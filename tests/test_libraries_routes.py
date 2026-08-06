@@ -5,6 +5,7 @@ and a working Switch, because over-blocking the owner on their own machine is as
 much a regression as leaking host layout to a remote one.
 """
 
+import importlib
 import io
 import os
 import tempfile
@@ -503,3 +504,67 @@ class TestTheRequestContract:
         from pixlstash.routes.libraries import SwitchLibraryRequest
 
         assert set(SwitchLibraryRequest.model_fields) == {"uuid"}
+
+
+class TestCliHintLength:
+    """The hint is copy-pasted, so it has to stay both short and runnable.
+
+    A venv install that is not on PATH prints an absolute interpreter path. Most
+    of that is the reader's own home directory, and the full string wraps the
+    settings panel.
+    """
+
+    def test_home_is_abbreviated_and_stays_expandable(self, monkeypatch, tmp_path):
+        # pixlstash.hub re-exports the cli_hint FUNCTION, which shadows the
+        # submodule name, so a plain `import ... as` would bind the function.
+        cli_hint_module = importlib.import_module("pixlstash.hub.cli_hint")
+
+        home = tmp_path / "home" / "someone"
+        venv_bin = home / "Projects" / "app" / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        interpreter = venv_bin / "python3"
+        interpreter.write_text("")
+
+        monkeypatch.setattr(cli_hint_module.os.path, "expanduser", lambda _p: str(home))
+        monkeypatch.setattr(cli_hint_module.sys, "executable", str(interpreter))
+        monkeypatch.setattr(cli_hint_module.shutil, "which", lambda _n: None)
+        monkeypatch.setattr(cli_hint_module, "running_in_docker", lambda: False)
+
+        hint = cli_hint_module.cli_hint()
+
+        assert hint.startswith("~/"), f"home should collapse to ~, got {hint}"
+        assert str(home) not in hint
+        assert hint.endswith("libraries list")
+
+    def test_a_quoted_path_keeps_the_tilde_outside_the_quotes(self):
+        """``shlex.quote('~/x')`` yields ``'~/x'``, which no shell expands."""
+        _quote = importlib.import_module("pixlstash.hub.cli_hint")._quote
+
+        quoted = _quote("~/Projects/my dir/bin/python")
+
+        assert quoted.startswith("~/"), "a quoted tilde stops being the home dir"
+        assert "my dir" in quoted
+
+    def test_the_console_script_beside_the_interpreter_wins(
+        self, monkeypatch, tmp_path
+    ):
+        """Shorter than spelling out the module invocation, and the same env."""
+        # pixlstash.hub re-exports the cli_hint FUNCTION, which shadows the
+        # submodule name, so a plain `import ... as` would bind the function.
+        cli_hint_module = importlib.import_module("pixlstash.hub.cli_hint")
+
+        venv_bin = tmp_path / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        (venv_bin / "python3").write_text("")
+        (venv_bin / cli_hint_module.CONSOLE_SCRIPT).write_text("")
+
+        monkeypatch.setattr(
+            cli_hint_module.sys, "executable", str(venv_bin / "python3")
+        )
+        monkeypatch.setattr(cli_hint_module.shutil, "which", lambda _n: None)
+        monkeypatch.setattr(cli_hint_module, "running_in_docker", lambda: False)
+
+        hint = cli_hint_module.cli_hint()
+
+        assert cli_hint_module.CONSOLE_SCRIPT in hint
+        assert cli_hint_module.MODULE_INVOCATION not in hint

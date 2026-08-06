@@ -14,7 +14,7 @@
  */
 import { computed, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
-import { VProgressCircular } from "vuetify/components";
+import { VCard, VDialog, VProgressCircular } from "vuetify/components";
 
 import { LIBRARIES_DOCUMENTATION_URL } from "../../api/libraries";
 import { useConfirm } from "../../composables/useConfirm";
@@ -47,6 +47,11 @@ const {
 } = storeToRefs(librariesStore);
 const { targetLibrary, overlayOpen } = storeToRefs(switchStore);
 const copiedCommand = ref("");
+// The four commands carry an absolute interpreter path each, so inline they
+// dominated a panel whose actual job is listing and switching libraries. They
+// are reference material consulted once, not part of that flow, so they live
+// behind a button.
+const commandsOpen = ref(false);
 const expandedPaths = ref(new Set());
 
 const showOneLibraryPrimer = computed(
@@ -232,30 +237,24 @@ async function copyCommand(command) {
         because it points PixlStash at folders on your computer.
       </p>
 
-      <ul v-if="cliCommands.length" class="libraries-cli-list">
-        <li v-for="item in cliCommands" :key="item.verb" class="libraries-cli">
-          <div class="libraries-cli__text">
-            <code class="libraries-cli__command">{{ item.command }}</code>
-            <span>{{ item.description }}</span>
-          </div>
-          <AppButton
-            class="libraries-cli__copy"
-            size="sm"
-            variant="ghost"
-            icon-left="content-copy"
-            :title="`Copy ${item.syntax} command`"
-            @click="copyCommand(item.command)"
-          >
-            {{ copiedCommand === item.command ? "Copied" : "Copy" }}
-          </AppButton>
-        </li>
-      </ul>
+      <AppButton
+        v-if="cliCommands.length"
+        size="sm"
+        variant="secondary"
+        icon-left="console"
+        @click="commandsOpen = true"
+      >
+        Show the commands
+      </AppButton>
       <p v-else class="libraries-note">
         Open the documentation on the machine hosting PixlStash for the command
         appropriate to that installation. Host paths and command details are
         not shown to remote sessions.
       </p>
 
+      <!-- Guidance and the documentation link stay in the section rather than
+           moving into the dialog: they are exactly what a remote session needs,
+           and that session never gets a dialog to open. -->
       <p class="libraries-note">
         <a
           :href="LIBRARIES_DOCUMENTATION_URL"
@@ -278,6 +277,37 @@ async function copyCommand(command) {
         switch between them here.
       </p>
     </SettingsSection>
+
+    <v-dialog v-model="commandsOpen" max-width="640">
+      <v-card class="libraries-cli-dialog">
+        <h3 class="libraries-cli-dialog__title">Adding and removing libraries</h3>
+
+        <ul class="libraries-cli-list">
+          <li v-for="item in cliCommands" :key="item.verb" class="libraries-cli">
+            <div class="libraries-cli__text">
+              <code class="libraries-cli__command">{{ item.command }}</code>
+              <span>{{ item.description }}</span>
+            </div>
+            <AppButton
+              class="libraries-cli__copy"
+              size="sm"
+              variant="ghost"
+              icon-left="content-copy"
+              :title="`Copy ${item.syntax} command`"
+              @click="copyCommand(item.command)"
+            >
+              {{ copiedCommand === item.command ? "Copied" : "Copy" }}
+            </AppButton>
+          </li>
+        </ul>
+
+        <div class="libraries-cli-dialog__actions">
+          <AppButton size="sm" variant="secondary" @click="commandsOpen = false">
+            Close
+          </AppButton>
+        </div>
+      </v-card>
+    </v-dialog>
 
     <p class="visually-hidden" role="status" aria-live="polite">
       {{ copyAnnouncement }}
@@ -426,6 +456,25 @@ async function copyCommand(command) {
   margin: var(--space-2) 0 0;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
+}
+
+.libraries-cli-dialog {
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.libraries-cli-dialog__title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.libraries-cli-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
 }
 
 .libraries-cli-list {

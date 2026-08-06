@@ -178,18 +178,6 @@ const close = () => desktop?.windowClose?.();
       </button>
     </div>
   </div>
-  <div v-else-if="activeLibraryName" class="browser-library-chrome">
-    <button
-      type="button"
-      class="browser-library-chrome__button"
-      :title="`Open Libraries settings. Active library: ${activeLibraryName}`"
-      @click="emit('open-libraries')"
-    >
-      <v-icon size="15" aria-hidden="true">mdi-bookshelf</v-icon>
-      <span class="browser-library-chrome__prefix">Active library</span>
-      <span class="browser-library-chrome__name">{{ activeLibraryName }}</span>
-    </button>
-  </div>
 </template>
 
 <style scoped>
@@ -321,55 +309,6 @@ const close = () => desktop?.windowClose?.();
 .titlebar-library:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-}
-
-.browser-library-chrome {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  min-height: 32px;
-  padding: var(--space-1) var(--space-4);
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
-  background: rgb(var(--v-theme-surface));
-}
-
-.browser-library-chrome__button {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  max-width: 100%;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: rgb(var(--v-theme-on-surface));
-  font-family: var(--font-ui);
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-
-.browser-library-chrome__button:hover {
-  border-color: rgb(var(--v-theme-accent));
-  background: var(--hover-wash);
-}
-
-.browser-library-chrome__button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.browser-library-chrome__prefix {
-  flex-shrink: 0;
-  font-weight: var(--weight-medium);
-}
-
-.browser-library-chrome__name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: var(--weight-semibold);
 }
 
 /* Breadcrumb: current-view path, inline after the version. */

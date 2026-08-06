@@ -57,7 +57,12 @@ describe("TitleBar active library", () => {
     expect(wrapper.find(".titlebar-library").exists()).toBe(false);
   });
 
-  it("keeps a visible deep-link in browser chrome", async () => {
+  it("renders no chrome at all in a plain browser", async () => {
+    // The title bar is the Electron shell's window chrome. A browser already
+    // has its own, and a permanent full-width strip naming the active library
+    // is not worth the vertical space: for the common single-library install it
+    // never changes, and the document title already carries the name. Libraries
+    // stay reachable through Settings.
     window.pixlstashDesktop = undefined;
     vi.resetModules();
     const { default: BrowserTitleBar } = await import("./TitleBar.vue");
@@ -67,21 +72,6 @@ describe("TitleBar active library", () => {
     });
 
     expect(wrapper.find(".titlebar").exists()).toBe(false);
-    const indicator = wrapper.find(".browser-library-chrome__button");
-    expect(indicator.text()).toContain("Browser library");
-    await indicator.trigger("click");
-    expect(wrapper.emitted("open-libraries")).toHaveLength(1);
-  });
-
-  it("does not disclose a browser identity when the owner prop is withheld", async () => {
-    window.pixlstashDesktop = undefined;
-    vi.resetModules();
-    const { default: BrowserTitleBar } = await import("./TitleBar.vue");
-    const wrapper = mount(BrowserTitleBar, {
-      props: { activeLibraryName: "" },
-      global: { stubs: { VIcon: true, WordmarkLogo: true } },
-    });
-
-    expect(wrapper.find(".browser-library-chrome").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Browser library");
   });
 });

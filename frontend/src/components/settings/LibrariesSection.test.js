@@ -11,6 +11,16 @@ import { mount } from "@vue/test-utils";
 import { nextTick } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 
+// The CLI commands live in a dialog, so the real VDialog would need Vuetify's
+// defaults instance. Render the slot inline instead, matching
+// LibrarySwitchOverlay.test.js.
+vi.mock("vuetify/components", () => ({
+  VCard: { name: "v-card", template: "<div><slot /></div>" },
+  VDialog: { name: "v-dialog", template: "<div><slot /></div>" },
+  VIcon: { name: "v-icon", template: "<i><slot /></i>" },
+  VProgressCircular: { name: "v-progress-circular", template: "<i />" },
+}));
+
 import LibrariesSection from "./LibrariesSection.vue";
 import { listLibraries, setActiveLibrary } from "../../api/libraries";
 import { useLibrarySwitchStore } from "../../stores/useLibrariesStore";
@@ -344,6 +354,22 @@ describe("teaching the CLI", () => {
     expect(wrapper.text()).toContain("attach <folder>");
     expect(wrapper.text()).toContain("detach <name>");
     expect(wrapper.text()).toContain("No files are removed");
+  });
+
+  it("keeps the commands behind a button so the pane stays short", async () => {
+    // Four commands, each carrying an absolute interpreter path, buried the
+    // list-and-switch flow this pane exists for. They are reference material,
+    // so the pane offers a way in rather than spending its height on them.
+    const wrapper = await settle(mountPane());
+
+    const trigger = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Show the commands"));
+    expect(trigger, "the pane must offer a way into the commands").toBeTruthy();
+    await trigger.trigger("click");
+    await nextTick();
+
+    expect(wrapper.text()).toContain("create <folder>");
   });
 
   it("falls back to instructions when the server withheld the command", async () => {
