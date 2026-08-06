@@ -267,3 +267,51 @@ def test_port_check_skipped_for_disabled_electron_external(tmp_path, monkeypatch
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_ctrl_c_shuts_down_without_a_traceback(monkeypatch):
+    """Ctrl-C is how a foreground server is stopped, not a crash.
+
+    ``Server.run`` calls ``uvicorn.Server.run()`` directly rather than
+    ``uvicorn.run()``, because it needs the concrete listener handle for the
+    switch-failure path. That bypasses the ``except KeyboardInterrupt: pass``
+    inside ``uvicorn.run()``, which is what let a plain Ctrl-C print an asyncio
+    traceback all the way out of ``__main__``.
+
+    The ``finally`` cleanup still has to run: an interrupted server closes its
+    vault and hub like any other exit.
+    """
+    import uvicorn
+
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    monkeypatch.delenv("PIXLSTASH_HOST", raising=False)
+    monkeypatch.delenv("PIXLSTASH_PORT", raising=False)
+
+    class _InterruptedListener:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(uvicorn, "Server", _InterruptedListener)
+    monkeypatch.setattr(uvicorn, "Config", lambda *a, **k: None)
+
+    closed = []
+    server = SimpleNamespace(
+        api=object(),
+        _server_config={"host": "127.0.0.1", "port": 9537},
+        _shutdown_on_lifespan=False,
+        _uvicorn_servers=[],
+        vault=SimpleNamespace(),
+        _get_version=lambda: "0.0.0-test",
+        _print_banner=lambda *a, **k: None,
+        _close_active_vault=lambda: closed.append("vault"),
+        _close_hub=lambda: closed.append("hub"),
+    )
+
+    Server.run(server)  # must not raise
+
+    assert closed == ["vault", "hub"], (
+        "an interrupted server must still close the vault and the hub"
+    )

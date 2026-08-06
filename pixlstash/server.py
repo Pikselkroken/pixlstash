@@ -822,6 +822,14 @@ class Server(
         self._uvicorn_servers = [listener]
         try:
             listener.run()
+        except KeyboardInterrupt:
+            # Ctrl-C is how a foreground server is stopped, not a crash, so it
+            # must not print a traceback. ``uvicorn.run()`` swallows this for
+            # exactly that reason; constructing the listener above to keep its
+            # handle opts out of that wrapper, so the suppression has to be
+            # repeated here. SIGTERM is unaffected either way: uvicorn captures
+            # it, sets ``should_exit`` and returns normally.
+            logger.info("Interrupted; shutting down.")
         finally:
             if getattr(self, "vault", None) is not None:
                 self._close_active_vault()
