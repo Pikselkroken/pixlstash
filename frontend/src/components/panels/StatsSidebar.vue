@@ -509,6 +509,7 @@ const tmLabelMap = {
   comfyui_extraction: "ComfyUI backfill",
   tag_predictions_scored: "Tag Predictions",
   missing_file_purge: "File cleanup",
+  snapshot_identity_scrub: "Snapshot cleanup",
   planner_managed: "Planner task",
   text_score: "Text score",
   object_detection: "Object detection",

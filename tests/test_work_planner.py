@@ -239,3 +239,31 @@ def test_snapshot_identity_task_marks_a_missing_archive_done(tmp_path):
     ).fetchone()[0]
     conn.close()
     assert marked is not None, "a missing archive must not be retried forever"
+
+
+def test_snapshot_scrub_progress_is_counted_in_archives_not_pictures(tmp_path):
+    """The worker panel must show the real backlog, not a picture count.
+
+    Falling through to the generic ``planner_managed`` branch reports the
+    library's picture total with nothing remaining, i.e. "N / N, 0 left" while
+    the scrub still has archives to rewrite. This is a one-time migration the
+    user is waiting to finish, so a bar that claims completion is worse than no
+    bar at all.
+    """
+    from sqlmodel import Session, create_engine
+
+    from pixlstash.vault import Vault
+
+    vault = _vault_with_snapshots(
+        tmp_path, [(1, True), (2, False), (3, False), (4, True), (5, False)]
+    )
+    engine = create_engine(f"sqlite:///{vault}")
+    try:
+        with Session(engine) as session:
+            total = Vault._count_total_snapshots(session)
+            remaining = Vault._count_unscrubbed_snapshots(session)
+    finally:
+        engine.dispose()
+
+    assert (total, remaining) == (5, 3)
+    assert max(total - remaining, 0) == 2, "two archives are genuinely done"

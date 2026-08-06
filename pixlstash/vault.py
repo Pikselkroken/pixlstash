@@ -22,6 +22,7 @@ from .db_models import (
     Face,
     Picture,
     PictureSet,
+    Snapshot,
     Tag,
     TAG_SENTINEL_LIKE_PATTERN,
     TAG_SENTINEL_ESCAPE_CHAR,
@@ -1345,6 +1346,21 @@ class Vault:
                 total = 0
                 missing = 0
                 label = "missing_file_purge"
+            elif worker_type == TaskType.SNAPSHOT_IDENTITY_SCRUB:
+                # Counted in snapshot archives, not pictures. This is a one-time
+                # migration with a real finish line, so the generic picture total
+                # would claim "N / N, nothing remaining" while the scrub still
+                # has archives to rewrite: the same misleading shape the dedup
+                # scan avoids below, but worse here because the user is waiting
+                # for it to end.
+                total = int(
+                    self.db.run_immediate_read_task(self._count_total_snapshots) or 0
+                )
+                missing = int(
+                    self.db.run_immediate_read_task(self._count_unscrubbed_snapshots)
+                    or 0
+                )
+                label = "snapshot_identity_scrub"
             elif worker_type == TaskType.TEXT_SCORE:
                 missing = int(
                     self.db.run_immediate_read_task(self._count_missing_text_score) or 0
@@ -1431,6 +1447,31 @@ class Vault:
     @staticmethod
     def _count_total_pictures(session: Session) -> int:
         result = session.exec(select(func.count()).select_from(Picture)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_total_snapshots(session: Session) -> int:
+        """Every registered snapshot, scrubbed or not."""
+        result = session.exec(select(func.count()).select_from(Snapshot)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_unscrubbed_snapshots(session: Session) -> int:
+        """Legacy archives the identity scrub still owes work to.
+
+        Mirrors ``MissingSnapshotIdentityScrubFinder._fetch_next``: keyed on
+        ``identity_scrubbed_at IS NULL``, which means a pre-hub archive and
+        nothing else, because snapshots created since are stamped at creation.
+        """
+        result = session.exec(
+            select(func.count())
+            .select_from(Snapshot)
+            .where(Snapshot.identity_scrubbed_at.is_(None))
+        ).one()
         if isinstance(result, (tuple, list)):
             return result[0]
         return result or 0
