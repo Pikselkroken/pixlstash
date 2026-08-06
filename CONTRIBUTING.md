@@ -151,7 +151,7 @@ or, if the release contains a security fix:
 where `LEVEL` is one of: `Critical`, `High`, `Moderate`, `Low`.
 
 Use the **highest** severity level present in that release if there are multiple
-security fixes. The level should reflect the CVSS score of the most severe issue:
+security fixes. Start from the CVSS score of the most severe issue:
 
 | Level    | CVSS range |
 |----------|------------|
@@ -160,9 +160,68 @@ security fixes. The level should reflect the CVSS score of the most severe issue
 | Moderate | 4.0 – 6.9  |
 | Low      | 0.1 – 3.9  |
 
+### Rate the impact on PixlStash, not the upstream score
+
+A published CVSS score describes the worst case for *everyone* who uses the
+affected code. What we tag is what an installed PixlStash is actually exposed to,
+so adjust the starting level for how the vulnerable code is reached here:
+
+- **Not shipped to users** — a build- or test-only dependency (anything marked
+  `"dev": true` in a lockfile, e.g. `node-gyp`, `jsdom`, `@electron/get`) is not
+  part of the app anyone runs. Updating it protects no installed version, so the
+  release gets **no tag**. Still record the update as a normal changelog entry and
+  say in that entry why it carries no tag.
+- **Shipped but unreachable** — the dependency ships, but nothing in PixlStash can
+  reach the vulnerable code path. Downgrade, and state in the entry which path is
+  and is not reachable.
+- **Reachable but constrained** — exploiting it needs a precondition most installs
+  do not meet (an off-by-default setting, an already-authenticated attacker, a
+  specific filter combination). Downgrade at most one level and describe the
+  precondition, so users can tell whether it applies to them.
+
+**When in doubt, tag the higher level.** Downgrade only when you can name the
+reason in the changelog entry. If the reachability argument takes more than a
+sentence, or nobody has traced the call path, treat it as reachable and tag it at
+its upstream severity — under-warning is the expensive mistake, and a release
+tagged more cautiously than it needed to be costs users nothing but an update.
+
+Note that this cuts both ways: a low upstream score can warrant a **higher** tag
+when PixlStash uses the weak component for something load-bearing, or when the
+fix forces user action (reissued tokens, invalidated share links).
+
+### What the tag does
+
 The CI build reads this tag from the changelog and publishes it in
 `latest-version.json` so that running instances can warn users when they need to
-upgrade for security reasons.
+upgrade for security reasons. Two thresholds matter in
+`frontend/src/composables/useVersionCheck.js`:
+
+- **Any level** turns the in-app update badge from "available" into
+  "security ⚠️" and tells the user to update as soon as possible. `Low` and
+  `Moderate` produce an identical warning — only the wording of the tooltip
+  differs. The meaningful choice is therefore *tag or no tag*, not `Low` vs
+  `Moderate`.
+- **`Critical` and `High`** make the check stop throttling, so the prompt
+  reappears on every page load instead of once a day. Note what this does *not*
+  do: the throttle is keyed on the level stored from the install's **previous**
+  check, so no tag reaches an instance any faster than any other. Every level,
+  including no tag at all, takes up to 24 hours to surface. Escalating to
+  `Critical` buys persistence after that first check, not speed.
+
+Reserve `Critical` and `High` for releases where continuing to run the old
+version is genuinely unsafe. The stored level is sticky: it is written on every
+successful check regardless of whether the install is out of date, so a
+`Critical` release keeps *every* install — including ones that already updated —
+checking on every page load until a later release publishes without a
+`Critical`/`High` tag.
+
+None of this is a push channel. If a vulnerability is severe enough that waiting
+up to a day for the next check is unacceptable, the tag is not the mechanism —
+post the advisory and tell people directly.
+
+Tagging a release users are not exposed to spends the same attention as a real
+one, and the warning only works for the next 1.8.1 or 1.8.3 if it has not been
+worn out on build tooling.
 
 ---
 

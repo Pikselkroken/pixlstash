@@ -45,6 +45,22 @@ Coming from 1.8.0 or earlier, updating to 1.9 clears every API token, exactly as
 - Filter your views on stacked or unstacked images, and collapse a stack down to the copy you want to keep with **Keep cover only**. The rest go to the Scrapheap, so you can change your mind.
 - Easily assign pictures to a person by using the new context menu "Suggest More Pictures" which shows you a view of all pictures that look like that person. An easy to use button lets you assign all found (or all selected) items to the person.
 
+# [1.8.5]
+
+- Fixed: opening a picture and then reloading the page, or following a link straight to a picture, could leave the overlay showing a broken-image icon instead of the picture. The overlay now waits until it knows the file's format before loading it, and a stale error no longer hides the picture once it does load.
+- Save, Save as… and Copy are now available on pictures and videos from both the image overlay and the grid's right-click menu, with keyboard shortcuts. Save as… keeps the original file extension so the saved file still opens as what it is.
+- Update the undici HTTP library (to 6.28.0 and 7.29.0) and fast-uri (to 3.1.5) that our build and test tooling pulls in, picking up upstream security fixes, one of them rated high. This release carries no security tag: both are build and test dependencies only, neither is part of the app you run, so no installed version was ever exposed.
+
+# [1.8.4]
+
+- Fix issue #694 (Database Query Error): Sometimes a query failed due to too many bound variables in a SQL statement.
+
+# [1.8.3] [Security:Moderate]
+
+If you have given a share link to anyone, please update. Once you have, your existing links are safe again and keep working. Reissue a link only if you would rather the person you gave it to had never been able to see the information described below.
+
+- Fixed: a share link could be used to read details about pictures outside what was actually shared, including their file names and the folders they sit in on your computer. Nobody could see the pictures themselves, only information about them, and only while using one specific combination of filters. Affects every release from 1.3.0 onward. We will publish the details once people have had a chance to update.
+
 # [1.8.2]
 
 - Signed Windows installers and nothing else. If you already installed or you're not on Windows, this is not the release for you.
