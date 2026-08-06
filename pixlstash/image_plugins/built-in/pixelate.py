@@ -329,11 +329,3 @@ class PixelatePlugin(ImagePlugin):
 
         result = Image.fromarray(result_arr, "RGB")
         return result.convert(orig_mode) if orig_mode != "RGB" else result
-
-    @staticmethod
-    def _coerce_positive_number(value: Any, default: float) -> float:
-        try:
-            v = float(value)
-            return v if v > 0 else default
-        except (TypeError, ValueError):
-            return default

@@ -24,7 +24,7 @@ from pixlstash.db_models import (
 from pixlstash.db_models.guest_score import GuestScore
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.pixl_logging import get_logger
-from pixlstash.picture_scoring import (
+from pixlstash.scoring import (
     count_pictures_by_character_likeness,
     find_pictures_by_character_likeness_sql,
 )

@@ -1647,11 +1647,6 @@ class AuthService:
             "has_password": bool(user.password_hash),
         }
 
-    @property
-    def _guest_db(self):
-        """The database holding guest sessions, which is the active vault."""
-        return self.vault_db if self.vault_db is not None else self._db
-
     def active_library_uuid(self) -> Optional[str]:
         """Return the library a token minted right now belongs to.
 

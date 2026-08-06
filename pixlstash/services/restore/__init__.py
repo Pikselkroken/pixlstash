@@ -3,9 +3,8 @@
 Assembles the restore behaviour split across :mod:`schema_upgrade`,
 :mod:`full_restore`, :mod:`resource_restore`, and :mod:`preview` into the
 single :class:`RestoreService` class, and re-exports the public data models
-and exceptions.  The public interface is unchanged from the original
-``pixlstash.services.restore_service`` module (see backend refactor plan
-§4.4).
+and exceptions.  This package is the import path for all of them (see backend
+refactor plan §4.4).
 """
 
 import threading

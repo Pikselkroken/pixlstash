@@ -94,7 +94,7 @@ def resolve_anomaly_apply_thresholds(vault) -> dict[str, float]:
     the map is exactly the rule ``PixlStashTaggerService.tag_items`` uses to decide
     whether a prediction becomes a tag.
 
-    Completeness matters: :func:`pixlstash.picture_scoring.fetch_anomaly_confidences`
+    Completeness matters: :func:`pixlstash.scoring.smart_score.fetch_anomaly_confidences`
     treats a missing key as "do not gate this tag", so a partial map would silently let
     sub-threshold predictions back into the penalty.
 

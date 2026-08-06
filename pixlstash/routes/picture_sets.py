@@ -47,7 +47,7 @@ from pixlstash.utils.service.filter_helpers import (
     narrow_project_fields,
     visible_project_ids,
 )
-from pixlstash.picture_scoring import (
+from pixlstash.scoring import (
     find_pictures_by_character_likeness,
     find_pictures_by_smart_score,
     get_smart_score_penalised_tags_from_request,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -12,7 +11,6 @@ from sqlmodel import Session, delete, select
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.db_models.picture import (
-    LIKENESS_PARAMETER_SENTINEL,
     LikenessParameter,
     Picture,
 )
@@ -439,73 +437,10 @@ class LikenessUtils:
         PictureLikenessQueue.enqueue(session, ids)
         session.commit()
 
-    @classmethod
-    def compute_param_gap_thresholds(
-        cls, session: Session, percentile: int, sample_limit: int
-    ) -> Dict[LikenessParameter, float]:
-        """Compute per-parameter gap thresholds from a sample of the database."""
-        rows = session.exec(
-            select(Picture.likeness_parameters)
-            .where(Picture.likeness_parameters.is_not(None))
-            .limit(sample_limit)
-        ).all()
-        if not rows:
-            return {}
-        values_by_param: Dict[LikenessParameter, List[float]] = {
-            param: [] for param in cls.GATING_PARAMS
-        }
-        for row in rows:
-            blob = row[0] if isinstance(row, (tuple, list)) else row
-            vec = cls._decode_likeness_parameters(blob, len(LikenessParameter))
-            if vec is None:
-                continue
-            for param in cls.GATING_PARAMS:
-                value = float(vec[int(param)])
-                if value == LIKENESS_PARAMETER_SENTINEL or not math.isfinite(value):
-                    continue
-                values_by_param[param].append(value)
-
-        thresholds: Dict[LikenessParameter, float] = {}
-        for param, values in values_by_param.items():
-            if len(values) < 2:
-                continue
-            values.sort()
-            diffs = []
-            prev = values[0]
-            for value in values[1:]:
-                diff = value - prev
-                if diff >= 0:
-                    diffs.append(diff)
-                prev = value
-            if diffs:
-                thresholds[param] = float(np.percentile(diffs, percentile))
-        return thresholds
-
-    @staticmethod
-    def compute_date_span_seconds(session: Session) -> Optional[float]:
-        """Return the total date span (in seconds) across all pictures, or None."""
-        row = session.exec(
-            select(func.min(Picture.created_at), func.max(Picture.created_at))
-        ).first()
-        if not row:
-            return None
-        min_date, max_date = row
-        if min_date is None or max_date is None:
-            return None
-        span = max_date - min_date
-        return float(span.total_seconds())
-
     @staticmethod
     def decode_embedding(blob) -> Optional[np.ndarray]:
         """Decode a raw embedding blob to a numpy array."""
         return LikenessUtils._decode_embedding(blob)
-
-    @staticmethod
-    def decode_likeness_parameters(
-        blob: Optional[object], length: int
-    ) -> Optional[np.ndarray]:
-        """Decode a raw likeness parameter blob to a numpy array."""
-        return LikenessUtils._decode_likeness_parameters(blob, length)
 
     @staticmethod
     def _decode_embedding(blob) -> Optional[np.ndarray]:

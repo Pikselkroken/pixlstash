@@ -27,7 +27,7 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Face, Picture, PictureSetMember
 from pixlstash.pixl_logging import get_logger
-from pixlstash.picture_scoring import (
+from pixlstash.scoring import (
     compute_character_likeness_for_faces,
     find_pictures_by_character_likeness_sql,
     pack_reference_blobs,

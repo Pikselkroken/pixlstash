@@ -9,7 +9,7 @@ from pixlstash.db_models import (
     Picture,
     Quality,
 )
-from pixlstash.picture_scoring import (
+from pixlstash.scoring.smart_score import (
     _load_builtin_anchors,
     _BUILTIN_MIN_GOOD,
     _BUILTIN_MIN_BAD,
@@ -35,7 +35,7 @@ class SmartScoreTask(BaseTask):
     scorer's inputs are owned outside the DB session: the tagger's per-label acceptance
     thresholds, which live in the model's ``meta.json`` plus the user's threshold offset.
     The owner's penalised-tag weights are resolved from the DB inside the read session by
-    :func:`~pixlstash.picture_scoring.attach_anomaly_inputs`, so this background path and
+    :func:`~pixlstash.scoring.smart_score.attach_anomaly_inputs`, so this background path and
     the request path score identically.
 
     Args:
@@ -129,8 +129,8 @@ class SmartScoreTask(BaseTask):
 
         Returns ``(good_anchors, bad_anchors, candidates, scorer_config,
         anomaly_signature)``. Mirrors
-        :func:`pixlstash.picture_scoring.fetch_smart_score_data` and shares
-        :func:`pixlstash.picture_scoring.attach_anomaly_inputs`, so the background task
+        :func:`pixlstash.scoring.smart_score.fetch_smart_score_data` and shares
+        :func:`pixlstash.scoring.smart_score.attach_anomaly_inputs`, so the background task
         and the on-demand sort score identically.
 
         The ``anomaly_signature`` (``{picture_id: signature}`` from
@@ -144,7 +144,7 @@ class SmartScoreTask(BaseTask):
             session: Active DB session.
             candidate_ids: Pictures to score.
             apply_thresholds: Per-tag confidence gate; see
-                :func:`pixlstash.picture_scoring.fetch_anomaly_confidences`.
+                :func:`pixlstash.scoring.smart_score.fetch_anomaly_confidences`.
         """
         good = session.exec(
             select(Picture.image_embedding, Picture.score)

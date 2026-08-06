@@ -122,6 +122,7 @@ from pixlstash.services.set_lock_service import (
     partition_stackable_members,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK as ID_CHUNK
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pixlstash.vault import Vault
@@ -283,7 +284,6 @@ when the computation failed (the repo's failed-metric sentinel). Same neutral
 principle as :data:`COVER_SMART_SCORE_NEUTRAL`, at the midpoint of the
 metric's typical 0-0.5 range (see ``Quality.calculate_quality_score``)."""
 
-ID_CHUNK = 900
 """SQLite bound-variable safety margin for ``IN`` loads."""
 
 

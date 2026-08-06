@@ -484,25 +484,6 @@ class FaceExtractionTask(BaseTask):
                 )
         return results
 
-    @staticmethod
-    def _expand_bbox(bbox, frame_w, frame_h, scale):
-        if bbox is None or len(bbox) != 4:
-            return None
-        x1, y1, x2, y2 = bbox
-        cx = (x1 + x2) / 2.0
-        cy = (y1 + y2) / 2.0
-        w = max(1.0, x2 - x1)
-        h = max(1.0, y2 - y1)
-        half_w = (w * scale) / 2.0
-        half_h = (h * scale) / 2.0
-        ex1 = int(max(0, min(frame_w - 1, round(cx - half_w))))
-        ey1 = int(max(0, min(frame_h - 1, round(cy - half_h))))
-        ex2 = int(max(0, min(frame_w, round(cx + half_w))))
-        ey2 = int(max(0, min(frame_h, round(cy + half_h))))
-        if ex2 <= ex1 or ey2 <= ey1:
-            return None
-        return [ex1, ey1, ex2, ey2]
-
     _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".avif"}
     _VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv"}
     # Minimum pixel dimension (width or height) required for InsightFace to run

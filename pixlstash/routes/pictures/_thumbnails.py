@@ -26,7 +26,7 @@ from pixlstash.db_models import (
     Tag,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.picture_scoring import (
+from pixlstash.scoring import (
     get_smart_score_penalised_tags_from_request,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils

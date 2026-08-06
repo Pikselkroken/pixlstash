@@ -579,15 +579,3 @@ class FaceTags:
             ``True`` when at least one tag is in :attr:`ALL`.
         """
         return any(tag in cls.ALL for tag in tags)
-
-    @classmethod
-    def filter_face_tags(cls, tags: "Iterable[str]") -> "frozenset[str]":
-        """Return the subset of *tags* that are face-related.
-
-        Args:
-            tags: Any iterable of tag strings.
-
-        Returns:
-            A ``frozenset`` containing only the face-related tags.
-        """
-        return frozenset(tag for tag in tags if tag in cls.ALL)

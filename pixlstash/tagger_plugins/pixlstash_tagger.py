@@ -1123,20 +1123,6 @@ class PixlStashTaggerPlugin(TaggerPlugin):
         """Return ``{name: default}`` from ``parameter_schema``."""
         return {f["name"]: f["default"] for f in self.parameter_schema()}
 
-    def plugin_schema(self) -> dict:
-        """Return JSON-serialisable metadata for this plugin."""
-        return {
-            "name": self.name,
-            "display_name": self.display_name,
-            "description": self.description,
-            "supports_tags": self.supports_tags,
-            "supports_descriptions": self.supports_descriptions,
-            "requires_download": self.requires_download,
-            "parameters": self.parameter_schema(),
-            "downloaded_artifacts": self.list_downloaded_artifacts(),
-            "is_loaded": self.is_loaded(),
-        }
-
     def needs_download(self, parameters=None) -> bool:
         """Return ``True`` if model files are absent or stale."""
         return self.service.needs_download()

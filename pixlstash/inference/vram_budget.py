@@ -108,7 +108,3 @@ class VramBudget:
             base_mb,
             per_item_mb,
         )
-
-    def total_vram_mb(self) -> int:
-        """Return total installed VRAM in MiB (0 on CPU or if unavailable)."""
-        return query_total_vram_mb()

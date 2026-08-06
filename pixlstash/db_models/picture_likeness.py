@@ -10,7 +10,7 @@ from sqlmodel import (
     select,
     delete,
 )
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from .picture import Picture
 
@@ -135,38 +135,6 @@ class PictureLikeness(SQLModel, table=True):
                 VALUES (:picture_id_a, :picture_id_b, :likeness, :metric)
             """),
             params=rows,
-        )
-
-    @classmethod
-    def prune_below_top_k(cls, session: Session, picture_id_a: int, top_k: int) -> None:
-        """
-        Prune PictureLikeness entries to keep only the top K likenesses per picture_id_a.
-        Deletes entries beyond the TOP_K highest likeness scores for each picture_id_a.
-        """
-        session.exec(
-            text("""
-                WITH ranked AS (
-                    SELECT
-                        picture_id_a,
-                        picture_id_b,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY picture_id_a
-                            ORDER BY likeness DESC, picture_id_b ASC
-                        ) AS rn
-                    FROM picturelikeness
-                    WHERE picture_id_a = :a
-                )
-                DELETE FROM picturelikeness
-                WHERE rowid IN (
-                    SELECT p.rowid
-                    FROM picturelikeness p
-                    JOIN ranked r
-                        ON r.picture_id_a = p.picture_id_a
-                        AND r.picture_id_b = p.picture_id_b
-                    WHERE r.rn > :top_k
-                );
-            """),
-            params={"a": picture_id_a, "top_k": top_k},
         )
 
     @classmethod
@@ -319,73 +287,3 @@ class PictureLikenessFrontier(SQLModel, table=True):
             pf.j_max = max(a, new_jmax)
             session.add(pf)
         session.commit()
-
-    @classmethod
-    def range_to_compare(
-        cls,
-        session: Session,
-        a: int,
-        max_id: Optional[int] = None,
-        batch_limit: int = 5000,
-    ) -> Optional[Tuple[int, int]]:
-        """
-        Compute the next contiguous [start_b, end_b] for picture a.
-        Ensures canonical a < b and respects frontier j_max.
-        Returns None if nothing to do.
-        """
-        if max_id is None:
-            max_id = cls.max_picture_id(session)
-        pf = session.get(PictureLikenessFrontier, a)
-        if pf is None:
-            # Initialize frontier on the fly
-            pf = PictureLikenessFrontier(picture_id_a=a, j_max=a)
-            session.add(pf)
-            session.commit()
-
-        start_b = max(pf.j_max + 1, a + 1)
-        if start_b > max_id:
-            return None
-        end_b = min(max_id, start_b + batch_limit - 1)
-        return (start_b, end_b)
-
-    @classmethod
-    def get_next_a_candidate(
-        cls, session: Session, quality_ready: callable
-    ) -> Optional[int]:
-        """
-        Find the smallest picture_id_a whose frontier hasn't reached max_id
-        AND whose Quality is ready.
-        """
-        max_id = PictureLikenessFrontier.max_picture_id(session)
-        if not max_id:
-            return None
-
-        rows = session.exec(
-            select(PictureLikenessFrontier)
-            .where(PictureLikenessFrontier.j_max < max_id)
-            .order_by(PictureLikenessFrontier.picture_id_a)
-        ).all()
-
-        for pf in rows:
-            a = int(pf.picture_id_a)
-            if quality_ready(session, a):
-                return a
-
-        return None  # no eligible 'a' with quality
-
-    @classmethod
-    def consecutive_prefix(cls, start_b: int, eligible_bs: List[int]) -> List[int]:
-        """
-        Given start_b and a set/list of eligible b values in the window,
-        return the longest consecutive prefix starting at start_b.
-        """
-        if not eligible_bs:
-            return []
-        # Use a set for O(1) membership
-        s = set(eligible_bs)
-        result = []
-        b = start_b
-        while b in s:
-            result.append(b)
-            b += 1
-        return result

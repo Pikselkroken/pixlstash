@@ -13,7 +13,6 @@ file agree.
 
 import time
 
-from sqlalchemy import func
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -102,17 +101,3 @@ class PixelShaTask(BaseTask):
             .where(Picture.file_path.is_not(None))
             .limit(limit)
         ).all()
-
-    @staticmethod
-    def count_missing_pixel_sha(session: Session) -> int:
-        """How many pictures tier 1 is still blind to."""
-        result = session.exec(
-            select(func.count())
-            .select_from(Picture)
-            .where(Picture.pixel_sha.is_(None))
-            .where(Picture.deleted.is_(False))
-            .where(Picture.file_path.is_not(None))
-        ).one()
-        if isinstance(result, (tuple, list)):
-            return result[0]
-        return result or 0

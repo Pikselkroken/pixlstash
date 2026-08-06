@@ -8,13 +8,39 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
 from abc import ABC, abstractmethod
 from typing import Any, Callable
 
+import cv2
+import numpy as np
 from PIL import Image
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 ErrorCallback = Callable[[dict[str, Any]], None]
+
+# Container/codec pairs tried in order when opening the output writer. Which of
+# these OpenCV can actually open depends on how the local build was compiled, so
+# the writer is opened by trial rather than by assumption.
+_WRITER_CANDIDATES = [
+    (".mp4", "avc1"),
+    (".mp4", "H264"),
+    (".webm", "VP80"),
+    (".webm", "VP90"),
+    (".mp4", "mp4v"),
+]
+
+# A .webm source keeps its container when possible, so a VP8/VP9 input does not
+# silently become H.264 on output.
+_WEBM_WRITER_CANDIDATES = [
+    (".webm", "VP80"),
+    (".webm", "VP90"),
+    (".mp4", "avc1"),
+    (".mp4", "H264"),
+    (".mp4", "mp4v"),
+]
 
 
 class ImagePlugin(ABC):
@@ -231,3 +257,194 @@ class ImagePlugin(ABC):
         if details:
             payload["details"] = details
         error_callback(payload)
+
+    def transform_video(
+        self,
+        source_path: str,
+        transform: Callable[[Image.Image], Image.Image],
+        *,
+        progress_callback: ProgressCallback | None = None,
+        error_callback: ErrorCallback | None = None,
+        error_message: str,
+        progress_verb: str = "Processed",
+    ) -> tuple[bytes, str]:
+        """Run *transform* over every frame of a video and return the re-encoded result.
+
+        Implements the decode → transform → encode loop shared by every
+        video-capable plugin, so a subclass' ``run_video`` only has to parse its
+        parameters and hand over a per-frame function.
+
+        The output writer is sized from the *first transformed frame* rather than
+        from the source dimensions. Transforms that change the frame size (a 90°
+        rotation, say) therefore need no separate size arithmetic, and the writer
+        can never disagree with the frames it is given, and a mismatch makes OpenCV
+        drop every write silently.
+
+        Args:
+            source_path: Absolute path to the input video file.
+            transform: Callable applied to each frame as an RGB PIL image; it
+                must return a PIL image, and must return the same size for every
+                frame.
+            progress_callback: Optional callable invoked per frame.
+            error_callback: Optional callable invoked once if the run fails.
+            error_message: Message passed to ``report_error`` on failure.
+            progress_verb: Leading word of the per-frame progress message.
+
+        Returns:
+            A ``(bytes, extension)`` tuple of the encoded video.
+
+        Raises:
+            ValueError: The source cannot be opened, reports invalid dimensions,
+                yields no frames, or no output writer could be opened.
+        """
+        cap = cv2.VideoCapture(source_path)
+        if not cap.isOpened():
+            raise ValueError(f"Failed to open video file: {source_path}")
+
+        frame_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        if fps <= 0:
+            fps = 24.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        if width <= 0 or height <= 0:
+            cap.release()
+            raise ValueError(f"Invalid video dimensions for {source_path}")
+
+        temp_path = ""
+        writer = None
+        output_ext = ".mp4"
+        processed = 0
+        try:
+            while True:
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    break
+
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                transformed = transform(Image.fromarray(rgb_frame))
+                transformed_bgr = cv2.cvtColor(
+                    np.array(transformed.convert("RGB")),
+                    cv2.COLOR_RGB2BGR,
+                )
+
+                if writer is None:
+                    out_height, out_width = transformed_bgr.shape[:2]
+                    writer, temp_path, output_ext = self._open_video_writer(
+                        source_path, fps, out_width, out_height
+                    )
+
+                writer.write(transformed_bgr)
+
+                processed += 1
+                self.report_progress(
+                    progress_callback,
+                    current=processed,
+                    total=frame_total if frame_total > 0 else processed,
+                    message=f"{progress_verb} video frame {processed}",
+                )
+
+            if processed == 0:
+                raise ValueError("No frames processed from video")
+
+            writer.release()
+            writer = None
+            cap.release()
+
+            with open(temp_path, "rb") as handle:
+                return handle.read(), output_ext
+        except Exception as exc:
+            self.report_error(
+                error_callback,
+                index=0,
+                message=error_message,
+                details={"error": str(exc), "source_path": source_path},
+            )
+            raise
+        finally:
+            if writer is not None:
+                writer.release()
+            cap.release()
+            if temp_path and os.path.exists(temp_path):
+                with contextlib.suppress(OSError):
+                    os.remove(temp_path)
+
+    @staticmethod
+    def _open_video_writer(
+        source_path: str, fps: float, width: int, height: int
+    ) -> tuple[Any, str, str]:
+        """Open an output writer, trying each container/codec pair in turn.
+
+        Args:
+            source_path: Input path, used only to prefer the source container.
+            fps: Frame rate for the output stream.
+            width: Output frame width in pixels.
+            height: Output frame height in pixels.
+
+        Returns:
+            A ``(writer, temp_path, extension)`` tuple. The caller owns the
+            writer and the temporary file.
+
+        Raises:
+            ValueError: None of the candidate encoders could be opened.
+        """
+        source_ext = os.path.splitext(source_path)[1].lower()
+        candidates = (
+            _WEBM_WRITER_CANDIDATES if source_ext == ".webm" else _WRITER_CANDIDATES
+        )
+
+        for candidate_ext, codec in candidates:
+            with tempfile.NamedTemporaryFile(
+                suffix=candidate_ext, delete=False
+            ) as temp_file:
+                temp_path = temp_file.name
+            candidate_writer = cv2.VideoWriter(
+                temp_path,
+                cv2.VideoWriter_fourcc(*codec),
+                fps,
+                (width, height),
+            )
+            if candidate_writer.isOpened():
+                return candidate_writer, temp_path, candidate_ext
+            candidate_writer.release()
+            with contextlib.suppress(OSError):
+                os.remove(temp_path)
+
+        raise ValueError("Failed to open output video writer")
+
+    @staticmethod
+    def _coerce_number(value: Any, default: float) -> float:
+        """Return *value* as a float, or *default* if it is not numeric.
+
+        Args:
+            value: Raw parameter value straight off the JSON payload.
+            default: Value returned when *value* cannot be parsed.
+
+        Returns:
+            The parsed float, or *default*.
+        """
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _coerce_positive_number(value: Any, default: float) -> float:
+        """Return *value* as a strictly positive float, or *default*.
+
+        Non-numeric input, zero, negatives and NaN all fall back to *default*
+        (the ``> 0`` test is false for NaN, which is why it is written this way
+        round rather than as ``<= 0``).
+
+        Args:
+            value: Raw parameter value straight off the JSON payload.
+            default: Value returned when *value* is not a positive number.
+
+        Returns:
+            The parsed positive float, or *default*.
+        """
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default

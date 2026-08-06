@@ -9,7 +9,7 @@ calibrated anomaly penalty applied in
 the human/model anomaly labels, which tag edits mutate. Without an explicit
 invalidation the stored score silently goes stale after a re-tag or a manual tag edit.
 
-The change signal is taken from :func:`pixlstash.picture_scoring.fetch_anomaly_confidences`
+The change signal is taken from :func:`pixlstash.scoring.smart_score.fetch_anomaly_confidences`
 — *the exact function the scorer feeds from* — rather than from a derived summary such as
 ``Picture.anomaly_tag_uncertainty``. That column is a ``max()`` over per-tag scores and is
 therefore lossy: two materially different anomaly states can collapse to the same value
@@ -36,7 +36,7 @@ from sqlmodel import select
 
 from pixlstash.db_models import Picture, Tag, TagPrediction
 from pixlstash.db_models.tag import DEFAULT_TAG_MERGES
-from pixlstash.picture_scoring import fetch_anomaly_confidences
+from pixlstash.scoring import fetch_anomaly_confidences
 from pixlstash.utils.quality.anomaly_penalty import (
     ANOMALY_FAMILIES,
     ANOMALY_PENALTY_TAGS,
@@ -44,14 +44,13 @@ from pixlstash.utils.quality.anomaly_penalty import (
     normalise_tag_weights,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sql_chunking import chunked
 
 if TYPE_CHECKING:
     from sqlmodel import Session
 
 logger = get_logger(__name__)
 
-# SQLite caps bound variables per statement (~999); chunk id lists to stay under it.
-_ID_CHUNK = 900
 
 # Confidences are stored as floats. Rounding before comparison stops pure float
 # representation noise from counting as a change, while staying far finer than any
@@ -158,16 +157,11 @@ def _normalise_ids(picture_ids: Iterable) -> list[int]:
     return sorted({int(pid) for pid in picture_ids if pid is not None})
 
 
-def _chunks(seq: list, size: int = _ID_CHUNK):
-    for i in range(0, len(seq), size):
-        yield seq[i : i + size]
-
-
 def anomaly_state_signature(session: "Session", picture_ids: Iterable) -> dict:
     """Return ``{picture_id: signature}`` capturing the scorer's anomaly inputs.
 
     The signature is a canonical, order-independent, hashable rendering of exactly the
-    two values :func:`pixlstash.picture_scoring.attach_anomaly_inputs` hands the scorer:
+    two values :func:`pixlstash.scoring.smart_score.attach_anomaly_inputs` hands the scorer:
     the per-tag anomaly probability map (with human POS/NEG already folded in) and the
     set of human-verified present tags.
 
@@ -184,7 +178,7 @@ def anomaly_state_signature(session: "Session", picture_ids: Iterable) -> dict:
         return {}
     signatures: dict[int, tuple] = {}
     # Chunked so a large batch stays under SQLite's bound-variable cap.
-    for chunk in _chunks(ids):
+    for chunk in chunked(ids):
         probs_map, human_map = fetch_anomaly_confidences(session, chunk)
         for pid in chunk:
             probs = probs_map.get(pid) or {}
@@ -222,7 +216,7 @@ def invalidate_smart_scores(session: "Session", picture_ids: Iterable) -> int:
     if not ids:
         return 0
     cleared = 0
-    for chunk in _chunks(ids):
+    for chunk in chunked(ids):
         result = session.exec(
             update(Picture)
             .where(Picture.id.in_(chunk), Picture.smart_score.is_not(None))
@@ -351,7 +345,7 @@ def invalidate_for_penalised_tag_change(
 
     "Carrying" spans both label sources the penalty reads: an applied :class:`Tag` row,
     or an anomaly :class:`TagPrediction` row (which is what
-    :func:`~pixlstash.picture_scoring.fetch_anomaly_confidences` actually feeds the
+    :func:`~pixlstash.scoring.smart_score.fetch_anomaly_confidences` actually feeds the
     scorer, including human POS/NEG decisions). Predictions are matched without a
     confidence gate on purpose: a weight change must invalidate a picture whose
     prediction sits either side of the apply threshold, and over-invalidating a handful
@@ -375,7 +369,7 @@ def invalidate_for_penalised_tag_change(
         )
         return 0
     cleared = 0
-    for chunk in _chunks(tags):
+    for chunk in chunked(tags):
         tagged = select(Tag.picture_id).where(func.lower(Tag.tag).in_(chunk))
         predicted = select(TagPrediction.picture_id).where(
             func.lower(TagPrediction.tag).in_(chunk)
@@ -404,7 +398,7 @@ def invalidate_all_anomaly_scores(session: "Session", *, context: str) -> int:
 
     The tagger's ``threshold_offset`` moves *two* things at once for every anomaly
     detection: the apply gate in
-    :func:`~pixlstash.picture_scoring.fetch_anomaly_confidences` (which decides whether a
+    :func:`~pixlstash.scoring.smart_score.fetch_anomaly_confidences` (which decides whether a
     model prediction reaches the scorer at all) and the acceptance threshold ``t`` that the
     penalty normalises each detection against via ``u = (p - t) / (1 - t)``. A change to
     the offset therefore invalidates *every* cached score that has an anomaly component,
@@ -439,7 +433,7 @@ def invalidate_all_anomaly_scores(session: "Session", *, context: str) -> int:
         )
         return 0
     cleared = 0
-    for chunk in _chunks(tags):
+    for chunk in chunked(tags):
         predicted = select(TagPrediction.picture_id).where(
             func.lower(TagPrediction.tag).in_(chunk)
         )

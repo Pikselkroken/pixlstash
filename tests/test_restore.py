@@ -630,7 +630,7 @@ def test_restore_existing_picture_set_replaces_project_memberships_exactly(serve
 def test_root_entity_membership_projects_are_restore_dependencies(server):
     """A deleted project referenced only by the root join is preflighted."""
     from pixlstash.services.project_membership_service import set_character_projects
-    from pixlstash.services.restore_service import MissingDependenciesError
+    from pixlstash.services.restore import MissingDependenciesError
 
     def _setup(session):
         project = Project(name="root-membership-dependency")
@@ -743,7 +743,7 @@ def test_concurrent_restore_rejected_with_409(server):
     """
     import threading
 
-    from pixlstash.services.restore_service import RestoreInProgressError
+    from pixlstash.services.restore import RestoreInProgressError
 
     _create_file(server, "concurrent.jpg")
     _add_picture(server, filename="concurrent.jpg", description="v1")
@@ -1106,7 +1106,7 @@ def test_restore_resource_picture_with_missing_character_raises_without_confirm(
     service must refuse to write anything and raise
     ``MissingDependenciesError`` carrying the missing character ids.
     """
-    from pixlstash.services.restore_service import MissingDependenciesError
+    from pixlstash.services.restore import MissingDependenciesError
 
     _create_file(server, "with_char.jpg")
     pic = _add_picture(server, filename="with_char.jpg")
@@ -1218,7 +1218,7 @@ def test_restore_resource_picture_confirm_restores_missing_character(server):
 def test_restore_batch_unions_missing_dependencies_across_items(server):
     """The batch path must collect the union of missing parents across all
     items and raise once with the combined dict, not item-by-item."""
-    from pixlstash.services.restore_service import MissingDependenciesError
+    from pixlstash.services.restore import MissingDependenciesError
 
     _create_file(server, "batch_a.jpg")
     _create_file(server, "batch_b.jpg")
@@ -1522,7 +1522,7 @@ def test_restore_resource_picture_with_missing_picture_set_raises_without_confir
     in live. Restoring the picture references the missing set; un-confirmed
     must raise MissingDependenciesError carrying the set id and write nothing.
     """
-    from pixlstash.services.restore_service import MissingDependenciesError
+    from pixlstash.services.restore import MissingDependenciesError
 
     _create_file(server, "in_set.jpg")
     pic = _add_picture(server, filename="in_set.jpg")
@@ -1612,7 +1612,7 @@ def test_restore_resource_picture_with_missing_project_raises_without_confirm(
     """A snapshot picture belongs to a Project (via PictureProjectMember) that
     was later deleted in live. Un-confirmed restore must raise with the
     missing project id and write nothing."""
-    from pixlstash.services.restore_service import MissingDependenciesError
+    from pixlstash.services.restore import MissingDependenciesError
 
     _create_file(server, "in_proj.jpg")
     pic = _add_picture(server, filename="in_proj.jpg")
@@ -1814,7 +1814,7 @@ def test_missing_deps_refusal_emits_started_then_failed(server):
     """A dependency-refusal restore emits STARTED then a terminal FAILED
     (so the client clears activeJob), never COMPLETED."""
     from pixlstash.event_types import EventType
-    from pixlstash.services.restore_service import MissingDependenciesError
+    from pixlstash.services.restore import MissingDependenciesError
 
     _create_file(server, "evt_dep.jpg")
     pic = _add_picture(server, filename="evt_dep.jpg")

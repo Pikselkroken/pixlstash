@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.restore_service import (
+from pixlstash.services.restore import (
     MissingDependenciesError,
     RestoreInProgressError,
     SafetySnapshotFailedError,

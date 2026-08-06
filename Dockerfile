@@ -66,9 +66,7 @@ RUN pip install --no-cache-dir \
     insightface \
     rapidfuzz \
     tqdm \
-    einops \
     sentence_transformers \
-    spacy \
     pillow-heif \
     sqlmodel \
     alembic \
@@ -79,7 +77,6 @@ RUN pip install --no-cache-dir \
     psutil \
     piexif \
     watchdog \
-    dotenv \
     python-dotenv \
     click \
     accelerate \
@@ -89,8 +86,6 @@ RUN pip install --no-cache-dir \
 # Remove build tools — not needed at runtime
 RUN apt-get purge -y --auto-remove build-essential && rm -rf /var/lib/apt/lists/*
 
-# Download spaCy English model
-RUN python -m spacy download en_core_web_sm
 
 # ── Non-root user ─────────────────────────────────────────────────────────────
 RUN groupadd -f -g 10001 pixlstash \

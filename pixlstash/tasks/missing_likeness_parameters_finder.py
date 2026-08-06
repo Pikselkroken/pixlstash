@@ -109,7 +109,3 @@ class MissingLikenessParametersFinder(BaseTaskFinder):
                     self._claimed_picture_ids.add(pid)
                     claimed.append(pid)
         return claimed
-
-    @staticmethod
-    def _count_pending_parameters(session: Session) -> int:
-        return LikenessParameterUtils.count_pending_parameters(session)
