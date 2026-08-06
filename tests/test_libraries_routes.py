@@ -506,65 +506,80 @@ class TestTheRequestContract:
         assert set(SwitchLibraryRequest.model_fields) == {"uuid"}
 
 
-class TestCliHintLength:
-    """The hint is copy-pasted, so it has to stay both short and runnable.
+class TestCliHintIsShort:
+    """The hint is read at a glance in a settings panel, so it stays short.
 
-    A venv install that is not on PATH prints an absolute interpreter path. Most
-    of that is the reader's own home directory, and the full string wraps the
-    settings panel.
+    It used to print the absolute interpreter path of the environment the server
+    was started from. That is the most precise answer and the least useful one:
+    on a venv install it wrapped the panel, and the verb (the part being taught)
+    ended up behind boilerplate the reader already knows.
     """
 
-    def test_home_is_abbreviated_and_stays_expandable(self, monkeypatch, tmp_path):
+    def _module(self):
         # pixlstash.hub re-exports the cli_hint FUNCTION, which shadows the
         # submodule name, so a plain `import ... as` would bind the function.
-        cli_hint_module = importlib.import_module("pixlstash.hub.cli_hint")
+        return importlib.import_module("pixlstash.hub.cli_hint")
 
-        home = tmp_path / "home" / "someone"
-        venv_bin = home / "Projects" / "app" / ".venv" / "bin"
-        venv_bin.mkdir(parents=True)
-        interpreter = venv_bin / "python3"
-        interpreter.write_text("")
-
-        monkeypatch.setattr(cli_hint_module.os.path, "expanduser", lambda _p: str(home))
-        monkeypatch.setattr(cli_hint_module.sys, "executable", str(interpreter))
-        monkeypatch.setattr(cli_hint_module.shutil, "which", lambda _n: None)
-        monkeypatch.setattr(cli_hint_module, "running_in_docker", lambda: False)
-
-        hint = cli_hint_module.cli_hint()
-
-        assert hint.startswith("~/"), f"home should collapse to ~, got {hint}"
-        assert str(home) not in hint
-        assert hint.endswith("libraries list")
-
-    def test_a_quoted_path_keeps_the_tilde_outside_the_quotes(self):
-        """``shlex.quote('~/x')`` yields ``'~/x'``, which no shell expands."""
-        _quote = importlib.import_module("pixlstash.hub.cli_hint")._quote
-
-        quoted = _quote("~/Projects/my dir/bin/python")
-
-        assert quoted.startswith("~/"), "a quoted tilde stops being the home dir"
-        assert "my dir" in quoted
-
-    def test_the_console_script_beside_the_interpreter_wins(
+    def test_no_interpreter_path_when_a_console_script_exists(
         self, monkeypatch, tmp_path
     ):
-        """Shorter than spelling out the module invocation, and the same env."""
-        # pixlstash.hub re-exports the cli_hint FUNCTION, which shadows the
-        # submodule name, so a plain `import ... as` would bind the function.
-        cli_hint_module = importlib.import_module("pixlstash.hub.cli_hint")
-
+        mod = self._module()
         venv_bin = tmp_path / ".venv" / "bin"
         venv_bin.mkdir(parents=True)
         (venv_bin / "python3").write_text("")
-        (venv_bin / cli_hint_module.CONSOLE_SCRIPT).write_text("")
+        (venv_bin / mod.CONSOLE_SCRIPT).write_text("")
 
-        monkeypatch.setattr(
-            cli_hint_module.sys, "executable", str(venv_bin / "python3")
+        monkeypatch.setattr(mod.sys, "executable", str(venv_bin / "python3"))
+        monkeypatch.setattr(mod.shutil, "which", lambda _n: None)
+        monkeypatch.setattr(mod, "running_in_docker", lambda: False)
+
+        hint = mod.cli_hint()
+
+        assert hint == f"{mod.CONSOLE_SCRIPT} libraries list"
+        assert str(tmp_path) not in hint, "no absolute path may survive"
+
+    def test_a_source_checkout_gets_the_module_invocation_not_a_path(
+        self, monkeypatch, tmp_path
+    ):
+        mod = self._module()
+        venv_bin = tmp_path / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        (venv_bin / "python3").write_text("")
+
+        monkeypatch.setattr(mod.sys, "executable", str(venv_bin / "python3"))
+        monkeypatch.setattr(mod.shutil, "which", lambda _n: None)
+        monkeypatch.setattr(mod, "running_in_docker", lambda: False)
+
+        hint = mod.cli_hint()
+
+        assert hint == f"python {mod.MODULE_INVOCATION} libraries list"
+        assert str(tmp_path) not in hint
+
+    def test_a_frozen_desktop_build_still_needs_its_bundled_executable(
+        self, monkeypatch, tmp_path
+    ):
+        """The one case a path is right: no console script, and no ``python``."""
+        mod = self._module()
+        bundled = tmp_path / "PixlStash" / "pixlstash-backend"
+        bundled.parent.mkdir(parents=True)
+        bundled.write_text("")
+
+        monkeypatch.setattr(mod.sys, "executable", str(bundled))
+        monkeypatch.setattr(mod.sys, "frozen", True, raising=False)
+        monkeypatch.setattr(mod, "running_in_docker", lambda: False)
+
+        hint = mod.cli_hint()
+
+        assert mod.MODULE_INVOCATION in hint
+        assert "pixlstash-backend" in hint
+
+    def test_docker_keeps_the_container_name_it_cannot_infer(self, monkeypatch):
+        mod = self._module()
+        monkeypatch.setattr(mod, "running_in_docker", lambda: True)
+        monkeypatch.setenv("HOSTNAME", "pixlstash-1")
+
+        hint = mod.cli_hint()
+
+        assert (
+            hint == f"docker exec -it pixlstash-1 {mod.CONSOLE_SCRIPT} libraries list"
         )
-        monkeypatch.setattr(cli_hint_module.shutil, "which", lambda _n: None)
-        monkeypatch.setattr(cli_hint_module, "running_in_docker", lambda: False)
-
-        hint = cli_hint_module.cli_hint()
-
-        assert cli_hint_module.CONSOLE_SCRIPT in hint
-        assert cli_hint_module.MODULE_INVOCATION not in hint

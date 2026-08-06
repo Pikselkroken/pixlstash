@@ -7,6 +7,7 @@ for pictures and search queries.
 from __future__ import annotations
 
 import logging
+import threading
 
 import numpy as np
 
@@ -30,6 +31,11 @@ class SBertService:
     def __init__(self, device: str) -> None:
         self._device = device
         self._model = None
+        # Serialises loading against unloading. ``aggressive_unload`` runs from
+        # the idle sweep and from shutdown, neither of which knows a load is in
+        # flight, and dropping the model mid-load frees device memory the
+        # loader is still writing into. See test_model_unload_race.py.
+        self._load_lock = threading.RLock()
 
     def is_loaded(self) -> bool:
         """Return True when the model is ready for inference."""
@@ -37,26 +43,28 @@ class SBertService:
 
     def ensure_ready(self) -> None:
         """Load the model if not already loaded."""
-        if self._model is not None:
-            return
-        try:
-            self._model = load_sentence_transformer(
-                SBERT_MODEL_NAME,
-                device=self._device,
-                local_files_only=True,
-                revision=SBERT_MODEL_REVISION,
-            )
-        except OSError:
-            logger.info("Downloading %s for the first time...", SBERT_MODEL_NAME)
-            self._model = load_sentence_transformer(
-                SBERT_MODEL_NAME,
-                device=self._device,
-                revision=SBERT_MODEL_REVISION,
-            )
+        with self._load_lock:
+            if self._model is not None:
+                return
+            try:
+                self._model = load_sentence_transformer(
+                    SBERT_MODEL_NAME,
+                    device=self._device,
+                    local_files_only=True,
+                    revision=SBERT_MODEL_REVISION,
+                )
+            except OSError:
+                logger.info("Downloading %s for the first time...", SBERT_MODEL_NAME)
+                self._model = load_sentence_transformer(
+                    SBERT_MODEL_NAME,
+                    device=self._device,
+                    revision=SBERT_MODEL_REVISION,
+                )
 
     def unload(self) -> None:
-        """Release model memory."""
-        self._model = None
+        """Release model memory, waiting for any in-flight load to finish."""
+        with self._load_lock:
+            self._model = None
 
     def encode(self, texts: list[str]) -> list[np.ndarray]:
         """Encode a list of texts into SBERT embeddings.

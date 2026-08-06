@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 import traceback
 from typing import Any, Optional
@@ -53,11 +54,19 @@ class JoyCaptionService:
         _model: Loaded LLaVA model or None.
         _processor: Loaded processor or None.
         _model_device: Device the model is resident on.
+        _load_lock: Serialises loading against unloading. Freeing CUDA state
+            while a load is still allocating into it is memory-unsafe: it
+            crashed the process (SIGSEGV in isolation, SIGABRT with
+            "terminate called without an active exception" during server
+            shutdown). ``ModelLifecycleManager.aggressive_unload`` calls
+            ``unload`` from the idle and shutdown paths, which know nothing
+            about a load in flight, so the guard has to live here.
     """
 
     def __init__(self, device: str, precision: str = "nf4") -> None:
         self._device = device
         self._precision = precision
+        self._load_lock = threading.RLock()
         self._model = None
         self._processor = None
         self._model_device: Optional[torch.device] = None
@@ -68,19 +77,27 @@ class JoyCaptionService:
 
     def ensure_ready(self, precision: str | None = None) -> None:
         """Load the model if not already loaded, re-loading on precision change."""
-        if precision is not None and precision != self._precision:
-            self.unload()
-            self._precision = precision
-        if self.is_loaded():
-            return
-        self._init()
+        with self._load_lock:
+            if precision is not None and precision != self._precision:
+                self.unload()
+                self._precision = precision
+            if self.is_loaded():
+                return
+            self._init()
 
     def unload(self) -> None:
-        """Release model and processor from memory."""
-        self._model = None
-        self._processor = None
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        """Release model and processor from memory.
+
+        Blocks while a load is in flight rather than freeing underneath it.
+        Waiting costs a few seconds on shutdown; the alternative is
+        ``torch.cuda.empty_cache()`` releasing memory that ``from_pretrained``
+        is still writing into, which takes the whole process down.
+        """
+        with self._load_lock:
+            self._model = None
+            self._processor = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def generate_caption(
         self,

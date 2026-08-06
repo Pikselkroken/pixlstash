@@ -105,29 +105,27 @@ def cli_hint(verb: str = "libraries list") -> str:
         container = os.environ.get("HOSTNAME") or socket.gethostname()
         return f"docker exec -it {shlex.quote(container)} {CONSOLE_SCRIPT} {verb}"
 
-    # A frozen desktop build has no console scripts on PATH and its interpreter
-    # is the bundled backend executable.
+    # A frozen desktop build is the one case that genuinely needs a path: it
+    # ships no console script and has no ``python`` to fall back on, because its
+    # interpreter *is* the bundled backend executable.
     if getattr(sys, "frozen", False):
         return f"{_quote(_shorten(sys.executable))} {MODULE_INVOCATION} {verb}"
 
-    on_path = shutil.which(CONSOLE_SCRIPT)
-    if on_path:
-        # Installed and resolvable by name: the short form is what the user
-        # would type, so show that rather than an absolute path.
+    # Everywhere else the hint stays a short command the user can read at a
+    # glance. An absolute interpreter path is technically the most precise
+    # answer and it was what this returned, but it wrapped the settings panel
+    # and buried the part that matters (the verb) behind boilerplate the reader
+    # already knows. The cost is one assumption, documented in the README next
+    # to these commands: run them with the same environment active that the
+    # server runs in.
+    beside = os.path.join(os.path.dirname(sys.executable), CONSOLE_SCRIPT)
+    if shutil.which(CONSOLE_SCRIPT) or os.path.isfile(beside):
         return f"{CONSOLE_SCRIPT} {verb}"
 
-    # Installed in an environment whose scripts are not on PATH (a venv the
-    # server was started from by absolute path, most often). Prefer the console
-    # script sitting beside the running interpreter: it is the same environment,
-    # and it is shorter than spelling out the module invocation.
-    beside = os.path.join(os.path.dirname(sys.executable), CONSOLE_SCRIPT)
-    if os.path.isfile(beside):
-        return f"{_quote(_shorten(beside))} {verb}"
-
-    # No console script to point at. The interpreter that is running is the one
-    # that can import pixlstash, so name it.
+    # No console script anywhere: a source checkout, where the module
+    # invocation is what actually works.
     logger.debug(
-        "%s is not on PATH; falling back to a module invocation for the CLI hint",
+        "%s is not installed as a console script; showing the module invocation",
         CONSOLE_SCRIPT,
     )
-    return f"{_quote(_shorten(sys.executable))} {MODULE_INVOCATION} {verb}"
+    return f"python {MODULE_INVOCATION} {verb}"

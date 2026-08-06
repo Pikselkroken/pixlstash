@@ -94,27 +94,62 @@ installation. Switch from **Settings → Libraries**. API tokens and share links
 are pinned to the library where they were created: they become inactive while a
 different library is open and work again when you switch back.
 
-Run library commands on the machine hosting PixlStash as the OS user that owns
-`hub.db`. Put global options before `libraries`:
+### The library command line
+
+Adding and removing libraries is a command-line operation in this release,
+because it points PixlStash at folders on your machine. **Settings → Libraries**
+shows the exact command for your installation, with a copy button.
+
+Run these on the machine hosting PixlStash, as the OS user that owns `hub.db`,
+**with the same environment active that the server runs in** (activate the venv,
+or use the same interpreter). That is the one assumption the short form makes;
+if the commands are not found, see [Which form to type](#which-form-to-type)
+below.
 
 ```bash
-pixlstash-cli --hub /path/to/config-dir/hub.db libraries list
-pixlstash-cli --hub /path/to/config-dir/hub.db libraries create /path/to/new-library --name "New library"
-pixlstash-cli --hub /path/to/config-dir/hub.db libraries attach /path/to/existing-library --name "Existing library"
-pixlstash-cli --hub /path/to/config-dir/hub.db libraries detach "Existing library"
-pixlstash-cli --hub /path/to/config-dir/hub.db libraries relocate "Existing library" /new/path
-pixlstash-cli --hub /path/to/config-dir/hub.db libraries backup "Existing library" /path/to/backups/
+pixlstash-cli libraries list
+pixlstash-cli libraries create /path/to/new-library --name "New library"
+pixlstash-cli libraries attach /path/to/existing-library --name "Existing library"
+pixlstash-cli libraries rename "Existing library" "Better name"
+pixlstash-cli libraries relocate "Existing library" /new/path
+pixlstash-cli libraries detach "Existing library"
+pixlstash-cli libraries backup "Existing library" /path/to/backups/
 ```
 
-`detach` only removes the registration and never deletes or changes library
-files. It refuses the active library; switch first. Reattaching the same
-fingerprinted folder revives its existing registration and share links.
-`relocate` preserves the library identity and links. A backup includes the hub
-and therefore login/token secrets; PixlStash creates it owner-readable and
-refuses to overwrite an existing destination. Source checkouts can replace
-`pixlstash-cli` with `python -m pixlstash.cli`. For a running Compose service,
-use `docker compose exec pixlstash pixlstash-cli ...`; paths are inside the
-container.
+| Command | What it does |
+| --- | --- |
+| `list` | Shows every registered library and marks the active one. |
+| `create` | Creates the folder, starts an empty library in it, and registers it. |
+| `attach` | Registers a library folder that already exists on disk. |
+| `rename` | Changes the display name. Nothing on disk moves. |
+| `relocate` | Points an existing registration at a new path, keeping its identity and share links. |
+| `detach` | Forgets a library. **No files are removed and nothing inside the folder changes.** |
+| `backup` | Writes the library and the hub to a single archive. |
+
+Notes worth knowing before you need them:
+
+- `detach` refuses the **active** library. Switch to another one first.
+- Reattaching the same folder revives its original registration, including its
+  share links, because a library carries a fingerprint of its own identity.
+- A backup contains `hub.db`, and therefore your login and token secrets.
+  PixlStash writes it owner-readable and refuses to overwrite an existing file.
+- A backup covers the library folder. Pictures kept in **reference folders** live
+  outside it and are *not* included, so back those up separately.
+- Backing up finishes any outstanding one-time snapshot cleanup first, so the
+  archive never carries credentials from before your upgrade.
+
+#### Which form to type
+
+The commands above assume `pixlstash-cli` is on your `PATH`, which is true once
+the environment PixlStash is installed into is active.
+
+- **Source checkout**, or an environment you have not activated:
+  `python -m pixlstash.cli libraries list`
+- **Docker Compose**, for a running service (paths are inside the container):
+  `docker compose exec pixlstash pixlstash-cli libraries list`
+- **A different hub** than the default: put global options *before* `libraries`,
+  e.g. `pixlstash-cli --hub /path/to/hub.db libraries list`. Without `--hub` the
+  CLI uses the standard config location, which is what you want almost always.
 
 ### Required one-shot preparation when upgrading
 

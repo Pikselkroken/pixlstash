@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 import traceback
 from typing import TYPE_CHECKING, Callable, Optional
@@ -137,6 +138,11 @@ class Florence2Service:
         self._processor = None
         self._model_device = None
         self._dtype = None
+        # Serialises loading against unloading. ``aggressive_unload`` runs from
+        # the idle sweep and from shutdown, neither of which knows a load is in
+        # flight, and dropping the model mid-load frees device memory the
+        # loader is still writing into. See test_model_unload_race.py.
+        self._load_lock = threading.RLock()
         self._model_variant = DEFAULT_FLORENCE_VARIANT
         variant = FLORENCE_MODEL_VARIANTS[DEFAULT_FLORENCE_VARIANT]
         self._model_name = variant["model"]
@@ -219,9 +225,22 @@ class Florence2Service:
 
     def ensure_ready(self) -> None:
         """Load Florence-2 if not already loaded (idempotent)."""
-        if self.is_loaded():
-            return
-        self._init()
+        with self._load_lock:
+            if self.is_loaded():
+                return
+            self._init()
+
+    def unload(self) -> None:
+        """Release the model and processor, waiting for any in-flight load.
+
+        The plugin used to clear ``_model``/``_processor`` from outside, which
+        could land in the middle of :meth:`_init`. Freeing device memory the
+        loader is still writing into crashes the process, so the drop belongs
+        here, under the same lock the load takes.
+        """
+        with self._load_lock:
+            self._model = None
+            self._processor = None
 
     def description_batch_size(self) -> int:
         """Return the VRAM-constrained batch size for caption generation."""
@@ -929,8 +948,7 @@ class Florence2Plugin(TaggerPlugin):
     def unload(self) -> None:
         """Unload Florence-2 from memory."""
         if self._service is not None:
-            self._service._model = None
-            self._service._processor = None
+            self._service.unload()
 
     def is_loaded(self) -> bool:
         """Return ``True`` if Florence-2 is loaded."""
