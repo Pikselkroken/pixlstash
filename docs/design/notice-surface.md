@@ -53,7 +53,7 @@ This is what keeps the surface from growing into a second dialog system.
 ### 2.1 The shipped situation
 
 `SelectionBar.vue` (in `components/panels/`, not `widgets/`) is **not** the full-width
-`--bar-height` action bar that `design-system-handoff.md` §6 describes. It is a floating
+`--bar-height` action bar the contextual-action-bar pattern describes. It is a floating
 pill:
 
 ```
@@ -505,7 +505,7 @@ Three rules on top, none of which the store enforces today:
 3. **The timer pauses** on `:hover`, on `:focus-within`, and while `document.hidden`;
    it resumes on leave / on visibility. Required by WCAG 2.2.1 (Pause, Stop, Hide) —
    `setTimeout` alone cannot satisfy it. §9.3.
-4. **A notice that describes the current context dies with it.** Rules 1 and 3 mean a card
+2. **A notice that describes the current context dies with it.** Rules 1 and 3 mean a card
    carrying an action has *no* deadline at all, which is right for "Undo" (true forever)
    and wrong for "3 of the selected pictures are in locked sets" (true only of that
    selection). The second kind declares a scope; when the scope changes, it is dismissed.
@@ -749,48 +749,42 @@ moves pixels somewhere; the list is the record of where to look.
 
 The original findings, kept for the evidence:
 
-1. **`design-system-handoff.md` §6 misdescribes its own reference component.** It states
-   the selection bar is a full-width bar on `toolbar`/`panel` at `--bar-height` with
-   `--elevation-2`. The shipped `SelectionBar.vue` is a floating centred pill on
-   `rgba(surface, .86)` with `border-radius: 999px`, `backdrop-filter: blur(12px)` and a
-   hardcoded shadow. §6 needs to either describe the pill or state that the pill is drift
-   scheduled for migration; right now it describes something that does not exist.
-2. **`SelectionBar.vue` lives in `components/panels/`, not `components/widgets/`.**
-   The handoff and the surrounding docs imply `widgets/`.
-3. **Hardcoded cold shadows.** `SelectionBar` `.floating-selection-bar`
+1. **`SelectionBar.vue` lives in `components/panels/`, not `components/widgets/`.**
+   The surrounding docs imply `widgets/`.
+2. **Hardcoded cold shadows.** `SelectionBar` `.floating-selection-bar`
    `0 8px 28px rgba(0,0,0,0.35)` and `.plugin-menu-panel` `0 8px 28px rgba(0,0,0,0.3)`
    are `--elevation-4`'s exact geometry with the token colour replaced by cold black.
    `.grid-range-pill` and `.grid-breadcrumb` in `ImageGrid.vue` both use
    `0 1px 6px rgba(0,0,0,0.22)`. All four should be `var(--elevation-N)`.
-4. **Off-grid and off-ramp values in `SelectionBar`:** `bottom: 18px`, `gap: 6px`,
+3. **Off-grid and off-ramp values in `SelectionBar`:** `bottom: 18px`, `gap: 6px`,
    `padding: 6px 10px`, `max-width: calc(100% - 24px)`, `border-radius: 999px` (literal,
    not `--radius-pill`), `border-radius: 5px` on the buttons (not in the radius set),
    40px button boxes, and `font-size: 1.1em / 0.85em / 0.88em / 0.92em` — `em` sizing is
    explicitly forbidden by §3 of the visual language. Fixing `bottom: 18px` → `--space-5`
    is a prerequisite for the §2.2 arithmetic landing on tokens.
-5. **`.selbar-pop` uses `0.22s ease`**, not `--dur-2` / `--ease-*`.
-6. **`SelectionBar.vue:805`** `.remove-btn` uses `rgb(var(--v-theme-on-warning))` — an
+4. **`.selbar-pop` uses `0.22s ease`**, not `--dur-2` / `--ease-*`.
+5. **`SelectionBar.vue:805`** `.remove-btn` uses `rgb(var(--v-theme-on-warning))` — an
    implicitly Vuetify-derived token that resolves to `#fff` at 3.25:1 on the light
    `warning` fill. Same class as the `on-error` finding.
-7. **All four `on-<status>` tokens are Vuetify-derived and seven of eight fail WCAG.**
+6. **All four `on-<status>` tokens are Vuetify-derived and seven of eight fail WCAG.**
    Full table and evidence in §3.3. `on-success` at 2.78:1 fails even the 3:1 non-text
    floor. Vuetify's `getForeground()` also returns pure `#000`/`#fff`, and pure black is
    explicitly banned by §4 of the visual language. The handoff's §3 token table omits all
    four (as it does `sidebar-hover`, `on-sidebar-hover`, `overlay`, `focus` and `hover`),
    so nothing in the documentation reveals that they exist and are wrong.
-8. **The light theme's `success` and `info` were never deepened.** `main.js` says the
+7. **The light theme's `success` and `info` were never deepened.** `main.js` says the
    light theme's "status hues are deepened so they hold contrast on the light canvas" —
    true for `error` (`#cf3b30` vs `#f44336`) and `warning` (`#b8861f` vs `#db7900`), but
    `success` (`#4caf50`) and `info` (`#2196F3`) are the unmodified Material 500s in both
    themes. As a foreground on the light canvas they measure 2.59:1 and 2.88:1 — both
    below the 3:1 UI floor. This is why §3.2 keeps status hue out of the glyph.
-9. **31 native `alert()` calls** across `ImageGrid.vue`, `ImageOverlay.vue`,
+8. **31 native `alert()` calls** across `ImageGrid.vue`, `ImageOverlay.vue`,
    `SideBar.vue`, `CharacterEditor.vue`, `PictureSetEditor.vue`,
    `OverlayDescriptionPanel.vue`, `useGridDragDrop.js` and `useStackOrdering.js`. Each is
    an unstyled, blocking, focus-stealing OS dialog inside a design-system app.
-10. **`DeleteForeverDialog.vue` uses the filled `mdi-alert`** where the rest of the app
+9. **`DeleteForeverDialog.vue` uses the filled `mdi-alert`** where the rest of the app
     uses the outline family.
-11. **There is no z-index scale.** 40+ distinct values from `0` to `99999`, including two
+10. **There is no z-index scale.** 40+ distinct values from `0` to `99999`, including two
     `z-index: 1000 !important`. Any new floating layer is currently placed by guesswork.
     A `--z-*` ladder is the right fix; §11 requests only the one value this surface needs.
     *(Correction: the codebase maximum is **100000**, not 99999 — `TitleBar.vue:188`,
