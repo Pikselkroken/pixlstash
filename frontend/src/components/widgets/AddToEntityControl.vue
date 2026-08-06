@@ -169,6 +169,7 @@ import {
   removeCharacterFaces,
 } from "../../api/characters";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   // 'set' | 'project' | 'character' | 'face'.
@@ -724,7 +725,7 @@ async function readCharacterMembers(ids) {
  */
 function reportToggleFailure(e, fallback) {
   const status = e?.response?.status;
-  const detail = e?.response?.data?.detail || e?.message || String(e);
+  const detail = errorDetail(e) || e?.message || String(e);
   console.warn(
     `[AddToEntityControl] ${props.type} assignment failed (status=${status ?? "n/a"}):`,
     e,
@@ -815,7 +816,7 @@ async function toggleSet(item) {
     // server again rather than patching the shared cache from here.
     entityLists.invalidate(["sets"], { baseUrl: baseUrl.value });
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     statusMessage.value = String(detail).includes("already in set")
       ? "Already in set"
       : reportToggleFailure(
@@ -960,7 +961,7 @@ async function addToLastSet() {
     scheduleStatusClear();
     return { success: true, setName: item.name };
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     statusMessage.value = String(detail).includes("already in set")
       ? `Already in ${item.name}`
       : reportToggleFailure(e, "Failed to add");

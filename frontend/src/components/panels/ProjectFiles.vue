@@ -143,6 +143,7 @@ import {
   deleteProjectAttachment,
 } from "../../api/projects";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   projectId: { type: Number, required: true },
@@ -221,7 +222,7 @@ async function onDrop(e) {
         files.value.push(created);
       }
     } catch (err) {
-      uploadError.value = err?.response?.data?.detail ?? "Could not save URL.";
+      uploadError.value = errorDetail(err) ?? "Could not save URL.";
     }
     return;
   }
@@ -238,8 +239,7 @@ async function onDrop(e) {
     }
     await fetchFiles();
   } catch (err) {
-    uploadError.value =
-      err?.response?.data?.detail ?? "Upload failed. Please try again.";
+    uploadError.value = errorDetail(err) ?? "Upload failed. Please try again.";
   } finally {
     uploading.value = false;
   }
@@ -288,7 +288,7 @@ async function submitUrl() {
     urlTitle.value = "";
     showUrlForm.value = false;
   } catch (err) {
-    uploadError.value = err?.response?.data?.detail ?? "Could not save URL.";
+    uploadError.value = errorDetail(err) ?? "Could not save URL.";
   }
 }
 

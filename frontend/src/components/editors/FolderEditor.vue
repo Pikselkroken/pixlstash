@@ -656,6 +656,7 @@ import {
   normalizeFolderPath,
 } from "../../utils/dockerHelpers";
 import FolderBrowser from "./FolderBrowser.vue";
+import { errorDetail } from "../../utils/apiError";
 
 const appVersion = __APP_VERSION__;
 
@@ -1239,7 +1240,7 @@ async function submitFolder() {
     emit("saved", savedResponse || null);
   } catch (error) {
     saveError.value =
-      error?.response?.data?.detail || `Failed to save ${props.type} folder.`;
+      errorDetail(error) || `Failed to save ${props.type} folder.`;
   }
 }
 
@@ -1257,7 +1258,7 @@ async function doDelete() {
     emit("deleted");
   } catch (error) {
     saveError.value =
-      error?.response?.data?.detail || `Failed to remove ${props.type} folder.`;
+      errorDetail(error) || `Failed to remove ${props.type} folder.`;
     confirmingDelete.value = false;
   } finally {
     deleteLoading.value = false;

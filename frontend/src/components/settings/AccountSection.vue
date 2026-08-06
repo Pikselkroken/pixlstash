@@ -22,6 +22,7 @@ import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import SettingsSection from "./SettingsSection.vue";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -311,7 +312,7 @@ async function createUserToken() {
     tokenWatermark.value = false;
     await fetchUserTokens();
   } catch (e) {
-    tokensError.value = e?.response?.data?.detail || "Failed to create token.";
+    tokensError.value = errorDetail(e) || "Failed to create token.";
   } finally {
     tokensLoading.value = false;
   }
@@ -332,7 +333,7 @@ async function updateTokenWatermark(token, value) {
   try {
     await patchToken(token.id, { watermark: value });
   } catch (e) {
-    tokensError.value = e?.response?.data?.detail || "Failed to update token.";
+    tokensError.value = errorDetail(e) || "Failed to update token.";
     token.watermark = previousValue;
   } finally {
     watermarkUpdating.delete(token.id);
@@ -357,7 +358,7 @@ async function deleteUserToken() {
     tokenToDelete.value = null;
     await fetchUserTokens();
   } catch (e) {
-    tokensError.value = e?.response?.data?.detail || "Failed to delete token.";
+    tokensError.value = errorDetail(e) || "Failed to delete token.";
   } finally {
     tokensLoading.value = false;
   }
@@ -404,8 +405,7 @@ async function submitPasswordChange() {
       }
     }
   } catch (e) {
-    settingsError.value =
-      e?.response?.data?.detail || "Failed to update password.";
+    settingsError.value = errorDetail(e) || "Failed to update password.";
   } finally {
     settingsLoading.value = false;
   }

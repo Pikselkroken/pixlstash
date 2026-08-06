@@ -16,6 +16,7 @@ import {
 // a second restore path, so it comes from the pictures resource module (the
 // import module owns the staging session, not the whole picture domain).
 import { restoreScrapheap } from "../../api/pictures";
+import { errorDetail } from "../../utils/apiError";
 
 // ── Async streaming-staging import (#459) ────────────────────────────────────
 // This component owns the two-phase import experience over the finalised
@@ -140,7 +141,7 @@ function offerScrapheapRestore(fileCount, pictureIds) {
           noticeStore.push({
             level: "error",
             text:
-              error?.response?.data?.detail ||
+              errorDetail(error) ||
               "Could not restore those pictures. Please try again.",
           });
         }
@@ -718,7 +719,7 @@ async function startImport(files, options = {}) {
       // reason (400 empty / face-worker-down, 409 committed, 507 disk) and
       // discard the session. A 409 means it is already handed off, so leave it.
       const detail =
-        err?.response?.data?.detail || err?.message || "Import commit failed.";
+        errorDetail(err) || err?.message || "Import commit failed.";
       const status = err?.response?.status;
       if (status !== 409 && currentStagingId) {
         const stagingId = currentStagingId;

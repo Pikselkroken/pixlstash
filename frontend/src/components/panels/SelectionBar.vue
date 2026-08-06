@@ -333,6 +333,7 @@ import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import { isEditableElement } from "../../utils/dom.js";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   selectedCount: Number,
@@ -637,7 +638,7 @@ async function fetchComfyWorkflows() {
     comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
   } catch (err) {
     comfyuiWorkflowError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+      errorDetail(err) || err?.message || String(err);
     comfyuiWorkflows.value = [];
   } finally {
     comfyuiWorkflowLoading.value = false;
@@ -681,8 +682,7 @@ async function runSelectedComfyWorkflow() {
       comfyuiMenuOpen.value = false;
     }, 1200);
   } catch (err) {
-    comfyuiRunError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+    comfyuiRunError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     comfyuiRunLoading.value = false;
   }

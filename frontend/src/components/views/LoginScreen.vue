@@ -75,6 +75,7 @@ import { onMounted, ref } from "vue";
 import { checkLoginStatus, login } from "../../utils/apiClient";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import WordmarkLogo from "../WordmarkLogo.vue";
+import { errorDetail } from "../../utils/apiError";
 
 defineProps({
   tokenError: { type: String, default: null },
@@ -101,7 +102,7 @@ async function submitLogin() {
     await login(username.value, password.value); // Call the centralised login function
   } catch (err) {
     console.error("Login failed:", err);
-    error.value = err.response?.data?.detail || err.message || "Login failed.";
+    error.value = errorDetail(err) || err.message || "Login failed.";
   }
 }
 

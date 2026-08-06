@@ -148,6 +148,7 @@ import {
 import { listTaggers } from "../../api/taggers";
 import { copyText } from "../../utils/clipboard";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { errorDetail } from "../../utils/apiError";
 import {
   isDescriptionSentinel,
   formatDescriptionSentinel,
@@ -247,7 +248,7 @@ async function saveDescription() {
   } catch (err) {
     console.error("Failed to update description", err);
     noticeStore.error(
-      `Couldn't save the description. ${err?.response?.data?.detail || err?.message || "Please try again."}`,
+      `Couldn't save the description. ${errorDetail(err) || err?.message || "Please try again."}`,
       { key: "description-save" },
     );
   } finally {
@@ -319,7 +320,7 @@ async function refreshDescription(model = null) {
   } catch (err) {
     console.error("Failed to reset description", err);
     noticeStore.error(
-      `Couldn't reset the description. ${err?.response?.data?.detail || err?.message || "Please try again."}`,
+      `Couldn't reset the description. ${errorDetail(err) || err?.message || "Please try again."}`,
       { key: "description-reset" },
     );
   } finally {

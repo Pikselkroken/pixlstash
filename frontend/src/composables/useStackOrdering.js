@@ -28,6 +28,7 @@ import {
 } from "../api/stacks";
 import { useGridStore } from "../stores/useGridStore";
 import { useSortStore } from "../stores/useSortStore";
+import { errorDetail } from "../utils/apiError";
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 
@@ -974,7 +975,7 @@ export function useStackOrdering(
     } catch (err) {
       console.error(`Failed to save the order of stack ${stackId}`, err);
       noticeStore.error(
-        `Couldn't save the stack order. ${err?.response?.data?.detail || err?.message || "The previous order was restored."}`,
+        `Couldn't save the stack order. ${errorDetail(err) || err?.message || "The previous order was restored."}`,
         { key: "stack-order-save" },
       );
       if (Array.isArray(previousIds) && previousIds.length) {

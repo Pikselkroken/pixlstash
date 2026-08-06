@@ -11,6 +11,7 @@ import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -72,7 +73,7 @@ async function save() {
       emit("saved", created?.id ?? null);
     }
   } catch (e) {
-    error.value = e?.response?.data?.detail || e.message || "Save failed.";
+    error.value = errorDetail(e) || e.message || "Save failed.";
   } finally {
     saving.value = false;
   }
@@ -93,7 +94,7 @@ async function deleteProject() {
     await deleteProjectRequest(props.project.id);
     emit("deleted", props.project.id);
   } catch (e) {
-    error.value = e?.response?.data?.detail || e.message || "Delete failed.";
+    error.value = errorDetail(e) || e.message || "Delete failed.";
     noticeStore.error(error.value);
   } finally {
     deleting.value = false;

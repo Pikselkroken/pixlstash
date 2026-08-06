@@ -40,6 +40,7 @@ import { getTagHealth, rebuildTagHealth } from "../api/tagHealth";
 import { getAnomalyRegion } from "../api/pictures";
 import { useEntityListsStore } from "./useEntityListsStore";
 import { SET_ICONS, SET_COLORS } from "../utils/setAppearance";
+import { errorDetail } from "../utils/apiError";
 
 const PAGE_SIZE = 200;
 
@@ -871,9 +872,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       createError.value =
         e?.response?.status === 409
           ? `An open review already exists for “${t}”.`
-          : e?.response?.data?.detail ||
-            e?.message ||
-            "Failed to create the review";
+          : errorDetail(e) || e?.message || "Failed to create the review";
       return null;
     } finally {
       creating.value = false;

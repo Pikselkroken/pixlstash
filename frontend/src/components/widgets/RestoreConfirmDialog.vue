@@ -17,6 +17,7 @@ import { computed, ref, watch } from "vue";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { formatUserDate } from "../../utils/utils";
 import { kindChipColor, relativeDate } from "../../utils/snapshots";
+import { errorDetail } from "../../utils/apiError";
 import {
   beginFullRestoreRequest,
   endFullRestoreRequest,
@@ -133,7 +134,7 @@ async function fetchPreview(cpId) {
     preview.value = await store.previewRestore(cpId, props.resources);
   } catch (err) {
     previewError.value =
-      err?.response?.data?.detail || err?.message || "Failed to load preview.";
+      errorDetail(err) || err?.message || "Failed to load preview.";
   } finally {
     previewLoading.value = false;
   }

@@ -324,6 +324,7 @@ import { resetPictureTags } from "../../api/pictures";
 import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
+import { errorDetail } from "../../utils/apiError";
 
 const MAX_TAG_FETCH = 100;
 const MAX_PREVIEW_IMAGES = 16;
@@ -626,7 +627,7 @@ async function confirmPredictionOnAll(
       fetchSelectedImagePredictions(),
     ]);
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     predActionLoading.value = predActionLoading.value.filter(
       (n) => n !== predEntry.tag,
@@ -677,7 +678,7 @@ async function removeTagFromAll(
     });
     await fetchSelectedImageTags();
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     tagActionLoading.value = tagActionLoading.value.filter(
       (n) => n !== tagEntry.name,
@@ -705,7 +706,7 @@ async function addTagToRemaining(tagEntry) {
     });
     await fetchSelectedImageTags();
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     tagActionLoading.value = tagActionLoading.value.filter(
       (n) => n !== tagEntry.name,
@@ -747,8 +748,7 @@ async function generateTagsForAll(model = null) {
     generateTagsSuccess.value = `Queued ${ids.length} image${ids.length !== 1 ? "s" : ""} for re-tagging${suffix}`;
     emit("tags-applied", { pictureIds: ids, action: "reset" });
   } catch (err) {
-    generateTagsError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+    generateTagsError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     generateTagsLoading.value = false;
   }
@@ -947,7 +947,7 @@ async function applyTag() {
     emit("tags-applied", { tag, pictureIds: ids });
     await fetchSelectedImageTags();
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     tagLoading.value = false;
   }
@@ -1007,7 +1007,7 @@ async function rejectTagOnAll(tagEntry, { batchId } = {}) {
     );
     await fetchSelectedImagePredictions();
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   }
 }
 

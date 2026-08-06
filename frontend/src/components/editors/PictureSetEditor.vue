@@ -174,6 +174,7 @@ import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
+import { errorDetail } from "../../utils/apiError";
 
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
@@ -318,7 +319,7 @@ async function saveSetFromEditor(setData) {
   } catch (e) {
     console.error("Failed to save picture set", e);
     noticeStore.error(
-      `Couldn't save that set. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Couldn't save that set. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "set-save" },
     );
   }

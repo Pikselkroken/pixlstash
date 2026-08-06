@@ -328,6 +328,7 @@ import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import { getPictureRecipe, listWorkflows, runImageToImage, runRecipe } from "../../api/comfyui";
 import { getPictureMetadata } from "../../api/pictures";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -820,7 +821,7 @@ async function loadRecipe(generation, imageId) {
     if (!isCurrentLoad(generation, imageId)) return;
     recipe.value = null;
     recipeError.value =
-      err?.response?.data?.detail ||
+      errorDetail(err) ||
       "Could not check this image for an embedded workflow.";
     console.error("Failed to read remix recipe:", err);
   } finally {
@@ -987,7 +988,7 @@ async function submit() {
     // A submission error is a FORM error: keep the dialog and every input.
     submitting.value = false;
     submitError.value =
-      err?.response?.data?.detail || err?.message || "Could not start the run.";
+      errorDetail(err) || err?.message || "Could not start the run.";
   }
 }
 </script>

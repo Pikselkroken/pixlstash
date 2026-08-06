@@ -8,6 +8,7 @@ import PluginsTable from "../widgets/PluginsTable.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsTwoCol from "./SettingsTwoCol.vue";
 import SettingsFieldBlock from "./SettingsFieldBlock.vue";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -107,8 +108,7 @@ async function saveMaxVramGb() {
     maxVramGbValue.value = nextValue;
     maxVramGbSuccess.value = "Saved.";
   } catch (e) {
-    maxVramGbError.value =
-      e?.response?.data?.detail || "Failed to update VRAM budget.";
+    maxVramGbError.value = errorDetail(e) || "Failed to update VRAM budget.";
   } finally {
     maxVramGbLoading.value = false;
     if (maxVramGbSuccess.value) {
@@ -159,7 +159,7 @@ async function setKeepModelsInMemory(value) {
     keepModelsInMemory.value = nextValue;
   } catch (e) {
     keepModelsInMemoryError.value =
-      e?.response?.data?.detail || "Failed to update model memory setting.";
+      errorDetail(e) || "Failed to update model memory setting.";
   } finally {
     keepModelsInMemoryLoading.value = false;
   }

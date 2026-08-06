@@ -118,6 +118,7 @@ import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import { errorDetail } from "../../utils/apiError";
 
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
@@ -314,7 +315,7 @@ async function saveCharacter(charData) {
   } catch (e) {
     console.error("Failed to save character", e);
     noticeStore.error(
-      `Couldn't save that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Couldn't save that person. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "character-save" },
     );
   }

@@ -83,6 +83,7 @@ import { useProjectStore } from "../../stores/useProjectStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useFilterStore } from "../../stores/useFilterStore";
+import { errorDetail } from "../../utils/apiError";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -107,7 +108,7 @@ const noticeStore = useNoticeStore();
  * @param {unknown} e
  */
 function noticeDetail(e) {
-  return e?.response?.data?.detail || e?.message || "Please try again.";
+  return errorDetail(e) || e?.message || "Please try again.";
 }
 
 // The desktop shell hosts the brand (logo + "new version" alert) in the title
@@ -544,7 +545,7 @@ async function relocateReferenceFolder() {
     referenceFolderRelocateResult.value = `Moved ${data?.moved_entry_count ?? 0} item${data?.moved_entry_count === 1 ? "" : "s"} and updated ${data?.rewritten_count ?? 0} picture path${data?.rewritten_count === 1 ? "" : "s"}.`;
   } catch (error) {
     referenceFolderRelocateError.value =
-      error?.response?.data?.detail || error?.message || "Relocation failed.";
+      errorDetail(error) || error?.message || "Relocation failed.";
   } finally {
     referenceFolderRelocateLoading.value = false;
   }
@@ -2944,7 +2945,7 @@ async function handleDropOnSet(setId, event) {
     // Emit event to parent to remove images from grid
     emit("images-moved", { imageIds: draggedIds });
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     if (typeof detail === "string" && detail.includes("already in set")) {
       showNotice("Picture already in set", setId);
       return;
@@ -3147,7 +3148,7 @@ async function onCharacterDrop(characterId, event) {
     // the grid against not-yet-committed data and also fire wrongly for
     // face-only drags.
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     console.error("Error parsing drag data:", detail);
     if (typeof detail === "string") {
       showNotice(detail, characterId, "character");
@@ -3189,7 +3190,7 @@ async function onCharacterDrop(characterId, event) {
     await fetchCharacterThumbnail(characterId);
     emit("images-assigned-to-character", { characterId, imageIds });
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     console.error("Error assignning character:", detail);
     if (typeof detail === "string") {
       showNotice(detail, characterId, "character");

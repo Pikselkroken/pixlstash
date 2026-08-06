@@ -2990,7 +2990,7 @@ const noticeStore = useNoticeStore();
  * @param {string} fallback - used when the server sent nothing useful.
  */
 function errorDetail(err, fallback = "Please try again.") {
-  return err?.response?.data?.detail || err?.message || fallback;
+  return errorDetail(err) || err?.message || fallback;
 }
 // Live "is the Review Sessions overlay up" signal. It stays mounted over the
 // grid as a modal review surface with its own keyboard/drag handling, so the
@@ -4005,7 +4005,7 @@ async function handleSetProjectForSelected(payload) {
     }
     emit("refresh-sidebar");
   } catch (err) {
-    const message = err?.response?.data?.detail || err?.message || String(err);
+    const message = errorDetail(err) || err?.message || String(err);
     noticeStore.error(`Couldn't update the project. ${message}`, {
       key: "project-update",
     });
@@ -7547,8 +7547,7 @@ async function exportCurrentViewToZip(options = {}) {
     exportProgress.status = "failed";
     exportProgress.message = "Export failed";
     console.error("ZIP export failed", e);
-    noticeStore.error(`Export failed. ${errorDetail(e)}`, {
-      key: "export-zip",
+    noticeStore.error(`Export failed. ${errorDetail(e)}`, { key: "export-zip",
     });
     setTimeout(() => {
       exportProgress.visible = false;
