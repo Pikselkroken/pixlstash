@@ -629,10 +629,6 @@ onUnmounted(() => {
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
   color: rgb(var(--v-theme-on-dark-surface));
 }
-.rs-keys :is(button):focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
 
 .rs-zoom {
   position: fixed;

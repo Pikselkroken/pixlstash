@@ -390,11 +390,6 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   transform: rotate(45deg);
 }
 
-.lock-row__checkbox:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .lock-row__body {
   display: flex;
   flex-direction: column;

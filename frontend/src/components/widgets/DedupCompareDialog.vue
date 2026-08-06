@@ -2302,11 +2302,6 @@ function onZoomContextMenu() {
   background: var(--active-wash);
 }
 
-.dc-pick:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 /* The image takes every pixel the metadata does not strictly need. */
 .dc-thumb {
   position: relative;
@@ -2392,11 +2387,6 @@ function onZoomContextMenu() {
 
 .dc-zoom:hover {
   color: rgb(var(--v-theme-accent));
-}
-
-.dc-zoom:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 /* ── The compact meta grid: two columns, label over value ─────────────────── */
@@ -2505,11 +2495,6 @@ function onZoomContextMenu() {
 .dc-toggle:hover {
   background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));
-}
-
-.dc-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 /* The expansion trigger reads as the value it replaces, not as a button in a

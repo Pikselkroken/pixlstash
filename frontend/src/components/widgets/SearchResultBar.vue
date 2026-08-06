@@ -497,11 +497,6 @@ onUnmounted(() => {
   accent-color: rgb(var(--v-theme-accent));
 }
 
-.search-result-threshold-input:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
 .threshold-panel {
   /* 300px, not the 240px this panel had as the narrow-width fallback: it is now
      the ONLY form of the strength slider, so its travel is the travel. 300 −

@@ -175,11 +175,6 @@ function onKeydown(e) {
   color: rgb(var(--v-theme-on-surface));
 }
 
-.app-dialog__close:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .app-dialog__body {
   overflow-y: auto;
   padding: var(--space-6);

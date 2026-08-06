@@ -182,6 +182,28 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* THE focus indicator (visual-language.md §11). One rule, app-wide, so a
+   focusable element gets the ring by default instead of by remembering to ask:
+   44 byte-identical `outline: none; box-shadow: var(--focus-ring)` blocks in 34
+   components collapsed into this, and anything focusable that was never styled
+   now shows a ring rather than the browser default.
+
+   Specificity is deliberately (0,1,0) — the bare `:focus-visible`, with the
+   exclusion wrapped in `:where()` so it contributes nothing. Every component
+   rule is `.class:focus-visible` at (0,2,0) and therefore still wins, whether it
+   adds to the ring (StackBadge's inset warning stroke) or replaces it
+   (StatsSidebar's SVG stroke). A component that wants NO indicator must say
+   `box-shadow: none` explicitly now, not merely stay silent.
+
+   `.v-btn` is excluded because Vuetify paints its elevation with `box-shadow`
+   and its own rules are class-only (0,1,0): a tie we would win or lose on import
+   order, flattening an elevated button while it holds focus. Vuetify's buttons
+   keep their own focus treatment. */
+:focus-visible:not(:where(.v-btn, .v-btn *)) {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 /* The sidebar, toolbar and title bar each paint from their OWN theme token
    (`sidebar`, `toolbar`, `toolbar` respectively) and the grid canvas from
    `background`. Want them to read as one continuous chrome strip? Set those tokens

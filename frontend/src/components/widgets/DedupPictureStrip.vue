@@ -362,11 +362,6 @@ watch(
   cursor: pointer;
 }
 
-.gthumb:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
 .gthumb--cover {
   border-color: rgb(var(--v-theme-accent));
 }

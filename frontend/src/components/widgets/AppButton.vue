@@ -145,11 +145,6 @@ defineExpose({ focus });
   padding: 0;
 }
 
-.app-btn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 /* Both spellings of "not allowed" fade the same way. `aria-disabled`, not the
    attribute, is how this app marks a control that is blocked FOR A REASON
    (UndoControl, ActionReceipt, ReviewDecisionBar): the button keeps its place

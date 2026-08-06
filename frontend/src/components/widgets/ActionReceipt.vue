@@ -265,10 +265,6 @@ function onUndo(event) {
 .r-btn:hover:not([aria-disabled="true"]) {
   background: var(--hover-wash);
 }
-.r-btn:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
 /* `aria-disabled`, never the attribute: disabling a control the keyboard is
    currently ON moves focus to <body>, and this button flips to Redo the moment
    the round trip lands. */

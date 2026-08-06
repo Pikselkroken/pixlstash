@@ -443,10 +443,6 @@ async function create() {
   flex-direction: column;
   gap: 14px;
 }
-.rs-dialog :is(button, input, select):focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
 .rs-dialog-title {
   font-size: 16px;
   font-weight: var(--weight-bold);
@@ -643,10 +639,6 @@ async function create() {
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
   background: rgb(var(--v-theme-dark-surface));
   box-shadow: var(--elevation-2);
-}
-.rs-listbox-menu:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
 }
 .rs-listbox-option {
   display: flex;

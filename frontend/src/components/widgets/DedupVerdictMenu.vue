@@ -182,11 +182,6 @@ function formatCount(value) {
   background: var(--hover-wash);
 }
 
-.vrow:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
 /* The last row standing is ON, not unavailable, so it keeps the active wash and
    only loses its pointer — dimming it would say the opposite of what it means. */
 .vrow:disabled {

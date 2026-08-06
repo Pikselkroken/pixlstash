@@ -722,10 +722,6 @@ const TAIL_TOGGLE_TITLE =
   overflow-y: auto;
   padding: 20px 24px;
 }
-.rs-board :is(button, input, select):focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
 .rs-board-inner {
   /* Fills the frame (sidebar excluded — that's `.rs-board`'s sibling), with
      the surrounding margin coming from `.rs-board`'s own padding. */

@@ -1014,11 +1014,6 @@ watch(
   background: var(--hover-wash);
 }
 
-.wm-drop__target:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .wm-drop__target:disabled {
   cursor: default;
   opacity: 0.6;

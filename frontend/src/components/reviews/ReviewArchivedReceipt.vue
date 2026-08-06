@@ -69,10 +69,6 @@ function formatWhen(iso) {
   justify-content: center;
   padding: 24px;
 }
-.rs-archived :is(button):focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
 .rs-archived-panel {
   width: 420px;
   max-width: 100%;

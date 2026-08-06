@@ -98,10 +98,6 @@ const countText = computed(() =>
 .scope-pill__dismiss:hover {
   background: var(--hover-wash);
 }
-.scope-pill__dismiss:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
 
 /* ── Shared toolbar collapse (docs/design/toolbar-responsive-decisions.md).
    The pill never folds while a scope is active — a filtered list that does

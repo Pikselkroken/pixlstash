@@ -244,10 +244,6 @@ onUnmounted(() => {
   flex-wrap: nowrap;
   min-height: 44px;
 }
-.rs-decide :is(button, input):focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
 
 .rs-decide-btn {
   display: inline-flex;

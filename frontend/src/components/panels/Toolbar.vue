@@ -1410,12 +1410,6 @@ const gbCollapseAllStacksDisabled = computed(
   background: var(--hover-wash);
 }
 
-.gb-sort-migration-open:focus-visible,
-.gb-sort-migration-dismiss:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
 .gb-sort-search-note {
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-panel), 0.7);

@@ -2842,8 +2842,11 @@ defineExpose({ focusTasksTab });
   stroke: rgb(var(--v-theme-primary));
   stroke-width: 2;
 }
+/* The indicator is the SVG stroke below, not a ring: opt out of both halves of
+   the app-wide `:focus-visible` rule in style.css. */
 .agreement-cell:focus-visible {
   outline: none;
+  box-shadow: none;
 }
 .agreement-cell:focus-visible .agreement-cell-outline {
   stroke: rgb(var(--v-theme-accent));

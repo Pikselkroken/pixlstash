@@ -306,10 +306,6 @@ defineExpose({
 .r-btn:hover:not([aria-disabled="true"]) {
   background: var(--hover-wash);
 }
-.r-btn:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
 /* `aria-disabled`, never the attribute: disabling a control the keyboard is on
    moves focus to <body>, and this button flips to Redo when the trip lands. */
 .r-btn[aria-disabled="true"] {

@@ -305,12 +305,6 @@ function viewProgress() {
   color: rgb(var(--v-theme-on-panel));
 }
 
-.tub-view:focus-visible,
-.tub-dismiss:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 /* Enter/leave: a calm slide-and-fade. Reduced motion is honoured globally by
    design-tokens.css, which forces near-zero durations. */
 .tub-enter-active {

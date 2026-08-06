@@ -155,11 +155,6 @@ function requestConfirm() {
   gap: var(--space-2);
 }
 
-.btn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .btn:disabled {
   opacity: 0.38;
   cursor: default;

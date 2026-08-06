@@ -1181,12 +1181,6 @@ function onDblClick(event) {
   background: var(--hover-wash);
 }
 
-.gbtn:focus-visible,
-.gcompare:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
 .gbtn:disabled {
   opacity: var(--opacity-disabled);
   cursor: default;

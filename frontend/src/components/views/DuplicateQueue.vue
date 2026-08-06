@@ -3021,11 +3021,6 @@ defineExpose({ windowedGroups, tierLabel });
   background: var(--hover-wash);
 }
 
-.dq-btn:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
 .dq-btn--accent {
   background: rgb(var(--v-theme-accent));
   border-color: rgb(var(--v-theme-accent));
@@ -3075,11 +3070,6 @@ defineExpose({ windowedGroups, tierLabel });
 
 .qdecided:hover {
   background: var(--hover-wash);
-}
-
-.qdecided:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .qdecided--on {

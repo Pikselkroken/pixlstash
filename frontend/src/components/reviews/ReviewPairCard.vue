@@ -324,8 +324,4 @@ function openZoom(id, ext) {
 .rs-manual-tag:hover {
   background: rgba(0, 0, 0, 0.85);
 }
-.rs-manual-tag:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
 </style>

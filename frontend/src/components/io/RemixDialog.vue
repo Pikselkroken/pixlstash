@@ -1057,11 +1057,6 @@ async function submit() {
   background: var(--hover-wash);
 }
 
-.remix-mode:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .remix-mode--on {
   background: var(--active-wash);
   border-color: rgb(var(--v-theme-accent));
@@ -1174,11 +1169,6 @@ async function submit() {
   border-radius: var(--radius-md);
 }
 
-.remix-select:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .remix-select-chevron {
   position: absolute;
   right: var(--space-3);
@@ -1197,11 +1187,6 @@ async function submit() {
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-}
-
-.remix-textarea:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .remix-hint,
@@ -1332,11 +1317,6 @@ async function submit() {
   background: var(--hover-wash);
 }
 
-.remix-seg-btn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .remix-seg-btn--on {
   background: var(--active-wash);
   color: rgb(var(--v-theme-on-surface));
@@ -1356,11 +1336,6 @@ async function submit() {
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-}
-
-.remix-num:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .remix-error {

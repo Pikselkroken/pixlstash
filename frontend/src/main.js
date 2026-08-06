@@ -110,7 +110,6 @@ const pixlStashLight = {
     border: "#d8d3c8",
     divider: "#e8e4dc",
     overlay: "#00000033",
-    focus: "#7c4dff",
     // Warm hover wash (rgba(45,32,15,.06)) instead of cold black.
     hover: "#2d200f0f",
     // Status hues + their authored foregrounds. The foreground is whichever of
@@ -178,7 +177,6 @@ const pixlStashDark = {
     border: "#363d45",
     divider: "#2c323a",
     overlay: "#00000066",
-    focus: "#7c4dff",
     hover: "#ffffff14",
     // Status hues are DEEP in both themes (unified Camp B palette), so three of
     // the four carry the warm near-white label like every other fill tier here.

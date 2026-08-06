@@ -322,11 +322,6 @@ function cancelReduction() {
   background: var(--hover-wash);
 }
 
-.sr-info:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .sr-tip {
   margin: 0;
   padding-left: var(--space-5);

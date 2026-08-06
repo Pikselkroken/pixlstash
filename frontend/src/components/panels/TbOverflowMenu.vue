@@ -118,11 +118,6 @@ defineExpose({ close });
   background: rgba(var(--v-theme-toolbar-text), 0.1);
 }
 
-.tbo-trigger:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
 .bar-btn--open {
   border-color: rgb(var(--v-theme-border));
   background: rgb(var(--v-theme-panel));

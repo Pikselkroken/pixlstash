@@ -388,11 +388,6 @@ defineExpose({
   background: rgba(var(--v-theme-toolbar-text), 0.1);
 }
 
-.uc-btn:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
 /* `aria-disabled`, not the `disabled` attribute: the design requires the
    buttons to stay tabbable and to keep naming the step ("Nothing to undo"),
    and a `disabled` button is neither focusable nor tooltip-bearing. The visual
@@ -467,11 +462,6 @@ defineExpose({
 
 .uc-row:hover:not(:disabled) {
   background: var(--hover-wash);
-}
-
-.uc-row:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
 }
 
 .uc-row-icon {

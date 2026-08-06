@@ -1147,11 +1147,6 @@ defineExpose({ startImport });
   filter: brightness(1.05);
 }
 
-.dlg-btn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .dlg-btn--danger {
   background: rgba(var(--v-theme-error), 0.1);
   border-color: rgba(var(--v-theme-error), 0.55);

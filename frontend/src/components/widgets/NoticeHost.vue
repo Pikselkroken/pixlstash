@@ -315,11 +315,6 @@ const hostEl = ref(null);
   background: var(--hover-wash);
 }
 
-.notice-action:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .notice-dismiss {
   position: relative;
   flex-shrink: 0;
@@ -347,11 +342,6 @@ const hostEl = ref(null);
 .notice-dismiss:hover {
   color: rgb(var(--v-theme-on-surface));
   background: var(--hover-wash);
-}
-
-.notice-dismiss:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 /* ── Dark-surface variant (spec §2.5) ─────────────────────────────────────── */

@@ -257,11 +257,6 @@ function onPick(member) {
   background: var(--hover-wash);
 }
 
-.sxthumb:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
 /* The cover is flagged twice, by edge and by label, so it survives both a
    colour-blind read and a glance at a strip of near-identical frames. */
 .sxthumb--cover {
@@ -321,10 +316,5 @@ function onPick(member) {
 
 .sxbtn:hover {
   background: var(--hover-wash);
-}
-
-.sxbtn:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
 }
 </style>

@@ -476,11 +476,6 @@ function archivedSummary(a) {
   border-right: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 
-.rs-rail :is(button):focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
-
 .rs-rail-head {
   flex-shrink: 0;
   display: flex;

@@ -200,11 +200,6 @@ const title = computed(() => {
   background-image: linear-gradient(var(--hover-wash), var(--hover-wash));
 }
 
-.sbadge:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
 /* A coloured glyph cannot reach `on-dark-surface`'s luminance, so the chip it
    sits on carries the difference: on the 0.55 scrim the darkest hue in the
    palette measures 1.62:1 over a bright photo, and on this one 3.98:1

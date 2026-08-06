@@ -306,11 +306,6 @@ const close = () => desktop?.windowClose?.();
   background: var(--hover-wash);
 }
 
-.titlebar-library:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 /* Breadcrumb: current-view path, inline after the version. */
 .titlebar-breadcrumb {
   display: flex;

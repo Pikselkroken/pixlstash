@@ -209,11 +209,6 @@ function formatCount(value) {
   background: var(--hover-wash);
 }
 
-.tierrow:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
 .tierrow:disabled {
   opacity: 0.38;
   cursor: default;

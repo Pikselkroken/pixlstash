@@ -771,11 +771,6 @@
   flex-shrink: 0;
 }
 
-.sidebar-telemetry-dot:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .sidebar.sidebar-docked .sidebar-brand {
   flex-direction: column;
   align-items: center;

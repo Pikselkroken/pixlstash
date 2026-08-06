@@ -398,11 +398,6 @@ async function copyCommand(command) {
   text-decoration: underline;
 }
 
-.library-row__path:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .library-row__path--expanded {
   direction: ltr;
   overflow: visible;

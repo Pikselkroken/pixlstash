@@ -410,11 +410,6 @@ function confirmDeleteUnprotected() {
   gap: var(--space-2);
 }
 
-.btn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .btn:disabled {
   /* The named token, same value: it is the one state the system lets fade. */
   opacity: var(--opacity-disabled);

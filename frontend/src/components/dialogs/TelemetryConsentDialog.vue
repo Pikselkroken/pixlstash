@@ -296,11 +296,6 @@ watch(
   background: rgba(var(--v-theme-accent), 0.06);
 }
 
-.tc__opt:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .tc__opt[aria-checked="true"] {
   border-color: rgb(var(--v-theme-accent));
   background: rgba(var(--v-theme-accent), 0.1);

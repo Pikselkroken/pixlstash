@@ -141,11 +141,6 @@ defineEmits([
   filter: brightness(1.15);
 }
 
-.retention-note__change:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .restore-btn {
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));

@@ -377,10 +377,6 @@ function zoomToRegion(box) {
   gap: 10px;
   width: 100%;
 }
-.rs-bin :is(button):focus-visible {
-  outline: 2px solid rgb(var(--v-theme-focus));
-  outline-offset: 1px;
-}
 
 .rs-bin-banner {
   flex-shrink: 0;
