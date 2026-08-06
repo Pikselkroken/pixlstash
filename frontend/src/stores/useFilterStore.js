@@ -20,6 +20,12 @@ export const useFilterStore = defineStore("filter", () => {
   // Impossible-tag grid filter: array of source keys ("no_face" / "no_humans"),
   // OR'd together. Empty array means the filter is off.
   const impossibleSources = ref([]);
+  // Stack state: 'all' | 'stacked' | 'unstacked' | 'unresolved'. Stacked and
+  // unstacked are a filter rather than a destination, because neither carries a
+  // to-do count. 'unresolved' (a group the duplicate queue has found but nobody
+  // has ruled on yet) is still honoured by the store and the API, but the filter
+  // panel no longer offers it: the duplicate queue owns that work.
+  const stackStateFilter = ref("all");
 
   function resetFilters() {
     mediaTypeFilter.value = "all";
@@ -37,6 +43,7 @@ export const useFilterStore = defineStore("filter", () => {
     comfyuiModelFilter.value = [];
     comfyuiLoraFilter.value = [];
     impossibleSources.value = [];
+    stackStateFilter.value = "all";
   }
 
   const isActive = computed(
@@ -61,7 +68,8 @@ export const useFilterStore = defineStore("filter", () => {
         impossibleSources.value.length > 0) ||
       faceBboxFilter.value != null ||
       sharedOnlyFilter.value ||
-      unassignedOnlyFilter.value,
+      unassignedOnlyFilter.value ||
+      stackStateFilter.value !== "all",
   );
 
   const activeCount = computed(() => {
@@ -87,6 +95,7 @@ export const useFilterStore = defineStore("filter", () => {
     if (faceBboxFilter.value != null) count++;
     if (sharedOnlyFilter.value) count++;
     if (unassignedOnlyFilter.value) count++;
+    if (stackStateFilter.value !== "all") count++;
     return count;
   });
 
@@ -107,6 +116,7 @@ export const useFilterStore = defineStore("filter", () => {
     comfyuiLoraFilter,
     comfyuiConfigured,
     impossibleSources,
+    stackStateFilter,
     resetFilters,
     isActive,
     activeCount,

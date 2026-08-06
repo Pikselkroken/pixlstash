@@ -11,7 +11,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 
-from sqlmodel import Session, create_engine, select
+from sqlmodel import Session, select
 from sqlalchemy import (
     delete as sa_delete,
     inspect as sa_inspect,
@@ -20,11 +20,13 @@ from sqlalchemy import (
 
 from pixlstash.db_models import (
     Character,
+    CharacterProjectMember,
     Face,
     Picture,
     PictureProjectMember,
     PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
     Project,
     Tag,
 )
@@ -37,8 +39,15 @@ from ._models import (
     RestoreReport,
     _SUPPORTED_RESOURCE_TYPES,
 )
+from .schema_upgrade import snapshot_engine
 
 logger = get_logger(__name__)
+
+# Transport key for an entity's project membership on a candidate-parent dict.
+# Not a column: it is popped before the row is turned back into a model, and it
+# exists only so the join rows travel with the parent from the snapshot session
+# to the live one (issue #125).
+_PROJECT_IDS_KEY = "__project_ids"
 
 
 class ResourceRestoreMixin:
@@ -328,7 +337,7 @@ class ResourceRestoreMixin:
             resource_id=resource_id,
         )
 
-        snap_engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
+        snap_engine = snapshot_engine(abs_snapshot)
         try:
             with Session(snap_engine) as snap_session:
                 if resource_type == "picture":
@@ -476,7 +485,7 @@ class ResourceRestoreMixin:
             "projects": [],
         }
 
-        snap_engine = create_engine(f"sqlite:///{upgraded_snapshot}", echo=False)
+        snap_engine = snapshot_engine(upgraded_snapshot)
         try:
             with Session(snap_engine) as snap_session:
                 for item in resources:
@@ -555,7 +564,13 @@ class ResourceRestoreMixin:
         Returns:
             ``{"characters": [{...}, ...], "picture_sets": [...],
               "projects": [...]}`` — one dict per parent referenced
-            anywhere in ``snap_rows``.
+            anywhere in ``snap_rows``. Character and picture-set dicts carry an
+            extra :data:`_PROJECT_IDS_KEY` entry holding the entity's project
+            membership from the snapshot; :meth:`_restore_parent_rows` pops it
+            and rebuilds the join rows. Without it a restored entity would come
+            back with its scalar ``project_id`` set but no membership row, i.e.
+            invisible to every project-scoped read (issue #125: the join is the
+            read model).
         """
 
         def _as_dict(obj):
@@ -571,14 +586,44 @@ class ResourceRestoreMixin:
         }
         set_ids = {m.set_id for m in snap_rows.get("picture_set_members", [])}
         proj_ids = {m.project_id for m in snap_rows.get("picture_project_members", [])}
+        # Root entity memberships are authoritative snapshot collections too.
+        # Their projects must participate in dependency preflight before the
+        # live join rows are replaced, otherwise the exact replacement can fail
+        # late (or be silently narrowed) when a referenced project was deleted.
+        proj_ids.update(snap_rows.get("character_project_ids", []))
+        proj_ids.update(snap_rows.get("picture_set_project_ids", []))
+
+        def _with_project_ids(row, membership_model, id_column, entity_id):
+            if row is None:
+                return None
+            row[_PROJECT_IDS_KEY] = sorted(
+                int(pid)
+                for pid in snap_session.execute(
+                    sa_select(membership_model.project_id).where(id_column == entity_id)
+                )
+                .scalars()
+                .all()
+                if pid is not None
+            )
+            return row
 
         characters = [
-            _as_dict(snap_session.get(Character, cid))
+            _with_project_ids(
+                _as_dict(snap_session.get(Character, cid)),
+                CharacterProjectMember,
+                CharacterProjectMember.character_id,
+                cid,
+            )
             for cid in sorted(char_ids)
             if snap_session.get(Character, cid) is not None
         ]
         picture_sets = [
-            _as_dict(snap_session.get(PictureSet, sid))
+            _with_project_ids(
+                _as_dict(snap_session.get(PictureSet, sid)),
+                PictureSetProjectMember,
+                PictureSetProjectMember.set_id,
+                sid,
+            )
             for sid in sorted(set_ids)
             if snap_session.get(PictureSet, sid) is not None
         ]
@@ -639,6 +684,13 @@ class ResourceRestoreMixin:
         are merged; existing live parents (with the same ID) are not
         touched.
 
+        A restored character or picture set also gets its project-membership
+        join rows rebuilt from the snapshot (issue #125). The join is the read
+        model, so merging the row alone would restore an entity that is
+        unreachable from the project it belongs to. Only memberships whose
+        project actually exists live are re-created — a project the user did not
+        restore would violate the foreign key.
+
         Args:
             live_session: Live writer session.
             candidate_parents: Output of ``_collect_candidate_parents``.
@@ -648,6 +700,7 @@ class ResourceRestoreMixin:
             Number of parent rows restored.
         """
         restored = 0
+        pending_memberships: list[tuple[type, str, int, list[int]]] = []
         for plural, model in (
             ("characters", Character),
             ("picture_sets", PictureSet),
@@ -657,9 +710,69 @@ class ResourceRestoreMixin:
             if not wanted:
                 continue
             for parent in candidate_parents.get(plural, []):
-                if parent["id"] in wanted:
-                    live_session.merge(model(**parent))
-                    restored += 1
+                if parent["id"] not in wanted:
+                    continue
+                fields = dict(parent)
+                project_ids = fields.pop(_PROJECT_IDS_KEY, None)
+                live_session.merge(model(**fields))
+                restored += 1
+                if project_ids:
+                    if model is Character:
+                        pending_memberships.append(
+                            (
+                                CharacterProjectMember,
+                                "character_id",
+                                int(fields["id"]),
+                                project_ids,
+                            )
+                        )
+                    elif model is PictureSet:
+                        pending_memberships.append(
+                            (
+                                PictureSetProjectMember,
+                                "set_id",
+                                int(fields["id"]),
+                                project_ids,
+                            )
+                        )
+
+        if pending_memberships:
+            # Flush the parents first so the membership FKs resolve, and only
+            # link projects that exist live.
+            live_session.flush()
+            wanted_projects = {
+                pid for _m, _c, _e, pids in pending_memberships for pid in pids
+            }
+            live_project_ids = set(
+                live_session.execute(
+                    sa_select(Project.id).where(Project.id.in_(wanted_projects))
+                )
+                .scalars()
+                .all()
+            )
+            for (
+                membership_model,
+                id_field,
+                entity_id,
+                project_ids,
+            ) in pending_memberships:
+                for project_id in project_ids:
+                    if project_id not in live_project_ids:
+                        logger.warning(
+                            "Restore: skipping %s membership %s=%s project_id=%s — "
+                            "the project does not exist in the live database, so "
+                            "the entity comes back without that membership",
+                            membership_model.__name__,
+                            id_field,
+                            entity_id,
+                            project_id,
+                        )
+                        continue
+                    live_session.merge(
+                        membership_model(
+                            **{id_field: entity_id, "project_id": project_id}
+                        )
+                    )
         return restored
 
     def _collect_rows_for_upsert(
@@ -686,6 +799,8 @@ class ResourceRestoreMixin:
             "tags": [],
             "picture_set_members": [],
             "picture_project_members": [],
+            "character_project_ids": [],
+            "picture_set_project_ids": [],
             "character": None,
             "picture_set": None,
             "project": None,
@@ -714,12 +829,30 @@ class ResourceRestoreMixin:
         if resource_type == "picture_set":
             ps = snap_session.get(PictureSet, resource_id)
             rows["picture_set"] = ps
+            rows["picture_set_project_ids"] = sorted(
+                int(project_id)
+                for project_id in snap_session.exec(
+                    select(PictureSetProjectMember.project_id).where(
+                        PictureSetProjectMember.set_id == resource_id
+                    )
+                ).all()
+                if project_id is not None
+            )
         elif resource_type == "project":
             proj = snap_session.get(Project, resource_id)
             rows["project"] = proj
         elif resource_type == "character":
             char = snap_session.get(Character, resource_id)
             rows["character"] = char
+            rows["character_project_ids"] = sorted(
+                int(project_id)
+                for project_id in snap_session.exec(
+                    select(CharacterProjectMember.project_id).where(
+                        CharacterProjectMember.character_id == resource_id
+                    )
+                ).all()
+                if project_id is not None
+            )
 
         return rows
 
@@ -755,6 +888,39 @@ class ResourceRestoreMixin:
             _merge(snap_rows["picture_set"])
         if snap_rows.get("character"):
             _merge(snap_rows["character"])
+
+        # Character/PictureSet project membership is a snapshot-owned
+        # collection for root restores, just like a picture's Face/Tag rows.
+        # Use the canonical write-both helpers so the join rows are replaced
+        # exactly and the legacy scalar project_id is re-derived consistently.
+        from pixlstash.services.project_membership_service import (
+            set_character_projects,
+            set_picture_set_projects,
+        )
+
+        root_character = snap_rows.get("character")
+        if root_character is not None:
+            merged_character = session.get(Character, root_character.id)
+            if merged_character is None:
+                session.flush()
+                merged_character = session.get(Character, root_character.id)
+            set_character_projects(
+                session,
+                merged_character,
+                snap_rows.get("character_project_ids", []),
+            )
+
+        root_picture_set = snap_rows.get("picture_set")
+        if root_picture_set is not None:
+            merged_picture_set = session.get(PictureSet, root_picture_set.id)
+            if merged_picture_set is None:
+                session.flush()
+                merged_picture_set = session.get(PictureSet, root_picture_set.id)
+            set_picture_set_projects(
+                session,
+                merged_picture_set,
+                snap_rows.get("picture_set_project_ids", []),
+            )
 
         # Scrapheap rows carry the snapshot's ORIGINAL ``deleted_at``. Merging
         # that verbatim hands the retention auto-purge an already-expired

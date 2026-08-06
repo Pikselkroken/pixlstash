@@ -972,10 +972,13 @@ def test_full_pair_card_page_survives_sqlite_variable_ceiling():
         assert response.status_code == 200, response.text
         cards = response.json()
         assert len(cards) == card_count
-        assert len(
-            {card["picture_id"] for card in cards}
-            | {card["twin_picture_id"] for card in cards}
-        ) == card_count * 2
+        assert (
+            len(
+                {card["picture_id"] for card in cards}
+                | {card["twin_picture_id"] for card in cards}
+            )
+            == card_count * 2
+        )
     finally:
         _teardown(temp_dir, server)
 
@@ -1343,8 +1346,16 @@ def test_scoped_token_cannot_read_review_suggestions():
         headers = {"Authorization": f"Bearer {token}"}
         scoped_resp = bearer.get(f"{API}/reviews/{rid}/suggestions", headers=headers)
         assert scoped_resp.status_code == 403, scoped_resp.text
-        assert scoped_resp.json()["detail"] == (
-            "Owner-level (full, unscoped) access required"
+        # The denial now comes from the AuthzGate, not from the handler: the
+        # route is declared OWNER_ONLY in ROUTE_POLICIES, so the gate runs
+        # require_unscoped_owner as a router dependency and the handler's own
+        # inline check never executes for a scoped token. Asserting the gate's
+        # message is what keeps this test honest about WHICH layer is holding
+        # the line, which is the thing that would silently rot if the
+        # declaration were ever dropped.
+        assert (
+            scoped_resp.json()["detail"]
+            == "Owner-level (full, unscoped) access required"
         )
 
         # Owner side: the queue is served in full. These are exactly the fields

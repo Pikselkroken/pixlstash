@@ -74,13 +74,20 @@ the Windows exes get an explicit `-unsigned` suffix and a workflow warning
 ## GitHub setup
 
 1. Repo → Settings → Environments → **New environment: `windows-signing`**.
-   Two settings are **mandatory, not optional** — they are the only controls
-   preventing anyone with write access from exfiltrating the TOTP seed by
-   dispatching a modified workflow against the environment:
-   - **Required reviewer** (yourself): every signing job waits for explicit
-     approval. Releases are rare; the friction is negligible.
-   - **Deployment branches/tags restricted** to `v*` tags and `main`.
-   Do not set `WINDOWS_SIGNING_ENABLED` until both are configured.
+   - **Deployment branches/tags restricted** to `v*` tags and `main`. This one
+     is **mandatory**: it is the control that stops a modified workflow on an
+     arbitrary branch from being dispatched against the environment to
+     exfiltrate the TOTP seed. Add nothing else to the list, and prune it after
+     a rollout. A leftover feature branch here is a hole, since it reaches the
+     secrets with none of the tag validation (`ci/certum-windows-signing` sat
+     in this list until 2026-08-04).
+   - **Required reviewer:** deliberately **off**. With a single admin
+     collaborator, approving your own deployment uses the same credential that
+     triggered the run, so it adds no second factor and costs two prompts per
+     release tag. **Reinstate it the moment a second account gets write
+     access**, and at the same time add a ruleset restricting `v*` tag creation
+     to admins. Those two together are what the reviewer was standing in for.
+   Do not set `WINDOWS_SIGNING_ENABLED` until the ref restriction is in place.
 2. Add **environment secrets** on `windows-signing`:
    | Secret | Value |
    |---|---|
@@ -111,12 +118,12 @@ the Windows exes get an explicit `-unsigned` suffix and a workflow warning
 
 ## Operations
 
-- **Every release tag now needs two manual approvals.** Pushing a `v*` tag is
-  no longer fire-and-forget: **Build Electron Desktop App** and **Build
-  Windows Installer** each pause at their sign job until the `windows-signing`
-  environment's required reviewer approves the deployment (Actions → the run →
-  "Review deployments"). Nothing signed attaches until both are approved; the
-  builds themselves run first, so the prompts appear once each build finishes.
+- **Release tags stay fire-and-forget.** Pushing a `v*` tag builds, signs and
+  attaches with no human gate: **Build Electron Desktop App** and **Build
+  Windows Installer** each run their sign job as soon as their build finishes.
+  The environment's ref restriction is the only thing between a workflow and
+  the seed, which is why that list must stay minimal (see GitHub setup above
+  for when to put the reviewer back).
 - **One SimplySign session at a time.** Certum allows a single active session
   per account, so `sign-windows-desktop` and `sign-windows-server` share the
   `certum-simplysign-session` concurrency group (`cancel-in-progress: false`)
@@ -149,7 +156,7 @@ the Windows exes get an explicit `-unsigned` suffix and a workflow warning
 | OTP rejected | Seed mismatch (compare generator vs phone app) or container clock skew. |
 | Segfault at launch, empty log | `$USER` unset — baked into the image (`ENV USER=root`); if it recurs, something cleared the environment. |
 | jsign timestamp errors | `time.certum.pl` hiccup; the action already retries 3×. Persistent failures: try re-running the job. |
-| Signing job waits forever | The `windows-signing` environment's required reviewer hasn't approved the deployment. |
+| Signing job waits forever | The `windows-signing` environment has no required reviewer, so this is normally the shared `certum-simplysign-session` concurrency group: the other workflow's sign job holds it and this one queues (expected, never cancelled). If the run instead shows a "Review deployments" prompt, a reviewer rule was re-added. |
 
 ## Related
 

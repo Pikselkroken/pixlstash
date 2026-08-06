@@ -25,7 +25,6 @@ from sqlmodel import select
 
 from pixlstash.db_models import (
     Character,
-    Face,
     Picture,
     PictureProjectMember,
     PictureSetMember,
@@ -34,6 +33,8 @@ from pixlstash.db_models import (
     TAG_PENDING_SENTINEL,
 )
 from pixlstash.event_types import EventType
+from pixlstash.services import import_dedup_service
+from pixlstash.services.comfyui_recipe_service import format_prompt_rejection
 from pixlstash.services.set_lock_service import drop_locked_set_ids
 from pixlstash.stacking import normalize_stack_positions
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -44,6 +45,16 @@ logger = get_logger(__name__)
 
 SEED_FIELDS = {"noise_seed", "seed"}
 SEED_NODE_CLASSES = {"RandomNoise", "KSampler", "KSamplerAdvanced"}
+
+# Nodes from the ComfyUI-PixlStash pack that upload straight into the vault
+# instead of writing a file for PixlStash to collect. Their history entry
+# carries the ids they created under PIXLSTASH_IDS_KEY, and the images they do
+# report are `type: "temp"` previews of pictures that are already imported.
+PIXLSTASH_SAVER_CLASSES = frozenset({"PixlStashPictureSaver"})
+PIXLSTASH_IDS_KEY = "picture_ids"
+
+# Every class that ends a graph with an image PixlStash can end up owning.
+SAVE_NODE_CLASSES = frozenset({"SaveImage"}) | PIXLSTASH_SAVER_CLASSES
 
 
 def _extract_history_entry(history_payload: dict, prompt_id: str) -> dict:
@@ -277,15 +288,15 @@ def _submit_comfyui_prompt(
     clean_workflow = {
         k: v for k, v in workflow.items() if not k.startswith("pixlstash_")
     }
-    # Pass the workflow under extra_pnginfo so ComfyUI embeds it in the
-    # generated PNG automatically (same as the ComfyUI frontend does).
+    # Do NOT pass the graph under extra_data.extra_pnginfo.workflow: that PNG
+    # chunk is where the ComfyUI frontend stores the *UI* node graph, and the
+    # frontend feeds it to loadGraphData unguarded when an image is dropped on
+    # the canvas. Embedding our API-format graph there breaks drag-back-in
+    # (issue #628). ComfyUI itself always writes the correct ``prompt`` chunk
+    # (the executed API graph), which is what recipe replay and workflow
+    # display read.
     payload = {
         "prompt": clean_workflow,
-        "extra_data": {
-            "extra_pnginfo": {
-                "workflow": clean_workflow,
-            }
-        },
     }
     if client_id:
         payload["client_id"] = client_id
@@ -302,7 +313,16 @@ def _submit_comfyui_prompt(
             detail="ComfyUI prompt request failed",
         ) from exc
     if response.status_code >= 300:
-        detail = (response.text or "").strip()
+        raw_detail = (response.text or "").strip()
+        # ComfyUI answers a validation failure with a structured body naming the
+        # offending node and input. That is the only authoritative account of why
+        # a graph will not run, so surface it rather than a JSON dump.
+        structured = None
+        try:
+            structured = format_prompt_rejection(response.json())
+        except ValueError:
+            logger.debug("ComfyUI prompt error body was not JSON: %s", raw_detail[:200])
+        detail = structured or raw_detail
         logger.warning(
             "ComfyUI prompt failed: status=%s detail=%s",
             response.status_code,
@@ -354,9 +374,24 @@ def _extract_output_node_ids(workflow: dict, payload: dict) -> list[str]:
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
-        if node.get("class_type") == "SaveImage":
+        if node.get("class_type") in SAVE_NODE_CLASSES:
             save_nodes.append(str(node_id))
     return save_nodes
+
+
+def graph_has_pixlstash_saver(workflow: dict) -> bool:
+    """True when *workflow* ends in a node that imports into the vault itself.
+
+    Such a graph needs no ``filename_prefix`` tagging to be stacked: the saver
+    reports the picture ids it created and ``_process_comfyui_outputs`` adopts
+    them directly.
+    """
+    if not isinstance(workflow, dict):
+        return False
+    return any(
+        isinstance(node, dict) and node.get("class_type") in PIXLSTASH_SAVER_CLASSES
+        for node in workflow.values()
+    )
 
 
 def _fetch_comfyui_history(base_url: str, prompt_id: str) -> dict:
@@ -393,11 +428,12 @@ def _fetch_comfyui_history(base_url: str, prompt_id: str) -> dict:
         ) from exc
 
 
-def _extract_comfyui_output_images(
+def _iter_output_nodes(
     history_payload: dict,
     prompt_id: str,
     output_node_ids: list[str] | None,
-) -> list[dict]:
+):
+    """Yield the ``outputs`` payload of each history node in scope."""
     outputs = {}
     if isinstance(history_payload, dict):
         if "outputs" in history_payload:
@@ -406,14 +442,54 @@ def _extract_comfyui_output_images(
             outputs = history_payload.get(prompt_id, {}).get("outputs") or {}
 
     if not isinstance(outputs, dict):
-        return []
+        return
 
     node_filter = set(output_node_ids or [])
-    images = []
     for node_id, node_payload in outputs.items():
         if node_filter and str(node_id) not in node_filter:
             continue
         if not isinstance(node_payload, dict):
+            continue
+        yield node_payload
+
+
+def _extract_pixlstash_picture_ids(
+    history_payload: dict,
+    prompt_id: str,
+    output_node_ids: list[str] | None,
+) -> list[int] | None:
+    """Picture ids a PixlStash saver node imported, or None if none ran.
+
+    The empty list is meaningful and distinct from None: the node ran but every
+    image it uploaded was a duplicate of one already in the vault, so there is
+    nothing new to stack — and nothing to gain from downloading its previews.
+    """
+    ids: list[int] | None = None
+    for node_payload in _iter_output_nodes(history_payload, prompt_id, output_node_ids):
+        if PIXLSTASH_IDS_KEY not in node_payload:
+            continue
+        if ids is None:
+            ids = []
+        for value in node_payload.get(PIXLSTASH_IDS_KEY) or []:
+            # The node joins its ids into one comma-separated string so that
+            # downstream ComfyUI nodes can consume them as a STRING.
+            for part in str(value).split(","):
+                part = part.strip()
+                if part.isdigit():
+                    ids.append(int(part))
+    return ids
+
+
+def _extract_comfyui_output_images(
+    history_payload: dict,
+    prompt_id: str,
+    output_node_ids: list[str] | None,
+) -> list[dict]:
+    images = []
+    for node_payload in _iter_output_nodes(history_payload, prompt_id, output_node_ids):
+        if PIXLSTASH_IDS_KEY in node_payload:
+            # A PixlStash saver's images are temp previews of pictures it has
+            # already imported. Downloading them would re-import a duplicate.
             continue
         for image in node_payload.get("images") or []:
             if not isinstance(image, dict):
@@ -437,7 +513,12 @@ def _wait_for_comfyui_outputs(
     output_node_ids: list[str] | None,
     timeout_s: float = 300.0,
     poll_s: float = 1.0,
-) -> list[dict]:
+) -> tuple[list[dict], list[int] | None]:
+    """Poll history until the prompt produces output.
+
+    Returns the images to download and import, plus the picture ids a PixlStash
+    saver node imported on its own (None when no such node ran).
+    """
     # 5 min budget covers cold model loading plus generation before giving up.
     deadline = time.time() + timeout_s
     last_images = []
@@ -446,18 +527,21 @@ def _wait_for_comfyui_outputs(
         images = _extract_comfyui_output_images(
             history_payload, prompt_id, output_node_ids
         )
+        pixlstash_ids = _extract_pixlstash_picture_ids(
+            history_payload, prompt_id, output_node_ids
+        )
         status_str, error_text = _extract_history_status_and_error(
             history_payload, prompt_id
         )
-        if images:
-            return images
+        if images or pixlstash_ids is not None:
+            return images, pixlstash_ids
         if status_str in {"error", "failed", "failure", "interrupted", "cancelled"}:
             raise RuntimeError(error_text or f"ComfyUI status={status_str}")
         if error_text and status_str != "success":
             raise RuntimeError(error_text)
         last_images = images
         time.sleep(poll_s)
-    return last_images
+    return last_images, None
 
 
 def _emit_comfyui_failure_progress(server, prompt_id: str, message: str) -> None:
@@ -534,38 +618,42 @@ def _import_comfyui_outputs(
     if not image_entries:
         return [], []
 
-    shas = [
-        ImageUtils.calculate_hash_from_bytes(img_bytes)
-        for img_bytes, _ in image_entries
+    fingerprints = [
+        (
+            ImageUtils.calculate_hash_from_bytes(img_bytes),
+            len(img_bytes),
+            ImageUtils.calculate_full_hash_from_bytes(img_bytes),
+        )
+        for img_bytes, _ext in image_entries
     ]
 
-    existing_pictures = server.vault.db.run_immediate_read_task(
-        lambda session: Picture.find(session, pixel_shas=shas, include_unimported=True)
+    candidates = server.vault.db.run_immediate_read_task(
+        import_dedup_service.load_match_candidates_in_session,
+        [(sampled, size) for sampled, size, _full in fingerprints],
+        False,
     )
-    existing_map = {pic.pixel_sha: pic for pic in existing_pictures}
+    existing_map, _scrapheaped_map = import_dedup_service.partition_confirmed_matches(
+        candidates, fingerprints, server.vault.image_root
+    )
 
-    new_entries = [
-        (entry, sha)
-        for entry, sha in zip(image_entries, shas)
-        if sha not in existing_map
-    ]
-
-    new_pictures = []
-    for (img_bytes, ext), sha in new_entries:
+    new_picture_map = {}
+    for (img_bytes, ext), fingerprint in zip(image_entries, fingerprints):
+        if fingerprint in existing_map or fingerprint in new_picture_map:
+            continue
+        sampled_sha, _size_bytes, _full_sha = fingerprint
         if output_dir and source_file_stem:
             pic_uuid = _unique_edit_filename(output_dir, source_file_stem, ext)
         else:
             pic_uuid = f"{uuid.uuid4()}{ext}"
-        new_pictures.append(
-            ImageUtils.create_picture_from_bytes(
-                image_root_path=server.vault.image_root,
-                image_bytes=img_bytes,
-                picture_uuid=pic_uuid,
-                pixel_sha=sha,
-                output_dir=output_dir,
-                reference_folder_id=reference_folder_id,
-            )
+        new_picture_map[fingerprint] = ImageUtils.create_picture_from_bytes(
+            image_root_path=server.vault.image_root,
+            image_bytes=img_bytes,
+            picture_uuid=pic_uuid,
+            pixel_sha=sampled_sha,
+            output_dir=output_dir,
+            reference_folder_id=reference_folder_id,
         )
+    new_pictures = list(new_picture_map.values())
 
     def import_task(session):
         if new_pictures:
@@ -598,11 +686,19 @@ def _import_comfyui_outputs(
         server.vault.db.run_task(mark_imported, [pic.id for pic in new_pictures])
 
     new_ids = [pic.id for pic in new_pictures if pic.id is not None]
-    duplicate_ids = [
-        pic.id
-        for sha in shas
-        if (pic := existing_map.get(sha)) is not None and pic.id is not None
-    ]
+    duplicate_ids = []
+    seen_new = set()
+    for fingerprint in fingerprints:
+        pic = existing_map.get(fingerprint)
+        if pic is not None and pic.id is not None:
+            duplicate_ids.append(pic.id)
+            continue
+        if fingerprint in seen_new:
+            pic = new_picture_map.get(fingerprint)
+            if pic is not None and pic.id is not None:
+                duplicate_ids.append(pic.id)
+        else:
+            seen_new.add(fingerprint)
     return new_ids, duplicate_ids
 
 
@@ -646,56 +742,6 @@ def _assign_outputs_to_stack_top(
         session.commit()
 
     server.vault.db.run_task(update_stack)
-
-
-def _copy_face_assignments(
-    server,
-    source_picture_id: int | None,
-    target_picture_ids: list[int],
-) -> None:
-    if not source_picture_id or not target_picture_ids:
-        return
-
-    def copy_task(session):
-        source_faces = session.exec(
-            select(Face).where(Face.picture_id == source_picture_id)
-        ).all()
-        if not source_faces:
-            return 0
-        target_ids = [pid for pid in target_picture_ids if pid is not None]
-        if not target_ids:
-            return 0
-        existing_targets = session.exec(
-            select(Face.picture_id).where(Face.picture_id.in_(target_ids))
-        ).all()
-        skip_ids = set(existing_targets)
-        new_faces = []
-        for target_id in target_ids:
-            if target_id in skip_ids:
-                continue
-            for face in source_faces:
-                new_faces.append(
-                    Face(
-                        picture_id=target_id,
-                        frame_index=face.frame_index,
-                        face_index=face.face_index,
-                        character_id=face.character_id,
-                        bbox=face.bbox,
-                    )
-                )
-        if new_faces:
-            session.add_all(new_faces)
-            session.commit()
-        return len(new_faces)
-
-    copied = server.vault.db.run_task(copy_task)
-    if copied:
-        logger.info(
-            "Copied %s face assignments to %s picture(s) from %s",
-            copied,
-            len(target_picture_ids),
-            source_picture_id,
-        )
 
 
 def _copy_set_and_project_assignments(
@@ -890,7 +936,6 @@ def _process_comfyui_outputs(
     stack_id: int | None,
     source_picture_id: int | None,
     view_context: dict | None = None,
-    is_i2i: bool = False,
 ) -> None:
     """Poll ComfyUI for a prompt's outputs, import them, and emit ONE event.
 
@@ -915,8 +960,10 @@ def _process_comfyui_outputs(
     ``_emit_comfyui_failure_progress`` and never a ``PICTURE_IMPORTED`` event.
     """
     try:
-        images = _wait_for_comfyui_outputs(base_url, prompt_id, output_node_ids)
-        if not images:
+        images, pixlstash_ids = _wait_for_comfyui_outputs(
+            base_url, prompt_id, output_node_ids
+        )
+        if not images and pixlstash_ids is None:
             logger.warning("ComfyUI produced no outputs for prompt %s", prompt_id)
             _emit_comfyui_failure_progress(
                 server,
@@ -957,19 +1004,34 @@ def _process_comfyui_outputs(
             reference_folder_id=ref_folder_id,
             source_file_stem=source_file_stem,
         )
+        if pixlstash_ids:
+            # A PixlStash saver node uploaded these itself, so there is nothing
+            # left to import — but everything below (stacking, source lineage,
+            # set/project inheritance, the single import event) still has to
+            # run, and it needs the ids the node reported.
+            #
+            # ponytail: assumes the node points at this vault, which is what
+            # ComfyUI Settings is configured with. Cross-wiring it at a second
+            # vault would adopt ids belonging to unrelated pictures; the fix is
+            # for the node to report its target URL, not a heuristic here.
+            new_ids = new_ids + [pid for pid in pixlstash_ids if pid not in new_ids]
         if stack_id and new_ids:
             _assign_outputs_to_stack_top(server, stack_id, new_ids)
         if new_ids:
-            # Association strategy is decoupled from physical stack placement:
-            # whether outputs join a stack (stack_id) and whether they are I2I
-            # (is_i2i) are independent. I2I always copies faces directly even
-            # when stacking is disabled; T2I always defers to similarity.
-            if is_i2i:
-                # I2I: copy face records directly (positions are structurally similar)
-                _copy_face_assignments(server, source_picture_id, new_ids)
-            else:
-                # T2I: let face extraction run and schedule similarity-based assignment
-                _set_source_picture_id_on_pictures(server, source_picture_id, new_ids)
+            # Both I2I and T2I defer to the same mechanism: mark the output with
+            # its source, let face extraction find the output's REAL faces, and
+            # let SourceFaceLikenessTask inherit a character only where the two
+            # faces actually match at >= 0.7.
+            #
+            # I2I used to copy the source's face rows outright, on the reasoning
+            # that "positions are structurally similar". They are not reliably:
+            # a bbox is pixel coordinates, and an I2I output at a different
+            # resolution puts the source's numbers over a different region
+            # entirely (on a much larger canvas they collapse into the top-left
+            # corner and capture nothing). It also asserted the person is in the
+            # output without looking at the output, which for a regenerated face
+            # is a guess. Deferring costs one extraction pass and is correct.
+            _set_source_picture_id_on_pictures(server, source_picture_id, new_ids)
             _copy_set_and_project_assignments(server, source_picture_id, new_ids)
         if new_ids and view_context:
             _assign_pictures_to_view_context(

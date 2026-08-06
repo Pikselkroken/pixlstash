@@ -60,6 +60,17 @@ class User(SQLModel, table=True):
     max_vram_gb: Optional[float] = Field(default=2.0)
     tagger_settings: Optional[str] = Field(default=None)
     check_for_updates: Optional[bool] = Field(default=None)
+    # Opt-in telemetry consent. Every category is off by default, on every
+    # install and every deployment type; nothing is transmitted until the user
+    # ticks a box. ``telemetry_consent_prompted`` records that the question has
+    # been put to the user, so it is asked exactly once and never re-raised.
+    # Declining is a decision, not an unanswered prompt. Existing rows read NULL
+    # for all five and fall back to these defaults, so an upgrade stays off.
+    telemetry_send_install_id: bool = Field(default=False)
+    telemetry_send_feature_usage: bool = Field(default=False)
+    telemetry_send_error_reports: bool = Field(default=False)
+    telemetry_send_hardware_profile: bool = Field(default=False)
+    telemetry_consent_prompted: bool = Field(default=False)
     show_keyboard_hint: bool = Field(default=True)
     embed_watermark: bool = Field(default=True)
     watermark_image: Optional[bytes] = Field(

@@ -131,9 +131,11 @@ import ReviewSessionView from "../reviews/ReviewSessionView.vue";
 import ReviewArchivedReceipt from "../reviews/ReviewArchivedReceipt.vue";
 import NewReviewDialog from "../reviews/NewReviewDialog.vue";
 import TbTagPanel from "../panels/TbTagPanel.vue";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useProjectStore } from "../../stores/useProjectStore";
+import { formatKeyHint, undoKeyHint } from "../../utils/shortcutHints";
 
 // Sidebar selection sentinels (mirrors useSelectionStore.js / App.vue).
 const ALL_PICTURES_ID = "ALL";
@@ -148,6 +150,7 @@ const emit = defineEmits(["close", "tags-applied"]);
 const store = useReviewSessionsStore();
 const selectionStore = useSelectionStore();
 const projectStore = useProjectStore();
+const noticeStore = useNoticeStore();
 
 const sessionRef = ref(null);
 const boardRef = ref(null);
@@ -166,17 +169,25 @@ const archivedReview = computed(() =>
     : null,
 );
 
-const SHORTCUTS = [
+// The undo row names both keys because they are the same action: Ctrl+Z (⌘Z on
+// a Mac) is the app-wide undo vocabulary and must mean something everywhere,
+// and `U` is the reviewer muscle memory that keeps working. "in this review" is
+// the whole point of the row: it is the only place the scope boundary between
+// the review's undo and the app-wide one is taught before the user hits it.
+const SHORTCUTS = computed(() => [
   ["Y / N", "Answer a binary card (yes / no)"],
   ["B / N / L / R", "Answer a pair card (both / neither / left / right)"],
   ["S", "Skip — leaves the queue undecided, no change made"],
-  ["U", "Undo the last decision"],
+  [
+    `U / ${formatKeyHint(undoKeyHint())}`,
+    "Undo the last decision in this review",
+  ],
   ["H", "Show / hide the evidence region"],
   ["T", "Apply tags to the pictured image(s)"],
   ["/", "Filter the tag health board"],
   ["?", "This cheat-sheet"],
   ["Esc", "Close the topmost layer"],
-];
+]);
 
 // Translate the app's current selection into the dialog's scope prefill, so a
 // review created from a filtered view lands pre-scoped to it (old overlay
@@ -372,8 +383,101 @@ function isEditable(el) {
   return tag === "INPUT" || tag === "TEXTAREA";
 }
 
+/**
+ * Ctrl+Z / ⌘Z, and only that.
+ *
+ * Ctrl+Shift+Z and Ctrl+Y are REDO, which a review has no meaning for: undo
+ * puts the card back at the head of the queue, so "redo" would be deciding it
+ * again, and that is a decision rather than a replay. They are left alone.
+ *
+ * @param {KeyboardEvent} event
+ * @returns {boolean}
+ */
+function isUndoChord(event) {
+  return (
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    !event.shiftKey &&
+    !event.repeat &&
+    event.key?.toLowerCase() === "z"
+  );
+}
+
+/** Ctrl+Y or Ctrl+Shift+Z: redo, everywhere else in the app. */
+function isRedoChord(event) {
+  const key = event.key?.toLowerCase();
+  return (
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    !event.repeat &&
+    (key === "y" || (key === "z" && event.shiftKey))
+  );
+}
+
+/**
+ * One undo request, however it was typed: `U`, Ctrl+Z, or the bar's button all
+ * land here.
+ *
+ * The session view owns every guard and every message once a review is open — a
+ * locked picture set makes a decision final, an empty stack has to say so — and
+ * it consumes the key in all of those cases. This function only covers the case
+ * it can see and the session view cannot: no review open at all.
+ *
+ * The review's undo is deliberately a SEPARATE stack from the app-wide one
+ * behind the overlay. A review decision also flips its suggestion row's status
+ * and writes the human-label ledger, and the operation log captures neither, so
+ * one shared stack would undo half of each decision. Ctrl+Z therefore always
+ * means "my last action HERE" and never quietly reaches past the overlay; the
+ * message says where the other stack lives instead.
+ */
+function handleUndoRequest() {
+  if (sessionRef.value) {
+    sessionRef.value.handleKey("undo");
+    closeZoom();
+    return;
+  }
+  noticeStore.push({
+    level: "info",
+    text: "Nothing to undo here. Close the review sessions to undo earlier changes from the toolbar.",
+    key: "review-nothing-to-undo",
+  });
+}
+
+/**
+ * Redo has no meaning in a review: undo puts the card back at the head of the
+ * queue, so re-applying the decision means answering the card again. Say that
+ * rather than leaving the chord dead, and never let it fall through to the
+ * app-wide redo behind the overlay.
+ */
+function reportNoRedo() {
+  noticeStore.push({
+    level: "info",
+    text: "Nothing to redo in this review. Answer the card again to reapply a decision you undid.",
+    key: "review-nothing-to-redo",
+  });
+}
+
 function handleKeyDown(event) {
   if (isEditable(event.target) || isEditable(document.activeElement)) return;
+
+  // Undo/redo are checked BEFORE the modifier bail below — that bail is what
+  // made Ctrl+Z dead in a review session, while App's global handler skips the
+  // whole overlay. The owner ruled the chord must be consistent, so it lands
+  // here on the review's own undo, exactly like `U`. The bail itself stays for
+  // everything else: Ctrl+F, Ctrl+A, Ctrl+C and Ctrl+R must keep working.
+  //
+  // Skipped while the cheat-sheet or the new-review dialog owns the screen, on
+  // the same rule the letter keys follow below: a modal layer is up, so nothing
+  // behind it acts.
+  const modalLayerUp = shortcutsOpen.value || Boolean(dialog.value);
+  if (!modalLayerUp && (isUndoChord(event) || isRedoChord(event))) {
+    if (isUndoChord(event)) handleUndoRequest();
+    else reportNoRedo();
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+
   if (event.metaKey || event.ctrlKey || event.altKey) return;
 
   const key = event.key.toLowerCase();
@@ -403,6 +507,10 @@ function handleKeyDown(event) {
     boardRef.value?.focusFilter?.();
   } else if (key === "t" && store.current) {
     tagApplyOpen.value = !tagApplyOpen.value;
+  } else if (key === "u") {
+    // Same request as Ctrl+Z, so the two cannot drift: `U` on the board (no
+    // review open) now gets the same answer instead of doing nothing.
+    handleUndoRequest();
   } else if (key === "enter" && sessionRef.value) {
     handled = !!sessionRef.value.handleKey("enter");
   } else if (sessionRef.value) {

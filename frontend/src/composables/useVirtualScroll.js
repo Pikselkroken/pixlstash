@@ -6,6 +6,7 @@ import {
   JUSTIFIED_ROW_GAP,
 } from "./useJustifiedLayout";
 import { rowHeightForSizeLevel } from "../utils/thumbnailSizes";
+import { useGridStore } from "../stores/useGridStore";
 
 // Constants shared with ImageGrid.vue
 const MIN_THUMBNAIL_SIZE = 128;
@@ -17,7 +18,7 @@ const VIEW_WINDOW = 100;
  * Manages viewport geometry, row height, and scroll position for the virtual
  * scrolling image grid.
  *
- * Two layout modes, selected by `props.thumbnailMode`:
+ * Two layout modes, selected by `gridStore.thumbnailMode`:
  * - `'square'` (default): the original uniform grid — `cols` items per row,
  *   every row `rowHeight` px tall, `index → row` is `floor(index / cols)`.
  * - `'justified'`: Google-Photos-style rows packed by `useJustifiedLayout`.
@@ -48,12 +49,13 @@ export function useVirtualScroll(
   allGridImagesLength,
   { onVisibleRangeChange, afterRowHeightUpdate, getAspectRatios } = {},
 ) {
+  const gridStore = useGridStore();
   // ── Render buffer ──────────────────────────────────────────────────────────
   // During the initial render the buffer is 0 so the first paint is fast;
   // once the grid has rendered once the buffer expands to a full view-window
   // worth of items on each side.
   const divisibleViewWindow = computed(() => {
-    const cols = props.columns;
+    const cols = gridStore.columns;
     return Math.ceil(VIEW_WINDOW / cols) * cols;
   });
 
@@ -70,7 +72,7 @@ export function useVirtualScroll(
   // ── Justified layout ──────────────────────────────────────────────────────
   const isJustifiedMode = computed(
     () =>
-      props.thumbnailMode === "justified" &&
+      gridStore.thumbnailMode === "justified" &&
       typeof getAspectRatios === "function",
   );
 
@@ -93,13 +95,13 @@ export function useVirtualScroll(
     // resizes justified rows exactly as it resizes square columns. The min/max
     // bounds flex around the target so leftover rows can still stretch/shrink
     // to fill the container width without jumping to a fixed global size.
-    const targetRowHeight = rowHeightForSizeLevel(props.sizeLevel);
+    const targetRowHeight = rowHeightForSizeLevel(gridStore.sizeLevel);
     return packJustifiedRows({
       aspectRatios,
       containerWidth,
       targetRowHeight,
       gap: JUSTIFIED_ROW_GAP,
-      rowExtraHeight: props.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT,
+      rowExtraHeight: gridStore.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT,
       minRowHeight: Math.round(targetRowHeight * 0.7),
       maxRowHeight: Math.round(targetRowHeight * 1.4),
     });
@@ -118,34 +120,38 @@ export function useVirtualScroll(
     Math.round(
       Math.min(
         MAX_THUMBNAIL_SIZE,
-        Math.max(MIN_THUMBNAIL_SIZE, props.thumbnailSize || MIN_THUMBNAIL_SIZE),
-      ) + (props.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT),
+        Math.max(
+          MIN_THUMBNAIL_SIZE,
+          gridStore.thumbnailSize || MIN_THUMBNAIL_SIZE,
+        ),
+      ) + (gridStore.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT),
     ),
   );
 
   function getGridColumnWidth() {
-    const cols = Math.max(1, props.columns || 1);
+    const cols = Math.max(1, gridStore.columns || 1);
     const gridWidth =
-      gridContainer.value?.clientWidth ??
-      scrollWrapper.value?.clientWidth ??
-      0;
+      gridContainer.value?.clientWidth ?? scrollWrapper.value?.clientWidth ?? 0;
     if (!gridWidth) {
       return Math.min(
         MAX_THUMBNAIL_SIZE,
         Math.max(
           MIN_THUMBNAIL_SIZE,
-          props.thumbnailSize || MIN_THUMBNAIL_SIZE,
+          gridStore.thumbnailSize || MIN_THUMBNAIL_SIZE,
         ),
       );
     }
     const availableWidth = Math.max(0, gridWidth - 4);
     const rawWidth = availableWidth / cols;
-    return Math.min(MAX_THUMBNAIL_SIZE, Math.max(1, rawWidth || MIN_THUMBNAIL_SIZE));
+    return Math.min(
+      MAX_THUMBNAIL_SIZE,
+      Math.max(1, rawWidth || MIN_THUMBNAIL_SIZE),
+    );
   }
 
   function updateRowHeightFromGrid() {
     const columnWidth = getGridColumnWidth();
-    const infoHeight = props.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT;
+    const infoHeight = gridStore.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT;
     rowHeight.value = Math.round(columnWidth + infoHeight);
     if (isJustifiedMode.value) {
       remeasureJustifiedWidth();
@@ -216,7 +222,7 @@ export function useVirtualScroll(
     }
     const cardHeight = rowHeight.value;
     const scrollTop = el.scrollTop;
-    const cols = props.columns;
+    const cols = gridStore.columns;
     const firstVisibleRow = scrollTop / cardHeight;
     const lastVisibleRow = (scrollTop + el.clientHeight - 1) / cardHeight;
     return {
@@ -286,7 +292,7 @@ export function useVirtualScroll(
       // supplies JUSTIFIED_ROW_GAP px of the offset.
       return Math.max(0, layout.rowOffsets[row] - JUSTIFIED_ROW_GAP);
     }
-    const cols = props.columns;
+    const cols = gridStore.columns;
     const rowsAbove = Math.floor(renderStart.value / cols);
     return rowsAbove > 0 ? rowsAbove * rowHeight.value : 1;
   });
@@ -302,11 +308,10 @@ export function useVirtualScroll(
       const lastRow = rowOfIndex(layout.rowStarts, end - 1);
       // rowOffsets[lastRow + 1] already includes the inter-row gap that the
       // flex layout inserts between the last rendered row and the spacer.
-      const nextOffset =
-        layout.rowOffsets[lastRow + 1] ?? layout.totalHeight;
+      const nextOffset = layout.rowOffsets[lastRow + 1] ?? layout.totalHeight;
       return Math.max(0, layout.totalHeight - nextOffset);
     }
-    const cols = props.columns;
+    const cols = gridStore.columns;
     const lastRenderedRow = Math.floor((renderEnd.value - 1) / cols) + 1;
     const totalRows = Math.ceil(allGridImagesLength.value / cols);
     const rowsBelow = totalRows - lastRenderedRow;
@@ -379,7 +384,7 @@ export function useVirtualScroll(
       itemTop = layout.rowOffsets[row];
       itemBottom = itemTop + layout.rowHeights[row];
     } else {
-      const cols = Math.max(1, props.columns || 1);
+      const cols = Math.max(1, gridStore.columns || 1);
       const row = Math.floor(idx / cols);
       itemTop = row * rowHeight.value;
       itemBottom = itemTop + rowHeight.value;

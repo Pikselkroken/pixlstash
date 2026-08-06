@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import torch
-
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.vram_utils import query_total_vram_mb, vram_limited_batch_cap
 
@@ -72,6 +70,11 @@ class VramBudget:
             )
             requested_mb = total_mb
         self._max_vram_usage_mb = requested_mb
+        # Local import: torch costs seconds to import and is only needed once a
+        # budget is actually being set on a CUDA device. Importing it at module
+        # scope would make the API server and every test pay for it at startup.
+        import torch
+
         try:
             free_bytes, _ = torch.cuda.mem_get_info()
             free_gb = free_bytes / 1024**3

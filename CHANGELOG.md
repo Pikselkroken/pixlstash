@@ -1,3 +1,15 @@
+# [1.9.0]
+
+Coming from 1.8.0 or earlier, updating to 1.9 clears every API token, exactly as described under 1.8.1 below: create replacements from Settings, share your links again with their new values, and enter your public URL and ComfyUI URL again. If you already updated to 1.8.1 this has happened and your tokens are left alone.
+
+- Full Undo/Redo for soft-deletion, tagging, editing descriptions, image associations, image movement, etc. Use standard keyboard shortcuts (CTRL-Z, CTRL-Y),
+  undo/redo-buttons or the undo history to undo more than one edit.
+- A brand new Duplicates view that helps you stack duplicates in your current view.
+- New Privacy pane in Settings, holding the update check and a new option to send an anonymous install ID. Both are off unless you turn them on, and upgrading leaves them off. The ID is a random number stored next to your server config, never derived from anything about your computer, and you can replace it whenever you like. It lets us tell whether people keep using PixlStash rather than just downloading it, which plain download counts cannot. When it is on, PixlStash sends that number, your version and your install type once a day, and nothing else. PRIVACY.md shows the exact message.
+- Characters and picture sets can belong to more than one project at a time, so a character you use across two shoots no longer has to be duplicated or moved back and forth. Their pictures show up in every project they are shared with, and removing them from one project leaves the others alone. Existing single-project assignments carry over untouched.
+- Filter your views on stacked or unstacked images, and collapse a stack down to the copy you want to keep with **Keep cover only**. The rest go to the Scrapheap, so you can change your mind.
+- Easily assign pictures to a person by using the new context menu "Suggest More Pictures" which shows you a view of all pictures that look like that person. An easy to use button lets you assign all found (or all selected) items to the person.
+
 # [1.8.5]
 
 - Fixed: opening a picture and then reloading the page, or following a link straight to a picture, could leave the overlay showing a broken-image icon instead of the picture. The overlay now waits until it knows the file's format before loading it, and a stale error no longer hides the picture once it does load.

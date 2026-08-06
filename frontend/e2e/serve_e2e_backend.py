@@ -22,6 +22,7 @@ nothing accumulates and the committed fixture is never modified.
 
 import json
 import os
+import hashlib
 import shutil
 import sqlite3
 import sys
@@ -32,9 +33,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DATA = Path(os.environ.get("PIXLSTASH_E2E_DATA") or (REPO_ROOT / "test-data"))
 SRC_IMAGES = SRC_DATA / "images"
 PORT = int(os.environ.get("PIXLSTASH_E2E_PORT", "9600"))
-# Isolate the work dir per fixture so a screenshots run (demo-data) never stomps
-# a parallel e2e run (test-data) using the shared temp directory.
-WORK_DIR = Path(tempfile.gettempdir()) / f"pixlstash-e2e-{SRC_DATA.name}"
+# Isolate the work dir per fixture AND per checkout. Per fixture so a
+# screenshots run (demo-data) never stomps an e2e run (test-data); per checkout
+# because the fixture folder is called "test-data" in every clone, so two
+# working copies of the repo would otherwise resolve to the same directory and
+# rmtree each other's vault mid-run. That failure is worth naming: the symptom
+# is not an error but a handful of unrelated specs failing, or global-setup
+# reporting the vault is not in first-run state.
+_CHECKOUT_TAG = hashlib.sha1(str(REPO_ROOT).encode()).hexdigest()[:8]
+WORK_DIR = (
+    Path(tempfile.gettempdir()) / f"pixlstash-e2e-{SRC_DATA.name}-{_CHECKOUT_TAG}"
+)
 
 
 def _ignore_backups(_dir, names):

@@ -1,0 +1,19 @@
+{
+  "name": "pixlstash-telemetry-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker that ingests anonymous install pings and publishes aggregate cohort numbers.",
+  "scripts": {
+    "test": "npm run test:unit && npm run test:d1",
+    "test:unit": "node --test test/config.test.js test/worker.test.js",
+    "test:d1": "node --test test/d1-integration.test.js",
+    "dev": "wrangler dev",
+    "check:config": "WRANGLER_LOG_PATH=.wrangler/logs wrangler deploy --dry-run --outdir .wrangler/dry-run",
+    "deploy": "wrangler deploy --no-x-provision --no-x-auto-create"
+  },
+  "devDependencies": {
+    "miniflare": "https://registry.npmjs.org/miniflare/-/miniflare-5.20260730.0-alpha.tgz",
+    "wrangler": "4.118.0"
+  }
+}

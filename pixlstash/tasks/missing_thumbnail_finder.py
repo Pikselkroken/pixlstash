@@ -7,9 +7,9 @@ through :class:`ThumbnailGenerationTask`.
 """
 
 from sqlmodel import Session, select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only, selectinload
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Face, Picture
 
 from .base_task_finder import BaseTaskFinder
 from .thumbnail_generation_task import ThumbnailGenerationTask
@@ -58,5 +58,21 @@ class MissingThumbnailFinder(BaseTaskFinder):
         if suppressed_ids:
             stmt = stmt.where(Picture.id.notin_(tuple(suppressed_ids)))
         return session.exec(
-            stmt.options(selectinload(Picture.faces)).order_by(Picture.id).limit(limit)
+            stmt.options(
+                # This probe runs on every planning sweep, so it must never drag
+                # the LargeBinary columns (image_embedding / text_embedding /
+                # likeness_parameters) or Face.features off disk. Narrow it to
+                # exactly what ThumbnailGenerationTask reads from a DETACHED
+                # picture: ``pic.id`` (task params + claim filter), ``pic.file_path``
+                # (source resolution + thumbnail write path), and each face's
+                # ``bbox`` (the square-crop weighting), which is a Python property
+                # over the ``bbox_`` column. ``Face.picture_id`` is the selectin
+                # correlation column and must not be deferred. Anything else read
+                # downstream would raise DetachedInstanceError, because
+                # ``run_immediate_read_task`` closes the session before the task runs.
+                load_only(Picture.id, Picture.file_path),
+                selectinload(Picture.faces).load_only(Face.bbox_, Face.picture_id),
+            )
+            .order_by(Picture.id)
+            .limit(limit)
         ).all()

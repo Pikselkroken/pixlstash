@@ -259,7 +259,7 @@
  *   refetchPredictions(id) - Re-fetch predictions after parent metadata refresh.
  */
 import { ref, reactive, computed, watch, nextTick, onMounted } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { isReadOnly, newOperationBatchId } from "../../utils/apiClient";
 import {
   listTags,
   removeTagEverywhere,
@@ -805,13 +805,29 @@ async function handleDropOnRejectedTags() {
   const tagObj = allImageTags.value.find(
     (entry) => tagLabel(entry).trim().toLowerCase() === key,
   );
-  await removeAllTag(tagObj || { tag: draggedTag });
-  await rejectPrediction(draggedTag);
+  // One drag, one undo step: every request this gesture fans out shares a
+  // batch id (docs/backend_architecture.md §21.2).
+  const batchId = newOperationBatchId();
+  await removeAllTag(tagObj || { tag: draggedTag }, { batchId });
+  await rejectPrediction(draggedTag, { batchId });
 }
 
 // ── Tag mutation functions ──────────────────────────────────────────────────
 
-async function removeAllTag(tag) {
+/**
+ * Delete a tag chip: remove the tag library-wide, then record the rejection
+ * that keeps the tagger from re-suggesting it.
+ *
+ * Both requests carry one gesture batch id, so the two operations they record
+ * are one history step and one Ctrl+Z restores the tag AND the ledger. Without
+ * it the first undo reverted only the ledger and looked like a no-op.
+ *
+ * @param {Object|string} tag - the chip (or a bare `{ tag }`) to remove.
+ * @param {Object} [options]
+ * @param {string} [options.batchId] - an id from a caller that is already part
+ *   of a larger gesture; a fresh one is minted otherwise.
+ */
+async function removeAllTag(tag, { batchId = newOperationBatchId() } = {}) {
   if (!tag) return;
   const label = tagLabel(tag);
   if (!label) return;
@@ -841,6 +857,7 @@ async function removeAllTag(tag) {
     try {
       await removeTagEverywhere(capturedImageId, label, {
         baseUrl: props.backendUrl,
+        batchId,
       });
     } catch (err) {
       console.warn("Failed to remove tag everywhere:", err);
@@ -848,7 +865,7 @@ async function removeAllTag(tag) {
   }
 
   if (didUpdate && capturedImageId) {
-    await rejectPrediction(label);
+    await rejectPrediction(label, { batchId });
     emit("overlay-change", {
       imageId: capturedImageId,
       fields: { tags: true, smartScore: true },
@@ -895,12 +912,23 @@ async function confirmPrediction(tag) {
   }
 }
 
-async function rejectPrediction(tag) {
+/**
+ * Record the human NEG that makes a tag removal durable supervision.
+ *
+ * @param {string} tag - the tag being rejected.
+ * @param {Object} [options]
+ * @param {string} [options.batchId] - the gesture batch id of the removal this
+ *   reject belongs to, so the pair is one undo step.
+ */
+async function rejectPrediction(tag, { batchId } = {}) {
   if (!props.image?.id || !props.backendUrl) return;
   const imageId = props.image.id;
   const key = String(tag).trim().toLowerCase();
   try {
-    await rejectTagPrediction(imageId, tag, { baseUrl: props.backendUrl });
+    await rejectTagPrediction(imageId, tag, {
+      baseUrl: props.backendUrl,
+      batchId,
+    });
     tagPredictions.value = tagPredictions.value.map((p) =>
       p.tag.trim().toLowerCase() === key ? { ...p, status: "REJECTED" } : p,
     );

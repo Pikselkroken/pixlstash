@@ -5,12 +5,10 @@ import threading
 import time
 import warnings
 import weakref
-import torch
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 
 import cv2
-from insightface.app import FaceAnalysis
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import NO_VALUE
@@ -29,6 +27,7 @@ from pixlstash.utils.insightface_model_utils import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
+from pixlstash.utils.vram_utils import empty_cuda_cache
 
 # Suppress noisy FutureWarning from insightface's face_align.py about
 # SimilarityTransform.estimate being deprecated in scikit-image >= 0.26.
@@ -295,8 +294,7 @@ class FaceExtractionTask(BaseTask):
             cls._app_instances.clear()
 
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_cuda_cache()
         cls._trim_process_memory()
 
     @staticmethod
@@ -337,6 +335,12 @@ class FaceExtractionTask(BaseTask):
                 :func:`~pixlstash.utils.insightface_model_utils.validate_model_pack`).
             RuntimeError: If a required model-pack download fails.
         """
+        # Local imports: insightface (which drags in onnxruntime) and torch each
+        # cost seconds to import, and this module is on the server's import
+        # path. Both are only needed once face detection actually initialises.
+        import torch
+        from insightface.app import FaceAnalysis
+
         # Validate the configured pack and provision it on disk (no-op for
         # auto-downloaded packs like buffalo_l) before constructing FaceAnalysis.
         # Fails closed for unknown names instead of letting FaceAnalysis try to

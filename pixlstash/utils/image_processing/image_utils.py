@@ -682,6 +682,47 @@ class ImageUtils:
             )
 
     @staticmethod
+    def calculate_full_hash_from_file_path(file_path: str) -> str:
+        """Compute SHA-256 over every byte of a file.
+
+        ``calculate_hash_from_file_path`` deliberately samples files larger than
+        128 KiB and is suitable as a cheap candidate key, not as final identity.
+        Import de-duplication calls this method only after ``(sampled hash,
+        size)`` has selected a small candidate set.
+        """
+        sha256 = hashlib.sha256()
+        with open(file_path, "rb") as file_handle:
+            while chunk := file_handle.read(1024 * 1024):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+
+    @staticmethod
+    def thumbnail_cache_token(
+        thumbnail_width: Optional[int], thumbnail_height: Optional[int]
+    ) -> str:
+        """The ``?v=`` cache-buster for a picture's thumbnail URL.
+
+        Keyed on the stored bitmap's own dimensions, so any regeneration that
+        repopulates them changes the URL and the browser refetches instead of
+        painting a stale bitmap. ``"0"`` until the picture has been processed.
+
+        Single source of truth on purpose: the batch-thumbnail endpoint and the
+        duplicate queue both hand this token to the same frontend cache, and two
+        independent copies of the ``WxH`` formula would eventually disagree and
+        reintroduce the stale-thumbnail bug this token exists to fix.
+
+        Args:
+            thumbnail_width: Stored bitmap width, or ``None`` when unprocessed.
+            thumbnail_height: Stored bitmap height, or ``None`` when unprocessed.
+
+        Returns:
+            ``"<width>x<height>"``, or ``"0"`` when either dimension is missing.
+        """
+        if thumbnail_width and thumbnail_height:
+            return f"{thumbnail_width}x{thumbnail_height}"
+        return "0"
+
+    @staticmethod
     def calculate_hash_from_bytes(image_bytes: bytes) -> str:
         """Compute a content hash for raw image bytes."""
         file_size = len(image_bytes)
@@ -693,6 +734,11 @@ class ImageUtils:
             file_size=file_size,
             read_chunk=_read_chunk,
         )
+
+    @staticmethod
+    def calculate_full_hash_from_bytes(image_bytes: bytes) -> str:
+        """Compute SHA-256 over every byte in an in-memory file."""
+        return hashlib.sha256(image_bytes).hexdigest()
 
     @staticmethod
     def create_picture_from_file(
@@ -902,6 +948,7 @@ class ImageUtils:
             comfyui_positive_prompt=comfyui_positive_prompt,
             comfyui_models=comfyui_models_json,
             comfyui_loras=comfyui_loras_json,
+            is_video=is_video,
             **thumb_cols,
         )
 

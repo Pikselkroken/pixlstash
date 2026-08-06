@@ -21,7 +21,11 @@ export const useGridStore = defineStore("grid", () => {
   // display preference persisted like `columns`; the justified path is driven
   // by useJustifiedLayout + useVirtualScroll and consumed by ImageGrid's
   // `thumbnailMode` prop.
-  const thumbnailMode = ref("square");
+  // Read-only starts justified: those sessions never fetch /users/me/config
+  // (fetchConfig returns early), so this default is the whole setting for them,
+  // and justified is how the demo is meant to look. Owner sessions keep square
+  // and are overwritten by the stored preference as soon as the config lands.
+  const thumbnailMode = ref(isReadOnly.value ? "justified" : "square");
   const compactMode = ref(isReadOnly.value);
   const showStars = ref(!isReadOnly.value);
   const showFaceBboxes = ref(false);
@@ -51,11 +55,22 @@ export const useGridStore = defineStore("grid", () => {
     return Math.max(1, Math.min(maxColumns.value, desired));
   });
 
+  // Both modes render from the same stored bitmap - justified shows it whole,
+  // square crops it to the stored rectangle - so a valid change applies at once
+  // with no thumbnail regeneration. Rejecting the unchanged value keeps the
+  // persist watcher from firing for nothing.
+  function setThumbnailMode(value) {
+    if (value !== "square" && value !== "justified") return;
+    if (value === thumbnailMode.value) return;
+    thumbnailMode.value = value;
+  }
+
   function refreshGridVersion() {
     gridVersion.value++;
   }
 
   return {
+    setThumbnailMode,
     columns,
     sizeLevel,
     thumbnailSize,

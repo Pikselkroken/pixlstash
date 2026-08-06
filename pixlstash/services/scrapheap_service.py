@@ -478,9 +478,7 @@ def fetch_scrapheap_rows_in_session(
         Picture.deleted_at,
     ).where(Picture.deleted.is_(True))
     if ids is not None:
-        scope = scope_id_subquery(
-            session, ids, name="_pixlstash_scrapheap_row_ids"
-        )
+        scope = scope_id_subquery(session, ids, name="_pixlstash_scrapheap_row_ids")
         query = query.where(Picture.id.in_(scope))
     return [ScrapheapRow(*row) for row in session.exec(query).all()]
 
@@ -501,9 +499,7 @@ def still_scrapheaped_ids_in_session(
 ) -> set[int]:
     """Which of ``picture_ids`` are, RIGHT NOW, still soft-deleted."""
     ids = [int(pid) for pid in picture_ids if pid is not None]
-    scope = scope_id_subquery(
-        session, ids, name="_pixlstash_still_scrapheaped_ids"
-    )
+    scope = scope_id_subquery(session, ids, name="_pixlstash_still_scrapheaped_ids")
     rows = session.exec(
         select(Picture.id).where(Picture.id.in_(scope), Picture.deleted.is_(True))
     ).all()
@@ -521,9 +517,7 @@ def existing_picture_ids_in_session(
     :func:`purge_rows_in_session`.
     """
     ids = [int(pid) for pid in picture_ids if pid is not None]
-    scope = scope_id_subquery(
-        session, ids, name="_pixlstash_existing_picture_ids"
-    )
+    scope = scope_id_subquery(session, ids, name="_pixlstash_existing_picture_ids")
     rows = session.exec(select(Picture.id).where(Picture.id.in_(scope))).all()
     return {int(pid) for pid in rows if pid is not None}
 
@@ -639,9 +633,7 @@ def purge_rows_in_session(
     # above: belt-and-braces against anything that could commit between the
     # two statements in this same session.
     session.exec(
-        delete(Picture).where(
-            Picture.id.in_(purge_scope), Picture.deleted.is_(True)
-        )
+        delete(Picture).where(Picture.id.in_(purge_scope), Picture.deleted.is_(True))
     )
     # The DELETE is authoritative, not the re-check above. Read the removed set
     # back BEFORE committing: a row its predicate spared must keep its file and
@@ -672,7 +664,7 @@ def purge_rows_in_session(
 
 
 def locked_scrapheap_picture_ids_in_session(session: Session, picture_ids) -> set[int]:
-    """Use :func:`locked_picture_ids` as THE lock lookup for the scrapheap.
+    """Run :func:`locked_picture_ids` — THE lock lookup for the scrapheap.
 
     Both the auto-purge finder and the scrapheap listing go through here so the
     countdown the UI renders and the decision the sweep makes can never disagree

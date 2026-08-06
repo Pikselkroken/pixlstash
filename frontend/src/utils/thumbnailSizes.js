@@ -3,23 +3,68 @@
 // A single user-facing "size" (a level 0..6) maps to a representative column
 // count for the square grid AND a target row height for the justified layout,
 // so one control drives both modes. The backend persists the chosen level as
-// `thumbnail_size_level` (see the 0082 migration, which backfills existing
-// users from their old `columns` value). This table is the frontend source of
-// truth and MUST stay in sync with the backend backfill mapping (the `columns`
-// value per level).
+// `thumbnail_size_level` (see the 0082 migration). This table is the frontend
+// source of truth for what a level MEANS; the 0082 backfill is a frozen,
+// one-time translation of the legacy `columns` preference into a level and is
+// deliberately NOT kept in step with later re-scalings of this ladder.
 // Column counts step DOWN gently toward the large end (…6,5,4,3) and never
 // reach 1–2, where a square tile would balloon to a half- or full-width image.
 // The perceptual jump between few-column layouts is large (tile width scales as
-// 1/columns), so the steps shrink (2,2,2,1,1,1) rather than grow as the tiles
+// 1/columns), so the steps shrink (3,2,2,1,1,1) rather than grow as the tiles
 // get bigger. Justified row heights are a separate, smoother scale.
+// Both grid scales were made STEEPER (owner call, 2026-08-05): the large end
+// was right but the small end never got small enough, so `huge` is pinned where
+// it was and every level below it steps down harder — a constant ratio of about
+// 1.20 per notch on row height (was ~1.17) and the matching ~0.77 on square tile
+// width. `tiny`'s 14 columns is the ceiling `MAX_COLUMNS` in
+// `useViewportLayout.js` allows; going denser than that means raising it there
+// too, and at 96px minimum tile width there is little room left.
+// `stripHeight` is the third consumer of the same ladder: the duplicate
+// queue's candidate strip, where the pictures sit in a row beside the group's
+// facts rather than in a grid of their own. Its numbers are a third scale
+// again, and a smaller one, because a triage row is read a screenful at a
+// time. The whole scale was raised 75% (owner call, 2026-07-30): every level
+// drew its copies too small to judge a duplicate by, which is the one thing
+// the strip exists for. The ratios between the levels are unchanged, so the
+// control still steps the way it did.
 export const THUMBNAIL_SIZE_STEPS = [
-  { key: "tiny", label: "Tiny", columns: 12, rowHeight: 150 },
-  { key: "very_small", label: "Very Small", columns: 10, rowHeight: 180 },
-  { key: "small", label: "Small", columns: 8, rowHeight: 210 },
-  { key: "medium", label: "Medium", columns: 6, rowHeight: 245 },
-  { key: "large", label: "Large", columns: 5, rowHeight: 285 },
-  { key: "very_large", label: "Very Large", columns: 4, rowHeight: 330 },
-  { key: "huge", label: "Huge", columns: 3, rowHeight: 375 },
+  { key: "tiny", label: "Tiny", columns: 14, rowHeight: 128, stripHeight: 112 },
+  {
+    key: "very_small",
+    label: "Very Small",
+    columns: 11,
+    rowHeight: 153,
+    stripHeight: 140,
+  },
+  {
+    key: "small",
+    label: "Small",
+    columns: 8,
+    rowHeight: 183,
+    stripHeight: 168,
+  },
+  {
+    key: "medium",
+    label: "Medium",
+    columns: 6,
+    rowHeight: 219,
+    stripHeight: 196,
+  },
+  {
+    key: "large",
+    label: "Large",
+    columns: 5,
+    rowHeight: 262,
+    stripHeight: 252,
+  },
+  {
+    key: "very_large",
+    label: "Very Large",
+    columns: 4,
+    rowHeight: 313,
+    stripHeight: 322,
+  },
+  { key: "huge", label: "Huge", columns: 3, rowHeight: 375, stripHeight: 406 },
 ];
 
 export const DEFAULT_THUMBNAIL_SIZE_LEVEL = 3; // Medium
@@ -48,6 +93,11 @@ export function columnsForSizeLevel(level) {
 /** Justified-layout target row height (px) for a size level. */
 export function rowHeightForSizeLevel(level) {
   return stepFor(level).rowHeight;
+}
+
+/** Duplicate-queue candidate-strip thumbnail height (px) for a size level. */
+export function stripHeightForSizeLevel(level) {
+  return stepFor(level).stripHeight;
 }
 
 /** Human-readable label ("Tiny" … "Huge") for a size level. */

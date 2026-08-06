@@ -25,7 +25,6 @@ import {
   sessionContext,
 } from "../../utils/apiClient";
 import {
-  listCharacters,
   patchCharacter,
   getCharacterSummary,
   getCharacterThumbnail,
@@ -34,16 +33,11 @@ import {
   deleteCharacter as apiDeleteCharacter,
 } from "../../api/characters";
 import {
-  listPictureSets,
   patchPictureSet,
   deletePictureSet,
   addPictureToSet,
 } from "../../api/pictureSets";
-import {
-  listProjects,
-  getProjectSummary,
-  deleteProject,
-} from "../../api/projects";
+import { deleteProject } from "../../api/projects";
 import {
   listReferenceFolders,
   listImportFolders,
@@ -55,12 +49,19 @@ import {
   movePicturesToReferenceFolder,
 } from "../../api/folders";
 import { setPicturesProject } from "../../api/pictures";
-import {
-  getSharedResourceIds,
-  revokeTokensByResource,
-} from "../../api/users";
+import { getSharedResourceIds, revokeTokensByResource } from "../../api/users";
 import { listSortMechanisms } from "../../api/session";
 import { extractSupportedImportFilesFromDataTransfer } from "../../utils/media.js";
+import {
+  characterCountUpdates,
+  projectCountUpdates,
+} from "../../utils/sidebarCounts.js";
+import {
+  entityBelongsToProject,
+  getEntityProjectIds,
+  toggleEntityProjectPatch,
+  withEntityProjectIds,
+} from "../../utils/projectMembership.js";
 import {
   SET_ICONS,
   SET_COLORS,
@@ -68,15 +69,33 @@ import {
   ICON_CARDS,
 } from "../../utils/setAppearance.js";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useVersionCheck } from "../../composables/useVersionCheck";
 import { useSidebarExpansion } from "../../composables/useSidebarExpansion";
+import { useRoute } from "vue-router";
+import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
+import { useSortStore } from "../../stores/useSortStore";
+import { useProjectStore } from "../../stores/useProjectStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useGridStore } from "../../stores/useGridStore";
+import { useFilterStore } from "../../stores/useFilterStore";
+import {
+  ALL_PICTURES_ID,
+  SCRAPHEAP_PICTURES_ID,
+  UNASSIGNED_PICTURES_ID,
+  useViewStore,
+} from "../../stores/useViewStore";
 
 // Publishes id → name maps for the ImageGrid breadcrumb. The sidebar is the
 // authoritative name source (it fetches these lists); see useEntityNamesStore.
 const entityNames = useEntityNamesStore();
+// The character / set / project lists themselves are shared with the image
+// context menu and the review scope pickers, so they live in one store (§4).
+const entityLists = useEntityListsStore();
 const sidebarStore = useSidebarStore();
 const lockedSetsStore = useLockedSetsStore();
 // Failures and outcomes report through the notice surface rather than a
@@ -95,41 +114,61 @@ function noticeDetail(e) {
 // bar, so the sidebar copies below are gated on !isDesktop.
 const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 
+const dedupStore = useDedupStore();
+
+// Store-direct (Phase 3): the sidebar reads the selection, sort, project and
+// preference state it displays straight from the stores and writes changes
+// back itself, instead of mirroring all of it through App.vue.
+const selectionStore = useSelectionStore();
+const sortStore = useSortStore();
+const projectStore = useProjectStore();
+const userPrefsStore = useUserPrefsStore();
+
+const telemetryIndicatorTitle = computed(() => {
+  const active = [];
+  if (userPrefsStore.checkForUpdates) active.push("update checks");
+  if (userPrefsStore.telemetrySendInstallId)
+    active.push("an anonymous install ID");
+  if (userPrefsStore.telemetrySendFeatureUsage) active.push("feature usage");
+  if (userPrefsStore.telemetrySendErrorReports) active.push("error reports");
+  if (userPrefsStore.telemetrySendHardwareProfile)
+    active.push("a hardware profile");
+  if (!active.length) return "Telemetry is off";
+  if (active.length === 1) return `Sending ${active[0]}`;
+  const last = active.pop();
+  return `Sending ${active.join(", ")} and ${last}`;
+});
+const gridStore = useGridStore();
+const filterStore = useFilterStore();
+const viewStore = useViewStore();
+const route = useRoute();
+
+// A folder filter and the Duplicates destination each suppress parts of the
+// entity lists, so both are derived once here.
+const hasFolderFilter = computed(
+  () => selectionStore.selectedFolderFilter != null,
+);
+// Duplicates is addressed by route name, not by a selection sentinel: it shows
+// no pictures, so there is no selection to express.
+const isDuplicatesView = computed(() => route.name === "duplicates");
+
+// A shared library keeps the duplicate affordances VISIBLE and inert rather
+// than hiding them: a read-only visitor should still see that the feature
+// exists. Every /dedup/* route is owner-only (a duplicate group is defined by
+// content identity, so it straddles any token's scope), so nothing here can be
+// primed with a count or a badge — the row states the reason instead.
+const READ_ONLY_DEDUP_HINT =
+  "Duplicate review is only available in your own library";
+
 const props = defineProps({
-  docked: { type: Boolean, default: false },
-  selectedCharacter: { type: [String, Number, null], default: null },
-  allPicturesId: { type: String, required: true },
-  unassignedPicturesId: { type: String, required: true },
-  scrapheapPicturesId: { type: String, required: true },
-  selectedSet: { type: [Number, null], default: null },
-  selectedSetIds: { type: Array, default: () => [] },
-  selectedCharacterIds: { type: Array, default: () => [] },
-  searchQuery: { type: String, default: "" },
-  selectedSort: { type: String, default: "" },
-  selectedDescending: { type: Boolean, default: false },
-  selectedSimilarityCharacter: { type: [String, Number, null], default: null },
   backendUrl: { type: String, required: true },
-  publicUrl: { type: String, default: null },
-  embedWatermark: { type: Boolean, default: false },
-  sidebarThumbnailSize: { type: Number, default: 48 },
-  sidebarWidth: { type: Number, default: 240 },
-  dateFormat: { type: String, default: "locale" },
-  themeMode: { type: String, default: "light" },
-  hasFolderFilter: { type: Boolean, default: false },
-  activeFolderKey: { type: String, default: null },
-  externalProjectViewMode: { type: String, default: null },
-  externalSelectedProjectId: { type: Number, default: null },
-  checkForUpdates: { type: Boolean, default: null },
   installType: { type: String, default: "pip" },
   dockerVariant: { type: String, default: "gpu" },
-  showKeyboardHint: { type: Boolean, default: true },
-  thumbnailMode: { type: String, default: "square" },
 });
 
 const emit = defineEmits([
+  "select-duplicates",
   "select-character",
-  "update:selected-sort",
-  "update:search-query",
   "select-set",
   "import-finished",
   "set-error",
@@ -138,28 +177,12 @@ const emit = defineEmits([
   "faces-assigned-to-character",
   "images-moved",
   "search-images",
-  "update:similarity-character",
-  "update:similarity-options",
-  "update:sidebar-thumbnail-size",
-  "update:sidebar-width",
-  "update:date-format",
-  "update:theme-mode",
-  "update:thumbnail-mode",
   "empty-scrapheap",
-  "update:sort-options",
-  "update:hidden-tags",
-  "update:apply-tag-filter",
-  "update:comfyui-configured",
-  "update:public-url",
-  "update:embed-watermark",
+  "suggest-pictures-for-character",
   "open-import-dialog",
-  "update:project-view-mode",
-  "update:selected-project-id",
   "view-project",
   "update:check-for-updates",
-  "update:show-keyboard-hint",
   "select-folder",
-  "update:folder-scanning",
 ]);
 
 // "New version available" alert. Disabled on the desktop shell, where the title
@@ -175,7 +198,7 @@ const {
   dismissUpdateAlert,
 } = useVersionCheck(
   () => props.installType,
-  () => props.checkForUpdates,
+  () => userPrefsStore.checkForUpdates,
   !isDesktop,
 );
 
@@ -231,14 +254,16 @@ function selectProjectNode(p) {
 const sortOptions = ref([]);
 
 // --- Character & Sidebar State ---
-const characters = ref([]);
+const characters = computed(() => entityLists.characters);
 const categoryCounts = ref({
-  [props.allPicturesId]: 0,
-  [props.unassignedPicturesId]: 0,
-  [props.scrapheapPicturesId]: 0,
+  [ALL_PICTURES_ID]: 0,
+  [UNASSIGNED_PICTURES_ID]: 0,
+  [SCRAPHEAP_PICTURES_ID]: 0,
 });
-// Counts keyed by project id (number) or UNASSIGNED_PROJECT_KEY (unassigned in project mode)
-const UNASSIGNED_PROJECT_KEY = "UNASSIGNED";
+// Per-project picture counts, keyed by project id. Populated from the shared
+// project list's `image_count` (see `utils/sidebarCounts.js`) and read by the
+// project tree's count badge only; there is no "unassigned" bucket key, since
+// no row renders one.
 const projectCounts = ref({});
 
 const flashCountsNextFetch = ref(false);
@@ -255,10 +280,10 @@ const dragOverCharacter = ref(null);
 const nextCharacterNumber = ref(1);
 
 // --- Picture Sets State ---
-const pictureSets = ref([]);
+const pictureSets = computed(() => entityLists.pictureSets);
 
 // --- Project State ---
-const projects = ref([]);
+const projects = computed(() => entityLists.projects);
 const projectViewMode = ref("global"); // 'global' | 'project'
 const selectedProjectId = ref(null); // null = 'No project' in project view
 // Tracks the view context when allPicturesId was last selected, so active state
@@ -580,7 +605,7 @@ async function referenceFolderDeleted() {
   selectedFolderKey.value = null;
   selectedFolderReferenceId.value = null;
   emit("select-folder", null);
-  emit("update:folder-scanning", false);
+  sidebarStore.folderScanning = false;
   await fetchReferenceFolders();
 }
 
@@ -606,7 +631,7 @@ async function importFolderSaved() {
         importFolderId: newFolder.id,
         label: newFolder.label || newFolder.folder,
       });
-      emit("update:folder-scanning", Boolean(newFolder.last_checked == null));
+      sidebarStore.folderScanning = Boolean(newFolder.last_checked == null);
       return;
     }
   }
@@ -621,7 +646,7 @@ async function importFolderSaved() {
     selectedFolderKey.value = null;
     selectedFolderReferenceId.value = null;
     emit("select-folder", null);
-    emit("update:folder-scanning", false);
+    sidebarStore.folderScanning = false;
     return;
   }
   emit("select-folder", {
@@ -641,7 +666,7 @@ async function importFolderDeleted() {
     selectedFolderKey.value = null;
     selectedFolderReferenceId.value = null;
     emit("select-folder", null);
-    emit("update:folder-scanning", false);
+    sidebarStore.folderScanning = false;
   }
   await fetchImportFolders();
 }
@@ -687,7 +712,7 @@ const selectedFolderScanning = computed(() => {
 });
 
 watch(selectedFolderScanning, (val) => {
-  emit("update:folder-scanning", val);
+  sidebarStore.folderScanning = val;
 });
 
 const collapsedProjectBtnTitle = computed(() => {
@@ -832,7 +857,7 @@ function handleFolderNodeSelect(key, payload) {
   }
   emit("select-folder", payload);
   // Emit immediately on selection so ImageGrid updates before next poll tick.
-  emit("update:folder-scanning", selectedFolderScanning.value);
+  sidebarStore.folderScanning = selectedFolderScanning.value;
 }
 
 async function handleFolderNodeToggle(path) {
@@ -1107,7 +1132,9 @@ function createSet() {
   // Pick an icon and color not already in use by sibling sets.
   const siblingScope =
     defaultProjectId !== null
-      ? nonReferenceSets.value.filter((s) => s.project_id === defaultProjectId)
+      ? nonReferenceSets.value.filter((s) =>
+          entityBelongsToProject(s, defaultProjectId),
+        )
       : nonReferenceSets.value;
   const usedIcons = new Set(
     siblingScope.map((s) => s.set_icon).filter(Boolean),
@@ -1131,7 +1158,11 @@ function createSet() {
 }
 
 function toggleProjectMenu() {
-  if (!projectMenuOpen.value && props.docked && collapsedProjectBtnRef.value) {
+  if (
+    !projectMenuOpen.value &&
+    sidebarStore.effectiveDocked &&
+    collapsedProjectBtnRef.value
+  ) {
     const rect = collapsedProjectBtnRef.value.getBoundingClientRect();
     collapsedProjectMenuPos.value = _flyoutPos(rect);
     if (
@@ -1295,13 +1326,14 @@ const sortedCharacters = computed(() => {
 
 const selectedCharacterObj = computed(() => {
   if (
-    props.selectedCharacter &&
-    props.selectedCharacter !== props.allPicturesId &&
-    props.selectedCharacter !== props.unassignedPicturesId &&
-    props.selectedCharacter !== props.scrapheapPicturesId
+    selectionStore.selectedCharacter &&
+    selectionStore.selectedCharacter !== ALL_PICTURES_ID &&
+    selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID &&
+    selectionStore.selectedCharacter !== SCRAPHEAP_PICTURES_ID
   ) {
     const char =
-      characters.value.find((c) => c.id === props.selectedCharacter) || null;
+      characters.value.find((c) => c.id === selectionStore.selectedCharacter) ||
+      null;
     if (char && typeof char.name === "string" && char.name.length > 0) {
       return {
         ...char,
@@ -1315,9 +1347,10 @@ const selectedCharacterObj = computed(() => {
 
 const selectedSetObj = computed(() => {
   const primarySetId =
-    Array.isArray(props.selectedSetIds) && props.selectedSetIds.length
-      ? props.selectedSetIds[0]
-      : props.selectedSet;
+    Array.isArray(selectionStore.selectedSetIds) &&
+    selectionStore.selectedSetIds.length
+      ? selectionStore.selectedSetIds[0]
+      : selectionStore.selectedSet;
   if (!primarySetId) return null;
   return pictureSets.value.find((pset) => pset.id === primarySetId) || null;
 });
@@ -1325,7 +1358,10 @@ const selectedSetObj = computed(() => {
 const selectedSetIdSet = computed(
   () =>
     new Set(
-      (Array.isArray(props.selectedSetIds) ? props.selectedSetIds : [])
+      (Array.isArray(selectionStore.selectedSetIds)
+        ? selectionStore.selectedSetIds
+        : []
+      )
         .map((id) => Number(id))
         .filter((id) => Number.isFinite(id) && id > 0),
     ),
@@ -1336,8 +1372,8 @@ const hasSingleSelectedSet = computed(() => selectedSetIdSet.value.size === 1);
 const selectedCharacterIdSet = computed(
   () =>
     new Set(
-      (Array.isArray(props.selectedCharacterIds)
-        ? props.selectedCharacterIds
+      (Array.isArray(selectionStore.selectedCharacterIds)
+        ? selectionStore.selectedCharacterIds
         : []
       )
         .map((id) => Number(id))
@@ -1362,7 +1398,7 @@ const selectedProjectObj = computed(() =>
 const visibleCharacters = computed(() => {
   if (projectViewMode.value === "global") return sortedCharacters.value;
   return sortedCharacters.value.filter(
-    (c) => c.project_id === selectedProjectId.value,
+    (c) => entityBelongsToProject(c, selectedProjectId.value),
   );
 });
 
@@ -1378,7 +1414,7 @@ const projectMenuCharacterGroups = computed(() => {
   if (projectViewMode.value !== "project" || selectedProjectId.value === null)
     return [];
   const all = sortedCharacters.value;
-  const globalItems = all.filter((c) => c.project_id === null);
+  const globalItems = all.filter((c) => getEntityProjectIds(c).length === 0);
   const projectsSorted = [...projects.value].sort((a, b) =>
     a.name.localeCompare(b.name),
   );
@@ -1387,7 +1423,7 @@ const projectMenuCharacterGroups = computed(() => {
     groups.push({ label: "Global", projectId: null, items: globalItems });
   }
   for (const proj of projectsSorted) {
-    const items = all.filter((c) => c.project_id === proj.id);
+    const items = all.filter((c) => getEntityProjectIds(c)[0] === proj.id);
     if (items.length > 0) {
       groups.push({ label: proj.name, projectId: proj.id, items });
     }
@@ -1399,7 +1435,7 @@ const projectMenuSetGroups = computed(() => {
   if (projectViewMode.value !== "project" || selectedProjectId.value === null)
     return [];
   const all = nonReferenceSets.value;
-  const globalItems = all.filter((s) => s.project_id === null);
+  const globalItems = all.filter((s) => getEntityProjectIds(s).length === 0);
   const projectsSorted = [...projects.value].sort((a, b) =>
     a.name.localeCompare(b.name),
   );
@@ -1408,7 +1444,7 @@ const projectMenuSetGroups = computed(() => {
     groups.push({ label: "Global", projectId: null, items: globalItems });
   }
   for (const proj of projectsSorted) {
-    const items = all.filter((s) => s.project_id === proj.id);
+    const items = all.filter((s) => getEntityProjectIds(s)[0] === proj.id);
     if (items.length > 0) {
       groups.push({ label: proj.name, projectId: proj.id, items });
     }
@@ -1419,7 +1455,7 @@ const projectMenuSetGroups = computed(() => {
 const visibleSets = computed(() => {
   if (projectViewMode.value === "global") return nonReferenceSets.value;
   return nonReferenceSets.value.filter(
-    (s) => s.project_id === selectedProjectId.value,
+    (s) => entityBelongsToProject(s, selectedProjectId.value),
   );
 });
 
@@ -1440,24 +1476,31 @@ const similarityCharacterOptions = computed(() => {
 watch(
   similarityCharacterOptions,
   (options) => {
-    emit("update:similarity-options", options);
+    sortStore.setSimilarityCharacterOptions(options);
   },
   { immediate: true },
 );
 
 const similarityCharacterModel = computed({
-  get: () => props.selectedSimilarityCharacter,
-  set: (value) => emit("update:similarity-character", value ?? null),
+  get: () => sortStore.selectedSimilarityCharacter,
+  // Changing the reference person changes what the similarity sort means, so
+  // the grid has to repaint; and on a narrow window the choice is made, so the
+  // auto-hidden sidebar gets out of the way.
+  set: (value) => {
+    sortStore.selectedSimilarityCharacter = value ?? null;
+    gridStore.refreshGridVersion();
+    if (sidebarStore.sidebarForcedHidden) sidebarStore.hideAutoSidebar();
+  },
 });
 
 const sidebarThumbnailSizeModel = computed({
-  get: () => props.sidebarThumbnailSize ?? 48,
+  get: () => userPrefsStore.sidebarThumbnailSize ?? 48,
   set: (value) => {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return;
     const clamped = Math.min(64, Math.max(16, parsed));
     const snapped = Math.round(clamped / 4) * 4;
-    emit("update:sidebar-thumbnail-size", snapped);
+    userPrefsStore.setSidebarThumbnailSize(snapped);
   },
 });
 
@@ -1468,25 +1511,27 @@ const _dockRowH = computed(() => sidebarThumbnailSizeModel.value + 4);
 const _DOCK_DIV = 3; // divider height (1px + 2px margins)
 const _addBtn = computed(() => (isReadOnly.value ? 0 : 1)); // extra [+] row when editable
 const setsCollapsed = computed(() => {
-  if (!props.docked || sidebarPrimaryTab.value === "folders") return false;
+  if (!sidebarStore.effectiveDocked || sidebarPrimaryTab.value === "folders")
+    return false;
   const h = _dockRowH.value;
   const charCount = visibleCharacters.value.length;
   const setCount = visibleSets.value.length;
   if (!setCount || dockedScrollHeight.value === 0) return false;
-  const fixedH = 2 * h + _DOCK_DIV; // allPictures + scrapheap + divider after allPictures
+  const fixedH = 3 * h + _DOCK_DIV; // allPictures + duplicates + scrapheap + divider after allPictures
   const charH = (charCount + _addBtn.value) * h; // always include [+] row when editable
   const setDividerH = _DOCK_DIV;
   const allSetsH = (setCount + _addBtn.value) * h;
   return fixedH + charH + setDividerH + allSetsH > dockedScrollHeight.value;
 });
 const charsCollapsed = computed(() => {
-  if (!props.docked || sidebarPrimaryTab.value === "folders") return false;
+  if (!sidebarStore.effectiveDocked || sidebarPrimaryTab.value === "folders")
+    return false;
   if (!setsCollapsed.value) return false;
   const h = _dockRowH.value;
   const charCount = visibleCharacters.value.length;
   const setCount = visibleSets.value.length;
   if (!charCount || dockedScrollHeight.value === 0) return false;
-  const fixedH = 2 * h + _DOCK_DIV;
+  const fixedH = 3 * h + _DOCK_DIV; // allPictures + duplicates + scrapheap + divider
   const charH = (charCount + _addBtn.value) * h;
   const setDividerH = setCount > 0 ? _DOCK_DIV : 0;
   const collapsedSetH = setCount > 0 ? h : 0; // sets become 1 button
@@ -1500,18 +1545,18 @@ const sidebarFolderChildIconSize = computed(() =>
 );
 
 const dateFormatModel = computed({
-  get: () => props.dateFormat ?? "locale",
-  set: (value) => emit("update:date-format", value ?? "locale"),
+  get: () => userPrefsStore.dateFormat ?? "locale",
+  set: (value) => userPrefsStore.setDateFormat(value ?? "locale"),
 });
 
 const themeModeModel = computed({
-  get: () => props.themeMode ?? "light",
-  set: (value) => emit("update:theme-mode", value ?? "light"),
+  get: () => userPrefsStore.themeMode ?? "light",
+  set: (value) => userPrefsStore.setThemeMode(value ?? "light"),
 });
 
 const showKeyboardHintModel = computed({
-  get: () => props.showKeyboardHint ?? true,
-  set: (value) => emit("update:show-keyboard-hint", value ?? true),
+  get: () => userPrefsStore.showKeyboardHint ?? true,
+  set: (value) => (userPrefsStore.showKeyboardHint = value ?? true),
 });
 
 const sidebarThumbnailSizeLarge = computed(
@@ -1536,11 +1581,11 @@ const clampSidebarWidth = (v) =>
 
 // Persisted width; the setter emits up to the store/backend.
 const sidebarWidthModel = computed({
-  get: () => props.sidebarWidth ?? 240,
+  get: () => userPrefsStore.sidebarWidth ?? 240,
   set: (value) => {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return;
-    emit("update:sidebar-width", clampSidebarWidth(parsed));
+    userPrefsStore.setSidebarWidth(clampSidebarWidth(parsed));
   },
 });
 
@@ -1552,7 +1597,7 @@ const sidebarDragWidth = ref(null);
 // drop them. Uses the live drag width while resizing, the saved width otherwise.
 const sidebarIsNarrow = computed(
   () =>
-    !props.docked &&
+    !sidebarStore.effectiveDocked &&
     (sidebarDragWidth.value ?? sidebarWidthModel.value ?? 240) < 150,
 );
 
@@ -1563,7 +1608,7 @@ const sidebarThumbStyle = computed(() => {
   };
   // Apply the resized width only when expanded; docked width is driven by the
   // thumbnail size in CSS, so leave it to the stylesheet there.
-  if (!props.docked) {
+  if (!sidebarStore.effectiveDocked) {
     const w = sidebarDragWidth.value ?? sidebarWidthModel.value;
     style.width = `${w}px`;
   }
@@ -1593,7 +1638,7 @@ function onSidebarResizeEnd() {
 }
 
 function onSidebarResizeStart(e) {
-  if (props.docked) return;
+  if (sidebarStore.effectiveDocked) return;
   e.preventDefault();
   const rect = sidebarRootRef.value?.getBoundingClientRect();
   _resizeStartWidth = rect ? rect.width : sidebarWidthModel.value;
@@ -1606,7 +1651,7 @@ function onSidebarResizeStart(e) {
 }
 
 function onSidebarResizeKey(e) {
-  if (props.docked) return;
+  if (sidebarStore.effectiveDocked) return;
   const step = e.shiftKey ? 24 : 8;
   if (e.key === "ArrowLeft") {
     sidebarWidthModel.value = sidebarWidthModel.value - step;
@@ -1617,14 +1662,22 @@ function onSidebarResizeKey(e) {
   }
 }
 
-const reactiveSelectedDescending = ref(props.selectedDescending);
+const reactiveSelectedDescending = ref(sortStore.selectedDescending);
 
 watch(
-  () => props.selectedDescending,
+  () => sortStore.selectedDescending,
   (newValue) => {
     reactiveSelectedDescending.value = newValue;
   },
 );
+
+// Changing the sort from the sidebar also closes an auto-hidden sidebar: on a
+// narrow window the user has just made their choice and wants to see the grid.
+function applySort(sort, descending) {
+  sortStore.selectedSort = sort;
+  sortStore.selectedDescending = descending;
+  if (sidebarStore.sidebarForcedHidden) sidebarStore.hideAutoSidebar();
+}
 
 const descendingModel = computed({
   get: () => {
@@ -1632,17 +1685,14 @@ const descendingModel = computed({
   },
   set: (value) => {
     reactiveSelectedDescending.value = value;
-    emit("update:selected-sort", { sort: sortModel.value, descending: value });
+    applySort(sortModel.value, value);
   },
 });
 
 const sortModel = computed({
-  get: () => props.selectedSort,
+  get: () => sortStore.selectedSort,
   set: (value) =>
-    emit("update:selected-sort", {
-      sort: value != null ? String(value) : "",
-      descending: descendingModel.value,
-    }),
+    applySort(value != null ? String(value) : "", descendingModel.value),
 });
 
 // --- Character Editor Dialog Functions ---
@@ -1680,13 +1730,13 @@ function openSettingsDialog(tab = "") {
 function selectCharacter(id, label = null, event = null) {
   clearCountNew(id);
   const isSpecial =
-    id === props.allPicturesId ||
-    id === props.unassignedPicturesId ||
-    id === props.scrapheapPicturesId;
+    id === ALL_PICTURES_ID ||
+    id === UNASSIGNED_PICTURES_ID ||
+    id === SCRAPHEAP_PICTURES_ID;
   const isMultiToggle = !isSpecial && Boolean(event?.ctrlKey || event?.metaKey);
 
   if (!isMultiToggle) {
-    if (id === props.allPicturesId) {
+    if (id === ALL_PICTURES_ID) {
       allPicturesLastMode.value = projectViewMode.value;
       allPicturesLastProjectId.value = selectedProjectId.value;
     }
@@ -1697,7 +1747,7 @@ function selectCharacter(id, label = null, event = null) {
     // Compute the full project context so App.vue can apply everything
     // atomically without relying on any pre-existing store state.
     let projectContext;
-    if (id === props.allPicturesId) {
+    if (id === ALL_PICTURES_ID) {
       // "All Pictures" keeps whatever project scope was active when clicked.
       projectContext = {
         mode: projectViewMode.value,
@@ -1763,7 +1813,7 @@ function selectCharacter(id, label = null, event = null) {
   const nextIds = Array.from(currentIds).sort((a, b) => a - b);
   if (!nextIds.length) {
     emit("select-character", {
-      id: props.allPicturesId,
+      id: ALL_PICTURES_ID,
       label: null,
       ids: [],
       projectIds: {},
@@ -1772,7 +1822,7 @@ function selectCharacter(id, label = null, event = null) {
   }
 
   // Keep the primary view unchanged on ctrl-click
-  const primaryId = props.selectedCharacter ?? nextIds[0];
+  const primaryId = selectionStore.selectedCharacter ?? nextIds[0];
   const multiProjectIds = {};
   for (const cid of nextIds) {
     const c = characters.value.find((ch) => ch.id === cid);
@@ -1848,17 +1898,13 @@ function selectSet(setId, label = null, event = null) {
 }
 
 async function deleteCharacter() {
-  if (!props.selectedCharacter) return;
+  if (!selectionStore.selectedCharacter) return;
   if (!window.confirm("Delete this character?")) return;
   try {
-    await apiDeleteCharacter(props.selectedCharacter);
-
-    // Remove the deleted character from the characters array
-    characters.value = characters.value.filter(
-      (char) => char.id !== props.selectedCharacter,
-    );
-
-    await fetchCharacters(); // Refresh sidebar
+    await apiDeleteCharacter(selectionStore.selectedCharacter);
+    // The list is shared state now: the server is asked again rather than the
+    // row being spliced out locally.
+    await fetchCharacters();
   } catch (e) {
     setError(e.message);
   }
@@ -1876,9 +1922,6 @@ async function deleteCharactersByIds(ids) {
   if (!window.confirm(msg)) return;
   try {
     await Promise.all(ids.map((id) => apiDeleteCharacter(id)));
-    characters.value = characters.value.filter(
-      (c) => !ids.includes(Number(c.id)),
-    );
     await fetchCharacters();
   } catch (e) {
     setError(e.message);
@@ -1973,7 +2016,7 @@ async function deleteImportFolderById(id) {
       selectedFolderKey.value = null;
       selectedFolderReferenceId.value = null;
       emit("select-folder", null);
-      emit("update:folder-scanning", false);
+      sidebarStore.folderScanning = false;
     }
     await fetchImportFolders();
   } catch (e) {
@@ -1987,9 +2030,87 @@ async function deleteImportFolderById(id) {
   }
 }
 
+/** Context-menu target types that can be scoped for a duplicate scan. */
+const DEDUP_SCOPE_TYPES = {
+  character: {
+    scope: "character",
+    icon: "mdi-account-box-outline",
+    noun: "for",
+  },
+  set: { scope: "set", icon: "mdi-folder-multiple-image", noun: "in this set" },
+  project: {
+    scope: "project",
+    icon: "mdi-briefcase-outline",
+    noun: "in this project",
+  },
+  folder: {
+    scope: "folder",
+    icon: "mdi-folder-outline",
+    noun: "in this folder",
+  },
+};
+
+/**
+ * Fetch the duplicate count for the object a context menu just opened on.
+ *
+ * Fire and forget: the row renders a placeholder until the number lands, which
+ * is the honest state, and a failed read leaves the row reading "Find
+ * duplicates" without a count rather than a wrong zero.
+ *
+ * @param {string} type - the context-menu target type.
+ * @param {Object} item - the target object.
+ */
+function primeDuplicateCount(type, item) {
+  if (isReadOnly.value) return;
+  const spec = DEDUP_SCOPE_TYPES[type];
+  if (!spec || !item?.id) return;
+  dedupStore.fetchScopeCount(spec.scope, item.id);
+}
+
+/**
+ * The known duplicate count for one scope, or null while it is still unknown.
+ * @param {string} type
+ * @param {Object} item
+ * @returns {number|null}
+ */
+function duplicateCountFor(type, item) {
+  const spec = DEDUP_SCOPE_TYPES[type];
+  if (!spec || !item?.id) return null;
+  const value = dedupStore.scopeCounts[scopeKey(spec.scope, item.id)];
+  return value === undefined ? null : value;
+}
+
+/**
+ * Open the duplicate queue scoped to the object the menu was opened on.
+ *
+ * Closes the menu first and acts afterwards, so the menu's own teardown cannot
+ * race the navigation for focus.
+ *
+ * @param {string} type
+ * @param {Object} item
+ */
+function findDuplicatesIn(type, item) {
+  const spec = DEDUP_SCOPE_TYPES[type];
+  if (!spec || !item?.id) return;
+  closeSidebarCtxMenu();
+  nextTick(() => {
+    emit("select-duplicates", {
+      type: spec.scope,
+      id: item.id,
+      label: item.name || item.label || "",
+      icon: spec.icon,
+    });
+  });
+}
+
 function openSidebarCtxMenu(type, item, event) {
   if (isReadOnly.value && (type === "folder" || type === "import-folder"))
     return;
+  // Warm the duplicate count for the object under the cursor, so the menu's
+  // "Find duplicates in..." row can carry a number rather than open a queue
+  // that turns out to be empty. A scoped count reuses cached hashes and is
+  // cheap; the store also de-duplicates repeat opens on the same object.
+  primeDuplicateCount(type, item);
   // Reset here rather than in every branch: only the scrapheap branch turns it
   // on, so a single top-level reset keeps the per-type blocks below untouched.
   sidebarCtxScrapheap.value = false;
@@ -2117,7 +2238,7 @@ function closeSidebarCtxMenu() {
 // The sidebar row already owns this count, so we read it here rather than reach
 // into the grid's `scrapheapEmptyDisabled`.
 const scrapheapIsEmpty = computed(
-  () => !categoryCounts.value[props.scrapheapPicturesId],
+  () => !categoryCounts.value[SCRAPHEAP_PICTURES_ID],
 );
 
 // Empty Scrapheap from the sidebar context menu. Navigate into the scrapheap
@@ -2126,8 +2247,22 @@ const scrapheapIsEmpty = computed(
 function emptyScrapheapFromCtx() {
   if (scrapheapIsEmpty.value) return;
   closeSidebarCtxMenu();
-  selectCharacter(props.scrapheapPicturesId, "Scrapheap");
+  selectCharacter(SCRAPHEAP_PICTURES_ID, "Scrapheap");
   emit("empty-scrapheap");
+}
+
+// "Suggest more pictures of <person>" (#636): ranks the whole library against
+// this person's reference faces so their un-tagged pictures can be assigned in
+// one action. Deliberately does NOT select the person first — the search spans
+// the library, and narrowing the view to what is already assigned would hide
+// every result it is meant to find.
+function suggestPicturesForCharacterFromCtx(character) {
+  if (!character?.id) return;
+  closeSidebarCtxMenu();
+  emit("suggest-pictures-for-character", {
+    id: character.id,
+    name: character.name,
+  });
 }
 
 function openSetCtxIconMenu(event) {
@@ -2320,12 +2455,24 @@ function dragLeaveSetItem() {
 
 function isCountSelected(id) {
   if (!id) return false;
-  return props.selectedCharacter === id;
+  return selectionStore.selectedCharacter === id;
 }
 
+/**
+ * Whether a selection-driven row may render as active at all. The Duplicates
+ * view is addressed by ROUTE, not by the selection system, so while it is open
+ * the underlying selection (kept so back-navigation restores it) must yield
+ * the highlight — otherwise the sidebar shows two active destinations. A live
+ * folder filter suppresses the same rows for the same reason, so the two
+ * guards travel together.
+ */
+const selectionOwnsHighlight = computed(
+  () => !hasFolderFilter.value && !isDuplicatesView.value,
+);
+
 const isAllPicturesRowActive = computed(() => {
-  if (props.hasFolderFilter) return false;
-  if (props.selectedCharacter !== props.allPicturesId) return false;
+  if (!selectionOwnsHighlight.value) return false;
+  if (selectionStore.selectedCharacter !== ALL_PICTURES_ID) return false;
   if (selectedSetIdSet.value.size > 0) return false;
   return true;
 });
@@ -2364,15 +2511,66 @@ function setCategoryCount(id, value, shouldFlash) {
 }
 
 // --- Sidebar & Character Data ---
+let sidebarCountEpoch = 0;
+
+function sidebarCountRequestKey() {
+  return JSON.stringify({
+    mode: projectViewMode.value,
+    projectId: selectedProjectId.value,
+    characters: characters.value.map((char) => [char.id, char.project_id]),
+    projects: projects.value.map((project) => project.id),
+  });
+}
+
 async function fetchSidebarData() {
+  const requestEpoch = (sidebarCountEpoch += 1);
+  // The per-character and per-project counts arrive ON the shared lists
+  // (`include_counts`), so this pass has to hold those lists before it can read
+  // a count off them, and before it can compute a request key that describes
+  // what it is about to write. `refreshSidebar` fires `fetchCharacters()` /
+  // `fetchProjects()` unawaited a tick earlier, and `useEntityListsStore.refresh`
+  // de-duplicates on the kind while a request is in flight, so awaiting here
+  // JOINS those reads rather than issuing a second pair. (Awaiting them after
+  // computing the key instead would be a bug: a cold list landing mid-flight
+  // changes the key and every count write would be discarded as stale.)
+  const [characterRows, projectRows] = await Promise.all([
+    entityLists.refresh("characters", { baseUrl: props.backendUrl }),
+    entityLists.refresh("projects", { baseUrl: props.backendUrl }),
+  ]);
+  const requestKey = sidebarCountRequestKey();
+  const isCurrentRequest = () =>
+    requestEpoch === sidebarCountEpoch &&
+    requestKey === sidebarCountRequestKey();
   const shouldFlash = flashCountsNextFetch.value;
+  // Per-character counts come off the list rows fetched above: one read for
+  // the whole tree instead of a `/characters/{id}/summary` per row (#651). Both
+  // scopes ship on every row, so a mode switch is a re-read of the same shape;
+  // which of the two a mode reads (and which rows have no answer yet) is pinned
+  // in `utils/sidebarCounts.js`. Written before the category summaries below so
+  // the tree's numbers do not wait on those round-trips.
+  if (isCurrentRequest()) {
+    for (const { id, count } of characterCountUpdates(
+      characterRows,
+      projectViewMode.value,
+    )) {
+      setCategoryCount(id, count, shouldFlash);
+    }
+  }
+  // Same for the projects. The unassigned bucket is not a row in that list, so
+  // it stays a single summary request (below).
+  if (isCurrentRequest()) {
+    for (const { id, count } of projectCountUpdates(projectRows)) {
+      projectCounts.value[id] = count;
+    }
+  }
   // Fetch total image count for END key logic
   try {
     // All images summary
-    const data = await getCharacterSummary(props.allPicturesId, undefined, {
+    const data = await getCharacterSummary(ALL_PICTURES_ID, undefined, {
       baseUrl: props.backendUrl,
     });
-    setCategoryCount(props.allPicturesId, data.image_count, shouldFlash);
+    if (isCurrentRequest())
+      setCategoryCount(ALL_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching all images summary:", e);
   }
@@ -2388,81 +2586,42 @@ async function fetchSidebarData() {
           }
         : undefined;
     const data = await getCharacterSummary(
-      props.unassignedPicturesId,
+      UNASSIGNED_PICTURES_ID,
       unassignedParams,
       { baseUrl: props.backendUrl },
     );
-    setCategoryCount(props.unassignedPicturesId, data.image_count, shouldFlash);
+    if (isCurrentRequest())
+      setCategoryCount(UNASSIGNED_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching unassigned images summary:", e);
   }
   try {
-    const data = await getCharacterSummary(
-      props.scrapheapPicturesId,
-      undefined,
-      { baseUrl: props.backendUrl },
-    );
-    setCategoryCount(props.scrapheapPicturesId, data.image_count, shouldFlash);
+    const data = await getCharacterSummary(SCRAPHEAP_PICTURES_ID, undefined, {
+      baseUrl: props.backendUrl,
+    });
+    if (isCurrentRequest())
+      setCategoryCount(SCRAPHEAP_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching scrapheap images summary:", e);
   }
-  await Promise.all(
-    characters.value.map(async (char) => {
-      try {
-        const characterSummaryParams =
-          projectViewMode.value === "project"
-            ? {
-                project_id:
-                  char.project_id != null ? char.project_id : "UNASSIGNED",
-              }
-            : null;
-        const data = await getCharacterSummary(
-          char.id,
-          characterSummaryParams ?? undefined,
-          { baseUrl: props.backendUrl },
-        );
-        setCategoryCount(char.id, data.image_count, shouldFlash);
-      } catch (e) {
-        console.warn("Error fetching character images summary:", e);
-      }
-    }),
-  );
-  // Fetch counts for each project and the unassigned bucket
-  try {
-    const countRequests = [
-      getProjectSummary("UNASSIGNED", undefined, {
-        baseUrl: props.backendUrl,
-      }).then((body) => {
-        projectCounts.value[UNASSIGNED_PROJECT_KEY] = body.image_count;
-      }),
-      ...projects.value.map((p) =>
-        getProjectSummary(p.id, undefined, {
-          baseUrl: props.backendUrl,
-        }).then((body) => {
-          projectCounts.value[p.id] = body.image_count;
-        }),
-      ),
-    ];
-    await Promise.all(countRequests);
-  } catch (e) {
-    console.warn("Error fetching project counts:", e);
-  }
-  flashCountsNextFetch.value = false;
+  // There is deliberately no "pictures in no project" count fetched here.
+  // `GET /projects/UNASSIGNED/summary` used to run on every sidebar refresh and
+  // write `projectCounts[UNASSIGNED]`, which no template has ever rendered.
+  // The tree's only count binding is `projectCounts[p.id]` over real project
+  // rows. It cost the owner a round-trip per refresh for nothing, and for a
+  // token scoped to a character / picture / set it is a project route that
+  // 403s, so it logged a warning on every refresh for a number nobody could
+  // have seen. Reinstating it means adding the row that would display it.
+  if (isCurrentRequest()) flashCountsNextFetch.value = false;
 }
 
 async function fetchCharacters() {
   setLoading(true);
   setError(null);
   try {
-    const chars = await listCharacters({ baseUrl: props.backendUrl });
-    const nextCharacters = Array.isArray(chars) ? chars : [];
-    if (!Array.isArray(chars)) {
-      console.warn(
-        "Unexpected /characters response; expected an array:",
-        chars,
-      );
-    }
-    characters.value = nextCharacters;
+    const nextCharacters = await entityLists.refresh("characters", {
+      baseUrl: props.backendUrl,
+    });
     entityNames.mergeCharacterNames(nextCharacters);
     for (const char of nextCharacters) {
       fetchCharacterThumbnail(char.id);
@@ -2487,9 +2646,14 @@ function refreshSidebar(options = {}) {
 
 async function fetchCharacterThumbnail(characterId) {
   try {
-    const blob = await getCharacterThumbnail(characterId, {
-      cacheBuster: Date.now(),
-    });
+    // No cache-buster: a fresh `?cb=` per call re-downloaded every character
+    // thumbnail on every sidebar refresh, against an already-expensive route
+    // (#651). Freshness is the *response's* job instead — the route sends
+    // `Cache-Control: private, no-cache` with an ETag and answers a conditional
+    // request with a 304, so the browser revalidates every time but transfers
+    // bytes only when the thumbnail actually changed. Re-adding a buster here
+    // would defeat that (integration_architecture.md §9).
+    const blob = await getCharacterThumbnail(characterId);
 
     // Create an object URL for the blob
     const blobUrl = URL.createObjectURL(blob);
@@ -2533,47 +2697,30 @@ async function fetchSortOptions() {
         ? sortOptions.value[0].value
         : null;
     }
-    emit("update:sort-options", sortOptions.value);
+    sortStore.setSortOptions(sortOptions.value);
   } catch (e) {
     console.error("Error fetching sort options:", e);
     sortOptions.value = [];
-    emit("update:sort-options", []);
+    sortStore.setSortOptions([]);
   }
 }
 
 // --- Picture Sets ---
 async function fetchProjects() {
-  // A token scoped to a non-project resource cannot access the projects list.
-  if (
-    isReadOnly.value &&
-    sessionContext.value?.resource_type != null &&
-    sessionContext.value.resource_type !== "project"
-  ) {
-    projects.value = [];
-    return;
-  }
-  try {
-    const rows = await listProjects({ baseUrl: props.backendUrl });
-    projects.value = Array.isArray(rows) ? rows : [];
-    entityNames.mergeProjectNames(projects.value);
-  } catch (e) {
-    console.error("Error fetching projects:", e);
-    projects.value = [];
-  }
+  // The store declines the call outright for a token scoped to a non-project
+  // resource, which cannot read the projects list.
+  const rows = await entityLists.refresh("projects", {
+    baseUrl: props.backendUrl,
+  });
+  entityNames.mergeProjectNames(rows);
 }
 
 async function fetchPictureSets() {
-  try {
-    // Always fetch all sets — in the flat project tree each project filters
-    // its own sets client-side, so we must not scope this call to a single project.
-    const sets = await listPictureSets({ baseUrl: props.backendUrl });
-    pictureSets.value = Array.isArray(sets) ? [...sets] : [];
-    entityNames.mergeSetNames(pictureSets.value);
-    await updateSetThumbnails(pictureSets.value);
-  } catch (e) {
-    console.error("Error fetching picture sets:", e);
-    pictureSets.value = [...pictureSets.value]; // force reactivity on error
-  }
+  // Always fetch all sets — in the flat project tree each project filters
+  // its own sets client-side, so we must not scope this call to a single project.
+  const sets = await entityLists.refresh("sets", { baseUrl: props.backendUrl });
+  entityNames.mergeSetNames(sets);
+  await updateSetThumbnails(sets);
 }
 
 async function fetchSharedIds() {
@@ -2946,6 +3093,19 @@ async function onProjectDrop(projectId, event) {
     emit("images-moved", { imageIds });
   } catch (e) {
     console.error("Failed to assign pictures to project:", e);
+    if (Number(e?.response?.status) >= 500) {
+      noticeStore.error(
+        "The project assignment outcome is uncertain. Counts and the current view are reloading before you retry.",
+        { key: "images-project-uncertain" },
+      );
+      await fetchSidebarData();
+      emit("images-moved", { imageIds, uncertain: true });
+      return;
+    }
+    noticeStore.error(
+      `Couldn't assign those pictures to the project. ${noticeDetail(e)}`,
+      { key: "images-project-assign" },
+    );
   }
 }
 
@@ -3068,8 +3228,8 @@ function handleDropOnCharacter(payload) {
 // --- Character Management ---
 async function characterSaved() {
   if (characterEditorCharacter.value && !characterEditorCharacter.value.id) {
-    characters.value.push(characterEditorCharacter.value);
-    // New character was created, increment nextCharacterNumber
+    // New character was created, increment nextCharacterNumber. The row itself
+    // comes from the refetch below — the shared list is never written locally.
     nextCharacterNumber.value++;
   }
   await fetchCharacters(); // Refresh characters
@@ -3096,15 +3256,15 @@ onMounted(() => {
     // _initializing suppresses the watchers so this one-time restore does NOT
     // emit navigation events back to App.vue.
     if (
-      props.externalProjectViewMode != null ||
-      props.externalSelectedProjectId != null
+      projectStore.projectViewMode != null ||
+      projectStore.selectedProjectId != null
     ) {
       _initializing = true;
-      if (props.externalProjectViewMode != null)
-        projectViewMode.value = props.externalProjectViewMode;
-      if (props.externalSelectedProjectId != null) {
-        lastUsedProjectId.value = props.externalSelectedProjectId;
-        selectedProjectId.value = props.externalSelectedProjectId;
+      if (projectStore.projectViewMode != null)
+        projectViewMode.value = projectStore.projectViewMode;
+      if (projectStore.selectedProjectId != null) {
+        lastUsedProjectId.value = projectStore.selectedProjectId;
+        selectedProjectId.value = projectStore.selectedProjectId;
       }
       nextTick(() => {
         _initializing = false;
@@ -3279,7 +3439,7 @@ watch(
 );
 
 watch(
-  [() => sortedCharacters.value, () => props.selectedSort],
+  [() => sortedCharacters.value, () => sortStore.selectedSort],
   ([chars, selectedSort]) => {
     const hasCharacters = Array.isArray(chars) && chars.length > 0;
     if (!hasCharacters && selectedSort === SIMILARITY_SORT_KEY) {
@@ -3298,7 +3458,7 @@ watch(
 );
 
 watch(
-  () => props.selectedCharacter,
+  () => selectionStore.selectedCharacter,
   (nextId) => {
     clearCountNew(nextId);
   },
@@ -3340,7 +3500,7 @@ watch(selectedProjectId, (v) => {
 // this handles every subsequent route change. (Switching the Projects tab does
 // NOT change the prop, so the stateless browse-scope is preserved.)
 watch(
-  () => props.externalSelectedProjectId,
+  () => projectStore.selectedProjectId,
   (v) => {
     if (_initializing) return;
     const next = v ?? null;
@@ -3353,7 +3513,7 @@ watch(
 // the matching key via the activeFolderKey prop so we can switch to the
 // folders tab and emit the correct filter payload.
 watch(
-  () => props.activeFolderKey,
+  () => viewStore.activeFolderKey,
   async (newKey, oldKey) => {
     if (!newKey) {
       // Route left a folder view — clear the sidebar's folder highlight.
@@ -3370,7 +3530,7 @@ watch(
     await fetchImportFolders();
 
     // Guard: user may have navigated away while fetches were in flight.
-    if (props.activeFolderKey !== newKey) return;
+    if (viewStore.activeFolderKey !== newKey) return;
 
     if (newKey.startsWith("rf-")) {
       const id = parseInt(newKey.slice(3), 10);
@@ -3411,22 +3571,23 @@ function switchToProjectView() {
 
 async function toggleCharacterProjectMembership(charId) {
   const char = characters.value.find((c) => c.id === charId);
-  const newProjectId =
-    char?.project_id === selectedProjectId.value
-      ? null
-      : selectedProjectId.value;
+  if (!char || selectedProjectId.value == null) return;
+  const membershipPatch = toggleEntityProjectPatch(
+    char,
+    selectedProjectId.value,
+  );
   try {
     await patchCharacter(
       charId,
-      { project_id: newProjectId },
+      membershipPatch,
       { baseUrl: props.backendUrl },
     );
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
-      characters.value[idx] = {
-        ...characters.value[idx],
-        project_id: newProjectId,
-      };
+      characters.value[idx] = withEntityProjectIds(
+        characters.value[idx],
+        membershipPatch.project_ids,
+      );
     }
     // Reassignment changes per-project and per-character image counts.
     fetchSidebarData();
@@ -3437,22 +3598,23 @@ async function toggleCharacterProjectMembership(charId) {
 
 async function toggleSetProjectMembership(setId) {
   const set = pictureSets.value.find((s) => s.id === setId);
-  const newProjectId =
-    set?.project_id === selectedProjectId.value
-      ? null
-      : selectedProjectId.value;
+  if (!set || selectedProjectId.value == null) return;
+  const membershipPatch = toggleEntityProjectPatch(
+    set,
+    selectedProjectId.value,
+  );
   try {
     await patchPictureSet(
       setId,
-      { project_id: newProjectId },
+      membershipPatch,
       { baseUrl: props.backendUrl },
     );
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
-      pictureSets.value[idx] = {
-        ...pictureSets.value[idx],
-        project_id: newProjectId,
-      };
+      pictureSets.value[idx] = withEntityProjectIds(
+        pictureSets.value[idx],
+        membershipPatch.project_ids,
+      );
     }
     // Reassignment changes per-project and per-set image counts.
     fetchSidebarData();
@@ -3491,7 +3653,12 @@ function onEntityDragEnd() {
 
 async function moveCharacterToProject(charId, projectId) {
   const char = characters.value.find((c) => c.id === charId);
-  if (!char || char.project_id === projectId) return;
+  const currentProjectIds = getEntityProjectIds(char);
+  if (
+    !char ||
+    (currentProjectIds.length === 1 && currentProjectIds[0] === projectId)
+  )
+    return;
   try {
     await patchCharacter(
       charId,
@@ -3500,10 +3667,9 @@ async function moveCharacterToProject(charId, projectId) {
     );
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
-      characters.value[idx] = {
-        ...characters.value[idx],
-        project_id: projectId,
-      };
+      characters.value[idx] = withEntityProjectIds(characters.value[idx], [
+        projectId,
+      ]);
     }
     // Reassignment changes per-project and per-character image counts.
     fetchSidebarData();
@@ -3517,7 +3683,12 @@ async function moveCharacterToProject(charId, projectId) {
 
 async function moveSetToProject(setId, projectId) {
   const set = pictureSets.value.find((s) => s.id === setId);
-  if (!set || set.project_id === projectId) return;
+  const currentProjectIds = getEntityProjectIds(set);
+  if (
+    !set ||
+    (currentProjectIds.length === 1 && currentProjectIds[0] === projectId)
+  )
+    return;
   try {
     await patchPictureSet(
       setId,
@@ -3526,10 +3697,9 @@ async function moveSetToProject(setId, projectId) {
     );
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
-      pictureSets.value[idx] = {
-        ...pictureSets.value[idx],
-        project_id: projectId,
-      };
+      pictureSets.value[idx] = withEntityProjectIds(pictureSets.value[idx], [
+        projectId,
+      ]);
     }
     // Reassignment changes per-project and per-set image counts.
     fetchSidebarData();
@@ -3624,9 +3794,9 @@ defineExpose({
   <ImageImporter
     ref="imageImporterRef"
     :backend-url="props.backendUrl"
-    :selected-character-id="props.selectedCharacter"
-    :all-pictures-id="props.allPicturesId"
-    :unassigned-pictures-id="props.unassignedPicturesId"
+    :selected-character-id="selectionStore.selectedCharacter"
+    :all-pictures-id="ALL_PICTURES_ID"
+    :unassigned-pictures-id="UNASSIGNED_PICTURES_ID"
     @import-finished="handleImportFinished"
   />
   <CharacterEditor
@@ -3661,17 +3831,19 @@ defineExpose({
     v-model:sidebar-thumbnail-size="sidebarThumbnailSizeModel"
     v-model:date-format="dateFormatModel"
     v-model:theme-mode="themeModeModel"
-    :checkForUpdates="props.checkForUpdates"
+    :checkForUpdates="userPrefsStore.checkForUpdates"
     v-model:show-keyboard-hint="showKeyboardHintModel"
-    :thumbnail-mode="props.thumbnailMode"
-    @update:thumbnail-mode="(value) => emit('update:thumbnail-mode', value)"
+    :thumbnail-mode="gridStore.thumbnailMode"
+    @update:thumbnail-mode="(value) => gridStore.setThumbnailMode(value)"
     :initial-tab="settingsDialogInitialTab"
-    @update:hidden-tags="(value) => emit('update:hidden-tags', value)"
-    @update:apply-tag-filter="(value) => emit('update:apply-tag-filter', value)"
-    @update:comfyui-configured="
-      (value) => emit('update:comfyui-configured', value)
+    @update:hidden-tags="(value) => userPrefsStore.setHiddenTags(value)"
+    @update:apply-tag-filter="
+      (value) => userPrefsStore.setApplyTagFilter(value)
     "
-    @update:public-url="(value) => emit('update:public-url', value)"
+    @update:comfyui-configured="
+      (value) => (filterStore.comfyuiConfigured = value)
+    "
+    @update:public-url="(value) => (userPrefsStore.publicUrl = value)"
     @update:check-for-updates="
       (value) => emit('update:check-for-updates', value)
     "
@@ -3826,14 +3998,14 @@ defineExpose({
     ref="sidebarRootRef"
     class="sidebar"
     :class="{
-      'sidebar-docked': props.docked,
+      'sidebar-docked': sidebarStore.effectiveDocked,
       'sidebar--narrow': sidebarIsNarrow,
     }"
     :style="sidebarThumbStyle"
   >
     <!-- Drag the right edge to resize the expanded sidebar (hidden when docked). -->
     <div
-      v-if="!props.docked"
+      v-if="!sidebarStore.effectiveDocked"
       class="sidebar-resize-handle"
       role="separator"
       aria-orientation="vertical"
@@ -3866,8 +4038,18 @@ defineExpose({
             class="sidebar-brand-logo"
           />
         </a>
-        <div v-if="!props.docked" class="sidebar-brand-text">
-          <WordmarkLogo class="sidebar-brand-title" />
+        <div v-if="!sidebarStore.effectiveDocked" class="sidebar-brand-text">
+          <div class="sidebar-brand-title-row">
+            <WordmarkLogo class="sidebar-brand-title" />
+            <button
+              v-if="userPrefsStore.telemetryActive"
+              type="button"
+              class="sidebar-telemetry-dot"
+              :title="telemetryIndicatorTitle"
+              :aria-label="`${telemetryIndicatorTitle}. Open privacy settings.`"
+              @click="openSettingsDialog('privacy')"
+            ></button>
+          </div>
           <div
             v-if="updateAvailable && !updateDismissed"
             class="sidebar-update-wrapper"
@@ -3894,8 +4076,15 @@ defineExpose({
         </div>
       </div>
     </div>
+    <!-- The docked counterpart of the Global / Projects / Folders tab strip
+         below, and gated on `scopedResourceType` for the same reason it is:
+         a share token scoped to a character, a picture or a set can read no
+         project list at all, so its Projects flyout is an empty box and its
+         Folders flyout is owner-only. Without this the two sidebar widths
+         disagreed: the expanded one omitted the switcher, the docked one
+         still offered it. -->
     <div
-      v-if="props.docked"
+      v-if="sidebarStore.effectiveDocked && !scopedResourceType"
       class="sidebar-collapsed-project-wrap"
       ref="projectMenuRef"
       @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
@@ -3921,7 +4110,7 @@ defineExpose({
       </div>
       <Teleport to="body">
         <div
-          v-if="projectMenuOpen && props.docked"
+          v-if="projectMenuOpen && sidebarStore.effectiveDocked"
           ref="collapsedProjectMenuRef"
           class="sidebar-collapsed-project-menu"
           :style="{
@@ -3940,7 +4129,7 @@ defineExpose({
             @mouseenter="scheduleCloseProjectSubMenu"
             @click="
               selectLibraryTab('global');
-              selectCharacter(props.allPicturesId, 'All Pictures');
+              selectCharacter(ALL_PICTURES_ID, 'All Pictures');
               projectMenuOpen = false;
             "
           >
@@ -3991,7 +4180,11 @@ defineExpose({
       <!-- Flyout submenu -->
       <Teleport to="body">
         <div
-          v-if="projectMenuSection && projectMenuOpen && props.docked"
+          v-if="
+            projectMenuSection &&
+            projectMenuOpen &&
+            sidebarStore.effectiveDocked
+          "
           ref="collapsedProjectSubMenuRef"
           class="sidebar-collapsed-project-submenu"
           :style="{
@@ -4022,8 +4215,8 @@ defineExpose({
               class="sidebar-project-menu-item"
               :class="{
                 active:
-                  props.externalProjectViewMode === 'project' &&
-                  props.externalSelectedProjectId === p.id,
+                  projectStore.projectViewMode === 'project' &&
+                  projectStore.selectedProjectId === p.id,
               }"
               @click="
                 selectLibraryTab('project');
@@ -4063,7 +4256,8 @@ defineExpose({
               :class="{
                 active:
                   sidebarPrimaryTab === 'folders' &&
-                  selectedFolderKey === 'rf-' + rf.id,
+                  selectedFolderKey === 'rf-' + rf.id &&
+                  !isDuplicatesView,
               }"
               @click="
                 selectFoldersTab();
@@ -4094,7 +4288,8 @@ defineExpose({
               :class="{
                 active:
                   sidebarPrimaryTab === 'folders' &&
-                  selectedFolderKey === 'if-' + imf.id,
+                  selectedFolderKey === 'if-' + imf.id &&
+                  !isDuplicatesView,
               }"
               @click="
                 selectFoldersTab();
@@ -4163,7 +4358,7 @@ defineExpose({
       ref="dockedScrollRef"
       @contextmenu.self.prevent="openSidebarCtxMenu('empty', null, $event)"
     >
-      <template v-if="props.docked">
+      <template v-if="sidebarStore.effectiveDocked">
         <!-- Catch-all: any right-click that reaches the list (blank gaps, the
              margins beside the centered rows, the spacer) opens the view menu.
              Item rows below use `.stop` on their own context menus so they never
@@ -4185,7 +4380,7 @@ defineExpose({
                 { active: isAllPicturesRowActive },
               ]"
               title="All Pictures"
-              @click="selectCharacter(props.allPicturesId, 'All Pictures')"
+              @click="selectCharacter(ALL_PICTURES_ID, 'All Pictures')"
               @contextmenu.prevent.stop="
                 openSidebarCtxMenu('all-pictures', null, $event)
               "
@@ -4213,8 +4408,8 @@ defineExpose({
                 'sidebar-collapsed-row',
                 {
                   active:
-                    props.selectedCharacter === char.id &&
-                    !props.hasFolderFilter,
+                    selectionStore.selectedCharacter === char.id &&
+                    selectionOwnsHighlight,
                 },
               ]"
             >
@@ -4223,8 +4418,8 @@ defineExpose({
                   'sidebar-collapsed-item',
                   {
                     active:
-                      props.selectedCharacter === char.id &&
-                      !props.hasFolderFilter,
+                      selectionStore.selectedCharacter === char.id &&
+                      selectionOwnsHighlight,
                   },
                 ]"
                 :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
@@ -4294,7 +4489,7 @@ defineExpose({
               'sidebar-collapsed-row--has-flyout',
               {
                 active:
-                  selectedCharacterIdSet.size > 0 && !props.hasFolderFilter,
+                  selectedCharacterIdSet.size > 0 && selectionOwnsHighlight,
               },
             ]"
           >
@@ -4304,7 +4499,7 @@ defineExpose({
                 'sidebar-collapsed-item--has-flyout',
                 {
                   active:
-                    selectedCharacterIdSet.size > 0 && !props.hasFolderFilter,
+                    selectedCharacterIdSet.size > 0 && selectionOwnsHighlight,
                 },
               ]"
               :title="
@@ -4364,8 +4559,8 @@ defineExpose({
                     'sidebar-collapsed-flyout-item',
                     {
                       active:
-                        props.selectedCharacter === char.id &&
-                        !props.hasFolderFilter,
+                        selectionStore.selectedCharacter === char.id &&
+                        selectionOwnsHighlight,
                     },
                   ]"
                   @click="
@@ -4433,7 +4628,7 @@ defineExpose({
                 'sidebar-collapsed-row',
                 {
                   active:
-                    selectedSetIdSet.has(pset.id) && !props.hasFolderFilter,
+                    selectedSetIdSet.has(pset.id) && selectionOwnsHighlight,
                 },
               ]"
             >
@@ -4442,7 +4637,7 @@ defineExpose({
                   'sidebar-collapsed-item',
                   {
                     active:
-                      selectedSetIdSet.has(pset.id) && !props.hasFolderFilter,
+                      selectedSetIdSet.has(pset.id) && selectionOwnsHighlight,
                   },
                 ]"
                 :title="pset.name || 'Picture Set'"
@@ -4529,7 +4724,7 @@ defineExpose({
             :class="[
               'sidebar-collapsed-row',
               'sidebar-collapsed-row--has-flyout',
-              { active: selectedSetIdSet.size > 0 && !props.hasFolderFilter },
+              { active: selectedSetIdSet.size > 0 && selectionOwnsHighlight },
             ]"
           >
             <div
@@ -4537,7 +4732,7 @@ defineExpose({
                 'sidebar-collapsed-item',
                 'sidebar-collapsed-item--has-flyout',
                 {
-                  active: selectedSetIdSet.size > 0 && !props.hasFolderFilter,
+                  active: selectedSetIdSet.size > 0 && selectionOwnsHighlight,
                 },
               ]"
               :title="selectedSetObj ? selectedSetObj.name : 'Picture Sets'"
@@ -4619,7 +4814,7 @@ defineExpose({
                     'sidebar-collapsed-flyout-item',
                     {
                       active:
-                        selectedSetIdSet.has(pset.id) && !props.hasFolderFilter,
+                        selectedSetIdSet.has(pset.id) && selectionOwnsHighlight,
                     },
                   ]"
                   @click="
@@ -4685,6 +4880,33 @@ defineExpose({
             </div>
           </Teleport>
 
+          <!-- Duplicates keeps its dock row so the count stays reachable when
+               the sidebar is narrow; the badge is the only thing here that
+               reports pending work. -->
+          <div
+            :class="['sidebar-collapsed-row', { active: isDuplicatesView }]"
+          >
+            <div
+              :class="[
+                'sidebar-collapsed-item',
+                {
+                  active: isDuplicatesView,
+                  'sidebar-collapsed-item--unavailable': isReadOnly,
+                },
+              ]"
+              :aria-disabled="isReadOnly || undefined"
+              :title="isReadOnly ? READ_ONLY_DEDUP_HINT : 'Duplicates'"
+              @click="isReadOnly || emit('select-duplicates', {})"
+            >
+              <v-icon>mdi-content-duplicate</v-icon>
+              <span
+                v-if="dedupStore.hasDuplicates"
+                class="sidebar-collapsed-dedup-badge"
+                title="There are duplicates to review"
+              ></span>
+            </div>
+          </div>
+
           <!-- Scrap Heap at bottom of dock. The flex spacer above it fills most
                of the dock's blank space; its right-clicks bubble to the list's
                catch-all handler, so it needs no handler of its own. -->
@@ -4695,8 +4917,8 @@ defineExpose({
               'sidebar-collapsed-row',
               {
                 active:
-                  props.selectedCharacter === props.scrapheapPicturesId &&
-                  !props.hasFolderFilter,
+                  selectionStore.selectedCharacter === SCRAPHEAP_PICTURES_ID &&
+                  selectionOwnsHighlight,
               },
             ]"
           >
@@ -4706,12 +4928,12 @@ defineExpose({
                 'sidebar-collapsed-item--scrapheap',
                 {
                   active:
-                    props.selectedCharacter === props.scrapheapPicturesId &&
-                    !props.hasFolderFilter,
+                    selectionStore.selectedCharacter ===
+                      SCRAPHEAP_PICTURES_ID && selectionOwnsHighlight,
                 },
               ]"
               title="Scrapheap"
-              @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
+              @click="selectCharacter(SCRAPHEAP_PICTURES_ID, 'Scrapheap')"
               @contextmenu.prevent.stop="
                 openSidebarCtxMenu('scrapheap', null, $event)
               "
@@ -5077,9 +5299,7 @@ defineExpose({
                   'sidebar-list-item',
                   { active: isAllPicturesRowActive },
                 ]"
-                @click="
-                  selectCharacter(props.allPicturesId, allPicturesRowLabel)
-                "
+                @click="selectCharacter(ALL_PICTURES_ID, allPicturesRowLabel)"
                 @contextmenu.prevent="
                   openSidebarCtxMenu('all-pictures', null, $event)
                 "
@@ -5091,8 +5311,49 @@ defineExpose({
                   allPicturesRowLabel
                 }}</span>
                 <span class="sidebar-list-count">{{
-                  categoryCounts[props.allPicturesId] ?? ""
+                  categoryCounts[ALL_PICTURES_ID] ?? ""
                 }}</span>
+              </div>
+            </div>
+
+            <!-- Duplicates earns a sidebar row because it is the one thing
+                 here with a to-do count: the number goes down as the user
+                 works, which is what a destination is for. Stacked and
+                 unstacked stay a filter. -->
+            <div class="sidebar-all-pictures-row">
+              <div
+                :class="[
+                  'sidebar-list-item',
+                  {
+                    active: isDuplicatesView,
+                    'sidebar-list-item--unavailable': isReadOnly,
+                  },
+                ]"
+                :aria-disabled="isReadOnly || undefined"
+                :title="isReadOnly ? READ_ONLY_DEDUP_HINT : undefined"
+                @click="isReadOnly || emit('select-duplicates', {})"
+              >
+                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
+                  ><v-icon size="18">mdi-content-duplicate</v-icon></span
+                >
+                <span class="sidebar-list-label">Duplicates</span>
+                <span
+                  v-if="dedupStore.isScanning"
+                  class="sidebar-dedup-scanning"
+                  title="Still looking for duplicates. Groups appear as they are found."
+                >
+                  <v-progress-circular indeterminate size="10" width="1.5" />
+                </span>
+                <!-- A presence DOT, not a count (owner call, 2026-07-29): the
+                     group count moves with the tier gate and the threshold,
+                     so it read as churn. The dot only says "there are
+                     duplicates to review"; the queue's own header carries the
+                     numbers. -->
+                <span
+                  v-if="dedupStore.hasDuplicates"
+                  class="sidebar-dedup-dot"
+                  title="There are duplicates to review"
+                ></span>
               </div>
             </div>
 
@@ -5102,11 +5363,11 @@ defineExpose({
                   'sidebar-list-item',
                   {
                     active:
-                      props.selectedCharacter === props.scrapheapPicturesId &&
-                      !props.hasFolderFilter,
+                      selectionStore.selectedCharacter ===
+                        SCRAPHEAP_PICTURES_ID && selectionOwnsHighlight,
                   },
                 ]"
-                @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
+                @click="selectCharacter(SCRAPHEAP_PICTURES_ID, 'Scrapheap')"
                 @contextmenu.prevent="
                   openSidebarCtxMenu('scrapheap', null, $event)
                 "
@@ -5115,8 +5376,13 @@ defineExpose({
                   ><v-icon size="18">mdi-trash-can-outline</v-icon></span
                 >
                 <span class="sidebar-list-label">Scrapheap</span>
+                <!-- `?? ""`, not `|| ""`: an empty Scrapheap has a count of 0,
+                     and 0 is an answer, so it renders. Only a count that has
+                     not arrived yet is blank. This is the same distinction
+                     `utils/sidebarCounts.js` is a module to protect, and every
+                     sibling badge here already reads this way. -->
                 <span class="sidebar-list-count">{{
-                  categoryCounts[props.scrapheapPicturesId] || ""
+                  categoryCounts[SCRAPHEAP_PICTURES_ID] ?? ""
                 }}</span>
               </div>
             </div>
@@ -5146,7 +5412,7 @@ defineExpose({
                     v-if="selectedCharacterIdSet.size > 1"
                     class="clear-selection-inline"
                     @click.stop="
-                      selectCharacter(props.allPicturesId, 'All Pictures')
+                      selectCharacter(ALL_PICTURES_ID, 'All Pictures')
                     "
                     title="Clear character selection"
                   >
@@ -5166,10 +5432,11 @@ defineExpose({
                   <v-icon
                     v-if="
                       !isReadOnly &&
-                      props.selectedCharacter &&
-                      props.selectedCharacter !== props.allPicturesId &&
-                      props.selectedCharacter !== props.unassignedPicturesId &&
-                      props.selectedCharacter !== props.scrapheapPicturesId
+                      selectionStore.selectedCharacter &&
+                      selectionStore.selectedCharacter !== ALL_PICTURES_ID &&
+                      selectionStore.selectedCharacter !==
+                        UNASSIGNED_PICTURES_ID &&
+                      selectionStore.selectedCharacter !== SCRAPHEAP_PICTURES_ID
                     "
                     class="delete-character-inline"
                     color="white"
@@ -5224,8 +5491,8 @@ defineExpose({
                         active:
                           (selectedCharacterIdSet.size > 0
                             ? selectedCharacterIdSet.has(char.id)
-                            : selectedCharacter === char.id) &&
-                          !props.hasFolderFilter,
+                            : selectionStore.selectedCharacter === char.id) &&
+                          selectionOwnsHighlight,
                         droppable: dragOverCharacter === char.id,
                       },
                     ]"
@@ -5372,7 +5639,7 @@ defineExpose({
                       {
                         active:
                           selectedSetIdSet.has(pset.id) &&
-                          !props.hasFolderFilter,
+                          selectionOwnsHighlight,
                         droppable: dragOverSet === pset.id,
                       },
                     ]"
@@ -5500,11 +5767,11 @@ defineExpose({
                     'sidebar-project-tree-row',
                     {
                       active:
-                        props.externalProjectViewMode === 'project' &&
-                        props.externalSelectedProjectId === p.id &&
-                        props.selectedCharacter === props.allPicturesId &&
+                        projectStore.projectViewMode === 'project' &&
+                        projectStore.selectedProjectId === p.id &&
+                        selectionStore.selectedCharacter === ALL_PICTURES_ID &&
                         selectedSetIdSet.size === 0 &&
-                        !props.hasFolderFilter,
+                        selectionOwnsHighlight,
                       droppable: dragOverProjectId === p.id,
                       'project-move-target': moveDragOverProjectId === p.id,
                     },
@@ -5592,8 +5859,9 @@ defineExpose({
                     >
                       <v-icon
                         v-show="
-                          sortedCharacters.filter((c) => c.project_id === p.id)
-                            .length > 0
+                          sortedCharacters.filter((c) =>
+                            entityBelongsToProject(c, p.id),
+                          ).length > 0
                         "
                         size="14"
                         class="sidebar-project-tree-sub-chevron"
@@ -5664,7 +5932,10 @@ defineExpose({
                                   class="sidebar-move-menu-item"
                                   :class="{
                                     'sidebar-move-menu-item--checked':
-                                      char.project_id === selectedProjectId,
+                                      entityBelongsToProject(
+                                        char,
+                                        selectedProjectId,
+                                      ),
                                   }"
                                   @click.stop="
                                     toggleCharacterProjectMembership(char.id)
@@ -5674,7 +5945,10 @@ defineExpose({
                                     size="16"
                                     class="sidebar-move-menu-check"
                                     >{{
-                                      char.project_id === selectedProjectId
+                                      entityBelongsToProject(
+                                        char,
+                                        selectedProjectId,
+                                      )
                                         ? "mdi-checkbox-marked"
                                         : "mdi-checkbox-blank-outline"
                                     }}</v-icon
@@ -5689,8 +5963,8 @@ defineExpose({
                     </div>
                     <template v-if="!projectTreePeopleCollapsed.has(p.id)">
                       <div
-                        v-for="char in sortedCharacters.filter(
-                          (c) => c.project_id === p.id,
+                        v-for="char in sortedCharacters.filter((c) =>
+                          entityBelongsToProject(c, p.id),
                         )"
                         :key="char.id"
                         :class="[
@@ -5700,8 +5974,9 @@ defineExpose({
                             active:
                               (selectedCharacterIdSet.size > 0
                                 ? selectedCharacterIdSet.has(char.id)
-                                : selectedCharacter === char.id) &&
-                              !props.hasFolderFilter,
+                                : selectionStore.selectedCharacter ===
+                                  char.id) &&
+                              selectionOwnsHighlight,
                             droppable: dragOverCharacter === char.id,
                           },
                         ]"
@@ -5801,8 +6076,9 @@ defineExpose({
                     >
                       <v-icon
                         v-show="
-                          nonReferenceSets.filter((s) => s.project_id === p.id)
-                            .length > 0
+                          nonReferenceSets.filter((s) =>
+                            entityBelongsToProject(s, p.id),
+                          ).length > 0
                         "
                         size="14"
                         class="sidebar-project-tree-sub-chevron"
@@ -5872,7 +6148,10 @@ defineExpose({
                                   class="sidebar-move-menu-item"
                                   :class="{
                                     'sidebar-move-menu-item--checked':
-                                      pset.project_id === selectedProjectId,
+                                      entityBelongsToProject(
+                                        pset,
+                                        selectedProjectId,
+                                      ),
                                   }"
                                   @click.stop="
                                     toggleSetProjectMembership(pset.id)
@@ -5882,7 +6161,10 @@ defineExpose({
                                     size="16"
                                     class="sidebar-move-menu-check"
                                     >{{
-                                      pset.project_id === selectedProjectId
+                                      entityBelongsToProject(
+                                        pset,
+                                        selectedProjectId,
+                                      )
                                         ? "mdi-checkbox-marked"
                                         : "mdi-checkbox-blank-outline"
                                     }}</v-icon
@@ -5897,8 +6179,8 @@ defineExpose({
                     </div>
                     <template v-if="!projectTreeSetsCollapsed.has(p.id)">
                       <div
-                        v-for="pset in nonReferenceSets.filter(
-                          (s) => s.project_id === p.id,
+                        v-for="pset in nonReferenceSets.filter((s) =>
+                          entityBelongsToProject(s, p.id),
                         )"
                         :key="pset.id"
                         :class="[
@@ -5908,7 +6190,7 @@ defineExpose({
                           {
                             active:
                               selectedSetIdSet.has(pset.id) &&
-                              !props.hasFolderFilter,
+                              selectionOwnsHighlight,
                             droppable: dragOverSet === pset.id,
                           },
                         ]"
@@ -6083,9 +6365,7 @@ defineExpose({
         <button
           class="sidebar-ctx-item sidebar-ctx-item--danger"
           :disabled="isReadOnly || scrapheapIsEmpty"
-          :title="
-            scrapheapIsEmpty ? 'Scrapheap is already empty' : undefined
-          "
+          :title="scrapheapIsEmpty ? 'Scrapheap is already empty' : undefined"
           :aria-disabled="isReadOnly || scrapheapIsEmpty"
           @click="emptyScrapheapFromCtx()"
         >
@@ -6096,6 +6376,43 @@ defineExpose({
         </button>
       </template>
       <template v-if="sidebarCtxCharacter">
+        <button
+          v-if="!isReadOnly"
+          class="sidebar-ctx-item"
+          :title="`Rank the library against ${sidebarCtxCharacter.name}'s reference faces to find their un-tagged pictures`"
+          @click="suggestPicturesForCharacterFromCtx(sidebarCtxCharacter)"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-account-search</v-icon>
+          <!-- The name is deliberately NOT in the label. The menu is anchored to
+               that person's row and every other item in it is already about
+               them, so repeating the name only bought an ellipsis: the menu is
+               260px wide and "Suggest more pictures of <a real name>" does not
+               fit. The title below still names them in full. -->
+          <span class="sidebar-ctx-label">Suggest more pictures</span>
+        </button>
+        <button
+          class="sidebar-ctx-item"
+          :disabled="isReadOnly || duplicateCountFor('character', sidebarCtxCharacter) === 0"
+          :title="isReadOnly ? READ_ONLY_DEDUP_HINT : undefined"
+          @click="findDuplicatesIn('character', sidebarCtxCharacter)"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            duplicateCountFor("character", sidebarCtxCharacter) === 0
+              ? "mdi-check"
+              : "mdi-content-duplicate"
+          }}</v-icon>
+          <span class="sidebar-ctx-label">{{
+            duplicateCountFor("character", sidebarCtxCharacter) === 0
+              ? "No duplicates for this person"
+              : "Find duplicates for this person"
+          }}</span>
+          <span
+            v-if="duplicateCountFor('character', sidebarCtxCharacter)"
+            class="sidebar-ctx-count"
+            >{{ duplicateCountFor("character", sidebarCtxCharacter) }}</span
+          >
+        </button>
+        <div class="sidebar-ctx-divider"></div>
         <button
           class="sidebar-ctx-item"
           :disabled="isReadOnly"
@@ -6166,6 +6483,29 @@ defineExpose({
         </button>
       </template>
       <template v-if="sidebarCtxSet">
+        <button
+          class="sidebar-ctx-item"
+          :disabled="isReadOnly || duplicateCountFor('set', sidebarCtxSet) === 0"
+          :title="isReadOnly ? READ_ONLY_DEDUP_HINT : undefined"
+          @click="findDuplicatesIn('set', sidebarCtxSet)"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            duplicateCountFor("set", sidebarCtxSet) === 0
+              ? "mdi-check"
+              : "mdi-content-duplicate"
+          }}</v-icon>
+          <span class="sidebar-ctx-label">{{
+            duplicateCountFor("set", sidebarCtxSet) === 0
+              ? "No duplicates in this set"
+              : "Find duplicates in this set"
+          }}</span>
+          <span
+            v-if="duplicateCountFor('set', sidebarCtxSet)"
+            class="sidebar-ctx-count"
+            >{{ duplicateCountFor("set", sidebarCtxSet) }}</span
+          >
+        </button>
+        <div class="sidebar-ctx-divider"></div>
         <button
           class="sidebar-ctx-item"
           :disabled="isReadOnly"
@@ -6367,6 +6707,29 @@ defineExpose({
       <template v-if="sidebarCtxProject">
         <button
           class="sidebar-ctx-item"
+          :disabled="isReadOnly || duplicateCountFor('project', sidebarCtxProject) === 0"
+          :title="isReadOnly ? READ_ONLY_DEDUP_HINT : undefined"
+          @click="findDuplicatesIn('project', sidebarCtxProject)"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            duplicateCountFor("project", sidebarCtxProject) === 0
+              ? "mdi-check"
+              : "mdi-content-duplicate"
+          }}</v-icon>
+          <span class="sidebar-ctx-label">{{
+            duplicateCountFor("project", sidebarCtxProject) === 0
+              ? "No duplicates in this project"
+              : "Find duplicates in this project"
+          }}</span>
+          <span
+            v-if="duplicateCountFor('project', sidebarCtxProject)"
+            class="sidebar-ctx-count"
+            >{{ duplicateCountFor("project", sidebarCtxProject) }}</span
+          >
+        </button>
+        <div class="sidebar-ctx-divider"></div>
+        <button
+          class="sidebar-ctx-item"
           :disabled="isReadOnly"
           @click="
             shareResource(
@@ -6437,6 +6800,32 @@ defineExpose({
         </button>
       </template>
       <template v-if="sidebarCtxFolder && !isReadOnly">
+        <button
+          v-if="!isReadOnly && !sidebarCtxFolderScopePath"
+          class="sidebar-ctx-item"
+          :disabled="duplicateCountFor('folder', sidebarCtxFolder) === 0"
+          @click="findDuplicatesIn('folder', sidebarCtxFolder)"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            duplicateCountFor("folder", sidebarCtxFolder) === 0
+              ? "mdi-check"
+              : "mdi-content-duplicate"
+          }}</v-icon>
+          <span class="sidebar-ctx-label">{{
+            duplicateCountFor("folder", sidebarCtxFolder) === 0
+              ? "No duplicates in this folder"
+              : "Find duplicates in this folder"
+          }}</span>
+          <span
+            v-if="duplicateCountFor('folder', sidebarCtxFolder)"
+            class="sidebar-ctx-count"
+            >{{ duplicateCountFor("folder", sidebarCtxFolder) }}</span
+          >
+        </button>
+        <div
+          v-if="!isReadOnly && !sidebarCtxFolderScopePath"
+          class="sidebar-ctx-divider"
+        ></div>
         <button
           v-if="!inDocker && !sidebarCtxFolderScopePath"
           class="sidebar-ctx-item"
@@ -6598,10 +6987,10 @@ defineExpose({
     :resource-type="shareDialogPending?.resourceType"
     :resource-id="shareDialogPending?.resourceId"
     :resource-label="shareDialogPending?.label"
-    :embed-watermark="props.embedWatermark"
+    :embed-watermark="userPrefsStore.embedWatermark"
     :backend-url="props.backendUrl"
-    :public-url="props.publicUrl"
-    @update:embed-watermark="emit('update:embed-watermark', $event)"
+    :public-url="userPrefsStore.publicUrl"
+    @update:embed-watermark="userPrefsStore.embedWatermark = $event"
   />
 
   <!-- ── Revoke all shares confirm dialog ──────────────────────── -->
@@ -6632,2910 +7021,5 @@ defineExpose({
     </v-card>
   </v-dialog>
 </template>
-
-<style scoped>
-.sidebar-project-header {
-  padding-top: var(--space-2);
-  padding-bottom: var(--space-2);
-  justify-content: center;
-}
-
-.sidebar-section-divider {
-  height: 1px;
-  background: rgba(var(--v-theme-border), 0.2);
-  margin: var(--space-1) 0;
-}
-
-.sidebar-collections-help-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  padding: 0 var(--space-2) var(--space-2);
-}
-
-.sidebar-collections-help {
-  font-size: var(--text-base);
-  font-style: italic;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-view-header {
-  display: flex;
-  align-items: stretch;
-  flex-shrink: 0;
-  /* Fixed 36px so the tabs' bottom edge aligns with the 36px toolbar's, regardless
-     of the sidebar font scaling. min-height:0 defeats the flex default
-     (min-height:auto) — without it the tab content pushes this past its set height
-     (the toolbar, a plain block, isn't subject to that). Re-pin --text-xs (the only
-     ramp token the tabs use) to its literal value so the tab labels are exempt from
-     --sidebar-font-scale and the height never drifts. */
-  height: 36px;
-  min-height: 0;
-  box-sizing: border-box;
-  padding: 0 var(--space-3);
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
-  --text-xs: 0.75rem;
-}
-
-.sidebar-view-tabs-row {
-  display: flex;
-  align-items: stretch;
-  flex: 1;
-  min-width: 0;
-  padding: 0;
-  position: relative;
-  z-index: 1;
-  gap: 0;
-  background: transparent;
-  border-bottom: none;
-  /* Query container for the progressive tab-label collapse (see the @container
-     rules below). Sits on the tabs row — not the header — so the thresholds
-     measure the space actually left for the tabs after the pin button. */
-  container: sidebartabs / inline-size;
-}
-
-.sidebar-view-tabs-icon {
-  flex-shrink: 0;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-view-tabs-label {
-  flex-shrink: 0;
-  font-size: var(--text-2xs);
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  color: rgb(var(--v-theme-sidebar-text));
-  white-space: nowrap;
-}
-
-.sidebar-view-tabs-arrow {
-  font-size: var(--text-sm);
-  opacity: 0.7;
-}
-
-.sidebar-view-tabs {
-  display: flex;
-  align-items: stretch;
-  gap: 0;
-  flex: 1;
-  min-width: 0;
-}
-
-.sidebar-view-tab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-2);
-  /* Equal widths that can shrink; labels are dropped (icon-only) when the sidebar
-     is narrow, so the tabs always stay on one line and the header height (and its
-     alignment with the toolbar) never changes. */
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-  border-radius: 0;
-  border: none;
-  border-bottom: 2px solid transparent;
-  /* Overlap the header's 1px bottom border so the active underline sits on it. */
-  margin-bottom: -1px;
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  background: transparent;
-  color: rgba(var(--v-theme-sidebar-text), 0.55);
-  transition:
-    color 0.15s,
-    border-color 0.15s;
-  white-space: nowrap;
-  position: relative;
-}
-
-.sidebar-view-tab .v-icon {
-  color: inherit;
-}
-
-/* Tab text label — shown whole or not at all (no ellipsis). It's dropped in two
-   stages by the @container rules below as the header narrows. */
-.sidebar-view-tab-label {
-  white-space: nowrap;
-}
-
-/* Stage 1 — the non-selected tabs shed their text and shrink to their icon, so
-   the selected tab keeps its label and takes the freed space. */
-@container sidebartabs (max-width: 205px) {
-  .sidebar-view-tab:not(.active) .sidebar-view-tab-label {
-    display: none;
-  }
-  .sidebar-view-tab:not(.active) {
-    flex: 0 1 auto;
-  }
-  .sidebar-view-tab.active {
-    flex: 1 1 auto;
-  }
-}
-
-/* Stage 2 — too tight even for the selected label: every tab is icon-only and
-   the three share the row equally again. */
-@container sidebartabs (max-width: 115px) {
-  .sidebar-view-tab.active .sidebar-view-tab-label {
-    display: none;
-  }
-  .sidebar-view-tab:not(.active),
-  .sidebar-view-tab.active {
-    flex: 1 1 0;
-  }
-}
-
-.sidebar-view-tab.active {
-  background: transparent;
-  color: rgb(var(--v-theme-accent));
-  border-bottom-color: rgb(var(--v-theme-accent));
-}
-
-.sidebar-view-tab:hover:not(.active) {
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-tab-panel {
-  margin: 0;
-  padding: 0;
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  background: transparent;
-}
-
-.sidebar-section-block {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  flex: 0 0 auto;
-}
-
-.sidebar-section-scroll {
-  flex: 0 0 auto;
-  overflow-x: hidden;
-  overflow-y: visible;
-  scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
-  background: transparent;
-  border-top: none;
-  border-bottom: none;
-}
-
-.sidebar-section-scroll::-webkit-scrollbar {
-  width: 8px;
-}
-
-.sidebar-section-scroll::-webkit-scrollbar-thumb {
-  background: rgb(var(--v-theme-accent));
-  border-radius: var(--radius-md);
-}
-
-.sidebar-section-scroll::-webkit-scrollbar-track {
-  background: rgba(var(--v-theme-shadow), 0.15);
-}
-
-.sidebar-no-projects-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-5);
-  padding: var(--space-8) var(--space-6);
-  text-align: center;
-}
-
-.sidebar-no-projects-icon {
-  opacity: 0.35;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-no-projects-text {
-  font-size: var(--text-base);
-  color: rgb(var(--v-theme-sidebar-text));
-  margin: 0;
-  line-height: 1.5;
-}
-
-.sidebar-no-projects-btn :deep(.v-btn__content) {
-  font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-2);
-}
-
-.sidebar-no-projects-btn--folders {
-  min-width: 190px;
-}
-
-/* Project tree (Projects tab flat tree) */
-.sidebar-project-tree-add {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-3);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.02em;
-  color: rgb(var(--v-theme-sidebar-text));
-  cursor: pointer;
-  border-left: 3px solid transparent;
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.22);
-  transition:
-    color 0.12s,
-    background 0.12s;
-}
-
-.sidebar-project-tree-add:hover {
-  color: rgb(var(--v-theme-sidebar-text));
-  background: rgba(var(--v-theme-accent), 0.08);
-}
-
-.sidebar-project-tree-node {
-  display: flex;
-  flex-direction: column;
-  margin-bottom: var(--space-3);
-  border-top: 1px solid rgba(var(--v-theme-border), 0.22);
-}
-
-.sidebar-project-tree-node:first-child {
-  border-top: none;
-}
-
-.sidebar-project-tree-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--sidebar-right-edge, 8px) 0 var(--space-3);
-  min-height: 28px;
-  cursor: pointer;
-  border-left: 3px solid transparent;
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
-  border-radius: 0;
-  background: transparent;
-  transition:
-    background 0.12s,
-    color 0.12s,
-    border-color 0.12s;
-  color: rgb(var(--v-theme-sidebar-text));
-  position: relative;
-}
-
-.sidebar-project-tree-row:hover {
-  background:
-    linear-gradient(var(--hover-wash), var(--hover-wash)),
-    rgba(var(--v-theme-sidebar-text), 0.05);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-project-tree-row.active {
-  background: var(--active-wash);
-  color: var(--active-text);
-  border-left: 3px solid var(--active-bar);
-  border-radius: 0;
-}
-
-/* Drop-target highlight (drag pictures onto a project to assign them) —
-   mirrors .sidebar-list-item.droppable used by character/set rows. */
-.sidebar-project-tree-row.droppable {
-  filter: brightness(1.2);
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-}
-
-.sidebar-project-tree-row.active:hover {
-  background:
-    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
-  color: var(--active-text);
-}
-
-/* Drop-target highlight while dragging a character/set onto a project */
-.sidebar-project-tree-row.project-move-target,
-.sidebar-project-tree-subsection.project-move-target {
-  background: rgba(var(--v-theme-primary), 0.22);
-  outline: 2px dashed rgb(var(--v-theme-primary));
-  outline-offset: -2px;
-  border-radius: var(--radius-sm);
-}
-
-.sidebar-project-tree-expand-indicator {
-  flex-shrink: 0;
-  opacity: 0.5;
-  color: inherit;
-  transform: rotate(-90deg);
-  transition:
-    transform 0.15s,
-    opacity 0.12s;
-}
-
-.sidebar-project-tree-expand-indicator.expanded {
-  transform: rotate(0deg);
-}
-
-.sidebar-project-tree-row:hover .sidebar-project-tree-expand-indicator {
-  opacity: 0.9;
-}
-
-.sidebar-project-tree-icon {
-  flex-shrink: 0;
-  opacity: 0.6;
-  color: inherit;
-}
-
-.sidebar-project-tree-name-group {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  overflow: hidden;
-}
-
-.sidebar-project-tree-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.sidebar-project-tree-actions {
-  display: none;
-  align-items: center;
-  gap: var(--space-1);
-  flex-shrink: 0;
-}
-
-.sidebar-project-tree-row:hover .sidebar-project-tree-actions {
-  display: flex;
-}
-
-.sidebar-project-tree-action-btn {
-  opacity: 0.55;
-  cursor: pointer;
-  color: inherit;
-  transition: opacity 0.12s;
-}
-
-.sidebar-project-tree-action-btn:hover {
-  opacity: 1;
-}
-
-.sidebar-project-tree-action-btn--danger:hover {
-  color: rgb(var(--v-theme-error));
-}
-
-/* Sub-sections under an expanded project */
-.sidebar-project-tree-subsection {
-  display: flex;
-  flex-direction: column;
-}
-
-.sidebar-project-tree-subheader {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) 0 var(--space-1) var(--space-3);
-  padding-right: var(--sidebar-header-action-right-edge) !important;
-  min-height: 24px;
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  transition: color 0.12s;
-  user-select: none;
-}
-
-.sidebar-project-tree-subheader:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-project-tree-sub-chevron {
-  flex-shrink: 0;
-  color: inherit;
-}
-
-/* v-show sets display:none — override to visibility:hidden so the space is preserved */
-.sidebar-project-tree-sub-chevron[style*="display: none"],
-.sidebar-project-tree-sub-chevron[style*="display:none"] {
-  display: inline-flex !important;
-  visibility: hidden;
-}
-
-.sidebar-project-tree-subheader-icon {
-  flex-shrink: 0;
-  opacity: 0.6;
-  color: inherit;
-}
-
-.sidebar-project-tree-subheader-label {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: inherit;
-  flex: 1;
-}
-
-/* Child items indented under a project sub-section */
-.sidebar-project-tree-child {
-  padding-left: var(--space-5) !important;
-}
-
-.sidebar-project-tree-empty {
-  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-5);
-  font-size: var(--text-2xs);
-  color: rgb(var(--v-theme-sidebar-text));
-  font-style: italic;
-}
-
-.sidebar-project-tree-files {
-  padding-left: 0;
-}
-
-.sidebar-no-projects-btn--folders :deep(.v-btn__content) {
-  white-space: nowrap;
-  font-size: var(--text-sm);
-}
-
-.sidebar-collapsed-project-wrap {
-  position: relative;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-.sidebar-collapsed-project-menu {
-  position: fixed;
-  z-index: 300;
-  background: rgb(var(--v-theme-surface));
-  border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: var(--radius-md);
-  box-shadow: none;
-  overflow: hidden;
-  min-width: 180px;
-  white-space: nowrap;
-}
-
-.sidebar-collapsed-project-menu .sidebar-project-menu-item,
-.sidebar-collapsed-project-menu .sidebar-project-menu-add,
-.sidebar-collapsed-project-submenu .sidebar-project-menu-item,
-.sidebar-collapsed-project-submenu .sidebar-project-menu-add {
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.sidebar-collapsed-project-menu .sidebar-project-menu-item.active,
-.sidebar-collapsed-project-submenu .sidebar-project-menu-item.active {
-  background: rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
-  font-weight: 600;
-  border-left: 3px solid rgb(var(--v-theme-primary));
-  padding-left: var(
-    --space-3
-  ); /* compensate for the 3px border so text stays aligned */
-}
-
-.sidebar-collapsed-project-submenu {
-  position: fixed;
-  z-index: 301;
-  background: rgb(var(--v-theme-surface));
-  border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  min-width: 180px;
-  max-height: 60vh;
-  overflow-y: auto;
-  white-space: nowrap;
-}
-
-.sidebar-project-menu-separator {
-  height: 1px;
-  background: rgba(var(--v-theme-border), 0.3);
-  margin: var(--space-1) 0;
-}
-
-.sidebar-project-menu-has-sub {
-  position: relative;
-}
-
-.sidebar-project-menu-has-sub.sub-open {
-  background: rgba(var(--v-theme-accent), 0.06);
-}
-
-.sidebar-project-menu-chevron {
-  margin-left: auto;
-  opacity: 0.45;
-  flex-shrink: 0;
-}
-
-.sidebar-collapsed-item--scrapheap {
-  opacity: 0.6;
-  transition:
-    opacity 0.15s,
-    background-color 0.18s ease,
-    color 0.18s ease;
-}
-
-.sidebar-collapsed-item--scrapheap:hover {
-  opacity: 1;
-}
-
-.sidebar-collapsed-item--scrapheap.active {
-  opacity: 1;
-}
-
-.sidebar-collapsed-flyout-menu {
-  position: fixed;
-  z-index: 300;
-  background: rgb(var(--v-theme-surface));
-  border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: var(--radius-md);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  max-height: 60vh;
-  min-width: 200px;
-  width: max-content;
-  white-space: nowrap;
-}
-
-.sidebar-collapsed-flyout-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-shrink: 0;
-  padding: var(--space-3) var(--space-4);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: rgb(var(--v-theme-sidebar-text));
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.4);
-  background: rgba(var(--v-theme-tertiary), 0.2);
-}
-
-.sidebar-collapsed-flyout-header-add {
-  opacity: 0.6;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: opacity 0.12s;
-}
-
-.sidebar-collapsed-flyout-header-add:hover {
-  opacity: 1;
-}
-
-.sidebar-collapsed-flyout-scroll {
-  overflow-y: auto;
-  flex: 1;
-}
-
-.sidebar-collapsed-flyout-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  cursor: pointer;
-  color: rgb(var(--v-theme-on-surface));
-  transition: background 0.12s;
-}
-
-.sidebar-collapsed-flyout-item:hover {
-  background: rgba(var(--v-theme-tertiary), 0.25);
-}
-
-.sidebar-collapsed-flyout-item.active {
-  background: rgba(var(--v-theme-primary), 0.15);
-  color: rgb(var(--v-theme-on-primary));
-}
-
-.sidebar-collapsed-flyout-thumb {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm);
-  object-fit: cover;
-  flex-shrink: 0;
-}
-
-.sidebar-collapsed-flyout-label {
-  font-size: var(--text-base);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-}
-
-.sidebar-collapsed-flyout-item-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex-shrink: 0;
-  margin-left: auto;
-  visibility: hidden;
-}
-
-.sidebar-collapsed-flyout-item:hover .sidebar-collapsed-flyout-item-actions {
-  visibility: visible;
-}
-
-.sidebar-collapsed-flyout-item-actions .v-icon {
-  opacity: 0.55;
-  cursor: pointer;
-  padding: var(--space-1);
-  border-radius: var(--radius-sm);
-  transition:
-    opacity 0.1s,
-    background 0.1s;
-}
-
-.sidebar-collapsed-flyout-item-actions .v-icon:hover {
-  opacity: 1;
-  background: rgba(var(--v-theme-tertiary), 0.35);
-}
-
-.sidebar-project-menu-section-label {
-  padding: var(--space-3) var(--space-3) var(--space-1);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-project-menu-wrap {
-  position: relative;
-  padding: 0;
-  border-bottom: none;
-}
-
-.sidebar-project-label {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
-  background: transparent;
-  color: rgb(var(--v-theme-sidebar-text));
-  font-size: var(--text-sm);
-  font-weight: 500;
-  min-height: 26px;
-}
-
-.sidebar-project-trigger {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-radius: 0;
-  border: none;
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
-  background: transparent;
-  color: rgb(var(--v-theme-sidebar-text));
-  font-size: var(--text-sm);
-  font-weight: 500;
-  min-height: 26px;
-  cursor: pointer;
-  transition:
-    background 0.12s,
-    color 0.12s;
-  text-align: left;
-}
-
-.sidebar-project-trigger:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-project-trigger-label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: left;
-}
-
-.sidebar-project-trigger-chevron {
-  flex-shrink: 0;
-  opacity: 0.6;
-}
-
-.sidebar-project-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 200;
-  background: color-mix(
-    in srgb,
-    rgb(var(--v-theme-tertiary)) 38%,
-    rgb(var(--v-theme-sidebar))
-  );
-  border: none;
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.5);
-  border-radius: 0;
-  box-shadow: 0 4px 8px rgba(var(--v-theme-shadow), 0.15);
-  overflow: hidden;
-}
-
-/* The project menu's background is a 38% `tertiary` TINT over `sidebar`, not a
-   solid `tertiary` fill, so `on-tertiary` is the wrong foreground here: an
-   `on-<x>` token is authored against a solid, full-opacity `<x>` fill and is
-   simply a different colour on a tint (measured 1.43-1.70:1 in light). On a
-   tint the foreground is the surface's own. See design-system-handoff.md §9.2. */
-.sidebar-project-menu-item {
-  display: flex;
-  align-items: center;
-  padding: var(--space-2) var(--space-3);
-  cursor: pointer;
-  font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface));
-  transition:
-    background 0.1s,
-    color 0.1s;
-  gap: var(--space-3);
-  min-height: 26px;
-}
-
-.sidebar-project-menu-item:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.sidebar-project-menu-item.active {
-  background: rgba(var(--v-theme-tertiary), 0.3);
-  color: rgb(var(--v-theme-on-surface));
-  font-weight: 600;
-}
-
-.sidebar-project-menu-item-label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-project-menu-item-action {
-  flex-shrink: 0;
-  opacity: 0;
-  color: rgb(var(--v-theme-on-surface));
-  transition: opacity 0.12s;
-}
-
-.sidebar-project-menu-item:hover .sidebar-project-menu-item-action {
-  opacity: 0.6;
-}
-
-.sidebar-project-menu-item-action:hover {
-  opacity: 1 !important;
-}
-
-.sidebar-project-menu-add {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  cursor: pointer;
-  color: rgba(var(--v-theme-on-surface), 0.65);
-  border-top: 1px solid rgba(var(--v-theme-border), 0.25);
-  min-height: 26px;
-  transition:
-    background 0.1s,
-    color 0.1s;
-}
-
-.sidebar-project-menu-add:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.sidebar-project-select {
-  flex: 1;
-  width: 100%;
-  margin-left: 0;
-}
-
-.sidebar-native-select {
-  background: rgba(var(--v-theme-surface), 0.3);
-  color: rgb(var(--v-theme-on-surface));
-  border-radius: var(--radius-sm);
-  min-height: 32px;
-  height: 32px;
-  font-size: var(--text-md);
-  box-shadow: 2px 2px 6px rgba(var(--v-theme-shadow), 0.2);
-  margin-left: var(--space-3);
-  box-sizing: border-box;
-  padding-left: var(--space-3);
-  padding-right: var(--space-3);
-  border: 1px solid rgba(var(--v-theme-border), 0.5);
-  width: 230px;
-  transition: border 0.15s;
-}
-.sidebar-native-select:focus {
-  border: 1.5px solid rgb(var(--v-theme-accent));
-}
-.sidebar-native-select-chevron {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  pointer-events: none;
-  color: rgb(var(--v-theme-on-surface));
-  display: flex;
-  align-items: center;
-  height: 18px;
-  z-index: 2;
-}
-
-.sidebar-search-result-label {
-  display: flex;
-  align-items: center;
-  min-height: 32px;
-  padding: 0 var(--space-4);
-  margin-left: var(--space-3);
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-surface), 0.2);
-  color: rgba(var(--v-theme-on-surface), 0.7);
-  border: 1px dashed rgba(var(--v-theme-border), 0.5);
-  font-size: var(--text-md);
-}
-/* Sidebar right edge for counts */
-.sidebar {
-  width: 240px;
-  position: relative;
-  --sidebar-right-edge: 8px;
-  --sidebar-header-action-right-edge: 0px;
-  --sidebar-thumb-size: 24px;
-  --sidebar-thumb-size-large: calc(var(--sidebar-thumb-size) + 4px);
-  --sidebar-space-y: 2px;
-  --sidebar-item-radius: 25%;
-  /* Rescale the type ramp for the whole sidebar in one place, driven by
-     --sidebar-font-scale (set from the thumbnail size in the inline style;
-     defaults to 1 = unchanged). Every sidebar text rule uses these tokens, so
-     this scales them all at once. Values mirror docs/design/design-tokens.css. */
-  --sidebar-font-scale: 1;
-  --text-2xs: calc(0.6875rem * var(--sidebar-font-scale));
-  --text-xs: calc(0.75rem * var(--sidebar-font-scale));
-  --text-sm: calc(0.8125rem * var(--sidebar-font-scale));
-  --text-base: calc(0.875rem * var(--sidebar-font-scale));
-  --text-md: calc(1rem * var(--sidebar-font-scale));
-  --text-xl: calc(1.375rem * var(--sidebar-font-scale));
-  color: rgb(var(--v-theme-sidebar-text));
-  background: rgb(var(--v-theme-sidebar));
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  min-height: 0;
-  height: 100%;
-  max-height: 100%;
-  overflow: hidden;
-  scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
-  box-sizing: border-box;
-  /* One rule for "chrome rail meets the grid canvas", shared with
-     `.stats-sidebar`'s border-left so both rails present the same edge. */
-  border-right: 1px solid rgb(var(--v-theme-border));
-}
-
-/* Drag-to-resize grip on the sidebar's right edge (expanded mode only). Sits over
-   the border, invisible until hovered/focused/dragged. */
-.sidebar-resize-handle {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 6px;
-  z-index: 6;
-  cursor: ew-resize;
-  background: transparent;
-  touch-action: none;
-  transition: background 0.15s ease;
-}
-.sidebar-resize-handle:hover,
-.sidebar-resize-handle:focus-visible {
-  background: rgba(var(--v-theme-accent), 0.4);
-  outline: none;
-}
-
-.sidebar.sidebar-docked {
-  width: calc(var(--sidebar-thumb-size) + 20px);
-  overflow: hidden;
-}
-
-.sidebar.sidebar-docked .sidebar-brand {
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-2) 0 var(--space-1);
-  gap: var(--space-1);
-  position: static;
-}
-
-.sidebar.sidebar-docked .sidebar-brand-left {
-  padding: 0;
-  justify-content: center;
-}
-
-.sidebar.sidebar-docked .sidebar-brand-logo {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  padding-left: calc(var(--sidebar-thumb-size) * 0.1);
-  object-fit: contain;
-}
-
-.sidebar-brand {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-1);
-  background: transparent;
-}
-
-.sidebar-brand-left {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
-}
-
-.sidebar-brand-logo {
-  width: 40px;
-  height: 40px;
-  object-fit: contain;
-  transition:
-    filter 0.2s ease,
-    transform 0.2s ease;
-}
-
-.sidebar-brand-logo-link {
-  display: flex;
-  align-items: center;
-  border-radius: var(--radius-md);
-  outline: none;
-}
-
-.sidebar-brand-logo-link:hover .sidebar-brand-logo {
-  filter: drop-shadow(0 0 8px rgba(var(--v-theme-accent), 0.9))
-    drop-shadow(0 0 16px rgba(var(--v-theme-accent), 0.5));
-  transform: scale(1.08);
-}
-
-.sidebar-brand-title {
-  /* Tiny5 brand wordmark (WordmarkLogo.vue), sized by font-size. "Pixl" uses the
-     sidebar text colour, "Stash" the accent — matching the desktop title bar. */
-  font-size: var(--text-xl);
-  color: rgb(var(--v-theme-sidebar-text));
-  --wordmark-accent: rgb(var(--v-theme-accent));
-}
-
-.sidebar-brand-text {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  position: relative;
-}
-
-.sidebar-update-wrapper {
-  /* Flows below the wordmark (was absolute top:100%, which slid behind the tabs
-     row and looked "gone"). */
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  white-space: nowrap;
-  margin-top: var(--space-2);
-}
-
-.sidebar-update-available {
-  font-size: var(--text-2xs);
-  line-height: 1;
-  color: rgba(var(--v-theme-accent), 0.8);
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.sidebar-update-available:hover {
-  text-decoration: underline;
-}
-
-.sidebar-update-dismiss {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  width: 10px;
-  height: 10px;
-  font-size: var(--text-2xs);
-  line-height: 1;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  color: rgba(var(--v-theme-on-surface), 0.4);
-  opacity: 0.7;
-}
-
-.sidebar-update-dismiss:hover {
-  opacity: 1;
-  color: rgba(var(--v-theme-on-surface), 0.8);
-}
-
-.sidebar-update-security {
-  color: rgb(var(--v-theme-warning));
-}
-
-.sidebar-update-security:hover {
-  color: #c96000;
-}
-
-.sidebar-update-security--high {
-  color: rgb(var(--v-theme-error));
-}
-
-.sidebar-update-security--high:hover {
-  color: #c62828;
-}
-
-.sidebar-brand-task-btn {
-  min-width: 30px;
-  min-height: 30px;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  opacity: 0.6;
-}
-
-.sidebar-brand-task-btn:hover {
-  opacity: 1;
-  background-color: rgba(var(--v-theme-accent), 0.25);
-}
-
-.sidebar-collapsed-list {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--sidebar-space-y);
-  padding: var(--space-2) 0 var(--space-3);
-  overflow-y: auto;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.sidebar-collapsed-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  flex-shrink: 0;
-}
-
-.sidebar-collapsed-row::before {
-  content: "";
-  position: absolute;
-  left: 2px;
-  top: 50%;
-  transform: translateY(-50%) scaleY(0);
-  width: 3px;
-  height: 60%;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: rgb(var(--v-theme-primary));
-  transition: transform 0.18s ease;
-  pointer-events: none;
-  z-index: 1;
-}
-
-.sidebar-collapsed-row.active::before {
-  transform: translateY(-50%) scaleY(1);
-}
-
-.sidebar-collapsed-row--has-flyout::after {
-  content: "";
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 0;
-  height: 0;
-  border-top: 3px solid transparent;
-  border-bottom: 3px solid transparent;
-  border-left: 4px solid currentColor;
-  opacity: 0.45;
-  pointer-events: none;
-}
-
-.sidebar-collapsed-row--has-flyout.active::after {
-  opacity: 0.8;
-}
-
-/* Prominent indicator for the main project/nav menu */
-.sidebar-collapsed-row--project::after {
-  right: 3px;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  border-left: 6px solid currentColor;
-  opacity: 0.7;
-}
-
-.sidebar-collapsed-row--project.active::after {
-  opacity: 1;
-}
-
-.sidebar-collapsed-spacer {
-  flex: 1 1 auto;
-  width: 100%;
-}
-
-.sidebar-collapsed-item {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--sidebar-item-radius);
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  position: relative;
-  transition:
-    background-color 0.18s ease,
-    color 0.18s ease;
-}
-
-.sidebar-collapsed-item.active {
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-collapsed-item--add {
-  background: rgba(var(--v-theme-sidebar-text), 0.07);
-  border: 1px dashed rgba(var(--v-theme-sidebar-text), 0.25);
-  color: rgb(var(--v-theme-sidebar-text));
-  position: relative;
-  overflow: hidden;
-}
-
-.sidebar-collapsed-item--add-bg-icon {
-  position: absolute !important;
-  display: block !important;
-  top: 50% !important;
-  left: 50% !important;
-  transform: translate(-50%, -50%) !important;
-  font-size: calc(var(--sidebar-thumb-size) * 1) !important;
-  width: calc(var(--sidebar-thumb-size) * 1) !important;
-  height: calc(var(--sidebar-thumb-size) * 1) !important;
-  line-height: 1 !important;
-  opacity: 0.18;
-  pointer-events: none;
-  color: currentColor !important;
-}
-
-.sidebar-collapsed-item--add-plus {
-  position: relative;
-  z-index: 1;
-  font-size: calc(var(--sidebar-thumb-size) * 0.42) !important;
-  width: calc(var(--sidebar-thumb-size) * 0.42) !important;
-  height: calc(var(--sidebar-thumb-size) * 0.42) !important;
-}
-
-.sidebar-collapsed-item--add:hover {
-  background: rgba(var(--v-theme-primary), 0.18) !important;
-  border-color: rgba(var(--v-theme-primary), 0.5) !important;
-  color: rgb(var(--v-theme-primary)) !important;
-  filter: none !important;
-  box-shadow: none !important;
-}
-
-.sidebar-collapsed-item.droppable {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
-}
-
-.sidebar-collapsed-item:hover {
-  filter: brightness(1.03);
-  background-color: rgba(var(--v-theme-accent), 0.18);
-  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-accent), 0.22);
-}
-
-.sidebar-collapsed-item--has-flyout {
-  position: relative;
-}
-
-.sidebar-collapsed-thumb {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  border-radius: var(--sidebar-item-radius);
-  border: none;
-  padding: 0;
-  background: transparent;
-  cursor: pointer;
-  outline: none;
-  box-shadow: none;
-  transition:
-    background 0.18s ease,
-    box-shadow 0.18s ease,
-    filter 0.18s ease;
-}
-
-.sidebar-collapsed-thumb img {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  object-fit: contain;
-  border-radius: var(--sidebar-item-radius);
-  display: block;
-  position: relative;
-  z-index: 1;
-}
-
-.sidebar-collapsed-thumb::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: var(--radius-md);
-  pointer-events: none;
-  opacity: 0;
-  z-index: 2;
-  box-shadow: inset 0 0 0 3px transparent;
-  transition:
-    box-shadow 0.18s ease,
-    opacity 0.18s ease;
-}
-
-.sidebar-collapsed-thumb .sidebar-character-thumb {
-  filter: drop-shadow(0 2px 6px rgba(var(--v-theme-shadow), 0.35));
-}
-
-.sidebar-collapsed-thumb:focus,
-.sidebar-collapsed-thumb:focus-visible,
-.sidebar-collapsed-thumb:active,
-.sidebar-collapsed-thumb img:focus,
-.sidebar-collapsed-thumb img:focus-visible,
-.sidebar-collapsed-thumb img:active {
-  outline: none;
-  box-shadow: none;
-}
-
-.sidebar-collapsed-thumb.active {
-  background: rgb(var(--v-theme-primary));
-}
-
-.sidebar-collapsed-thumb.active::after {
-  opacity: 1;
-  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
-}
-
-.sidebar-collapsed-thumb:hover {
-  filter: brightness(1.03);
-  background-color: rgba(var(--v-theme-accent), 0.18);
-  transform: translateY(-1px) scale(1.02);
-}
-
-.sidebar-collapsed-thumb:hover::after {
-  opacity: 1;
-  box-shadow: inset 0 0 0 3px rgba(var(--v-theme-accent), 0.7);
-}
-
-.sidebar-collapsed-thumb.droppable {
-  background: rgb(var(--v-theme-primary));
-}
-
-.sidebar-collapsed-thumb.droppable::after {
-  opacity: 1;
-  box-shadow: inset 0 0 0 3px rgb(var(--v-theme-primary));
-}
-
-.sidebar-collapsed-divider {
-  width: 70%;
-  height: 1px;
-  margin: var(--space-1) auto;
-  background: rgba(var(--v-theme-sidebar-text), 0.15);
-}
-
-@media (max-width: 849px) {
-  .sidebar {
-    height: 100%;
-  }
-}
-
-.sidebar-section-header {
-  position: relative;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  min-height: clamp(18px, calc(var(--sidebar-thumb-size) * 0.65), 24px);
-  padding: clamp(2px, calc(var(--sidebar-thumb-size) * 0.1), 8px) var(--space-3)
-    var(--space-1) var(--space-3);
-  padding-right: var(--sidebar-header-action-right-edge) !important;
-  display: flex;
-  align-items: center;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-section-header--collapsible {
-  cursor: pointer;
-  user-select: none;
-}
-
-.sidebar-section-header--collapsible:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-section-chevron {
-  margin-right: var(--space-2);
-  flex-shrink: 0;
-  color: rgb(var(--v-theme-sidebar-text));
-  transition: transform 0.15s;
-}
-
-.sidebar-section-header-icon {
-  display: none;
-}
-
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-
-.sidebar-list-item,
-.sidebar-list-item.active {
-  display: flex;
-  align-items: center;
-  min-height: calc(var(--sidebar-thumb-size) + 6px);
-  padding: var(--space-2) var(--space-3);
-  padding-right: var(--sidebar-right-edge) !important;
-  cursor: pointer;
-  border-radius: 0;
-  margin-bottom: 0;
-  font-size: var(--text-sm);
-  font-weight: 400;
-  background: transparent;
-  color: rgb(var(--v-theme-sidebar-text));
-  transition:
-    background 0.12s,
-    color 0.12s,
-    border-color 0.12s;
-  border-left: 3px solid transparent;
-}
-
-.sidebar-footer-spacer {
-  flex: 1 1 auto;
-}
-
-.sidebar-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  padding: 0px 0 0;
-  /* Shared subtle scrollbar treatment — keep in sync with .grid-scroll-wrapper in ImageGrid.vue */
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.05) transparent;
-  scrollbar-width: thin;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  background: transparent;
-}
-
-.sidebar-scroll:hover {
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.18) transparent;
-}
-
-.sidebar-scroll::-webkit-scrollbar {
-  width: 8px;
-}
-
-.sidebar-scroll::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.05);
-  background-clip: padding-box;
-  border: 2px solid transparent;
-  border-radius: var(--radius-md);
-  transition: background 0.15s ease;
-}
-
-.sidebar-scroll:hover::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.18);
-}
-
-.sidebar-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--v-theme-on-surface), 0.3);
-}
-
-.sidebar-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.sidebar-readonly-notice {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-3);
-  border-top: 1px solid rgba(var(--v-theme-border), 0.2);
-  background: rgb(var(--v-theme-sidebar));
-  flex-shrink: 0;
-  font-size: var(--text-2xs);
-  font-weight: 500;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-readonly-notice-label {
-  white-space: nowrap;
-}
-
-.sidebar-readonly-notice-sep {
-  opacity: 0.5;
-}
-
-.sidebar-readonly-notice-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-accent), 0.15);
-  /* 11px text on a 15% accent tint. The accent as its own foreground here
-     measured 3.41:1 light / 2.81:1 dark after the fill deepen — under the 4.5:1
-     body floor in both, and under even the 3:1 UI floor in dark. Same rule as
-     the project-menu fixes: on a TINT the foreground is the surface's own, not
-     the tint's hue. `on-surface` gives 11.55:1 light / 10.43:1 dark at rest
-     (9.77 / 9.00 on the 28% hover tint); the accent still carries the
-     affordance through the tint itself. */
-  color: rgb(var(--v-theme-on-surface));
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  text-decoration: none;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-
-.sidebar-readonly-notice-btn:hover {
-  background: rgba(var(--v-theme-accent), 0.28);
-}
-
-.sidebar-readonly-notice-logo {
-  width: 13px;
-  height: 13px;
-  object-fit: contain;
-  display: block;
-}
-
-.sidebar-collapsed .sidebar-readonly-notice {
-  display: none;
-}
-
-.sidebar-footer {
-  padding: var(--space-2) 0 0 0;
-}
-
-.sidebar-footer-item {
-  margin-bottom: 0;
-}
-
-.sidebar-list-item.active {
-  background: var(--active-wash);
-  color: var(--active-text);
-  border-left: 3px solid var(--active-bar);
-  position: relative;
-  border-radius: 0;
-}
-
-.sidebar-list-item.active .sidebar-list-count {
-  color: color-mix(in srgb, var(--active-text) 65%, transparent);
-}
-
-.sidebar-list-item:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-list-item.active:hover {
-  background:
-    linear-gradient(var(--hover-wash), var(--hover-wash)), var(--active-wash);
-  color: var(--active-text);
-}
-
-.sidebar-list-item.droppable {
-  filter: brightness(1.2);
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-}
-
-.sidebar-header-spacer {
-  flex: 1 1 auto;
-}
-
-.sidebar-header-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 40px;
-  justify-content: flex-end;
-  margin-left: auto;
-  padding-right: var(--sidebar-header-action-right-edge) !important;
-}
-
-.sidebar-header-actions .v-icon {
-  min-width: 22px;
-  min-height: 22px;
-  justify-content: center;
-  text-align: center;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-move-to-project-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-.sidebar-move-menu {
-  position: fixed;
-  z-index: 9999;
-  background: color-mix(
-    in srgb,
-    rgb(var(--v-theme-tertiary)) 38%,
-    rgb(var(--v-theme-sidebar))
-  );
-  border: 1px solid rgba(var(--v-theme-border), 0.4);
-  border-radius: var(--radius-md);
-  min-width: 180px;
-  max-width: 300px;
-  max-height: 420px; /* keep in sync with MOVE_MENU_MAX_H in the script */
-  overflow-y: auto;
-  padding: var(--space-2) 0;
-  box-shadow: 0 4px 16px rgba(var(--v-theme-shadow), 0.3);
-  white-space: nowrap;
-}
-
-.sidebar-move-menu-group-header {
-  padding: var(--space-3) var(--space-3) var(--space-2);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: rgba(var(--v-theme-on-tertiary), 0.45);
-  margin-top: var(--space-2);
-}
-
-.sidebar-move-menu-group-header:first-child {
-  margin-top: 0;
-}
-
-.sidebar-move-menu-group-header--current {
-  color: rgba(var(--v-theme-primary), 0.8);
-}
-
-.sidebar-move-menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  font-size: var(--text-base);
-  cursor: pointer;
-  color: rgb(var(--v-theme-on-tertiary));
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: background 0.12s;
-}
-
-.sidebar-move-menu-check {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
-.sidebar-move-menu-item--create {
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.3);
-  margin-bottom: var(--space-1);
-  font-style: italic;
-  opacity: 0.85;
-}
-
-.sidebar-move-menu-item--checked .sidebar-move-menu-check {
-  opacity: 1;
-}
-
-.sidebar-move-menu-item:hover {
-  background: rgba(var(--v-theme-tertiary), 0.25);
-}
-
-.sidebar-list-icon {
-  display: flex;
-  align-items: center;
-  margin-right: var(--space-3);
-  justify-content: center;
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  flex-shrink: 0;
-  overflow: visible;
-}
-
-/* For items that never have a thumbnail — keep the icon slot compact */
-.sidebar-list-icon--fixed {
-  width: min(var(--sidebar-thumb-size), 24px) !important;
-  height: min(var(--sidebar-thumb-size), 24px) !important;
-}
-
-/* Top-level nav rows (All Pictures, Scrapheap) — slightly larger than --fixed */
-.sidebar-list-icon--toplevel {
-  width: min(var(--sidebar-thumb-size), 26px) !important;
-  height: min(var(--sidebar-thumb-size), 26px) !important;
-}
-
-.sidebar.sidebar-docked .sidebar-brand-toggle .v-icon {
-  font-size: calc(var(--sidebar-thumb-size) * 0.5) !important;
-  width: calc(var(--sidebar-thumb-size) * 0.5) !important;
-  height: calc(var(--sidebar-thumb-size) * 0.5) !important;
-}
-
-.sidebar-list-icon .v-icon,
-.sidebar-collapsed-item .v-icon,
-.sidebar-brand-toggle .v-icon,
-.sidebar-brand-task-btn .v-icon {
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-collapsed-item .v-icon {
-  /* Fill most of the box so the line-art icons read the same size as the
-     edge-to-edge thumbnails (MDI glyphs carry ~8% internal margin, so this
-     stops just short of the edge rather than touching it). */
-  font-size: calc(var(--sidebar-thumb-size) * 0.92) !important;
-  width: calc(var(--sidebar-thumb-size) * 0.92) !important;
-  height: calc(var(--sidebar-thumb-size) * 0.92) !important;
-}
-
-.sidebar-list-label {
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-  padding-left: 0;
-}
-
-.sidebar-list-label-text {
-  display: block;
-  width: 100%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sidebar-character-thumb {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  object-fit: contain;
-  border-radius: var(--sidebar-item-radius);
-  background: transparent;
-  border: none;
-  display: inline-block;
-  filter: none;
-  transition: transform 0.12s ease;
-}
-
-.sidebar-set-thumb-image {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  border-radius: var(--sidebar-item-radius);
-  object-fit: cover;
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  display: block;
-  box-sizing: border-box;
-  transition: transform 0.12s ease;
-}
-
-.sidebar-set-thumb-image--collapsed {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  margin: 0;
-  border: none;
-  box-shadow: none;
-}
-
-.sidebar-set-thumb-image--large {
-  width: var(--sidebar-thumb-size);
-  height: var(--sidebar-thumb-size);
-  border-radius: var(--sidebar-item-radius);
-}
-
-.sidebar-list-item:hover .sidebar-character-thumb,
-.sidebar-list-item:hover .sidebar-set-thumb-image {
-  transform: scale(1.04);
-}
-
-.sidebar-list-item:hover .sidebar-character-thumb {
-  border-color: rgba(var(--v-theme-accent), 0.6);
-}
-
-.sidebar-collapsed-item,
-.sidebar-collapsed-thumb {
-  position: relative;
-  overflow: hidden;
-}
-
-.sidebar-character-group {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-}
-
-.sidebar-error-bubble {
-  position: fixed;
-  top: 72px;
-  left: 20px;
-  transform: translateY(-50%);
-  z-index: 1200;
-  color: rgb(var(--v-theme-on-error));
-  /* Solid, not 80%: `on-error` is authored against the SOLID fill (4.86:1 light,
-     4.68:1 dark). Blending the fill toward the surface lightens it and drops
-     this --text-base label to 3.49:1, under the 4.5 floor. */
-  background: rgb(var(--v-theme-error));
-  padding: var(--space-3) var(--space-5);
-  border-radius: var(--radius-lg);
-  font-size: var(--text-base);
-  line-height: 1.3;
-  box-shadow: 0 8px 20px rgba(var(--v-theme-shadow), 0.25);
-  pointer-events: none;
-  max-width: 360px;
-  white-space: normal;
-  word-break: break-word;
-}
-
-.sidebar-list-count {
-  font-size: var(--text-xs);
-  color: rgb(var(--v-theme-sidebar-text));
-  min-width: 2.4em;
-  text-align: right;
-  margin: 0;
-  font-weight: 400;
-  letter-spacing: 0.01em;
-  align-self: center;
-  display: inline-flex;
-  justify-content: flex-end;
-}
-
-.sidebar-new-tag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: var(--space-1) var(--space-1);
-  margin-right: var(--space-2);
-  border-radius: var(--radius-sm);
-  color: rgb(var(--v-theme-on-primary));
-  background: rgba(var(--v-theme-primary), 0.7);
-  position: relative;
-  top: -2px;
-}
-
-.sidebar-character-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-left: auto;
-  justify-content: flex-end;
-}
-
-.sidebar-character-actions .sidebar-list-count {
-  margin: 0;
-}
-
-/* Under ~150px there isn't room for the per-entry image counts — drop them. */
-.sidebar--narrow .sidebar-list-count,
-.sidebar--narrow .sidebar-folder-count-badge {
-  display: none;
-}
-
-/* ── Share link indicator icon on sidebar list items ──────────── */
-.sidebar-shared-icon {
-  opacity: 0.5;
-  color: rgb(var(--v-theme-primary));
-  flex-shrink: 0;
-  pointer-events: none;
-}
-
-.sidebar-lock-icon {
-  color: rgba(var(--v-theme-on-surface), 0.55);
-  flex-shrink: 0;
-  /* Keep pointer events so the lock-reason title shows on hover. */
-  pointer-events: auto;
-}
-
-/* Corner lock overlay for the collapsed/dock set icon (and the collapsed
-   flyout button). Sits over the set icon, so it keeps a translucent backing via
-   the shared `--scrim-surface` token to stay legible against an arbitrary set
-   thumbnail. NOTE: this deliberately no longer matches the grid's
-   `.thumbnail-lock-badge`, which dropped its scrim to read as a sibling of the
-   problem indicator; that badge sits in a padded badge column, this one is a
-   corner chip directly on top of imagery. */
-.sidebar-collapsed-lock {
-  position: absolute;
-  right: 1px;
-  bottom: 1px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  background: var(--scrim-surface);
-  color: rgba(var(--v-theme-on-surface), 0.85);
-  /* Keep pointer events so the lock-reason title shows on hover. */
-  pointer-events: auto;
-  z-index: 2;
-}
-
-.sidebar-shared-icon--inline {
-  opacity: 0.5;
-  color: rgb(var(--v-theme-primary));
-  flex-shrink: 0;
-  pointer-events: none;
-  margin-right: var(--space-1);
-}
-
-.sidebar-character-toggle {
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  opacity: 0.8;
-  margin-right: var(--space-2);
-}
-
-.sidebar-character-toggle:hover {
-  opacity: 1;
-  color: rgb(var(--v-theme-on-primary));
-}
-
-.add-character-inline {
-  color: rgb(var(--v-theme-sidebar-text)) !important;
-  font-size: var(--text-md);
-  cursor: pointer;
-  background: transparent;
-  border-radius: var(--radius-sm);
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-
-.add-character-inline:hover {
-  background: rgba(var(--v-theme-accent), 0.85);
-  color: rgb(var(--v-theme-on-primary)) !important;
-}
-
-.clear-selection-inline {
-  color: rgb(var(--v-theme-primary)) !important;
-  font-size: var(--text-base);
-  cursor: pointer;
-  background: transparent;
-  border: none;
-  padding: 0;
-  border-radius: var(--radius-sm);
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 22px;
-  transition: background 0.15s;
-}
-
-.clear-selection-inline:hover {
-  background: rgba(var(--v-theme-primary), 0.15);
-}
-
-.edit-character-inline,
-.edit-set-inline {
-  color: rgb(var(--v-theme-sidebar-text)) !important;
-  font-size: var(--text-md);
-  cursor: pointer;
-  background: transparent;
-  border-radius: var(--radius-sm);
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 22px;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-
-.edit-character-inline:hover,
-.edit-set-inline:hover {
-  background: rgba(var(--v-theme-primary), 0.15);
-  color: rgb(var(--v-theme-primary)) !important;
-}
-
-.sidebar-all-pictures-actions {
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  gap: 0;
-  flex-shrink: 0;
-}
-
-.sidebar-inline-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  width: max(52px, calc(var(--sidebar-thumb-size) + 8px));
-  flex-shrink: 0;
-  border-radius: 0;
-  color: rgb(var(--v-theme-sidebar-text));
-  opacity: 0.55;
-  transition:
-    background 0.18s,
-    opacity 0.18s,
-    color 0.18s;
-}
-
-.sidebar-inline-btn .v-icon {
-  color: inherit;
-}
-
-.sidebar-inline-btn:hover {
-  opacity: 1;
-}
-
-.sidebar-inline-btn--upload:hover {
-  color: rgb(var(--v-theme-success));
-}
-
-.sidebar-inline-btn--scrapheap:hover {
-  color: rgb(var(--v-theme-error));
-}
-
-.sidebar-inline-btn--scrapheap.active {
-  opacity: 1;
-  color: rgb(var(--v-theme-error));
-}
-
-.delete-character-inline {
-  color: rgb(var(--v-theme-sidebar-text)) !important;
-  font-size: var(--text-md);
-  cursor: pointer;
-  background: transparent;
-  border-radius: var(--radius-sm);
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 22px;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-
-.delete-character-inline:hover {
-  background: rgba(var(--v-theme-error), 0.15);
-  color: rgb(var(--v-theme-error)) !important;
-}
-
-.sidebar-sort {
-  display: flex;
-  flex-direction: column;
-}
-
-.sidebar-sort-select {
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
-  border-radius: var(--radius-md) !important;
-  min-height: 36px !important;
-  height: 36px !important;
-  font-size: var(--text-md);
-  box-shadow: none;
-  margin-top: 0px;
-  margin-bottom: var(--space-1);
-  align-items: center;
-  padding-left: var(--space-3);
-  padding-right: var(--space-3);
-}
-
-/* Remove extra height from v-input root for select */
-.sidebar-sort-select .v-input__control,
-.sidebar-sort-select .v-field {
-  min-height: 32px !important;
-  height: 32px !important;
-  border-radius: var(--radius-lg) !important;
-  box-shadow: none !important;
-}
-
-.sidebar-sort-select .v-field__input {
-  min-height: 28px !important;
-  height: 28px !important;
-  padding-top: var(--space-1) !important;
-  padding-bottom: var(--space-1) !important;
-  align-items: center;
-}
-
-/* Items within People/Sets sections get a tree indent */
-.sidebar-section-scroll .sidebar-list-item {
-  padding-left: var(--space-5);
-}
-
-.sidebar-section-block .sidebar-section-header {
-  padding-bottom: var(--space-1);
-}
-
-/* All-pictures row: same compact height as regular items */
-.sidebar-all-pictures-row {
-  padding-top: 0;
-  display: flex;
-  align-items: stretch;
-  width: 100%;
-  transition: outline 0.12s;
-}
-
-/* Keep All Pictures / Scrapheap rows compact but slightly prominent */
-.sidebar-all-pictures-row .sidebar-list-item {
-  min-height: calc(min(var(--sidebar-thumb-size), 22px) + 6px) !important;
-  padding-top: var(--space-2) !important;
-  padding-bottom: var(--space-2) !important;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.02em;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-all-pictures-row.drag-over-project {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: -2px;
-  background: rgba(var(--v-theme-primary), 0.1);
-}
-
-.sidebar-all-pictures-row .sidebar-list-item {
-  flex: 1 1 0;
-  width: 0;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.sidebar-inline-notice {
-  position: fixed;
-  transform: translateY(-50%);
-  background: rgba(var(--v-theme-secondary), 0.75);
-  color: rgb(var(--v-theme-on-secondary));
-  padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-pill);
-  font-size: var(--text-base);
-  white-space: nowrap;
-  pointer-events: none;
-  z-index: 1000 !important;
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .sidebar-list-item,
-  .sidebar-list-item.active {
-    min-height: 56px;
-    padding: var(--space-3) var(--space-3);
-  }
-
-  .sidebar-section-header {
-    min-height: 48px;
-  }
-
-  .sidebar-all-pictures-row .sidebar-list-item,
-  .sidebar-all-pictures-row .sidebar-list-item.active {
-    min-height: 48px;
-    padding: var(--space-3) var(--space-3);
-  }
-
-  .sidebar-list-icon {
-    width: var(--sidebar-thumb-size);
-    height: var(--sidebar-thumb-size);
-  }
-
-  .sidebar-character-thumb {
-    width: var(--sidebar-thumb-size);
-    height: var(--sidebar-thumb-size);
-  }
-
-  .add-character-inline,
-  .delete-character-inline,
-  .edit-character-inline,
-  .edit-set-inline,
-  .clear-selection-inline {
-    width: 36px;
-    height: 36px;
-  }
-
-  .sidebar-header-actions .v-icon {
-    min-width: 44px;
-    min-height: 44px;
-  }
-}
-
-/* ── Reference Folders panel ──────────────────────────────── */
-.sidebar-folders-loading {
-  display: flex;
-  justify-content: center;
-  padding: var(--space-7);
-}
-
-.sidebar-folders-list {
-  flex: 0 0 auto;
-  overflow-y: visible;
-  overflow-x: hidden;
-  padding: var(--space-1) 0;
-  scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
-}
-
-/* Add folder button in the folders tab needs no bottom divider — section headers do that job */
-.sidebar-tab-panel > .sidebar-project-tree-add {
-  border-bottom: none;
-}
-
-.sidebar-folder-section-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--sidebar-right-edge, 8px) 0 var(--space-1);
-  min-height: 28px;
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  background: transparent;
-  border-top: 1px solid rgba(var(--v-theme-border), 0.22);
-  border-bottom: 1px solid rgba(var(--v-theme-border), 0.2);
-  border-left: 3px solid transparent;
-  user-select: none;
-  transition:
-    background 0.12s,
-    color 0.12s;
-}
-
-.sidebar-folder-section-header:first-child {
-  border-top: none;
-}
-
-.sidebar-folder-section-header:hover {
-  background:
-    linear-gradient(
-      rgba(var(--v-theme-accent), 0.08),
-      rgba(var(--v-theme-accent), 0.08)
-    ),
-    rgba(var(--v-theme-sidebar-text), 0.05);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-folder-section-chevron {
-  flex-shrink: 0;
-  opacity: 0.6;
-  color: inherit;
-}
-
-.sidebar-folder-section-icon {
-  flex-shrink: 0;
-  opacity: 0.6;
-  color: inherit;
-}
-
-.sidebar-folder-section-title {
-  flex: 1 1 auto;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: inherit;
-}
-
-.sidebar-folder-section-edit-btn {
-  width: 22px;
-  justify-content: flex-end;
-  flex-shrink: 0;
-  opacity: 0.66;
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  transition:
-    opacity 0.15s,
-    color 0.15s;
-}
-
-.sidebar-folder-section-edit-btn:hover {
-  opacity: 1;
-  color: rgb(var(--v-theme-primary));
-}
-
-.sidebar-folder-root {
-  display: flex;
-  flex-direction: column;
-}
-
-.sidebar-folder-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-1);
-  cursor: pointer;
-  color: rgb(var(--v-theme-sidebar-text));
-  user-select: none;
-  min-height: 28px;
-  border-left: 3px solid transparent;
-  transition:
-    background 0.12s,
-    color 0.12s;
-}
-
-.sidebar-folder-root-row {
-  font-size: var(--text-sm);
-}
-
-.sidebar-folder-row:hover {
-  background: rgba(var(--v-theme-accent), 0.08);
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-folder-row.active {
-  background: rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
-  border-left: 3px solid rgb(var(--v-theme-primary));
-}
-
-.sidebar-folder-row.active:hover {
-  background:
-    linear-gradient(
-      rgba(var(--v-theme-accent), 0.08),
-      rgba(var(--v-theme-accent), 0.08)
-    ),
-    rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
-}
-
-.sidebar-folder-row.droppable {
-  filter: brightness(1.2);
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-}
-
-.sidebar-folder-children {
-  padding-left: var(--space-2);
-  border-left: 1px dashed rgba(var(--v-theme-border), 0.35);
-  margin-left: var(--space-1);
-}
-
-.sidebar-folder-label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.sidebar-folder-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s;
-}
-
-.sidebar-folder-row:hover .sidebar-folder-actions,
-.sidebar-folder-row:focus-within .sidebar-folder-actions,
-.sidebar-folder-row.active .sidebar-folder-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.sidebar-folder-action-btn {
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0.72;
-}
-
-.sidebar-folder-action-btn:hover {
-  background: rgba(var(--v-theme-accent), 0.18);
-  opacity: 1;
-}
-
-.sidebar-folder-chevron,
-.sidebar-folder-icon {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
-/* All folder icons fixed at 16px regardless of thumbnail size */
-.sidebar-folders-list :deep(.sidebar-folder-icon) {
-  font-size: var(--text-md) !important;
-  width: 16px !important;
-  height: 16px !important;
-}
-.sidebar-folders-list :deep(.sidebar-folder-chevron) {
-  font-size: var(--text-md) !important;
-  width: 16px !important;
-  height: 16px !important;
-}
-
-.sidebar-folder-status-badge {
-  flex-shrink: 0;
-  margin-left: var(--space-1);
-  opacity: 0.75;
-}
-
-.sidebar-folder-count-badge {
-  flex-shrink: 0;
-  margin-left: var(--space-2);
-  min-width: 22px;
-  text-align: right;
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-folder-row.active .sidebar-folder-count-badge {
-  color: rgba(var(--v-theme-on-primary), 0.65);
-}
-
-.sidebar-folder-status--active {
-  color: rgb(var(--v-theme-sidebar-text));
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition:
-    color 0.15s,
-    opacity 0.15s;
-}
-
-.sidebar-folder-status--active:hover {
-  color: rgb(var(--v-theme-sidebar-text));
-  opacity: 1;
-}
-
-.sidebar-folder-status--pending_mount {
-  color: rgb(var(--v-theme-warning, 255, 152, 0));
-}
-
-.sidebar-folder-status--scanning {
-  color: rgb(var(--v-theme-sidebar-text));
-  display: flex;
-  align-items: center;
-}
-
-.sidebar-folder-status--mount_error {
-  color: rgb(var(--v-theme-error, 244, 67, 54));
-}
-
-.sidebar-folder-loading-row {
-  display: flex;
-  justify-content: center;
-  padding: var(--space-3);
-}
-
-.sidebar-folder-empty-row {
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-xs);
-  color: rgb(var(--v-theme-sidebar-text));
-  font-style: italic;
-}
-
-.sidebar-folder-error-row {
-  color: rgba(var(--v-theme-error, 244, 67, 54), 0.8);
-}
-
-/* ── Sidebar context menu ────────────────────────────── */
-.sidebar-ctx-menu {
-  position: fixed;
-  z-index: 2000;
-  background: rgb(var(--v-theme-surface));
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: var(--radius-md);
-  box-shadow: var(--elevation-3);
-  padding: var(--space-2) 0;
-  min-width: 140px;
-  max-width: 260px;
-  user-select: none;
-}
-
-.sidebar-ctx-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  width: 100%;
-  padding: var(--space-3) var(--space-4);
-  font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface));
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-  white-space: nowrap;
-  transition: background 0.1s;
-}
-
-/* Truncate long resource names in share items so the menu can't overflow. */
-.sidebar-ctx-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.sidebar-ctx-item:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
-}
-
-.sidebar-ctx-item--danger {
-  color: rgb(var(--v-theme-error));
-}
-
-.sidebar-ctx-item--disabled {
-  opacity: 0.38;
-  cursor: default;
-  pointer-events: none;
-}
-
-button.sidebar-ctx-item:disabled {
-  opacity: 0.38;
-  cursor: default;
-  pointer-events: none;
-}
-
-button.sidebar-ctx-item:disabled:hover {
-  background: transparent;
-}
-
-.sidebar-ctx-item--has-arrow {
-  justify-content: flex-start;
-}
-
-.sidebar-ctx-arrow {
-  margin-left: auto;
-  opacity: 0.5;
-  font-size: var(--text-md);
-  line-height: 1;
-}
-
-.sidebar-ctx-color-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-/* Appearance panel (icon / color picker) that floats next to the context menu */
-.sidebar-ctx-appearance-panel {
-  position: fixed;
-  z-index: 2100;
-  background: rgb(var(--v-theme-surface));
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: var(--radius-md);
-  box-shadow: var(--elevation-3);
-  padding: var(--space-3) var(--space-3) var(--space-3);
-  user-select: none;
-  max-height: calc(100vh - 16px);
-  overflow-y: auto;
-}
-
-.sidebar-ctx-appearance-label {
-  font-size: var(--text-2xs);
-  opacity: 0.55;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  margin-bottom: var(--space-3);
-}
-
-.sidebar-ctx-icon-section-wrap {
-  display: flex;
-  gap: var(--space-3);
-  align-items: flex-start;
-}
-
-.sidebar-ctx-icon-or-divider {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  align-self: stretch;
-  padding: var(--space-6) var(--space-1);
-  gap: var(--space-2);
-}
-
-.sidebar-ctx-icon-or-line {
-  flex: 1;
-  width: 1px;
-  background: rgba(var(--v-theme-on-surface), 0.12);
-}
-
-.sidebar-ctx-icon-or-text {
-  font-size: var(--text-2xs);
-  opacity: 0.35;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  line-height: 1;
-}
-
-.sidebar-ctx-icon-cards-aside {
-  flex-shrink: 0;
-  text-align: center;
-}
-
-.sidebar-ctx-icon-btn--cards-large {
-  width: 48px;
-  height: 48px;
-  border-radius: var(--radius-md);
-  border: 2px solid transparent;
-  background: transparent;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  overflow: hidden;
-  transition: border-color 0.12s;
-}
-
-.sidebar-ctx-icon-btn--cards-large:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
-}
-
-.sidebar-ctx-icon-btn--cards-large.selected {
-  border-color: rgba(var(--v-theme-on-surface), 0.65);
-  background: rgba(var(--v-theme-on-surface), 0.1);
-}
-
-.sidebar-ctx-icon-grid {
-  display: grid;
-  grid-template-columns: repeat(8, 28px);
-  column-gap: var(--space-1);
-  row-gap: var(--space-1);
-}
-
-.sidebar-ctx-cat-header {
-  grid-column: 1 / -1;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  opacity: 0.45;
-  padding: var(--space-2) 0 var(--space-1);
-  line-height: 1;
-}
-
-.sidebar-ctx-icon-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  border: 2px solid transparent;
-  background: transparent;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  transition: border-color 0.12s;
-}
-
-.sidebar-ctx-icon-thumb {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: var(--radius-sm);
-  display: block;
-}
-
-.sidebar-ctx-icon-btn:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
-}
-
-.sidebar-ctx-icon-btn.selected {
-  border-color: rgba(var(--v-theme-on-surface), 0.65);
-  background: rgba(var(--v-theme-on-surface), 0.1);
-}
-
-.sidebar-ctx-color-section-header {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  opacity: 0.45;
-  padding: 0 0 var(--space-2);
-  line-height: 1;
-}
-
-.sidebar-ctx-color-grid {
-  display: grid;
-  grid-template-columns: repeat(6, 26px);
-  grid-auto-rows: 26px;
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.sidebar-ctx-color-swatch {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-md);
-  border: 2px solid transparent;
-  cursor: pointer;
-  outline: none;
-  padding: 0;
-  box-sizing: border-box;
-  aspect-ratio: 1 / 1;
-  position: relative;
-  transition:
-    transform 0.12s,
-    border-color 0.12s;
-}
-
-.sidebar-ctx-color-swatch:hover {
-  transform: scale(1.12);
-  z-index: 1;
-}
-
-.sidebar-ctx-color-swatch.selected {
-  border-color: #fff;
-  transform: scale(1.12);
-  z-index: 1;
-}
-
-.sidebar-ctx-icon {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
-.folder-type-card {
-  border-radius: var(--radius-lg);
-}
-
-.folder-type-title {
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-  padding: var(--space-5) var(--space-5) var(--space-3);
-}
-
-.folder-type-body {
-  padding: var(--space-3) var(--space-5) 0;
-}
-
-.folder-type-subtitle {
-  margin: 0 0 var(--space-3);
-  font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-surface), 0.62);
-}
-
-.folder-type-options {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.folder-type-option {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  width: 100%;
-  border: 1px solid rgba(var(--v-theme-border), 0.35);
-  border-radius: var(--radius-md);
-  background: rgba(var(--v-theme-surface), 0.4);
-  padding: var(--space-3) var(--space-4);
-  text-align: left;
-  cursor: pointer;
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.folder-type-option:hover {
-  border-color: rgba(var(--v-theme-primary), 0.6);
-  background: rgba(var(--v-theme-primary), 0.08);
-}
-
-.folder-type-option-text {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.folder-type-option-text strong {
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-}
-
-.folder-type-option-text small {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.62);
-}
-
-.folder-type-actions {
-  padding: var(--space-3) var(--space-5) var(--space-4);
-}
-
-.relocate-card {
-  border-radius: 14px;
-}
-
-.relocate-title {
-  font-size: 1.04rem;
-  font-weight: 700;
-  padding: 16px 18px 8px;
-}
-
-.relocate-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 8px 18px 0;
-}
-
-.relocate-path-block {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.relocate-path-label {
-  font-size: 0.74rem;
-  font-weight: 700;
-  opacity: 0.68;
-  text-transform: uppercase;
-}
-
-.relocate-path-value {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border-radius: 6px;
-  background: rgba(var(--v-theme-surface-variant), 0.35);
-  padding: 8px 10px;
-  font-family: monospace;
-  font-size: 0.82rem;
-}
-
-.relocate-destination-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-.relocate-destination-row .v-text-field {
-  flex: 1;
-}
-
-.relocate-warning {
-  font-size: 0.8rem;
-  line-height: 1.35;
-  color: rgba(var(--v-theme-on-surface), 0.72);
-}
-
-.relocate-error {
-  font-size: 0.8rem;
-  color: rgb(var(--v-theme-error));
-  background: rgba(var(--v-theme-error), 0.08);
-  border: 1px solid rgba(var(--v-theme-error), 0.22);
-  border-radius: 6px;
-  padding: 8px 10px;
-}
-
-.relocate-result {
-  font-size: 0.8rem;
-  color: rgb(var(--v-theme-accent));
-}
-
-.relocate-actions {
-  padding: 10px 16px 14px;
-}
-</style>
-
-<style>
-/* Non-scoped: webkit scrollbar pseudo-elements are suppressed by scoped data-v selectors */
-/* Shared subtle scrollbar treatment — keep in sync with .grid-scroll-wrapper in ImageGrid.vue */
-.sidebar-scroll::-webkit-scrollbar {
-  width: 8px !important;
-}
-.sidebar-scroll::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.05) !important;
-  background-clip: padding-box !important;
-  border: 2px solid transparent !important;
-  border-radius: var(--radius-md) !important;
-  transition: background 0.15s ease !important;
-}
-.sidebar-scroll:hover::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.18) !important;
-}
-.sidebar-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--v-theme-on-surface), 0.3) !important;
-}
-.sidebar-scroll::-webkit-scrollbar-track {
-  background: transparent !important;
-}
-
-/* Override ProjectFiles header inside the project tree to match subheader style */
-.sidebar-project-tree-files .pf-header {
-  min-height: 24px !important;
-  padding: var(--space-1) 0 var(--space-1) var(--space-3) !important;
-  padding-right: var(--sidebar-header-action-right-edge) !important;
-  font-size: var(--text-2xs) !important;
-  font-weight: var(--weight-semibold) !important;
-  letter-spacing: 0.07em !important;
-  gap: var(--space-2) !important;
-  color: rgb(var(--v-theme-sidebar-text)) !important;
-  text-transform: uppercase !important;
-  transition: color 0.12s !important;
-  user-select: none !important;
-}
-
-.sidebar-project-tree-files .pf-header:hover {
-  background: rgba(var(--v-theme-accent), 0.08) !important;
-  color: rgb(var(--v-theme-sidebar-text)) !important;
-}
-
-.sidebar-project-tree-files .pf-header-icon {
-  display: none !important;
-}
-
-.sidebar-project-tree-files .pf-title {
-  font-size: var(--text-2xs) !important;
-  font-weight: var(--weight-semibold) !important;
-  letter-spacing: 0.07em !important;
-  text-transform: uppercase !important;
-  flex: 1 !important;
-}
-
-.sidebar-project-tree-files .pf-count {
-  flex-shrink: 0;
-  margin-left: auto;
-  margin-right: var(--space-2);
-}
-
-.sidebar-project-tree-files .pf-chevron {
-  font-size: var(--text-base) !important;
-  order: -1;
-  opacity: 1 !important;
-  color: inherit !important;
-  flex-shrink: 0;
-}
-
-.sidebar-project-tree-files .pf-spacer {
-  display: none !important;
-}
-</style>
+<style scoped src="./SideBar.css"></style>
+<style src="./SideBar.global.css"></style>

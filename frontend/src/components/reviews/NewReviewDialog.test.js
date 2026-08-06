@@ -12,6 +12,8 @@ import { mount } from "@vue/test-utils";
 import { nextTick, h } from "vue";
 
 vi.mock("../../utils/apiClient", () => ({
+  onSessionReset: () => () => {},
+  sessionContext: { value: null },
   apiClient: {
     get: vi.fn().mockResolvedValue({ data: [] }),
     post: vi.fn().mockResolvedValue({ data: {} }),
@@ -21,6 +23,7 @@ vi.mock("../../utils/apiClient", () => ({
 
 import NewReviewDialog from "./NewReviewDialog.vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 
 const VIcon = {
   name: "v-icon",
@@ -35,15 +38,18 @@ const globalOpts = { stubs: { "v-icon": VIcon } };
 function seedStore() {
   const store = useReviewSessionsStore();
   store.healthRows = [];
-  store.projects = [];
-  store.characters = [];
-  // One unlocked set and one locked set — `locked` arrives free from the API
-  // (PictureSetResponse.locked via safe_model_dict), so the dialog reads it off
-  // store.sets directly.
-  store.sets = [
-    { id: 1, name: "Portraits", locked: false },
-    { id: 2, name: "Frozen eval", locked: true },
-  ];
+  // The scope lists are a view onto the shared entity-list cache, so they are
+  // seeded there. One unlocked set and one locked set — `locked` arrives free
+  // from the API (PictureSetResponse.locked via safe_model_dict), so the dialog
+  // reads it off store.sets directly.
+  useEntityListsStore().lists = {
+    characters: [],
+    projects: [],
+    sets: [
+      { id: 1, name: "Portraits", locked: false },
+      { id: 2, name: "Frozen eval", locked: true },
+    ],
+  };
   return store;
 }
 

@@ -7,7 +7,7 @@
     <title>Privacy Policy | PixlStash</title>
     <meta
       name="description"
-      content="PixlStash privacy policy: your library stays on hardware you control. Learn exactly what data the optional update check sends, and what never leaves your machine."
+      content="PixlStash privacy policy: your library stays on hardware you control. Learn exactly what the optional update check and anonymous install ID send, how the ID is handled, and what never leaves your machine."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -67,6 +67,22 @@
         border-radius: 5px;
       }
 
+      .prose pre {
+        overflow-x: auto;
+        margin: 0 0 12px;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: color-mix(in srgb, var(--text) 5%, transparent);
+        line-height: 1.55;
+      }
+
+      .prose pre code {
+        padding: 0;
+        background: transparent;
+        font-size: 0.86rem;
+      }
+
       .prose a {
         color: var(--accent-3);
         text-decoration: underline;
@@ -95,14 +111,14 @@
       </div>
 
       <article class="prose">
-        <p class="updated">Last updated: 11 June 2026</p>
+        <p class="updated">Last updated: 3 August 2026</p>
 
         <p>
           PixlStash is a self-hosted application for managing your own picture
           and video library. It is private by design: your content stays on
           hardware you control. This policy explains exactly what PixlStash does
-          and does not do with your data, and the one optional feature that
-          makes a network request to us.
+          and does not do with your data, and the two optional features that
+          make a network request to us.
         </p>
 
         <h2>Your library stays yours</h2>
@@ -133,11 +149,10 @@
 
         <h2>Optional update check (off until you turn it on)</h2>
         <p>
-          PixlStash can check whether a newer version is available. This is the
-          only feature that contacts a PixlStash-operated server, and it is
+          PixlStash can check whether a newer version is available. It is
           <strong
             >off unless you enable "Check for updates" in Settings →
-            Behaviour.</strong
+            Privacy.</strong
           >
           Until you opt in, no update check is ever made.
         </p>
@@ -188,7 +203,66 @@
         </p>
         <p>
           You can turn the update check off again at any time in Settings →
-          Behaviour; once disabled, no further checks are made.
+          Privacy; once disabled, no further checks are made.
+        </p>
+
+        <h2>The anonymous install ID (off until you turn it on)</h2>
+        <p>
+          PixlStash generates a random identifier for your installation the
+          first time it starts and stores it in <code>install-id.json</code>
+          next to <code>server-config.json</code>. Sending it is
+          <strong>off on every installation and every install type</strong>, and
+          upgrading from an earlier version leaves it off. Nothing is sent
+          unless you enable "Send an anonymous install ID" in Settings →
+          Privacy. This control is independent of the update check.
+        </p>
+        <p>
+          The ID exists to answer one question that plain visit and download
+          counts cannot: whether people keep using PixlStash, or install it once
+          and stop. Without it, ten people using PixlStash once cannot be told
+          apart from one person using it ten times.
+        </p>
+        <p>When you turn it on, PixlStash sends this message at most once a day:</p>
+        <pre><code>{
+  "install_id": "9f2c1b7e-4d5a-4c81-b3e6-8a7d2f0e5c14",
+  "is_new_install": true,
+  "install_type": "pip"
+}</code></pre>
+        <p>
+          That is the whole message. <code>is_new_install</code> is true only
+          when install-ID telemetry was enabled as part of the first consent
+          decision on a fresh install. It is false for upgrades and for people
+          who decline first and opt in later, so an established installation is
+          not counted as brand new. <code>install_type</code> is one of the same
+          coarse categories used by the update check: <code>docker</code>,
+          <code>pip</code>, <code>electron</code>, or <code>other</code>.
+        </p>
+        <p>
+          The identifier is random. It is never derived from your MAC address,
+          hostname, machine ID, serial number, or any other property of your
+          computer, so it cannot recognise your machine anywhere else. Its file
+          records the date it was created, not the exact time, because a precise
+          creation moment could itself be close to unique.
+        </p>
+        <p>
+          Settings has a <strong>Recreate ID</strong> button. It replaces the
+          identifier with a new random one. The old value is overwritten, is
+          never sent again, and nothing on disk links the two.
+        </p>
+        <p>
+          <strong>About your IP address:</strong> as with any request to any
+          website, the receiving server and Cloudflare see the address the
+          request came from, and Cloudflare logs it under its own retention.
+          PixlStash never writes the address into its own telemetry store and
+          never attaches it to the install ID. The request handler reads it only
+          while handling the request to refuse floods from one source; it is not
+          retained by us.
+        </p>
+        <p>
+          We store the install ID, the dates we first and last heard from it,
+          and a compact record of which days it was active. Nothing else. That
+          record is deleted after <strong>400 days of silence</strong>, and only
+          aggregate counts are ever published.
         </p>
 
         <h2>Software downloads from third parties</h2>

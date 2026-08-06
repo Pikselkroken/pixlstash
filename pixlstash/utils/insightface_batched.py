@@ -23,7 +23,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
-from insightface.utils import face_align
 
 
 @dataclass
@@ -72,6 +71,12 @@ class BatchedFaceRunner:
             contains :class:`FaceResult` objects sorted by detection score
             (highest first, matching ``FaceAnalysis.get()`` behaviour).
         """
+        # Local import: insightface drags in onnxruntime and costs seconds to
+        # import. This module sits on the server's import path, and a caller
+        # only reaches here with an already-prepared FaceAnalysis app — so
+        # insightface is resident by then anyway.
+        from insightface.utils import face_align
+
         # ── Phase 1: detection — one image at a time (ONNX batch dim = 1) ──
         detections: list[tuple[np.ndarray | None, np.ndarray, np.ndarray | None]] = []
         for img in images:

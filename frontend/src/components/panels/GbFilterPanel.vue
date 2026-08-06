@@ -42,46 +42,83 @@
         </div>
       </div>
 
-      <!-- Media + Face — icon-only on one row; labels move to tooltips/aria. -->
+      <!-- Media, Faces and Stacks: three scope filters on one row as native
+           selects (the `.tbm-select` pattern the sibling toolbar panels use).
+           Three segmented controls cost four rows and, at a third of the
+           panel's width, could only fit icons, which left the meaning in a
+           tooltip. A select shows its current state in words and costs two
+           rows. Native rather than a custom menu on purpose: the option list
+           renders outside the panel, so the scrolling body cannot clip it. -->
       <div class="tbm-section">
-        <div class="gb-media-face-row">
-          <div
-            class="tbm-seg gb-icon-group"
-            role="group"
-            aria-label="Media type filter"
-          >
-            <button
-              v-for="opt in gbMediaTypeOptions"
-              :key="opt.value"
-              class="tbm-seg-btn gb-icon-btn"
-              :class="{ 'tbm-seg-btn--on': gbMediaTypeFilter === opt.value }"
-              type="button"
-              :title="opt.title"
-              :aria-label="opt.label"
-              :aria-pressed="gbMediaTypeFilter === opt.value"
-              @click="gbSetMediaTypeFilter(opt.value)"
-            >
-              <v-icon size="16">{{ opt.icon }}</v-icon>
-            </button>
+        <div class="gb-scope-row">
+          <div class="gb-scope-field">
+            <span class="tbm-label">Media</span>
+            <div class="tbm-select-wrap">
+              <select
+                v-model="gbMediaTypeFilter"
+                class="tbm-select gb-scope-select"
+                :class="{ 'gb-scope-select--on': gbMediaTypeFilter !== 'all' }"
+                aria-label="Media type filter"
+              >
+                <option
+                  v-for="opt in gbMediaTypeOptions"
+                  :key="opt.value"
+                  :value="opt.value"
+                >
+                  {{ opt.label }}
+                </option>
+              </select>
+              <v-icon size="16" class="tbm-select-chevron"
+                >mdi-chevron-down</v-icon
+              >
+            </div>
           </div>
-          <div
-            class="tbm-btngroup gb-icon-group"
-            role="group"
-            aria-label="Face filter"
-          >
-            <button
-              v-for="opt in gbFaceBboxFilterOptions"
-              :key="String(opt.value)"
-              class="tbm-btn gb-icon-btn"
-              :class="{ 'tbm-btn--on': gbFaceBboxFilter === opt.value }"
-              type="button"
-              :title="opt.title"
-              :aria-label="opt.label"
-              :aria-pressed="gbFaceBboxFilter === opt.value"
-              @click="gbSetFaceBboxFilter(opt.value)"
-            >
-              <v-icon size="16">{{ opt.icon }}</v-icon>
-            </button>
+          <div class="gb-scope-field">
+            <span class="tbm-label">Faces</span>
+            <div class="tbm-select-wrap">
+              <select
+                v-model="gbFaceBboxFilter"
+                class="tbm-select gb-scope-select"
+                :class="{ 'gb-scope-select--on': gbFaceBboxFilter != null }"
+                aria-label="Face filter"
+              >
+                <option
+                  v-for="opt in gbFaceBboxFilterOptions"
+                  :key="String(opt.value)"
+                  :value="opt.value"
+                >
+                  {{ opt.label }}
+                </option>
+              </select>
+              <v-icon size="16" class="tbm-select-chevron"
+                >mdi-chevron-down</v-icon
+              >
+            </div>
+          </div>
+          <!-- Stacks is a filter rather than a destination: stacked and
+               unstacked carry no to-do count, so neither earns a sidebar
+               entry. -->
+          <div class="gb-scope-field">
+            <span class="tbm-label">Stacks</span>
+            <div class="tbm-select-wrap">
+              <select
+                v-model="gbStackStateFilter"
+                class="tbm-select gb-scope-select"
+                :class="{ 'gb-scope-select--on': gbStackStateFilter !== 'all' }"
+                aria-label="Stack state filter"
+              >
+                <option
+                  v-for="opt in gbStackStateOptions"
+                  :key="opt.value"
+                  :value="opt.value"
+                >
+                  {{ opt.label }}
+                </option>
+              </select>
+              <v-icon size="16" class="tbm-select-chevron"
+                >mdi-chevron-down</v-icon
+              >
+            </div>
           </div>
         </div>
       </div>
@@ -588,6 +625,12 @@ const gbMaxScoreFilter = computed({
     filterStore.maxScoreFilter = v ?? null;
   },
 });
+const gbStackStateFilter = computed({
+  get: () => filterStore.stackStateFilter,
+  set: (v) => {
+    filterStore.stackStateFilter = v || "all";
+  },
+});
 const gbFaceBboxFilter = computed({
   get: () => filterStore.faceBboxFilter,
   set: (v) => {
@@ -688,56 +731,28 @@ function gbToggleImpossibleSource(value, checked) {
   }
 }
 
+// Each option's label is what the closed select shows, so it has to read as a
+// statement of the current scope on its own, under its field's label.
 const gbMediaTypeOptions = [
-  {
-    value: "all",
-    icon: "mdi-multimedia",
-    label: "All",
-    title: "Show all media",
-  },
-  {
-    value: "images",
-    icon: "mdi-image-outline",
-    label: "Images",
-    title: "Show images only",
-  },
-  {
-    value: "videos",
-    icon: "mdi-video-outline",
-    label: "Video",
-    title: "Show videos only",
-  },
+  { value: "all", label: "All" },
+  { value: "images", label: "Images" },
+  { value: "videos", label: "Video" },
+];
+
+// 'unresolved' is a valid store/API value but is deliberately not offered here:
+// the duplicate queue is where an undecided group gets ruled on, so the grid
+// filter would be a second, weaker door onto the same work.
+const gbStackStateOptions = [
+  { value: "all", label: "Any" },
+  { value: "stacked", label: "Stacked" },
+  { value: "unstacked", label: "Unstacked" },
 ];
 
 const gbFaceBboxFilterOptions = [
-  {
-    value: null,
-    icon: "mdi-all-inclusive",
-    label: "Any",
-    title: "All pictures",
-  },
-  {
-    value: "with_face",
-    icon: "mdi-face-recognition",
-    label: "Has face",
-    title: "With detected face",
-  },
-  {
-    value: "without_face",
-    icon: "mdi-account-off-outline",
-    label: "No face",
-    title: "Without detected face",
-  },
+  { value: null, label: "Any" },
+  { value: "with_face", label: "Has face" },
+  { value: "without_face", label: "No face" },
 ];
-
-function gbSetMediaTypeFilter(value) {
-  gbMediaTypeFilter.value = value;
-}
-
-function gbSetFaceBboxFilter(value) {
-  gbFaceBboxFilter.value =
-    gbFaceBboxFilter.value === value && value !== null ? null : value;
-}
 
 function gbSetMinScore(n) {
   const newMin = gbMinScoreFilter.value === n ? null : n;
@@ -984,19 +999,34 @@ watch(
   margin-bottom: 0;
 }
 
-/* ── Media + Face: two icon-only groups sharing one row ───────────────────── */
-.gb-media-face-row {
+/* ── Media / Faces / Stacks: three scope selects sharing one row ──────────── */
+.gb-scope-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-3);
 }
-.gb-media-face-row .gb-icon-group {
+.gb-scope-field {
   flex: 1;
+  /* Each field takes a third of the row and is allowed to shrink with it,
+     rather than being forced wider by its longest option. */
+  min-width: 0;
 }
-.gb-icon-btn {
-  /* Icon-only — drop the label's horizontal padding so the glyph centres. */
-  padding: 0;
-  min-height: 32px;
+/* The panel's fields are denser than the settings screens the base `.tbm-select`
+   was sized for; a third of 350px has to hold "Unstacked" without truncating.
+   Same local-override shape as `.tb-import-project .tbm-select`. */
+.gb-scope-select {
+  min-height: 34px;
+  padding-right: var(--space-6);
+  padding-left: var(--space-3);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+}
+/* A filter that is doing something says so without being opened. The panel
+   header's count and Clear button report that any filter is on; this reports
+   which one. */
+.gb-scope-select--on {
+  color: rgb(var(--v-theme-accent));
+  border-color: rgb(var(--v-theme-accent));
 }
 
 /* ── Collapsible section header (Tag confidence, Impossible tags) ──────────── */

@@ -112,7 +112,11 @@ class InferenceEngine:
                         },
                     },
                     "florence2": {
-                        "params": {"max_new_tokens": 120, "fast_mode": False},
+                        "params": {
+                            "max_new_tokens": 120,
+                            "fast_mode": False,
+                            "model_variant": "base",
+                        },
                     },
                 },
             }
@@ -160,6 +164,32 @@ class InferenceEngine:
             )
         except (KeyError, TypeError):
             return self._pixlstash_tagger_enabled
+
+    @property
+    def florence_model_variant(self) -> str:
+        """The configured Florence-2 checkpoint key (issue #512).
+
+        One setting drives both captioning and object detection because they
+        share a single :class:`~pixlstash.tagger_plugins.florence2.Florence2Service`.
+        """
+        from pixlstash.tagger_plugins.florence2 import DEFAULT_FLORENCE_VARIANT
+
+        try:
+            return (
+                self._tagger_settings["plugins"]["florence2"]["params"].get(
+                    "model_variant", DEFAULT_FLORENCE_VARIANT
+                )
+                or DEFAULT_FLORENCE_VARIANT
+            )
+        except (AttributeError, KeyError, TypeError) as exc:
+            # A hand-edited or partially-migrated tagger_settings blob must not
+            # take captioning down; fall back to base and say why.
+            logger.debug(
+                "Florence-2 variant not readable from tagger_settings (%s); using %r.",
+                exc,
+                DEFAULT_FLORENCE_VARIANT,
+            )
+            return DEFAULT_FLORENCE_VARIANT
 
     # ------------------------------------------------------------------
     # Workflow accessors
@@ -395,9 +425,22 @@ class InferenceEngine:
         """Load the CLIP model if not already loaded."""
         self.clip_service.ensure_ready()
 
-    def _ensure_captioning_ready(self) -> None:
-        """Load Florence-2 if not already loaded."""
+    def ensure_captioning_ready(self) -> None:
+        """Apply the configured Florence-2 variant, then load it if needed.
+
+        This is the single chokepoint for the Florence-native paths (captions
+        and Segment). Applying the variant here — rather than only in
+        ``Florence2Plugin.init`` — is what keeps the two in step, because
+        ``DescriptionWorkflow`` and :meth:`detect_objects` reach the service
+        directly and never run the plugin's ``init``. Switching variants
+        unloads the resident checkpoint, so the load below picks up the new one.
+        """
+        self.florence_service.set_model_variant(self.florence_model_variant)
         self.lifecycle.ensure_captioning_ready(self.florence_service)
+
+    def _ensure_captioning_ready(self) -> None:
+        """Deprecated alias for :meth:`ensure_captioning_ready`."""
+        self.ensure_captioning_ready()
 
     def detect_objects(self, image_paths: list, prompt: str | None = None) -> dict:
         """Run Florence-2 object detection / phrase grounding on a batch.
@@ -412,7 +455,7 @@ class InferenceEngine:
         Returns:
             ``{path: [(label, [x1, y1, x2, y2], score_or_None), ...]}``.
         """
-        self.lifecycle.ensure_captioning_ready(self.florence_service)
+        self.ensure_captioning_ready()
         return self.florence_service.detect_objects(image_paths, prompt=prompt)
 
     def is_captioning_initialized(self) -> bool:

@@ -2,7 +2,14 @@
 
 - **Branch:** `backend-refactoring`
 - **Scope:** Phase 1 **Step 2 only** of the centralised-authz refactor (backend refactor plan §3.5). This PR **declares** the access policy of every mounted HTTP route in `pixlstash/authz/registry.py::ROUTE_POLICIES`. It does **not** enforce anything (`AUTHZ_GATE_ENFORCING = False`), remove any inline check, or change any handler. It is the regenerated coverage matrix the adversarial security review consumes.
-- **Arithmetic completeness:** **217 declared**, covering the **216** routes mounted in the default configuration plus **1 conditionally-mounted** route (was 207 at the Step-2 back-fill; +6 from the async streaming-staging import (#459), +2 from the v1.8.0 scrapheap-retention config pair GET/PATCH `/server-config/scrapheap-retention` (both `owner_only`), +1 GET `/server-config/scrapheap-retention/impact` (`owner_only`), +1 POST `/api/v1/test-hooks/ws-event` (`loopback_owner_only`)). Gate `enforce_startup` (both report-only and, as a dry check, `enforcing=True`) resolves the app with **0 undeclared, 0 dead declarations, 0 authoring problems** (every `PUBLIC`/`LOCAL_OWNER_ONLY` has a justification; every `*_SCOPED` `id_param` is a real template param). The audit allowlist in `tests/test_architecture_guardrails.py` has burned to **zero** (`_CURRENT_ROUTE_ALLOWLIST = frozenset()`); the registry is now the sole coverage matrix. Guardrail suite: **17 passed**.
+- **Arithmetic completeness (re-derived 2026-08-05, #721 projected face routes, CURRENT):** **249 declared**, covering the **248** routes mounted in the default configuration plus **1 conditionally-mounted** route (`POST /api/v1/test-hooks/ws-event`). Measured, not carried forward from prose: `len(ROUTE_POLICIES) == 249`, `len(api_endpoint_set(app)) == 248`, `live - declared == ∅`, `declared - live == {POST /api/v1/test-hooks/ws-event}`. By policy class: `owner_only` **113**, `scoped_list` 39, `picture_scoped` **36**, `any_token` 14, `public` 13, `local_owner_only` 13, `character_scoped` **6**, `project_scoped` 6, `loopback_owner_only` 5, `set_scoped` 4. #721 itself adds exactly **+1 `picture_scoped`** (GET `/pictures/{id}/faces`) and **+1 `character_scoped`** (GET `/characters/{id}/faces`). The third route in the delta over the 246 below is **not from #721**: `POST /api/v1/dedup/verdicts/batch` (`owner_only`, so 112 -> 113) was declared on 2026-08-04 by `cb656898` "Make bulk dedup verdicts atomic", which did not re-derive this count. The 246 line was correct when written on 2026-08-02 and went stale two days later. That is exactly the drift the row-level check below now prevents for rows, though not yet for these aggregates. Every declared route now also has a table row.
+- **Arithmetic completeness (re-derived 2026-08-02, telemetry install ID, v1.9 Lane F; superseded by the line above):** **246 declared**, covering the **245** routes mounted in the default configuration plus **1 conditionally-mounted** route (`POST /api/v1/test-hooks/ws-event`). Counted from `ROUTE_POLICIES`, not carried forward from prose: `len(ROUTE_POLICIES) == 246`. By policy class: `owner_only` **112**, `scoped_list` 39, `picture_scoped` 35, `any_token` **14**, `public` 13, `local_owner_only` 13, `project_scoped` 6, `loopback_owner_only` 5, `character_scoped` 5, `set_scoped` 4. The delta is **+2 `owner_only`**, both on `telemetry.py`: GET `/telemetry/install-id` and POST `/telemetry/install-id/recreate`. No other policy class moved.
+- **Arithmetic completeness (re-derived 2026-08-01, import-status retarget):** **244 declared**, covering the **243** routes mounted in the default configuration plus **1 conditionally-mounted** route (`POST /api/v1/test-hooks/ws-event`). Counted from `ROUTE_POLICIES`, not carried forward from prose: `len(ROUTE_POLICIES) == 244`. By policy class: `owner_only` **110**, `scoped_list` 39, `picture_scoped` 35, `any_token` **14**, `public` 13, `local_owner_only` 13, `project_scoped` 6, `loopback_owner_only` 5, `character_scoped` 5, `set_scoped` 4. The delta is **no new routes** and **2 retargeted declarations**, `any_token` → `owner_only`: GET `/api/v1/pictures/import/status` and GET `/api/v1/pictures/import/staging/{staging_id}/status`. Unlike every delta above this one, it is a **correction, not an addition**: both routes return per-object picture data (ids and vault filenames) and `ANY_TOKEN`'s contract is that a route returns none, so the two cells were wrong from the day they were written. See the corrected rows below and the amended v1.8.0 sign-off. No other policy class moved.
+- **Arithmetic completeness (previous re-derivation, 2026-08-01, Keep cover only, superseded by the line above):** **244 declared**, covering the **243** routes mounted in the default configuration plus **1 conditionally-mounted** route (`POST /api/v1/test-hooks/ws-event`). Counted from `ROUTE_POLICIES` and the live route inventory, not carried forward from prose: `len(ROUTE_POLICIES) == 244`, `len(api_endpoint_set(app)) == 243`, `live - declared == ∅`, `declared - live == {POST /api/v1/test-hooks/ws-event}`. By policy class: `owner_only` **108**, `scoped_list` 39, `picture_scoped` 35, `any_token` 16, `public` 13, `local_owner_only` 13, `project_scoped` 6, `loopback_owner_only` 5, `character_scoped` 5, `set_scoped` 4. The delta since the previous re-derivation is **+2 `owner_only`**, both on `stacks.py`, both for Keep cover only (`docs/design/keep-cover-only.md`): POST `/stacks/keep-cover-only/preview` and POST `/stacks/keep-cover-only`. No other policy class moved and no existing declaration was retargeted.
+- **Arithmetic completeness (previous re-derivation, 2026-08-01, Mixed stacks D5/B5 merged, superseded by the line above):** **242 declared**, covering the **241** routes mounted in the default configuration plus **1 conditionally-mounted** route (`POST /api/v1/test-hooks/ws-event`). Counted from `ROUTE_POLICIES` and the live route inventory, not carried forward from prose: `len(ROUTE_POLICIES) == 242`, `len(api_endpoint_set(app)) == 241`, `live - declared == ∅`, `declared - live == {POST /api/v1/test-hooks/ws-event}`. By policy class: `owner_only` **106**, `scoped_list` 39, `picture_scoped` 35, `any_token` 16, `public` 13, `local_owner_only` 13, `project_scoped` 6, `loopback_owner_only` 5, `character_scoped` 5, `set_scoped` 4. The delta since the previous re-derivation is **+5 `owner_only`**, all on `dedup.py`, all for Mixed stacks: GET `/dedup/mixed-stacks`, POST `/dedup/mixed-stacks/{stack_id}/split`, POST `/dedup/mixed-stacks/{stack_id}/unstack`, POST and DELETE `/dedup/mixed-stacks/{stack_id}/keep`. No other policy class moved and no existing declaration was retargeted.
+- **Arithmetic completeness (previous re-derivation, 2026-08-01, stack-units B1 merged, superseded by the line above):** **237 declared**, covering the **236** routes mounted in the default configuration plus **1 conditionally-mounted** route (`POST /api/v1/test-hooks/ws-event`). Counted from `ROUTE_POLICIES` and the live route inventory, not carried forward from prose: `len(ROUTE_POLICIES) == 237`, `len(api_endpoint_set(app)) == 236`, `live - declared == ∅`, `declared - live == {POST /api/v1/test-hooks/ws-event}`. By policy class: `owner_only` **101**, `scoped_list` 39, `picture_scoped` 35, `any_token` 16, `public` 13, `local_owner_only` 13, `project_scoped` 6, `loopback_owner_only` 5, `character_scoped` 5, `set_scoped` 4. The delta since the last re-derivation is **+9 `owner_only`**, all on `dedup.py`: **+8** for the v1.9 tiered Duplicates queue (Lane 1A, 2026-07-29, those rows were added to the tables below but this count line was not re-derived at the time, so the previously stated 228/227 was stale by exactly those 8), and **+1** for `GET /dedup/stacks/{stack_id}/members`, the deck expansion (stack units B1, 2026-08-01). No other policy class moved and no existing declaration was retargeted.
+- **Arithmetic completeness (previous re-derivation, 2026-07-29, v1.9 backbone merged, superseded, and it was stale by the 8 tiered-queue routes):** **228 declared**, covering the **227** routes mounted in the default configuration plus **1 conditionally-mounted** route (`POST /api/v1/test-hooks/ws-event`). These numbers are **counted from `ROUTE_POLICIES` and the live route inventory**, not carried forward from prose: `len(ROUTE_POLICIES) == 228`, `len(api_endpoint_set(app)) == 227`, `live - declared == ∅`, `declared - live == {POST /api/v1/test-hooks/ws-event}`. The v1.9 backbone delta over the 217-declaration baseline is **+11**: **+7 `owner_only`** for the DAM 1.2 operation log (#626, `operations.py`), **+2 `owner_only`** for the near-duplicate sweep dry run (#625, `dedup.py`, GET `/dedup/sweep/policy`, POST `/dedup/sweep/dry-run`), and **+2 `picture_scoped`** for Remix (#627, GET `/comfyui/pictures/{picture_id}/recipe`, POST `/comfyui/run_recipe`). That takes `owner_only` 83 → **92** and `picture_scoped` 33 → **35**; no other policy class moved and no existing declaration was retargeted. Multi-project membership (#629) declared no new routes. Earlier interim counts in this document (219 / 224) were prose carried across merges and are superseded by this count.
+- **Arithmetic completeness (pre-v1.9 baseline):** **217 declared**, covering the **216** routes mounted in the default configuration plus **1 conditionally-mounted** route (was 207 at the Step-2 back-fill; +6 from the async streaming-staging import (#459), +2 from the v1.8.0 scrapheap-retention config pair GET/PATCH `/server-config/scrapheap-retention` (both `owner_only`), +1 GET `/server-config/scrapheap-retention/impact` (`owner_only`), +1 POST `/api/v1/test-hooks/ws-event` (`loopback_owner_only`)). Gate `enforce_startup` (both report-only and, as a dry check, `enforcing=True`) resolves the app with **0 undeclared, 0 dead declarations, 0 authoring problems** (every `PUBLIC`/`LOCAL_OWNER_ONLY` has a justification; every `*_SCOPED` `id_param` is a real template param). The audit allowlist in `tests/test_architecture_guardrails.py` has burned to **zero** (`_CURRENT_ROUTE_ALLOWLIST = frozenset()`); the registry is now the sole coverage matrix. Guardrail suite: **17 passed**.
 - **WebSockets:** the 2 WS routes (`/ws/comfyui`, `/api/v1/ws/updates`) are **out of the HTTP registry by design** — their chokepoint is `authenticate_websocket` (plan §6). They remain acknowledged in `tests/test_architecture_guardrails.py::test_websocket_routes_are_acknowledged`, and `registry.py` carries the `# WS routes: see authn/websocket.py` sentinel.
 
 ## How each policy was derived (preserve-today's-behaviour rule)
@@ -26,17 +33,38 @@ Each route is mapped to the single `AccessPolicy` that reproduces its behaviour 
 | `local_owner_only` | `owner_only` + loopback/LAN/Tailscale IP, or a remote owner iff `allow_remote_host_ops=true` | **none in Step 2** — the §16.3 retarget is a deliberate Step-3 behaviour change (see below) |
 | `loopback_owner_only` | `owner_only` + strict loopback only (127.0.0.0/8 + ::1); `allow_remote_host_ops` can NOT loosen it | **none in Step 2** — §16.3.1 host-shell red line; a deliberate behaviour change (see below) |
 
-## Policy distribution (217 total)
+## Policy distribution (249 total)
+
+Recounted from `ROUTE_POLICIES` on 2026-08-05, when #721 added the two projected
+face routes. **The recount also corrected pre-existing drift**: the previous
+block claimed 228 routes as of 2026-07-29 and was stale by 19 before this change
+(`owner_only` alone had grown 92 -> 113). Only the two `faces` rows below belong
+to #721.
+
+The route *rows* in this document are machine-checked against the registry by
+`tests/test_architecture_guardrails.py::test_coverage_matrix_document_matches_the_registry`,
+which parses the tables below and fails if a declared route has no row, a row
+names an undeclared route, a route is tabled twice, or a row states a different
+policy than the registry enforces. That test was added on 2026-08-05 by the
+#721 adversarial sign-off, which found that **nothing had ever read this file**:
+the enforcement claim previously made here pointed at
+`test_all_routes_declare_access_policy`, which compares the registry against the
+live app and never opens the markdown. Six declared routes had no row and one
+row was duplicated. Both are fixed, and the check is now real.
+
+The **aggregate counts in the table below are still not machine-checked**; only
+the rows are. Re-derive them from `ROUTE_POLICIES` when you touch them rather
+than editing the previous figure.
 
 | Policy | Count |
 |---|---|
 | `public` | 13 |
-| `any_token` | 16 |
-| `owner_only` | 83 |
-| `picture_scoped` | 33 |
+| `any_token` | 14 |
+| `owner_only` | 113 |
+| `picture_scoped` | 36 |
 | `scoped_list` | 39 |
 | `set_scoped` | 4 |
-| `character_scoped` | 5 |
+| `character_scoped` | 6 |
 | `project_scoped` | 6 |
 | `local_owner_only` | 13 |
 | `loopback_owner_only` | 5 |
@@ -100,6 +128,9 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 |---|---|---|---|---|
 | GET | `/api/v1/server-config/filesystem-roots` | owner_only |  | require_unscoped_owner; also READ_BLOCKED; owner only |
 | POST | `/api/v1/server-config/open` | **loopback_owner_only** |  | §16.3.1 RED LINE (CSO Condition 1): opens the config path in the host file browser via `_open_in_os` (os.startfile/open/xdg-open) — byte-identical host-GUI spawn as pictures/open-location & reference-folders/open; strict loopback only; `allow_remote_host_ops` can NOT loosen it |
+| GET | `/api/v1/server-config/scrapheap-retention` | owner_only |  | Owner server-config read; returns no per-object data. Sibling of GET /server-config/snapshots (same owner-settings tier). Not a host-capability route (§16.3): it neither touches the host filesystem browser nor spawns a host GUI/shell, so no locality tier applies |
+| GET | `/api/v1/server-config/scrapheap-retention/impact` | owner_only |  | Reports a per-LIBRARY destruction count (how many scrapheap pictures a retention reduction would purge), exactly the kind of aggregate a resource-scoped share token must not see → owner_only, not any_token. Pure read: no config write, no purge, no reduced_at stamp |
+| PATCH | `/api/v1/server-config/scrapheap-retention` | owner_only |  | Owner server-config write; PATCH is blocked for READ tokens, so only an unscoped owner reaches it. Sibling of PATCH /server-config/snapshots. Sets the auto-purge window but performs NO destruction itself (the scheduled task is the only deleter), so the §16.3 tiers do not apply |
 | GET | `/api/v1/server-config/snapshots` | owner_only |  | require_unscoped_owner |
 | PATCH | `/api/v1/server-config/snapshots` | owner_only |  | require_unscoped_owner |
 | GET | `/api/v1/server-config/watch-folders` | owner_only |  | require_unscoped_owner; also READ_BLOCKED; owner only |
@@ -170,12 +201,12 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | GET | `/api/v1/pictures/export/status` | any_token |  |  |
 | POST | `/api/v1/pictures/face-search` | scoped_list |  |  |
 | POST | `/api/v1/pictures/import` | owner_only |  | Import pictures; POST blocked for READ tokens; owner only |
-| GET | `/api/v1/pictures/import/status` | any_token |  |  |
+| GET | `/api/v1/pictures/import/status` | owner_only |  | **Corrected 2026-08-01 (`any_token` → `owner_only`).** The earlier `any_token` cell was wrong on its face: `ANY_TOKEN` means the route returns no per-object resource data, and the completed payload carries `results[].picture_id`, `results[].file` (the vault-relative filename) and `scrapheaped_picture_ids`. A resource-scoped READ token refused picture 1's thumbnail was handed picture 1's id and filename here. Owner only: the route serves the owner's own import UI and its `POST /pictures/import` sibling is already owner only, so no live caller is narrowed |
 | POST | `/api/v1/pictures/import/staging` | owner_only |  | (#459, v1.8.0) Open async streaming-staging session; upload path, streams client bytes into vault — NOT a §16.3 host-FS read; mirrors `POST /pictures/import`; POST blocked for READ tokens; gate-enforced owner_only |
 | POST | `/api/v1/pictures/import/staging/{staging_id}/files` | owner_only |  | (#459, v1.8.0) Stream upload bytes into a staging session; owner only |
 | POST | `/api/v1/pictures/import/staging/{staging_id}/commit` | owner_only |  | (#459, v1.8.0) Hand staging off to the background `PictureImportTask`; owner only |
 | DELETE | `/api/v1/pictures/import/staging/{staging_id}` | owner_only |  | (#459, v1.8.0) Cancel an uncommitted staging session, discard streamed files; owner only |
-| GET | `/api/v1/pictures/import/staging/{staging_id}/status` | any_token |  | (#459, v1.8.0) Progress/stage/counts only (no per-object data); mirrors `GET /pictures/import/status`; staging_id is an unguessable server-minted uuid4 |
+| GET | `/api/v1/pictures/import/staging/{staging_id}/status` | owner_only |  | **Corrected 2026-08-01 (`any_token` → `owner_only`).** The original cell claimed "progress/stage/counts only (no per-object data)"; that was false when written, because the completed payload carries `scrapheaped_picture_ids`. The unguessable uuid4 `staging_id` was doing the whole job, which is a capability URL rather than an access policy. Now owner only, matching its open/files/commit/cancel siblings and the corrected `GET /pictures/import/status` |
 | POST | `/api/v1/pictures/impossible-tags/clear` | scoped_list |  |  |
 | POST | `/api/v1/pictures/impossible-tags/restore` | scoped_list |  |  |
 | GET | `/api/v1/pictures/likeness-groups` | scoped_list |  |  |
@@ -185,8 +216,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | PATCH | `/api/v1/pictures/project` | scoped_list |  |  |
 | POST | `/api/v1/pictures/score_character_likeness` | owner_only |  | Owner scoring op; POST not in READ_SAFE; owner only |
 | DELETE | `/api/v1/pictures/scrapheap` | owner_only |  | require_unscoped_owner |
-| POST | `/api/v1/pictures/scrapheap/delete-preview` | owner_only |  | (v1.8.0) Authoritative delete-forever preview; returns protected reference-original absolute file paths (per-object data) → owner_only, not any_token |
-| POST | `/api/v1/pictures/scrapheap/delete-preview` | owner_only |  | (v1.8.0) Returns absolute on-disk paths of protected reference-folder originals; per-object data → owner_only (POST not in READ_SAFE; gate-enforced). Rows constrained to `Picture.deleted.is_(True)` — cannot leak paths of live/non-scrapheap ids |
+| POST | `/api/v1/pictures/scrapheap/delete-preview` | owner_only |  | (v1.8.0) Authoritative delete-forever preview. Returns absolute on-disk paths of protected reference-folder originals; per-object data → owner_only, not any_token (POST not in READ_SAFE; gate-enforced). Rows constrained to `Picture.deleted.is_(True)`, so it cannot leak paths of live/non-scrapheap ids |
 | POST | `/api/v1/pictures/scrapheap/restore` | owner_only |  | require_unscoped_owner |
 | GET | `/api/v1/pictures/search` | scoped_list |  |  |
 | GET | `/api/v1/pictures/stats` | scoped_list |  |  |
@@ -201,6 +231,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | GET | `/api/v1/pictures/{id}/detections` | picture_scoped | id=id |  |
 | POST | `/api/v1/pictures/{id}/face` | picture_scoped | id=id |  |
 | DELETE | `/api/v1/pictures/{id}/face/{index}` | picture_scoped | id=id |  |
+| GET | `/api/v1/pictures/{id}/faces` | picture_scoped | id=id | Projected face list (`id`, `picture_id`, `character_id`, `frame_index`, `face_index`, `bbox`); replaced serving the `faces` relationship through `/{id}/{field}` (#721) |
 | GET | `/api/v1/pictures/{id}/metadata` | picture_scoped | id=id |  |
 | POST | `/api/v1/pictures/{id}/open-location` | **loopback_owner_only** |  | §16.3.1 RED LINE: opens the file location in the host file manager (host shell); strict loopback only; `allow_remote_host_ops` can NOT loosen it |
 | GET | `/api/v1/pictures/{id}/{field}` | picture_scoped | id=id |  |
@@ -235,12 +266,94 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 |---|---|---|---|---|
 | GET | `/api/v1/pictures/{picture_id}/stack` | scoped_list |  |  |
 | POST | `/api/v1/stacks` | owner_only |  | Create stack; POST blocked for READ tokens; owner only |
+| POST | `/api/v1/stacks/keep-cover-only` | owner_only |  | Soft-deletes stack members to the Scrapheap and writes the metadata union (tags, score, pending character) onto their covers, across pictures named only by a stack or picture id. Stacks are set-membership-atomic, so this also changes what collections effectively contain. Same reasoning as POST /dedup/verdicts/stack and the mixed-stack mutations; POST is also blocked for READ tokens |
+| POST | `/api/v1/stacks/keep-cover-only/preview` | owner_only |  | Dry run over stacks named only by stack or picture id, which can reach any stack in the vault. Returns per-stack membership, the names of the locked picture sets freezing a stack and of the characters a collapse would strand, plus a byte total, none of which can be narrowed to a share token's scope without either leaking that out-of-scope members exist or reporting counts measured over a subset (wrong numbers rather than narrower ones, the same reasoning as GET /dedup/mixed-stacks). POST is also blocked for READ tokens |
 | GET | `/api/v1/stacks/{stack_id}` | scoped_list |  |  |
 | POST | `/api/v1/stacks/{stack_id}/members` | owner_only |  | Add stack members; POST blocked for READ tokens; owner only |
 | DELETE | `/api/v1/stacks/{stack_id}/members` | owner_only |  | Remove stack members; DELETE blocked for READ tokens; owner only |
 | PATCH | `/api/v1/stacks/{stack_id}/members/{picture_id}` | owner_only |  | Set member position; PATCH blocked for READ tokens; owner only |
 | PATCH | `/api/v1/stacks/{stack_id}/order` | owner_only |  | Reorder stack; PATCH blocked for READ tokens; owner only |
 | GET | `/api/v1/stacks/{stack_id}/pictures` | scoped_list |  |  |
+
+### dedup.py
+
+Added 2026-07-28 with the v1.9 near-duplicate sweep (Lane E). Both routes are new,
+carry no inline authz code (the gate is the sole enforcement, §16.1), and are
+covered in both directions by `tests/test_dedup_sweep_api.py`
+(`test_scoped_read_token_is_denied_on_both_routes` /
+`test_owner_reaches_both_routes`).
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/dedup/sweep/policy` | owner_only |  | Sweep policy defaults/bounds; operator surface, returns no per-object data |
+| POST | `/api/v1/dedup/sweep/dry-run` | owner_only |  | Vault-wide near-duplicate plan (counts + picture ids across the whole library); cannot be narrowed to a share token's scope without leaking out-of-scope counts, same reasoning as tag_health. POST also blocked for READ tokens |
+
+The nine routes below were added with the v1.9 tiered Duplicates queue, eight on
+2026-07-29 (Lane 1A) and `GET /dedup/stacks/{stack_id}/members` on 2026-08-01 with
+the stack-units work (B1). All are new, none carries inline authz code (the gate is
+the sole enforcement, §16.1), and all nine are covered **in both directions** by
+`tests/test_dedup_tiers_api.py` — negative via `Authorization: Bearer` *and* via
+the `?token=` query-parameter path
+(`test_scoped_read_token_is_denied_on_every_route`), plus
+`test_a_denied_verdict_route_changed_nothing` (the 403 is fail-closed: no write
+happened) and `test_unauthenticated_is_denied`; positive on every route via the
+owner cookie session across the policy, queue, counts, scan, verdict and
+auto-stack tests. The deck expansion adds its own both-direction pair,
+`test_the_owner_expands_a_deck_and_a_scoped_token_cannot`, whose negative half
+uses a stack containing a picture the token IS granted so the 403 is a refusal
+of the route, not an accident of which pictures the token can reach.
+
+Two rationales apply. **Read routes:** a duplicate group is defined by *content
+identity*, not by collection membership, so it routinely spans a share token's
+scope boundary; narrowing it would leak that out-of-scope copies exist, which is
+the tag_health reasoning. **Write routes:** a verdict is addressed by a content
+signature that can name any picture in the vault and mutates stack membership,
+tags, project/set membership and scores, so there is no coherent scoped form of it.
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/dedup/policy` | owner_only |  | Tier defaults/bounds; operator surface, returns no per-object data |
+| GET | `/api/v1/dedup/groups` | owner_only |  | Returns duplicate groups with picture ids, dimensions and (for reference-folder pictures) file paths from anywhere in the vault; content-identity grouping crosses any token scope |
+| GET | `/api/v1/dedup/stacks/{stack_id}/members` | owner_only |  | The queue's deck expansion: every live member of one existing stack, with the same per-picture fields a queue candidate carries. Lazy half of `GET /dedup/groups`, owner-only for the same content-identity reason. Deliberately NOT `scoped_list` like `GET /stacks/{stack_id}/pictures`: this surface must report the stack's TRUE depth (the whole point of the deck), so a scope-filtered list would be a wrong number rather than a narrower one |
+| POST | `/api/v1/dedup/counts` | owner_only |  | Vault-wide and per-scope duplicate counts. Read-only but POST because the scope list does not fit a URL; POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/scan` | owner_only |  | Queues a background scan over the vault or a chosen scope; owner-only maintenance trigger. POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/verdicts/stack` | owner_only |  | Mutates stack membership, tags, project/set membership and scores across pictures named only by a content signature. POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/verdicts/keep-separate` | owner_only |  | Writes a permanent verdict about an arbitrary set of vault pictures. POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/verdicts/reopen` | owner_only |  | Reverses a stored verdict about an arbitrary set of vault pictures. POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/verdicts/batch` | owner_only |  | Atomically applies several stack or keep-separate verdicts over arbitrary vault pictures; same owner-only boundary as the single verdict routes above. POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/auto-stack` | owner_only |  | Bulk stacking across the whole vault under one undo batch; the most far-reaching mutation on this surface. POST also blocked for READ tokens |
+
+The five routes below were added on 2026-08-01 with **Mixed stacks** (design D5/B5).
+All are new, none carries inline authz code (the gate is the sole enforcement,
+§16.1), and all five are covered **in both directions** by
+`tests/test_mixed_stacks.py`: negative via `Authorization: Bearer` *and* via the
+`?token=` query-parameter path
+(`test_scoped_read_token_is_denied_on_every_mixed_stack_route`), plus
+`test_scoped_read_token_denial_is_fail_closed_before_any_write` (the 403 on split
+and unstack left every picture's `stack_id`/`stack_position` untouched); positive
+on all five via the owner cookie session
+(`test_owner_reaches_every_mixed_stack_route`, plus the behavioural tests that
+exercise each route's real answer).
+
+The same two rationales apply, at stack rather than group granularity. **The read
+route** enumerates every live stack in the vault that is not one connected
+cluster: cohesion is a fact about the *whole* stack, so narrowing it to a token's
+scope would either leak that out-of-scope members exist or report a component
+count measured over a subset: a wrong number rather than a narrower one, the
+same argument that makes `GET /dedup/stacks/{stack_id}/members` owner-only.
+**The write routes** remove pictures from, or dissolve, a stack anywhere in the
+vault, addressed only by a stack id; stacks are set-membership-atomic, so that
+also changes what collections effectively contain. The `Keep` pair changes no
+picture, but it is owner state on an owner-only surface and a scoped token has no
+listing to suppress.
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/dedup/mixed-stacks` | owner_only |  | Enumerates every live stack in the vault that is not one cluster, with its member picture ids, component sizes and stranded members. Cohesion is a whole-stack fact, so a scope-filtered list would be a wrong component count rather than a narrower list, the same reasoning as the deck expansion |
+| POST | `/api/v1/dedup/mixed-stacks/{stack_id}/split` | owner_only |  | Removes pictures from a stack anywhere in the vault, named only by a stack id; stacks are set-membership-atomic, so this changes what collections effectively contain. POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/mixed-stacks/{stack_id}/unstack` | owner_only |  | Dissolves a stack anywhere in the vault, freeing every member. Same reasoning as the split, at whole-stack scale. POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/mixed-stacks/{stack_id}/keep` | owner_only |  | Writes a durable dismissal against a stack anywhere in the vault. Changes no picture, but it is owner state on an owner-only surface. POST also blocked for READ tokens |
+| DELETE | `/api/v1/dedup/mixed-stacks/{stack_id}/keep` | owner_only |  | Clears the dismissal above; owner-only for the same reason. DELETE also blocked for READ tokens |
 
 ### characters.py
 
@@ -255,6 +368,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | GET | `/api/v1/characters/{id}` | character_scoped | id=id |  |
 | PATCH | `/api/v1/characters/{id}` | owner_only |  | Update character; PATCH blocked for READ tokens; owner only |
 | DELETE | `/api/v1/characters/{id}` | owner_only |  | Delete character; DELETE blocked for READ tokens; owner only |
+| GET | `/api/v1/characters/{id}/faces` | character_scoped | id=id | Projected face list; replaced serving the `faces` relationship through `/{id}/{field}` (#721) |
 | GET | `/api/v1/characters/{id}/reference_pictures` | character_scoped | id=id |  |
 | GET | `/api/v1/characters/{id}/summary` | character_scoped | id=id |  |
 | GET | `/api/v1/characters/{id}/{field}` | character_scoped | id=id |  |
@@ -311,8 +425,10 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
 | POST | `/api/v1/comfyui/abort` | owner_only |  | Abort generation; POST blocked for READ tokens; owner only |
+| GET | `/api/v1/comfyui/pictures/{picture_id}/recipe` | picture_scoped | id=picture_id |  |
 | GET | `/api/v1/comfyui/pictures/{picture_id}/workflow` | picture_scoped | id=picture_id |  |
 | POST | `/api/v1/comfyui/run_i2i` | picture_scoped | body=picture_ids |  |
+| POST | `/api/v1/comfyui/run_recipe` | picture_scoped | body=picture_id | required single body id; re-extracts the graph from the scoped picture |
 | POST | `/api/v1/comfyui/run_t2i` | picture_scoped | body=source_picture_id |  |
 | GET | `/api/v1/comfyui/workflows` | any_token |  |  |
 | POST | `/api/v1/comfyui/workflows/import` | owner_only |  | Import workflow; POST blocked for READ tokens; owner only |
@@ -349,6 +465,30 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | POST | `/api/v1/reviews/{review_id}/archive` | owner_only |  | Owner-only review surface; write |
 | POST | `/api/v1/reviews/{review_id}/refresh` | owner_only |  | Owner-only review surface; write |
 | GET | `/api/v1/reviews/{review_id}/suggestions` | owner_only |  | Owner-only review read (inline rejects scoped tokens) |
+
+### operations.py (added 2026-07-28 — DAM 1.2 operation log)
+
+Vault-wide change history plus the undo/redo stack. `owner_only` throughout: the
+log enumerates every change to the **whole library** (a resource-scoped share
+token must not read it), and undo/redo write metadata back onto arbitrary
+pictures across the vault, which no resource-scoped grant can bound. Every write
+here is a POST outside `READ_SAFE_POST_PATHS`, so a READ (⇒ scoped) token is
+already middleware-blocked; the reads are the rows `owner_only` actually
+tightens. **No inline authz check exists in these handlers** — the gate is the
+sole enforcement (pinned by
+`tests/test_operation_log.py::test_operations_routes_have_no_inline_authz_check`),
+and the declarations themselves are pinned by
+`tests/test_operation_log.py::test_every_operations_route_is_declared_owner_only`.
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/operations` | owner_only |  | Vault-wide change history; owner-only read |
+| GET | `/api/v1/operations/undo-state` | owner_only |  | Vault-wide undo/redo availability; owner-only read |
+| GET | `/api/v1/operations/{operation_id}` | owner_only |  | One operation incl. the recorded before/after metadata of its targets (arbitrary vault pictures); owner-only read |
+| POST | `/api/v1/operations/undo` | owner_only |  | Reverts metadata across the vault; owner-only write |
+| POST | `/api/v1/operations/redo` | owner_only |  | Re-applies metadata across the vault; owner-only write |
+| POST | `/api/v1/operations/{operation_id}/undo` | owner_only |  | Reverts metadata across the vault; owner-only write |
+| POST | `/api/v1/operations/batches/{batch_id}/undo` | owner_only |  | Reverts a whole bulk action across the vault; owner-only write |
 
 ### tag_health.py
 
@@ -387,6 +527,13 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | DELETE | `/api/v1/taggers/{name}/artifacts/{artifact_id}` | owner_only |  | Delete tagger artifact; DELETE blocked for READ tokens; owner only |
 | POST | `/api/v1/taggers/{name}/download` | owner_only |  | Download tagger plugin; POST blocked for READ tokens; owner only |
 
+### telemetry.py (added 2026-08-05; the rows were declared on 2026-08-02 but never tabled)
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/telemetry/install-id` | owner_only |  | Owner-only read of the installation's anonymous install ID. Not any_token: the ID is a stable installation identifier and a resource-scoped share token must not be able to read it |
+| POST | `/api/v1/telemetry/install-id/recreate` | owner_only |  | Owner-only rotation of the install ID; POST is blocked for READ tokens, so only an unscoped owner reaches it. Sibling of GET /telemetry/install-id |
+
 ### other
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
@@ -424,7 +571,25 @@ would duplicate each handler's own int-or-name lookup and risk a
 gate/handler divergence (the exact defect this refactor exists to kill; there is
 **no** shared name→id resolver today, verified). Their inline
 `_require_scope_allows_*` checks remain the live enforcement and must **not** be
-removed in Step 5 until a shared resolver exists. Note: `GET
+removed in Step 5 until a shared resolver exists.
+
+**#708 condition-2 amendment (2026-08-04):** all four also name a **project** in
+their path — a second scope question, over the project space rather than the
+object, that neither the gate's `id_param` resolution nor
+`enforce_project_filter_scope` (query params only) can see. Each handler resolved
+that project *before* any scope check, so its 404 branches answered from it: a
+`picture_set`-scoped token could tell "project exists and holds my set" (200) from
+"exists and does not" (404 *Picture set not found*) from "does not exist" (404
+*Project not found*), and `GET /projects/{id_or_name}` answered 403 for an
+existing project vs 404 for a missing one. All four now call
+`enforce_project_path_scope(server, request, resolved_id_or_None)` on the resolved
+id **before** the membership query, refusing with one constant 403 body in all
+three cases; the two `project_scoped` routes have it *instead of*
+`_require_scope_allows_project` (a strict superset of it), the two name-derived
+`set`/`character` routes have it *in addition to* their own inline check. Do not
+reorder it after the resolution. See `docs/backend_architecture.md` §16.6; both
+directions pinned in the R1d section of
+`tests/test_multi_project_membership_authz.py`. Note: `GET
 /projects/{project_id}/summary|export|attachments*` are **numeric** `project_id`
 (or the aggregate `UNASSIGNED`, which the gate fails closed to 403 for a scoped
 token — matching the handler), so those are gate-enforced, not `resolved_inline`.
@@ -499,6 +664,7 @@ Declared and armed behind the report-only gate (`AUTHZ_GATE_ENFORCING` stays `Fa
 1. **Coverage / gate resolution — COMPLETE.** All 5 routes are declared in `ROUTE_POLICIES`; `test_all_routes_declare_access_policy` passes with `_CURRENT_ROUTE_ALLOWLIST = frozenset()` (0 undeclared). The gate (`AUTHZ_GATE_ENFORCING = True`) keys by route-object identity, so the nested prefixed paths resolve correctly — proven live: `test_staging_files_and_commit_denied_for_read_token` gets **403** on files/commit/delete with a READ token, and `test_staging_open_denied_for_read_token_allowed_for_owner` confirms owner **200** (no over-block). A hypothetical undeclared sub-route would hard-deny (403), not fail open.
 2. **OWNER_ONLY vs §16.3 LOCAL_OWNER_ONLY — author's choice UPHELD.** These stream client-provided upload bytes into `image_root/.staging/`; they never read/walk the host FS. Verified no path-escape: every on-disk destination is `os.path.join(staging_dir, f"{uuid4()}{ext}")` where `ext` comes from `os.path.splitext` (cannot contain a separator), and the vault write in `ImageUtils.create_picture_from_bytes` uses `file_name = os.path.basename(uuid4())` — **no client-controlled component reaches any write path.** Zip entries are staged under fresh uuids (`base_name`/`inner_ext` used only for the sidecar stem + extension), so **zip-slip is structurally impossible**. `original_file_name` is a pure DB string, never a path. Decompression-bomb guards (≤50k entries, ≤50 GB decompressed, ≤20 GB/file) mirror the one-shot import.
 3. **Input space — no BOLA.** Single-owner model: the mutating routes are gate-enforced OWNER_ONLY, so only the unscoped owner reaches them; `set_id`/`character_id` are validated fail-closed at both open and commit (404 missing / 409 locked-set — `test_open_with_nonexistent_{set,character}_errors`). No cross-tenant surface exists. Status (ANY_TOKEN) returns only counts/stage/task_id (no picture data) and requires the unguessable uuid4 `staging_id`; consistent with the existing `import/status` sibling. Cancel/commit state machine is guarded (`stage != "staging"` → 409), so a committed import cannot be cancelled or double-committed cross-session.
+   > **CORRECTION 2026-08-01: this clause was wrong, and the sign-off above is amended accordingly.** `GET /pictures/import/staging/{staging_id}/status` does **not** return "only counts/stage/task_id": its completed payload carries `scrapheaped_picture_ids`, and the `GET /pictures/import/status` sibling it was reconciled against carries `results[].picture_id` and `results[].file` (the vault-relative filename) as well. Both were therefore per-object data behind an `ANY_TOKEN` declaration, so a resource-scoped READ token could read ids and filenames of pictures outside its grant. The unguessable `staging_id` was the only thing standing in the way, which is a capability URL, not an access policy, and it does not apply to `import/status` at all (the `task_id` is equally unguessable but the *scoped listing* of what an import touched is still owner data). **Both routes are now `owner_only`**; the two matrix rows above are corrected, and both directions are pinned in `tests/test_import_scrapheap_match.py` (scoped token 403 on header and `?token=`, owner still 200). The reasoning error to learn from is that the reviewer reconciled the new route against a *sibling declaration* rather than against the *payload*, and the sibling was itself mis-declared.
 4. **`DELETE /pictures/scrapheap` — unchanged, correctly `owner_only`** (`require_unscoped_owner`; POST/DELETE blocked for READ tokens). Confirmed still declared and gate-enforced.
 5. **Tests assert both directions and are not hollow** — 16/16 pass (`test_async_import_staging.py`): READ-token 403 on open/files/commit/delete AND owner 200/works, plus happy-path, dedupe, zip, sidecar, cancel, and association coverage.
 

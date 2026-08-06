@@ -6,8 +6,16 @@ import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-// Read the PixlStash version from the root pyproject.toml
+// Read the PixlStash version from the root pyproject.toml.
+//
+// PIXLSTASH_VERSION_OVERRIDE pins it instead. Only the screenshot harness sets
+// it (`npm run screenshots 1.9.0`, see e2e/screenshots/run.js), so marketing
+// captures can be stamped with a release number while the tree is still on an
+// rc or dev version. A normal `npm run build` never sets it and always reports
+// what the tree actually is.
 function readPixlStashVersion() {
+  const pinned = process.env.PIXLSTASH_VERSION_OVERRIDE?.trim()
+  if (pinned) return pinned
   try {
     const toml = readFileSync(resolve(__dirname, '../pyproject.toml'), 'utf-8')
     const match = toml.match(/^version\s*=\s*"([^"]+)"/m)
@@ -46,5 +54,16 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.test.{js,ts}'],
+    server: {
+      deps: {
+        // Vuetify ships its component CSS as sibling `.css` imports, which Node
+        // cannot load. Any test that mounts a component importing from
+        // "vuetify/components" therefore died at import with
+        // `Unknown file extension ".css"`. Inlining routes Vuetify through
+        // Vite's transform, where the CSS import is handled, so a component that
+        // uses AppDialog or AppButton is testable at all.
+        inline: ['vuetify'],
+      },
+    },
   },
 })

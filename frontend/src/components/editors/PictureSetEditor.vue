@@ -26,8 +26,9 @@
       />
       <AppSelect
         v-model="projectSelection"
-        label="Project"
+        label="Projects"
         :options="projectOptions"
+        :multiple="true"
         :disabled="isLockedSet"
         :title="isLockedSet ? LOCK_REASON : undefined"
       />
@@ -161,6 +162,7 @@ import {
 } from "../../api/pictureSets";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { getEntityProjectIds } from "../../utils/projectMembership";
 import {
   SET_COLORS,
   SET_ICON_CATEGORIES,
@@ -185,18 +187,14 @@ const props = defineProps({
   projects: { type: Array, default: () => [] },
 });
 
-// Native <select> carries string values, so map the "no project" sentinel to an
-// empty string and back to a null project_id.
-const projectOptions = computed(() => [
-  { value: "", label: "— No project —" },
-  ...props.projects.map((p) => ({ value: String(p.id), label: p.name })),
-]);
+const projectOptions = computed(() =>
+  props.projects.map((p) => ({ value: String(p.id), label: p.name })),
+);
 
 const projectSelection = computed({
-  get: () =>
-    localSet.value.project_id == null ? "" : String(localSet.value.project_id),
+  get: () => localSet.value.project_ids.map(String),
   set: (v) => {
-    localSet.value.project_id = v === "" ? null : Number(v);
+    localSet.value.project_ids = v.map(Number);
   },
 });
 
@@ -212,7 +210,7 @@ const localSet = ref({
   id: null,
   name: "",
   description: "",
-  project_id: null,
+  project_ids: [],
   set_icon: ICON_CARDS,
   set_color: SET_COLORS[0].value,
   locked: false,
@@ -259,7 +257,7 @@ watch(
         id: newSet.id,
         name: newSet.name || "",
         description: newSet.description || "",
-        project_id: newSet.project_id ?? null,
+        project_ids: getEntityProjectIds(newSet),
         set_icon: newSet.set_icon ?? ICON_CARDS,
         set_color: newSet.set_color ?? SET_COLORS[0].value,
         locked: !!newSet.locked,
@@ -269,7 +267,7 @@ watch(
         id: null,
         name: "",
         description: "",
-        project_id: null,
+        project_ids: [],
         set_icon: ICON_CARDS,
         set_color: SET_COLORS[0].value,
         locked: false,

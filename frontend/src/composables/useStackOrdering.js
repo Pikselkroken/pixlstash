@@ -11,12 +11,14 @@ import {
 import { useNoticeStore } from "../stores/useNoticeStore";
 import {
   applyStackBackgroundAlpha,
+  applyStackBadgeTint,
   arraysEqualByString,
   getStackColor,
   getStackColorIndexFromId,
   shiftRangesForDelta,
 } from "../utils/utils.js";
 import { getPictureId } from "../utils/media.js";
+import { isLockedRefusal, lockedSetsSentence, lockedSets } from "../utils/dedup.js";
 import {
   getStack,
   listStackPictures,
@@ -24,6 +26,8 @@ import {
   setStackOrder,
   removeStackMembers,
 } from "../api/stacks";
+import { useGridStore } from "../stores/useGridStore";
+import { useSortStore } from "../stores/useSortStore";
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 
@@ -67,6 +71,8 @@ export function useStackOrdering(
     setPendingRanges,
   },
 ) {
+  const sortStore = useSortStore();
+  const gridStore = useGridStore();
   // Stack-ordering failures report through the notice surface rather than a
   // blocking native alert() (docs/design/notice-surface.md §1). Called during
   // the host component's setup, so Pinia is active.
@@ -81,7 +87,7 @@ export function useStackOrdering(
   // ── Stack visual order map ────────────────────────────────────────────────
   const stackVisualOrderMap = computed(() => {
     const images = allGridImages.value;
-    const cols = Math.max(1, props.columns || 1);
+    const cols = Math.max(1, gridStore.columns || 1);
     const result = new Map();
     let stackAppearanceIndex = 0;
     for (let i = 0; i < images.length; i++) {
@@ -248,10 +254,8 @@ export function useStackOrdering(
       ? lastFetchedGridImages.value
       : [];
     if (!source.length) return [];
-    const members = source.filter(
-      (img) => getPictureStackId(img) === stackId,
-    );
-    const activeSort = String(props.selectedSort || "").toUpperCase();
+    const members = source.filter((img) => getPictureStackId(img) === stackId);
+    const activeSort = String(sortStore.selectedSort || "").toUpperCase();
     const useBackendOrder =
       !!activeSort && activeSort !== LIKENESS_GROUPS_SORT_KEY;
     return useBackendOrder ? members : sortStackMembers(members);
@@ -260,10 +264,12 @@ export function useStackOrdering(
   function cacheExpandedStackMembers(stackId, members) {
     if (!stackId || !Array.isArray(members) || members.length === 0)
       return false;
-    const activeSort = String(props.selectedSort || "").toUpperCase();
+    const activeSort = String(sortStore.selectedSort || "").toUpperCase();
     const useBackendOrder =
       !!activeSort && activeSort !== LIKENESS_GROUPS_SORT_KEY;
-    const sorted = useBackendOrder ? members.slice() : sortStackMembers(members);
+    const sorted = useBackendOrder
+      ? members.slice()
+      : sortStackMembers(members);
     const ordered = sorted
       .filter((img) => img && img.id != null)
       .map((img) =>
@@ -295,7 +301,7 @@ export function useStackOrdering(
     const entry = expandedStackMembers.value.get(stackId);
     const ids = Array.isArray(entry?.ids) ? entry.ids : [];
     const images = Array.isArray(entry?.images) ? entry.images : [];
-    const activeSort = String(props.selectedSort || "").toUpperCase();
+    const activeSort = String(sortStore.selectedSort || "").toUpperCase();
     const useBackendOrder =
       !!activeSort && activeSort !== LIKENESS_GROUPS_SORT_KEY;
     const sourceImages = ids.length
@@ -544,7 +550,7 @@ export function useStackOrdering(
     const newImages = mapGridImages(collapsed);
     allGridImages.value = newImages;
     if (visibleStart.value >= newImages.length) {
-      const cols = Math.max(1, props.columns || 1);
+      const cols = Math.max(1, gridStore.columns || 1);
       const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
       visibleStart.value = 0;
       visibleEnd.value = Math.min(newImages.length, windowCount);
@@ -590,12 +596,12 @@ export function useStackOrdering(
       nextLoading.add(stackId);
       expandedStackLoading.value = nextLoading;
       try {
-        const activeSort = props.selectedSort ?? "";
+        const activeSort = sortStore.selectedSort ?? "";
         const isStackSort =
           !activeSort || activeSort === LIKENESS_GROUPS_SORT_KEY;
         const picsData = await listStackPictures(stackId, {
           sort: activeSort || undefined,
-          descending: props.selectedDescending,
+          descending: sortStore.selectedDescending,
           baseUrl: props.backendUrl,
         });
         const pics = Array.isArray(picsData) ? picsData : [];
@@ -670,7 +676,10 @@ export function useStackOrdering(
 
     for (const { stackId, fallbackCount, loaded } of fetchResults) {
       if (loaded !== false) {
-        const insertedCount = insertExpandedStackMembers(stackId, fallbackCount);
+        const insertedCount = insertExpandedStackMembers(
+          stackId,
+          fallbackCount,
+        );
         if (insertedCount <= 0) {
           nextExpanded.delete(stackId);
         }
@@ -716,7 +725,10 @@ export function useStackOrdering(
       const loaded = await ensureStackMembersLoaded(stackId, fallbackCount);
       if (loaded !== false && expandedStackIds.value.has(stackId)) {
         removeExpandedStackMembers(stackId);
-        const insertedCount = insertExpandedStackMembers(stackId, fallbackCount);
+        const insertedCount = insertExpandedStackMembers(
+          stackId,
+          fallbackCount,
+        );
         if (insertedCount <= 0) {
           const nextExpanded = new Set(expandedStackIds.value);
           nextExpanded.delete(stackId);
@@ -815,10 +827,11 @@ export function useStackOrdering(
     };
   }
 
-  function getStackBadgeIconStyle(img) {
-    const color = getStackCardColor(img);
-    if (!color) return {};
-    return { color };
+  // The badge glyph's tint, not the raw stack colour: see `applyStackBadgeTint`
+  // for why the field colour cannot be used at glyph scale. Null when the tile
+  // has no stack colour, which the badge renders as its untinted default.
+  function getStackBadgeTint(img) {
+    return applyStackBadgeTint(getStackCardColor(img));
   }
 
   function getStackBandStyle(img) {
@@ -827,7 +840,12 @@ export function useStackOrdering(
     const color = getStackCardColor(img);
     if (!color) return null;
     return {
-      borderBottom: `8px solid ${color}`,
+      // Semi-transparent, on the same 0.6 the expanded card's background uses:
+      // one alpha per stack colour, no second value to keep in sync. The ribbon
+      // is the one stack mark that sits ON the picture (z-index 2, above
+      // `.thumbnail-img`) rather than on the canvas, so at full opacity it
+      // blanks an 8px strip of the very photo it exists to group.
+      borderBottom: `8px solid ${applyStackBackgroundAlpha(color)}`,
     };
   }
 
@@ -1086,7 +1104,8 @@ export function useStackOrdering(
           nextMembers.delete(stackId);
           expandedStackMembers.value = nextMembers;
           const nextExpanded = new Set(expandedStackIds.value);
-          if (nextExpanded.delete(stackId)) expandedStackIds.value = nextExpanded;
+          if (nextExpanded.delete(stackId))
+            expandedStackIds.value = nextExpanded;
         }),
       );
       clearSelection();
@@ -1094,7 +1113,37 @@ export function useStackOrdering(
       debouncedFetchAllGridImages();
     } catch (e) {
       console.error("Failed to dissolve selected stacks:", e);
+      reportStackDetachRefusal(e, "unstack");
     }
+  }
+
+  /**
+   * Say why a detach was refused, and put the grid back where the server is.
+   *
+   * `DELETE /stacks/{id}/members` gained a 423 when a locked set freezes any
+   * member of the stack. It could not answer that before, so every call site
+   * here only logged. Two things follow from a refusal and neither is optional:
+   * a locked set is the one refusal a user cannot diagnose without being told
+   * which set, and a mixed selection may already have written its unlocked
+   * stacks optimistically before the rejection skipped the corrective refetch,
+   * which would leave the grid claiming pictures left stacks they are still in.
+   *
+   * @param {*} err - the rejection.
+   * @param {string} action - verb for the message, e.g. "unstack".
+   */
+  function reportStackDetachRefusal(err, action) {
+    if (isLockedRefusal(err)) {
+      const sets = lockedSetsSentence(lockedSets(err));
+      noticeStore.error(
+        sets
+          ? `Could not ${action}: ${sets}`
+          : `Could not ${action}: a locked set freezes this stack.`,
+      );
+    }
+    // The optimistic writes above landed for whichever stacks succeeded, and
+    // the refetch that would have corrected them was skipped by the throw.
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages();
   }
 
   async function removeSelectedFromStack() {
@@ -1148,9 +1197,7 @@ export function useStackOrdering(
           ? entry.ids.filter((id) => !removed.has(getPictureId(id)))
           : [];
         const nextImages = Array.isArray(entry.images)
-          ? entry.images.filter(
-              (img) => !removed.has(getPictureId(img?.id)),
-            )
+          ? entry.images.filter((img) => !removed.has(getPictureId(img?.id)))
           : [];
         if (nextIds.length || nextImages.length) {
           nextMembers.set(stackId, { ids: nextIds, images: nextImages });
@@ -1168,11 +1215,12 @@ export function useStackOrdering(
       debouncedFetchAllGridImages();
     } catch (e) {
       console.error("Failed to remove selected images from stack:", e);
+      reportStackDetachRefusal(e, "remove these from the stack");
     }
   }
 
   async function createStacksFromSelectedGroups() {
-    if (props.selectedSort !== LIKENESS_GROUPS_SORT_KEY) return;
+    if (sortStore.selectedSort !== LIKENESS_GROUPS_SORT_KEY) return;
     const ids = Array.isArray(selectedImageIds.value)
       ? selectedImageIds.value
       : [];
@@ -1223,9 +1271,7 @@ export function useStackOrdering(
         continue;
       }
       if (membersByStack.size === 1) {
-        const [, stackedMembers] = Array.from(
-          membersByStack.entries(),
-        )[0];
+        const [, stackedMembers] = Array.from(membersByStack.entries())[0];
         const stackedAnchorId = stackedMembers?.[0]?.id;
         const unstackedIds = memberIds.filter(
           (id) => !getPictureStackId(imageById.get(String(id))),
@@ -1314,9 +1360,7 @@ export function useStackOrdering(
     return [...stackIds];
   });
 
-  const showRemoveFromStack = computed(
-    () => selectedStackId.value !== null,
-  );
+  const showRemoveFromStack = computed(() => selectedStackId.value !== null);
 
   return {
     // State
@@ -1338,7 +1382,7 @@ export function useStackOrdering(
     // Stack visual
     getStackCardStyle,
     getStackCardColor,
-    getStackBadgeIconStyle,
+    getStackBadgeTint,
     getStackBandStyle,
     isStackExpandedForImage,
     // Stack expand / collapse
@@ -1364,4 +1408,3 @@ export function useStackOrdering(
     createStacksFromSelectedGroups,
   };
 }
-

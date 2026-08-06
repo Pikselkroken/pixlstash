@@ -30,10 +30,23 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
             not from this value. Updated automatically after each scan; do not
             set this manually.
 
-    A file is only imported once its size and timestamps have stopped changing,
-    so a copy that is still in flight is never read half-written. See
-    ``_claim_if_settled``.
+    A file is only imported once its size and timestamps have stopped changing
+    for ``SETTLE_SECONDS``, so a copy that is still in flight is never read
+    half-written. See ``_claim_if_settled``.
     """
+
+    # How long a file's stat signature must stay unchanged before the file is
+    # handed to an import task.
+    #
+    # "Unchanged on two consecutive scans" is not a sufficient test on its own:
+    # the planner polls as often as ``WorkPlanner.MIN_INTERVAL_S`` (50ms), so a
+    # copy that merely pauses between writes - a network hiccup, an antivirus
+    # scan, a slow source drive, a writer flushing in chunks - looks settled
+    # after 50ms of quiet and is imported half-written. A wall-clock window
+    # makes the check independent of how fast the planner happens to be
+    # cycling. The cost is that a newly arrived file waits this long before it
+    # is imported.
+    SETTLE_SECONDS = 2.0
 
     _supported_image_exts = {
         ".jpg",
@@ -55,18 +68,19 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
         # (e.g. shutil.copy2) preserve the source mtime on the destination, and
         # on Windows ctime is the creation time and never moves at all.
         #
-        # ``_pending_stats`` holds the signature observed on the previous scan
-        # for paths that have not been handed to an import task yet.
+        # ``_pending_stats`` maps a path that has not been handed to an import
+        # task yet to ``(signature, first_seen)``, where ``first_seen`` is the
+        # monotonic timestamp at which the current signature was first observed.
         # ``_dispatched_stats`` holds the signature a path had when it *was*
-        # handed over.  A path only becomes a candidate once its signature is
-        # identical on two consecutive scans, which is what keeps a file that is
-        # still being written out of the import (see ``_claim_if_settled``).
+        # handed over.  A path only becomes a candidate once its signature has
+        # been unchanged for ``SETTLE_SECONDS``, which is what keeps a file that
+        # is still being written out of the import (see ``_claim_if_settled``).
         #
         # Both dicts are read/written by the finder on the WorkPlanner thread and
         # also mutated by WatchFolderImportTask (via ``discard_seen_paths``) on
         # the TaskRunner thread when a candidate fails to import, so all access
         # is guarded by ``_seen_lock`` to avoid a concurrent-mutation race.
-        self._pending_stats: dict[str, tuple[int, float, float]] = {}
+        self._pending_stats: dict[str, tuple[tuple[int, float, float], float]] = {}
         self._dispatched_stats: dict[str, tuple[int, float, float]] = {}
         self._seen_lock = threading.Lock()
 
@@ -96,6 +110,9 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
 
     def _find_task_from_db(self, watch_folders: list[ImportFolder]):
         now_ts = time.time()
+        # Settle windows are measured on the monotonic clock so a wall-clock
+        # adjustment cannot make a file look settled early (or never).
+        scan_started = time.monotonic()
         candidate_files = []
         total_candidates = 0
         last_checked_updates = {}
@@ -121,7 +138,7 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
                     normalized = os.path.normcase(os.path.abspath(file_path))
                     observed_paths.add(normalized)
 
-                    if self._claim_if_settled(normalized, signature):
+                    if self._claim_if_settled(normalized, signature, scan_started):
                         total_candidates += 1
                         candidate_files.append(
                             {
@@ -192,23 +209,28 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
         return (stat_result.st_size, stat_result.st_mtime, stat_result.st_ctime)
 
     def _claim_if_settled(
-        self, normalized: str, signature: tuple[int, float, float]
+        self,
+        normalized: str,
+        signature: tuple[int, float, float],
+        now: float,
     ) -> bool:
         """Claim *normalized* for import if it has stopped changing on disk.
 
         Returns True when the path is ready to be handed to an import task,
         recording it as dispatched so a later scan does not offer it again.
 
-        A path qualifies only once the same stat signature has been observed on
-        two consecutive scans. A file that is still being copied into the watch
-        folder changes size (and mtime) between scans, so it is held back until
-        the copy finishes. Without this, the importer hashes the bytes written so
-        far, stores a ``pixel_sha`` that does not describe the finished file, and
-        then imports the file a second time once it settles, because the settled
-        content hashes differently and the duplicate check misses it.
+        A path qualifies only once the same stat signature has been observed for
+        ``SETTLE_SECONDS`` of wall-clock time. A file that is still being copied
+        into the watch folder changes size (and mtime), so it is held back until
+        the copy has been quiet for that long. Without this, the importer hashes
+        the bytes written so far, stores a ``pixel_sha`` that does not describe
+        the finished file, and then imports the file a second time once it
+        settles, because the settled content hashes differently and the
+        duplicate check misses it.
 
-        The cost is that a newly arrived file waits one extra planner cycle
-        before it is imported.
+        *now* is the monotonic timestamp of the current scan; passing one value
+        for the whole scan keeps every file in it measured against the same
+        instant.
 
         A file that changes after it was imported goes back through the same
         wait, so an in-place overwrite is never read half-written either.
@@ -221,13 +243,20 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
                 # Changed on disk since it was imported: re-settle before it is
                 # offered again.
                 del self._dispatched_stats[normalized]
-                self._pending_stats[normalized] = signature
+                self._pending_stats[normalized] = (signature, now)
                 return False
 
             previous = self._pending_stats.get(normalized)
-            if previous != signature:
-                # First sighting, or still being written.
-                self._pending_stats[normalized] = signature
+            if previous is None or previous[0] != signature:
+                # First sighting, or still being written: (re)start the clock.
+                self._pending_stats[normalized] = (signature, now)
+                return False
+
+            if now - previous[1] < self.SETTLE_SECONDS:
+                # Unchanged so far, but not for long enough to call the write
+                # finished. Keep the original first-seen time so the window
+                # measures how long the file has been quiet, not how long since
+                # the previous scan.
                 return False
 
             del self._pending_stats[normalized]

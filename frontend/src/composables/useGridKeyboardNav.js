@@ -6,6 +6,8 @@ import {
   verticalNeighborIndex,
   JUSTIFIED_ROW_GAP,
 } from "./useJustifiedLayout.js";
+import { useGridStore } from "../stores/useGridStore";
+import { useSearchStore } from "../stores/useSearchStore";
 
 /**
  * Manages keyboard navigation and keyboard-driven actions for the image grid.
@@ -32,6 +34,7 @@ export function useGridKeyboardNav(
     overlayOpen,
     reviewOverlayOpen,
     showSelectionBar,
+    searchResultsActive,
     selectedImageIds,
     lastSelectedImageId,
     cursorIdx,
@@ -41,6 +44,7 @@ export function useGridKeyboardNav(
     toolbarSelectionMenuOpen,
     isJustifiedMode,
     justifiedLayout,
+    isGhosted = () => false,
   },
   props,
   emit,
@@ -55,6 +59,51 @@ export function useGridKeyboardNav(
     setScore,
   },
 ) {
+  const searchStore = useSearchStore();
+  const gridStore = useGridStore();
+  // ── Scrapheap ghosts ────────────────────────────────────────────────────
+  // A ghosted tile is on screen but inert: it is already in the Scrapheap and
+  // is only being held there while its undo is one click away.
+  //
+  // The cursor SKIPS them rather than landing on them. A cursor parked on an
+  // inert cell makes every following key a dead key — Space, Enter, a digit,
+  // all silently doing nothing with no way to tell that from a broken feature,
+  // which is the one outcome this codebase treats as unacceptable. One linear
+  // scan in the direction of travel serves all four arrow keys and both paging
+  // keys, in both the uniform and the justified layout, because it is a pure
+  // index predicate over `allGridImages` and touches no geometry.
+
+  /**
+   * First non-ghosted index at or after `index`, travelling in `step`.
+   * @returns {number|null} null when there is none (leave the cursor put).
+   */
+  function skipGhosts(index, step) {
+    const total = allGridImages.value.length;
+    if (index == null || index < 0 || index >= total) return null;
+    const direction = step < 0 ? -1 : 1;
+    for (let i = index; i >= 0 && i < total; i += direction) {
+      if (!isGhosted(i)) return i;
+    }
+    return null;
+  }
+
+  /** Drop ghosted ids from a selection about to be committed. */
+  function withoutGhosts(indexedIds) {
+    return indexedIds
+      .filter(({ index }) => !isGhosted(index))
+      .map(({ id }) => id);
+  }
+
+  /** `[start, end]` of `allGridImages` as selectable ids, ghosts skipped. */
+  function selectableRange(start, end) {
+    return withoutGhosts(
+      allGridImages.value
+        .slice(start, end + 1)
+        .map((img, offset) => ({ id: img?.id, index: start + offset }))
+        .filter((entry) => Boolean(entry.id)),
+    );
+  }
+
   // The packed justified layout when active, else null (→ uniform grid math).
   function activeJustifiedLayout() {
     if (!isJustifiedMode?.value) return null;
@@ -66,7 +115,7 @@ export function useGridKeyboardNav(
     if (scrollWrapper.value) {
       let newScrollTop = scrollWrapper.value.scrollTop;
       const total = allGridImages.value.length;
-      const cols = Math.max(1, props.columns || 1);
+      const cols = Math.max(1, gridStore.columns || 1);
       const totalRows = Math.ceil(total / cols);
       // Justified rows don't follow cols × rowHeight; use the packed model's
       // exact pixel height so End/PageDown reach the true bottom.
@@ -106,7 +155,11 @@ export function useGridKeyboardNav(
       if (!(element instanceof HTMLElement)) return false;
       if (element.isContentEditable) return true;
       const tagName = element.tagName;
-      if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") {
+      if (
+        tagName === "INPUT" ||
+        tagName === "TEXTAREA" ||
+        tagName === "SELECT"
+      ) {
         return true;
       }
       if (element.getAttribute("role") === "textbox") return true;
@@ -140,8 +193,19 @@ export function useGridKeyboardNav(
       } else if (isMultiCharacterView.value || isSetOverlapView.value) {
         // No images selected — ESC closes the union/intersect/overlap bar
         emit("clear-multi-selection");
-      } else if (props.searchQuery && props.searchQuery.trim()) {
-        // No selection active — ESC also clears search
+      } else if (
+        searchResultsActive?.value ||
+        (searchStore.searchQuery && searchStore.searchQuery.trim())
+      ) {
+        // No selection active — ESC also clears search. The query now comes
+        // from `searchStore` rather than a prop (App.vue slim-down, #661).
+        // `searchResultsActive` covers the modes that have no query string
+        // behind them (reverse image, similar faces, a person face search):
+        // `clearSearchQuery` has always reset all of them, but the gate here
+        // only ever asked about the text query, so Esc silently did nothing in
+        // those modes. The pill puts an Esc keycap on the button that clears
+        // them, so the key now has to actually reach it
+        // (merged-grid-action-pill.md §6.1).
         clearSearchQuery();
       } else {
         selectedImageIds.value = [];
@@ -155,8 +219,11 @@ export function useGridKeyboardNav(
       event.preventDefault();
       const total = allGridImages.value.length;
       if (total === 0) return;
-      const cols = Math.max(1, props.columns || 1);
+      const cols = Math.max(1, gridStore.columns || 1);
       let newIdx = cursorIdx.value;
+      // Which way the scan runs when the landing cell turns out to be a ghost.
+      const travel =
+        event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
       if (newIdx === null) {
         if (selectedImageIds.value.length > 0) {
           const firstSel = allGridImages.value.findIndex(
@@ -191,6 +258,11 @@ export function useGridKeyboardNav(
         else if (event.key === "ArrowDown")
           newIdx = Math.min(total - 1, newIdx + cols);
       }
+      // Land on the first cell that is actually operable. When the whole run
+      // ahead is ghosted, stay put rather than parking on an inert cell.
+      const landed = skipGhosts(newIdx, travel);
+      if (landed === null) return;
+      newIdx = landed;
       cursorIdx.value = newIdx;
       const cursorImg = allGridImages.value[newIdx];
       if (cursorImg && cursorImg.id) {
@@ -199,15 +271,13 @@ export function useGridKeyboardNav(
             lastSelectedImageId != null
               ? allGridImages.value.findIndex(
                   (item) =>
-                    getPictureId(item?.id) === getPictureId(lastSelectedImageId),
+                    getPictureId(item?.id) ===
+                    getPictureId(lastSelectedImageId),
                 )
               : newIdx;
           const start = Math.min(anchorIndex, newIdx);
           const end = Math.max(anchorIndex, newIdx);
-          selectedImageIds.value = allGridImages.value
-            .slice(start, end + 1)
-            .map((i) => i.id)
-            .filter(Boolean);
+          selectedImageIds.value = selectableRange(start, end);
         } else if (!event.ctrlKey && !event.metaKey) {
           // Plain arrow: move cursor and select only this image
           selectedImageIds.value = [cursorImg.id];
@@ -225,7 +295,7 @@ export function useGridKeyboardNav(
       event.preventDefault();
       const total = allGridImages.value.length;
       if (total === 0) return;
-      const cols = Math.max(1, props.columns || 1);
+      const cols = Math.max(1, gridStore.columns || 1);
       const packedLayout = activeJustifiedLayout();
       let newIdx;
       if (packedLayout) {
@@ -270,6 +340,9 @@ export function useGridKeyboardNav(
             ? Math.min(total - 1, cursorIdx.value + delta)
             : Math.max(0, cursorIdx.value - delta);
       }
+      const landed = skipGhosts(newIdx, event.key === "PageDown" ? 1 : -1);
+      if (landed === null) return;
+      newIdx = landed;
       cursorIdx.value = newIdx;
       const anchorIndex =
         lastSelectedImageId != null
@@ -280,15 +353,15 @@ export function useGridKeyboardNav(
           : newIdx;
       const start = Math.min(anchorIndex, newIdx);
       const end = Math.max(anchorIndex, newIdx);
-      selectedImageIds.value = allGridImages.value
-        .slice(start, end + 1)
-        .map((i) => i.id)
-        .filter(Boolean);
+      selectedImageIds.value = selectableRange(start, end);
       scrollCursorIntoView(newIdx);
     } else if (event.key === " ") {
       // Space: toggle selection at cursor
       if (cursorIdx.value !== null) {
         event.preventDefault();
+        // Defensive: the cursor never moves onto a ghost, but it can be sitting
+        // on a tile at the moment that tile becomes one.
+        if (isGhosted(cursorIdx.value)) return;
         const cursorImg = allGridImages.value[cursorIdx.value];
         if (cursorImg && cursorImg.id) {
           const newSelection = [...selectedImageIds.value];
@@ -307,6 +380,7 @@ export function useGridKeyboardNav(
       // Enter: open overlay for cursor image
       if (cursorIdx.value !== null) {
         event.preventDefault();
+        if (isGhosted(cursorIdx.value)) return;
         const cursorImg = allGridImages.value[cursorIdx.value];
         if (cursorImg && cursorImg.id) {
           openOverlay(cursorImg);
@@ -315,7 +389,8 @@ export function useGridKeyboardNav(
     } else if (event.key === "g" || event.key === "G") {
       // Focus the first visible image in the grid
       event.preventDefault();
-      const idx = visibleStart.value;
+      const idx = skipGhosts(visibleStart.value, 1);
+      if (idx === null) return;
       const img = allGridImages.value[idx];
       if (img && img.id) {
         cursorIdx.value = idx;
@@ -328,10 +403,14 @@ export function useGridKeyboardNav(
       }
     } else if ((event.ctrlKey || event.metaKey) && event.key === "a") {
       event.preventDefault();
-      // Select all images with valid IDs from allGridImages (not just visible)
-      const allIds = allGridImages.value
-        .filter((img) => img && img.id)
-        .map((img) => img.id);
+      // Select all images with valid IDs from allGridImages (not just visible).
+      // Ghosts are excluded: "select all" has to mean "all a bulk action can
+      // act on", and these are already in the Scrapheap.
+      const allIds = withoutGhosts(
+        allGridImages.value
+          .map((img, index) => ({ id: img?.id, index }))
+          .filter((entry) => Boolean(entry.id)),
+      );
       selectedImageIds.value = Array.from(allIds);
       lastSelectedImageId = null;
     } else if (

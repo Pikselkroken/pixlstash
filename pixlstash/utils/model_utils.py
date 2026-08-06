@@ -1,19 +1,38 @@
 """Utility helpers for loading and configuring ML models."""
 
+from __future__ import annotations
+
 import os
 import platform
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
-try:
-    from transformers import logging as transformers_logging
-except Exception:  # pragma: no cover - optional dependency behaviour
-    transformers_logging = None
-
-from sentence_transformers import SentenceTransformer
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _transformers_logging():
+    """Return the Transformers ``logging`` module, or ``None`` if unavailable.
+
+    Imported on demand rather than at module scope: ``transformers`` (and the
+    ``sentence_transformers`` stack below it) costs seconds to import and is
+    only needed once a model is actually loaded. Importing it here would make
+    every consumer of this module — including the API server and the whole test
+    suite — pay for it at startup.
+    """
+    try:
+        from transformers import logging as transformers_logging
+    except Exception as exc:  # pragma: no cover - optional dependency behaviour
+        logger.debug(
+            "Transformers logging unavailable (%s); model load reports stay unmuted.",
+            exc,
+        )
+        return None
+    return transformers_logging
 
 
 def env_int(name: str, default: int) -> int:
@@ -68,6 +87,7 @@ def quiet_transformers_load_report():
     "UNEXPECTED embeddings.position_ids" load report. Keep hard errors while
     muting that warning noise during model initialization.
     """
+    transformers_logging = _transformers_logging()
     if transformers_logging is None:
         yield
         return
@@ -82,6 +102,10 @@ def quiet_transformers_load_report():
 
 def load_sentence_transformer(*args, **kwargs) -> SentenceTransformer:
     """Load a SentenceTransformer model, suppressing benign load warnings."""
+    # Local import: see _transformers_logging() for why the ML stack is not
+    # imported at module scope.
+    from sentence_transformers import SentenceTransformer
+
     with quiet_transformers_load_report():
         return SentenceTransformer(*args, **kwargs)
 

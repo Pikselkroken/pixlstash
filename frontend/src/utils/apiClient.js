@@ -20,8 +20,101 @@ function setRequestClientId(clientId) {
     typeof clientId === 'string' && clientId ? clientId.slice(0, 200) : null;
 }
 
+// ── Auth-context transitions ────────────────────────────────────────────────
+// Every credential change — login, logout, share-token entry, vault switch —
+// is announced here, once, so no store has to invent its own detection. Any
+// store holding scope-filtered server data (whose CONTENT is an authorization
+// decision) registers here and drops that data synchronously, before the next
+// render can show one credential's data to another.
+const _sessionResetHandlers = new Set();
+
+/**
+ * Register a handler to run on every auth-context transition.
+ * @param {Function} handler - called synchronously, with no arguments.
+ * @returns {Function} unregisters the handler.
+ */
+function onSessionReset(handler) {
+  if (typeof handler !== 'function') return () => {};
+  _sessionResetHandlers.add(handler);
+  return () => _sessionResetHandlers.delete(handler);
+}
+
+/**
+ * Announce that the credential changed. Handlers run synchronously; one that
+ * throws is logged and never stops the others.
+ *
+ * The transport's own identity — the share token it attaches to every request,
+ * and the session context that `isReadOnly` is derived from — is dropped here
+ * too, AFTER the handlers. Both outlived a credential change before (issue
+ * #655 item 4): `Root.vue` calls `activateShareToken()` before validating the
+ * token, so an invalid `?token=` left `_shareToken` set while the login screen
+ * rendered, and the owner's subsequent login then attached a stale `token=`
+ * query param to every request. The stale `resource_type` that came with it
+ * suppressed the owner's own project list.
+ *
+ * Order is load-bearing, in both directions:
+ *
+ *   * AFTER the handlers, because a handler may read `sessionContext` while it
+ *     decides what to drop (`useEntityListsStore.canFetch`). Clearing first
+ *     would flip `isReadOnly` to false underneath them mid-reset.
+ *   * BEFORE `activateShareToken` assigns the new token, which is why that
+ *     function announces the transition first and assigns second.
+ *
+ * @param {string} reason - what changed, for the log line.
+ */
+function notifySessionReset(reason) {
+  for (const handler of _sessionResetHandlers) {
+    try {
+      handler();
+    } catch (error) {
+      console.error(
+          `Session-reset handler failed after ${reason}:`, error);
+    }
+  }
+  _shareToken = null;
+  sessionContext.value = null;
+}
+
 function activateShareToken(token) {
+  // Entering a share token is a credential change: whatever the previous
+  // context cached was scoped to a different principal.
+  notifySessionReset('share-token entry');
   _shareToken = token;
+}
+
+/**
+ * Mint a correlation id for one user gesture that fans out over several
+ * requests (deleting a tag chip is a `remove_all` *and* a `reject`).
+ *
+ * Sent as `X-Operation-Batch-Id` on every request of the gesture, it becomes
+ * the recorded operations' `batch_id`, so the whole gesture is one history step
+ * and one Ctrl+Z. See docs/backend_architecture.md §21.2.
+ *
+ * The `cli-` prefix is load-bearing: the backend only accepts client ids in
+ * that namespace, and mints its own as `srv-`, so the two can never collide.
+ *
+ * @returns {string} a fresh gesture batch id.
+ */
+function newOperationBatchId() {
+  const random =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().replace(/-/g, '')
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+  return `cli-${random}`;
+}
+
+/**
+ * Axios config carrying a gesture batch id, or `undefined` when there is none.
+ *
+ * Every api module that participates in a compound gesture merges this into its
+ * request config, which keeps the header spelling in exactly one place.
+ *
+ * @param {string} [batchId] - an id from {@link newOperationBatchId}.
+ * @returns {Object|undefined} `{ headers: { 'X-Operation-Batch-Id': … } }`.
+ */
+function operationBatchHeaders(batchId) {
+  if (!batchId) return undefined;
+  return {headers: {'X-Operation-Batch-Id': batchId}};
 }
 
 /**
@@ -30,11 +123,15 @@ function activateShareToken(token) {
  * that bypass the axios interceptor.
  */
 function appendShareToken(url) {
-  if (!_shareToken || !url) return url;
+  if (!_shareToken || !url || !backendCredentialTarget(url, {
+    allowWebSocket: true,
+  })) return url;
   // Avoid double-appending if the token is already in the URL.
   if (url.includes(`token=${encodeURIComponent(_shareToken)}`)) return url;
-  const sep = url.includes('?') ? '&' : '?';
-  return `${url}${sep}token=${encodeURIComponent(_shareToken)}`;
+  const [withoutHash, ...hashParts] = url.split('#');
+  const sep = withoutHash.includes('?') ? '&' : '?';
+  const hash = hashParts.length ? `#${hashParts.join('#')}` : '';
+  return `${withoutHash}${sep}token=${encodeURIComponent(_shareToken)}${hash}`;
 }
 
 const DEFAULT_BACKEND_PORT = 9537;
@@ -63,6 +160,53 @@ function deriveBackendUrl() {
 const resolvedBaseUrl = deriveBackendUrl();
 const apiBaseUrl = `${resolvedBaseUrl}${API_PREFIX}`;
 
+/**
+ * Parse a request target against the configured backend and decide whether it
+ * is allowed to carry PixlStash credentials. URL parsing, not string matching,
+ * is load-bearing here: suffix hosts, userinfo and alternate ports must never
+ * inherit the backend's share token or per-tab client id.
+ *
+ * Relative references resolve against the configured backend origin. Absolute
+ * and protocol-relative references must have exactly that origin. WebSocket
+ * schemes are accepted only for browser-native socket URLs, where ws maps to
+ * http and wss maps to https for the origin comparison.
+ */
+function backendCredentialTarget(rawUrl, {allowWebSocket = false} = {}) {
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) return null;
+
+  let backend;
+  let target;
+  try {
+    const documentOrigin = typeof window !== 'undefined'
+      ? window.location.origin
+      : undefined;
+    backend = new URL(resolvedBaseUrl, documentOrigin);
+    target = new URL(rawUrl, `${backend.origin}/`);
+  } catch {
+    return null;
+  }
+
+  if (!['http:', 'https:'].includes(backend.protocol) ||
+      backend.username || backend.password || target.username ||
+      target.password) {
+    return null;
+  }
+
+  if (allowWebSocket && ['ws:', 'wss:'].includes(target.protocol)) {
+    target.protocol = target.protocol === 'wss:' ? 'https:' : 'http:';
+  }
+  if (!['http:', 'https:'].includes(target.protocol)) return null;
+  return target.origin === backend.origin ? target : null;
+}
+
+/** Convert a trusted backend HTTP URL into its corresponding socket URL. */
+function toBackendWebSocketUrl(rawUrl) {
+  const target = backendCredentialTarget(rawUrl);
+  if (!target) return '';
+  target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
+  return target.toString();
+}
+
 // Axios instance
 const apiClient = axios.create({
   baseURL: resolvedBaseUrl,
@@ -89,24 +233,16 @@ apiClient.interceptors.request.use((config) => {
     return config;
   }
 
-  // For fully-qualified URLs, only inject the token / client id when the
-  // request targets the same origin (skip external hosts like ComfyUI to
-  // prevent leakage), then return early — the URL needs no path rewriting.
-  if (/^https?:\/\//i.test(rawUrl)) {
-    const isSameOrigin = typeof window !== 'undefined' &&
-        rawUrl.startsWith(window.location.origin);
-    if (isSameOrigin) {
-      if (_shareToken) {
-        config.params = {...(config.params || {}), token: _shareToken};
-      }
-      if (_clientId && isMutatingRequest(config)) {
-        config.headers = {...(config.headers || {}), 'X-Client-Id': _clientId};
-      }
-    }
+  const target = backendCredentialTarget(rawUrl);
+  if (!target) {
+    // Axios inherits `withCredentials: true` from this instance. Disable it on
+    // every untrusted or malformed absolute target as a second fail-closed
+    // boundary; the browser must not attach destination cookies either.
+    config.withCredentials = false;
     return config;
   }
 
-  // Inject share token into relative API requests.
+  config.withCredentials = true;
   if (_shareToken) {
     config.params = {...(config.params || {}), token: _shareToken};
   }
@@ -115,6 +251,14 @@ apiClient.interceptors.request.use((config) => {
   if (_clientId && isMutatingRequest(config)) {
     config.headers = {...(config.headers || {}), 'X-Client-Id': _clientId};
   }
+
+  // Fully-qualified and protocol-relative backend URLs already carry their
+  // complete path. Only relative API references need the API prefix.
+  const trimmedUrl = rawUrl.trim();
+  const isAbsoluteReference =
+      /^[a-z][a-z\d+.-]*:/i.test(trimmedUrl) ||
+      /^[\\/]{2}/.test(trimmedUrl);
+  if (isAbsoluteReference) return config;
 
   if (rawUrl.startsWith(API_PREFIX)) {
     return config;
@@ -131,6 +275,7 @@ apiClient.interceptors.request.use((config) => {
 async function login(username, password) {
   try {
     const response = await apiClient.post('/login', {username, password});
+    notifySessionReset('login');
     isAuthenticated.value = true;  // Update authentication state
     if (typeof window !== 'undefined' && 'credentials' in navigator &&
         'PasswordCredential' in window && username && password) {
@@ -154,6 +299,9 @@ async function login(username, password) {
 
 // Logout function
 async function logout() {
+  // Drop the previous session's cached, scope-filtered data FIRST: the POST can
+  // fail or hang, and nothing that outlives this call may still be readable.
+  notifySessionReset('logout');
   try {
     await apiClient.post('/logout');
   } catch (error) {
@@ -214,7 +362,12 @@ export {
   isReadOnly,
   login,
   logout,
+  newOperationBatchId,
+  notifySessionReset,
+  onSessionReset,
+  operationBatchHeaders,
   sessionContext,
   setRequestClientId,
+  toBackendWebSocketUrl,
   apiBaseUrl as API_BASE_URL,
 };

@@ -1,8 +1,10 @@
 """Tests for RestoreService — full and per-resource restore."""
 
+import asyncio
 import json
 import os
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 import shutil
 import tempfile
@@ -10,15 +12,18 @@ from contextlib import closing
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import delete, select
 
 from pixlstash.db_models import (
     Character,
+    CharacterProjectMember,
     DeletedFileLog,
     Face,
     Picture,
     PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
     Project,
     ReferenceFolder,
 )
@@ -66,6 +71,8 @@ def clean_db(server):
         session.exec(delete(PictureLikenessQueue))
         session.exec(delete(PictureLikenessFrontier))
         session.exec(delete(PictureProjectMember))
+        session.exec(delete(CharacterProjectMember))
+        session.exec(delete(PictureSetProjectMember))
         session.exec(delete(PictureSetMember))
         session.exec(delete(Face))
         session.exec(delete(Tag))
@@ -118,6 +125,34 @@ def _create_file(server, relative_path: str):
     abs_path = os.path.join(server.vault.image_root, relative_path)
     open(abs_path, "wb").close()
     return abs_path
+
+
+def _create_picture_share(owner, server, filename: str) -> tuple[Picture, dict]:
+    """Create a servable picture and return its scoped share credential."""
+    from PIL import Image
+
+    file_path = _create_file(server, filename)
+    Image.new("RGB", (2, 2), color=(20, 40, 60)).save(file_path, format="JPEG")
+    pic = _add_picture(server, filename=filename)
+
+    def _set_format(session):
+        stored = session.get(Picture, pic.id)
+        stored.format = os.path.splitext(filename)[1].lstrip(".").lower()
+        session.add(stored)
+        session.commit()
+
+    server.vault.db.run_task(_set_format)
+    response = owner.post(
+        "/api/v1/users/me/token",
+        json={
+            "description": "restore barrier share",
+            "scope": "READ",
+            "resource_type": "picture",
+            "resource_id": pic.id,
+        },
+    )
+    assert response.status_code == 200, response.text
+    return pic, response.json()
 
 
 def _remove_file(server, relative_path: str):
@@ -494,6 +529,157 @@ def test_restore_resource_character(server):
         lambda s: s.get(Character, char_id)
     )
     assert restored.name == "Alice"
+
+
+def test_restore_existing_character_replaces_project_memberships_exactly(server):
+    """A root character restore reinstates allowed joins and removes live-only ones."""
+    from pixlstash.services.project_membership_service import set_character_projects
+
+    def _setup(session):
+        allowed = Project(name="character-allowed")
+        denied = Project(name="character-denied")
+        session.add(allowed)
+        session.add(denied)
+        session.flush()
+        character = Character(name="snapshot-character")
+        session.add(character)
+        session.flush()
+        set_character_projects(session, character, [allowed.id])
+        session.commit()
+        return character.id, allowed.id, denied.id
+
+    char_id, allowed_id, denied_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _diverge(session):
+        character = session.get(Character, char_id)
+        character.name = "live-character"
+        set_character_projects(session, character, [denied_id])
+        session.commit()
+
+    server.vault.db.run_task(_diverge)
+    report = server.vault.restore_service.restore_resource(cp.id, "character", char_id)
+    assert not report.errors
+
+    restored, project_ids = server.vault.db.run_immediate_read_task(
+        lambda session: (
+            session.get(Character, char_id),
+            sorted(
+                session.exec(
+                    select(CharacterProjectMember.project_id).where(
+                        CharacterProjectMember.character_id == char_id
+                    )
+                ).all()
+            ),
+        )
+    )
+    assert restored.name == "snapshot-character"
+    assert restored.project_id == allowed_id
+    assert project_ids == [allowed_id]
+    assert denied_id not in project_ids
+
+
+def test_restore_existing_picture_set_replaces_project_memberships_exactly(server):
+    """A root set restore reinstates allowed joins and removes live-only ones."""
+    from pixlstash.services.project_membership_service import set_picture_set_projects
+
+    def _setup(session):
+        allowed = Project(name="set-allowed")
+        denied = Project(name="set-denied")
+        session.add(allowed)
+        session.add(denied)
+        session.flush()
+        picture_set = PictureSet(name="snapshot-set")
+        session.add(picture_set)
+        session.flush()
+        set_picture_set_projects(session, picture_set, [allowed.id])
+        session.commit()
+        return picture_set.id, allowed.id, denied.id
+
+    set_id, allowed_id, denied_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _diverge(session):
+        picture_set = session.get(PictureSet, set_id)
+        picture_set.name = "live-set"
+        set_picture_set_projects(session, picture_set, [denied_id])
+        session.commit()
+
+    server.vault.db.run_task(_diverge)
+    report = server.vault.restore_service.restore_resource(cp.id, "picture_set", set_id)
+    assert not report.errors
+
+    restored, project_ids = server.vault.db.run_immediate_read_task(
+        lambda session: (
+            session.get(PictureSet, set_id),
+            sorted(
+                session.exec(
+                    select(PictureSetProjectMember.project_id).where(
+                        PictureSetProjectMember.set_id == set_id
+                    )
+                ).all()
+            ),
+        )
+    )
+    assert restored.name == "snapshot-set"
+    assert restored.project_id == allowed_id
+    assert project_ids == [allowed_id]
+    assert denied_id not in project_ids
+
+
+def test_root_entity_membership_projects_are_restore_dependencies(server):
+    """A deleted project referenced only by the root join is preflighted."""
+    from pixlstash.services.project_membership_service import set_character_projects
+    from pixlstash.services.restore_service import MissingDependenciesError
+
+    def _setup(session):
+        project = Project(name="root-membership-dependency")
+        session.add(project)
+        session.flush()
+        character = Character(name="root-with-project")
+        session.add(character)
+        session.flush()
+        set_character_projects(session, character, [project.id])
+        session.commit()
+        return character.id, project.id
+
+    char_id, project_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _delete_project(session):
+        session.exec(
+            delete(CharacterProjectMember).where(
+                CharacterProjectMember.character_id == char_id
+            )
+        )
+        session.exec(delete(Project).where(Project.id == project_id))
+        session.commit()
+
+    server.vault.db.run_task(_delete_project)
+
+    with pytest.raises(MissingDependenciesError) as exc_info:
+        server.vault.restore_service.restore_resource(cp.id, "character", char_id)
+    assert exc_info.value.missing == {"projects": [project_id]}
+
+    report = server.vault.restore_service.restore_resource(
+        cp.id,
+        "character",
+        char_id,
+        confirm_restore_dependencies=True,
+    )
+    assert not report.errors
+    project, project_ids = server.vault.db.run_immediate_read_task(
+        lambda session: (
+            session.get(Project, project_id),
+            session.exec(
+                select(CharacterProjectMember.project_id).where(
+                    CharacterProjectMember.character_id == char_id
+                )
+            ).all(),
+        )
+    )
+    assert project is not None
+    assert project_ids == [project_id]
 
 
 # ---------------------------------------------------------------------------
@@ -2799,6 +2985,356 @@ def test_backfill_all_snapshot_hashes_repairs_intermediate_schema_snapshot(serve
 
 
 # ---------------------------------------------------------------------------
+# Snapshot engine configuration (issue #709): every engine the restore package
+# opens on a snapshot file goes through ``snapshot_engine``, which pairs the
+# vault engine's busy timeout / page cache / custom functions with the one
+# deliberate deviation a snapshot needs (no WAL, so it stays a single file).
+# ---------------------------------------------------------------------------
+
+
+def _make_legacy_snapshot(server, filename: str):
+    """Create a picture, snapshot it, and register a plain ``.sqlite`` copy."""
+    _create_file(server, filename)
+    pic = _add_picture(server, filename=filename)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+    snap_id, legacy_abs = _register_legacy_uncompressed_snapshot(
+        server, cp, with_sidecar=False
+    )
+    return pic, snap_id, legacy_abs
+
+
+def test_snapshot_engine_is_configured_like_the_vault_engine(server):
+    """A snapshot engine is not a bare ``create_engine``.
+
+    Before #709 these nine engines ran on SQLite's defaults: a 5 s busy
+    timeout, a 2 MiB page cache and no FK enforcement.
+    """
+    from pixlstash.database import SQLITE_BUSY_TIMEOUT_S, SQLITE_CACHE_SIZE_KIB
+    from pixlstash.services.restore.schema_upgrade import snapshot_engine
+
+    _pic, _snap_id, legacy_abs = _make_legacy_snapshot(server, "engine_cfg.jpg")
+
+    engine = snapshot_engine(legacy_abs)
+    try:
+        with engine.connect() as conn:
+            assert (
+                conn.exec_driver_sql("PRAGMA busy_timeout").scalar()
+                == SQLITE_BUSY_TIMEOUT_S * 1000
+            )
+            assert (
+                conn.exec_driver_sql("PRAGMA cache_size").scalar()
+                == SQLITE_CACHE_SIZE_KIB
+            )
+            assert conn.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
+            # The deviation: a snapshot must stay a single file.
+            assert conn.exec_driver_sql("PRAGMA journal_mode").scalar() != "wal"
+    finally:
+        engine.dispose()
+
+    for suffix in ("-wal", "-shm"):
+        assert not os.path.exists(legacy_abs + suffix), (
+            f"snapshot engine must not leave a {suffix} companion behind"
+        )
+
+
+def _engine_pragmas(engine) -> dict:
+    """Read the §13 settings off a *real* pooled connection of *engine*.
+
+    Every one of these is per-connection state applied by the ``connect``
+    listener plus ``connect_args``, so reading them back from a connection the
+    pool actually hands out is the only assertion that proves both halves of
+    the configuration arrived. Asserting that some constructor was called
+    would not.
+    """
+    with engine.connect() as conn:
+        return {
+            name: conn.exec_driver_sql(f"PRAGMA {name}").scalar()
+            for name in ("journal_mode", "foreign_keys", "cache_size", "busy_timeout")
+        }
+
+
+def test_full_restore_rebuilds_the_live_engine_with_the_startup_configuration(
+    server, tmp_path
+):
+    """The engine rebuilt after the DB swap is configured like the startup one.
+
+    This is issue #651 itself: ``_swap_database`` disposes the live engine and
+    builds a replacement, and for a while that replacement was written out by
+    hand, so the two definitions drifted. Settings are read back from a real
+    pooled connection of the rebuilt engine, because they are per-connection
+    state applied by ``connect_args`` and the ``connect`` listener; asserting
+    that some constructor was called would prove nothing.
+
+    The reference is a fresh ``create_configured_engine``, the exact
+    expression ``VaultDatabase.__init__`` uses, rather than the live engine
+    read before the restore. The live engine's pool hands back *recycled*
+    connections, and this module's ``clean_db`` fixture runs
+    ``PRAGMA foreign_keys = OFF`` on one of them, which sticks for that
+    connection's lifetime. That reference is not circular with respect to what
+    is under test here: ``_swap_database`` reverting to a bare
+    ``create_engine`` breaks the comparison. The other link in the chain,
+    helper == real startup engine, is asserted in
+    ``tests/test_database_engine_config.py``.
+
+    Note which pragmas discriminate: the file swapped in is a snapshot, i.e. a
+    rollback-journal file, so a bare ``create_engine`` here reports
+    ``journal_mode=delete``, ``foreign_keys=0``, SQLite's default 2 MiB cache
+    and a 5 s busy timeout.
+    """
+    from pixlstash.database import (
+        SQLITE_BUSY_TIMEOUT_S,
+        SQLITE_CACHE_SIZE_KIB,
+        create_configured_engine,
+    )
+
+    _create_file(server, "engine_after_swap.jpg")
+    pic = _add_picture(
+        server, filename="engine_after_swap.jpg", description="before swap"
+    )
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    engine_before = server.vault.db._engine
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    engine_after = server.vault.db._engine
+    assert engine_after is not engine_before, (
+        "the restore did not rebuild the engine, so this test proves nothing "
+        "about the rebuild"
+    )
+    settings_after = _engine_pragmas(engine_after)
+
+    reference_engine = create_configured_engine(tmp_path / "startup-reference.db")
+    try:
+        settings_reference = _engine_pragmas(reference_engine)
+    finally:
+        reference_engine.dispose()
+
+    assert settings_after == settings_reference, (
+        "the engine rebuilt by _swap_database drifted from the startup engine "
+        f"(#651): startup={settings_reference} rebuilt={settings_after}"
+    )
+    # Absolute values too: equality alone would also hold if BOTH engines were
+    # built badly.
+    assert settings_after["journal_mode"] == "wal", settings_after
+    assert settings_after["foreign_keys"] == 1, settings_after
+    assert settings_after["cache_size"] == SQLITE_CACHE_SIZE_KIB, settings_after
+    assert settings_after["busy_timeout"] == SQLITE_BUSY_TIMEOUT_S * 1000, (
+        settings_after
+    )
+
+    # The custom SQL functions are the other half of the connect listener and
+    # travel with the same configuration.
+    with engine_after.connect() as conn:
+        assert isinstance(
+            conn.exec_driver_sql("SELECT levenshtein('kitten', 'sitting')").scalar(),
+            float,
+        )
+        assert isinstance(
+            conn.exec_driver_sql(
+                "SELECT levenshtein_with_id('kitten', 'sitting', 1)"
+            ).scalar(),
+            float,
+        )
+
+    # And the restore itself really did run against the rebuilt engine.
+    assert _get_picture(server, pic.id) is not None
+
+
+def test_preview_paths_open_snapshots_through_the_shared_engine_helper(server):
+    """The preview / compare paths must all route through ``snapshot_engine``.
+
+    Asserted behaviourally: each engine they open is counted, so a call site
+    that goes back to a bare ``create_engine`` shows up as a miss.
+    """
+    import pixlstash.services.restore.preview as preview_mod
+    from pixlstash.services.restore.schema_upgrade import snapshot_engine
+
+    pic, snap_id, _legacy_abs = _make_legacy_snapshot(server, "engine_routing.jpg")
+
+    calls = []
+
+    def _counting(db_path):
+        calls.append(db_path)
+        return snapshot_engine(db_path)
+
+    original = preview_mod.snapshot_engine
+    preview_mod.snapshot_engine = _counting
+    try:
+        svc = server.vault.restore_service
+        svc.preview_full(snap_id)
+        svc.preview_resource(snap_id, "picture", pic.id)
+        svc.preview_batch(snap_id, [{"type": "picture", "id": pic.id}])
+        svc.compare_hashes(snap_id, [pic.id])
+    finally:
+        preview_mod.snapshot_engine = original
+
+    # Three previews plus the legacy in-file read in compare_hashes.
+    assert len(calls) >= 4, calls
+
+
+def test_full_restore_paths_open_snapshots_through_the_shared_engine_helper(server):
+    """``full_restore``'s two snapshot readers must route through the helper.
+
+    Patching ``preview.snapshot_engine`` only ever covered ``preview.py``;
+    ``full_restore.py`` imports the name into its own module namespace, so it
+    needs its own spy. Each of its two call sites is pinned separately (a
+    revert of just one would otherwise hide behind the other), then a real
+    end-to-end ``restore_full`` proves the flow reaches both.
+    """
+    import pixlstash.services.restore.full_restore as full_mod
+    from pixlstash.services.restore.schema_upgrade import snapshot_engine
+
+    _pic, snap_id, legacy_abs = _make_legacy_snapshot(server, "engine_full.jpg")
+    svc = server.vault.restore_service
+
+    calls = []
+
+    def _counting(db_path):
+        calls.append(db_path)
+        return snapshot_engine(db_path)
+
+    original = full_mod.snapshot_engine
+    full_mod.snapshot_engine = _counting
+    try:
+        # Site 1: the missing-file scan.
+        svc._find_missing_file_ids(legacy_abs, server.vault.image_root)
+        assert len(calls) == 1, (
+            f"_find_missing_file_ids did not open the snapshot through "
+            f"snapshot_engine: {calls}"
+        )
+
+        # Site 2: the permanent-deletion ledger cross-check. It short-circuits
+        # on an empty ledger, so hand it a hash to look for.
+        calls.clear()
+        svc._find_permanently_deleted_ids(legacy_abs, {"0" * 64}, set())
+        assert len(calls) == 1, (
+            f"_find_permanently_deleted_ids did not open the snapshot through "
+            f"snapshot_engine: {calls}"
+        )
+
+        # End to end: a real restore reaches both. A ledger row for an
+        # unrelated path keeps site 2 live without matching anything in the
+        # snapshot.
+        calls.clear()
+        _add_deleted_log(server, "purged_elsewhere.jpg")
+        report = svc.restore_full(snap_id)
+        assert not report.errors, f"Restore errors: {report.errors}"
+    finally:
+        full_mod.snapshot_engine = original
+
+    assert len(calls) >= 2, (
+        f"a full restore must open the snapshot through snapshot_engine for "
+        f"both the missing-file scan and the deletion-ledger scan: {calls}"
+    )
+
+
+def test_resource_restore_paths_open_snapshots_through_the_shared_engine_helper(
+    server,
+):
+    """``resource_restore``'s two snapshot readers must route through the helper.
+
+    Same reasoning as the ``full_restore`` case: its own module namespace, its
+    own spy, and each call site pinned by its own restore call so reverting
+    one is not masked by the other.
+    """
+    import pixlstash.services.restore.resource_restore as resource_mod
+    from pixlstash.services.restore.schema_upgrade import snapshot_engine
+
+    pic, snap_id, _legacy_abs = _make_legacy_snapshot(server, "engine_resource.jpg")
+    svc = server.vault.restore_service
+
+    calls = []
+
+    def _counting(db_path):
+        calls.append(db_path)
+        return snapshot_engine(db_path)
+
+    original = resource_mod.snapshot_engine
+    resource_mod.snapshot_engine = _counting
+    try:
+        # Site 1: single-resource restore.
+        report = svc.restore_resource(snap_id, "picture", pic.id)
+        assert not report.errors, f"restore_resource errors: {report.errors}"
+        assert len(calls) >= 1, (
+            f"restore_resource did not open the snapshot through "
+            f"snapshot_engine: {calls}"
+        )
+
+        # Site 2: the batch dependency collection.
+        calls.clear()
+        svc.restore_batch(snap_id, [{"type": "picture", "id": pic.id}])
+        assert len(calls) >= 1, (
+            f"restore_batch did not open the snapshot through snapshot_engine: {calls}"
+        )
+    finally:
+        resource_mod.snapshot_engine = original
+
+
+def test_snapshot_hash_backfill_survives_foreign_key_violations(server):
+    """The only restore path that WRITES to a snapshot runs with FKs enforced.
+
+    A snapshot is restored as a unit and may legitimately hold rows that
+    violate constraints (an orphaned tag, a dangling parent reference). The
+    hash backfill only ever updates ``picture.metadata_hash``, which is
+    neither a child key nor a parent key, so SQLite runs no FK check and the
+    write must still succeed. This is the assertion that made it safe to leave
+    FK enforcement ON for snapshot engines rather than silently off (#709).
+
+    Both directions are asserted. The positive one alone would also pass with
+    ``foreign_keys=OFF``, which would leave the setting pinned by nothing but a
+    single PRAGMA read, so the same connection is then made to *refuse* a
+    genuine violation.
+    """
+    from pixlstash.services.restore.schema_upgrade import snapshot_engine
+
+    pic, _snap_id, legacy_abs = _make_legacy_snapshot(server, "fk_violation.jpg")
+
+    with closing(sqlite3.connect(legacy_abs)) as conn:
+        conn.execute("UPDATE picture SET metadata_hash = NULL")
+        # An orphaned child row: tag.picture_id has a real FK to picture.id.
+        conn.execute(
+            "INSERT INTO tag (picture_id, tag) VALUES (?, ?)", (999999, "orphan")
+        )
+        conn.commit()
+        violations_before = conn.execute("PRAGMA foreign_key_check").fetchall()
+    assert violations_before, "pre-test invariant: the snapshot really is violating"
+
+    server.vault.restore_service._backfill_snapshot(legacy_abs)
+
+    engine = snapshot_engine(legacy_abs)
+    try:
+        with engine.connect() as conn:
+            stored = conn.exec_driver_sql(
+                f"SELECT metadata_hash FROM picture WHERE id = {pic.id}"
+            ).scalar()
+            assert stored is not None, (
+                "the backfill must still write through FK enforcement"
+            )
+
+            # Negative direction, on the SAME connection: an insert that really
+            # does violate tag.picture_id -> picture.id must be rejected. With
+            # foreign_keys=OFF this INSERT succeeds, which is exactly the state
+            # the positive assertion above cannot tell apart.
+            with pytest.raises(IntegrityError) as excinfo:
+                conn.exec_driver_sql(
+                    "INSERT INTO tag (picture_id, tag) VALUES (424242, 'must-fail')"
+                )
+            assert "FOREIGN KEY" in str(excinfo.value).upper(), str(excinfo.value)
+            conn.rollback()
+    finally:
+        engine.dispose()
+
+    with closing(sqlite3.connect(legacy_abs)) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        # The backfill must not have silently "repaired" the snapshot either.
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == violations_before
+    for suffix in ("-wal", "-shm"):
+        assert not os.path.exists(legacy_abs + suffix)
+
+
+# ---------------------------------------------------------------------------
 # Data-loss regression: restore must not resurrect a scrapheap "ghost" that
 # shadows a file re-added after the snapshot, or emptying the scrapheap would
 # hard-delete that live file.
@@ -3236,6 +3772,89 @@ def test_restore_does_not_resurrect_a_picture_whose_ledger_row_survived_a_collis
     )
 
 
+def test_restore_resource_rebuilds_entity_project_membership(server):
+    """A restored parent character comes back with its project membership rows,
+    not just its scalar ``project_id`` (issue #125).
+
+    The join table is the read model: a character restored with the FK alone
+    would be silently invisible to ``GET /characters?project_id=…`` and refused
+    by a project-scoped share token, which is the same "restored but unusable"
+    failure class as the 2026-07-22 snapshot-restore incident.
+    """
+    from pixlstash.db_models import CharacterProjectMember, Project
+    from pixlstash.services.project_membership_service import set_character_projects
+
+    _create_file(server, "membership_restore.jpg")
+    pic = _add_picture(server, filename="membership_restore.jpg")
+
+    def _setup_snapshot_state(session):
+        p1 = Project(name="restore-proj-1")
+        p2 = Project(name="restore-proj-2")
+        session.add(p1)
+        session.add(p2)
+        session.flush()
+        c = Character(name="multi-project-char")
+        session.add(c)
+        session.flush()
+        set_character_projects(session, c, [p1.id, p2.id])
+        session.add(
+            Face(
+                picture_id=pic.id,
+                frame_index=0,
+                face_index=0,
+                character_id=c.id,
+                bbox_="[0,0,20,20]",
+            )
+        )
+        session.commit()
+        return c.id, sorted([p1.id, p2.id])
+
+    char_id, project_ids = server.vault.db.run_task(_setup_snapshot_state)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _delete_char(session):
+        session.exec(
+            delete(CharacterProjectMember).where(
+                CharacterProjectMember.character_id == char_id
+            )
+        )
+        session.exec(delete(Character).where(Character.id == char_id))
+        session.commit()
+
+    server.vault.db.run_task(_delete_char)
+
+    report = server.vault.restore_service.restore_resource(
+        cp.id,
+        "picture",
+        pic.id,
+        confirm_restore_dependencies=True,
+    )
+    assert report.upserted_count > 0
+
+    restored = server.vault.db.run_immediate_read_task(
+        lambda s: (
+            s.get(Character, char_id),
+            sorted(
+                int(r)
+                for r in s.exec(
+                    select(CharacterProjectMember.project_id).where(
+                        CharacterProjectMember.character_id == char_id
+                    )
+                ).all()
+            ),
+        )
+    )
+    char_after, membership_after = restored
+    assert char_after is not None
+    assert membership_after == project_ids, (
+        "restored character must regain BOTH project memberships; got "
+        f"{membership_after}"
+    )
+    assert char_after.project_id == project_ids[0], (
+        "the legacy primary-project FK must survive the restore too"
+    )
+
+
 # ---------------------------------------------------------------------------
 # A restore always leaves the vault with no API tokens
 # ---------------------------------------------------------------------------
@@ -3441,3 +4060,402 @@ def test_restoring_a_snapshot_clears_guest_sessions_and_scores(server):
     restored = _get_picture(server, pic.id)
     assert restored is not None
     assert restored.description == "keep"
+
+
+def test_full_restore_closes_auth_before_swap_and_across_queue_gap(server, monkeypatch):
+    """Old cookies/tokens receive 503 between the DB swap and token deletion."""
+    from fastapi.testclient import TestClient
+
+    owner = TestClient(server.api, raise_server_exceptions=True)
+    login = owner.post(
+        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+    )
+    assert login.status_code == 200, login.text
+    token_response = owner.post(
+        "/api/v1/users/me/token",
+        json={"description": "pre-restore", "scope": "READ"},
+    )
+    assert token_response.status_code == 200, token_response.text
+    token = token_response.json()["token"]
+
+    _create_file(server, "restore-auth-gate.jpg")
+    _add_picture(server, filename="restore-auth-gate.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    service = server.vault.restore_service
+    original_swap = service._swap_database
+    original_clear = service._clear_api_tokens
+    entered_queue_gap = threading.Event()
+    release_token_clear = threading.Event()
+
+    def _assert_gate_then_swap(live_db_path, new_db_path):
+        assert server.auth.is_auth_closed_for_restore()
+        return original_swap(live_db_path, new_db_path)
+
+    def _blocked_token_clear(session):
+        entered_queue_gap.set()
+        assert release_token_clear.wait(10), "test did not release token clear"
+        return original_clear(session)
+
+    monkeypatch.setattr(service, "_swap_database", _assert_gate_then_swap)
+    monkeypatch.setattr(service, "_clear_api_tokens", _blocked_token_clear)
+
+    outcome = {}
+
+    def _restore():
+        try:
+            outcome["report"] = service.restore_full(cp.id)
+        except BaseException as exc:  # surface worker-thread assertion failures
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=_restore, daemon=True)
+    thread.start()
+    assert entered_queue_gap.wait(10), "restore never reached token-clear queue gap"
+    try:
+        assert server.auth.is_auth_closed_for_restore()
+
+        class _PreRestoreWebSocket:
+            cookies = {"session_id": owner.cookies.get("session_id")}
+            headers = {"authorization": f"Bearer {token}"}
+            query_params = {}
+
+        assert server.auth.authenticate_websocket(_PreRestoreWebSocket()) is None
+        cookie_response = owner.get("/api/v1/session/context")
+        token_response = TestClient(server.api).get(
+            "/api/v1/session/context",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert cookie_response.status_code == 503, cookie_response.text
+        assert token_response.status_code == 503, token_response.text
+        assert cookie_response.headers["Retry-After"] == "5"
+    finally:
+        release_token_clear.set()
+        thread.join(timeout=20)
+
+    assert not thread.is_alive(), "restore thread did not finish"
+    assert "error" not in outcome, outcome.get("error")
+    assert not outcome["report"].errors
+    assert not server.auth.is_auth_closed_for_restore()
+    assert owner.get("/api/v1/session/context").status_code == 401
+    assert (
+        TestClient(server.api)
+        .get(
+            "/api/v1/session/context",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        .status_code
+        == 401
+    )
+
+
+def test_share_link_is_unavailable_while_restore_admission_is_closed(server):
+    """The embedded share credential uses the same atomic restore gate."""
+    from fastapi.testclient import TestClient
+
+    owner = TestClient(server.api, raise_server_exceptions=True)
+    login = owner.post(
+        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+    )
+    assert login.status_code == 200, login.text
+    _pic, created = _create_picture_share(owner, server, "share-gate.jpg")
+    share_path = f"/share/{created['token']}.jpg"
+    share_url = f"http://testserver{share_path}"
+    anonymous = TestClient(server.api)
+    assert anonymous.get(share_url).status_code == 200
+
+    server.auth.close_auth_for_restore()
+    try:
+        response = anonymous.get(share_url)
+        assert response.status_code == 503, response.text
+        assert response.headers["Retry-After"] == "5"
+    finally:
+        server.auth.reopen_auth_after_restore()
+
+    assert anonymous.get(share_url).status_code == 200
+    deleted = owner.delete(f"/api/v1/users/me/token/{created['token_id']}")
+    assert deleted.status_code == 200, deleted.text
+
+
+def test_full_restore_drains_an_admitted_share_before_swap(server, monkeypatch):
+    """A share token/resource lookup admitted before closure finishes first."""
+    from fastapi import Request
+    from fastapi.responses import Response
+    from fastapi.testclient import TestClient
+
+    from pixlstash.services import share_service
+
+    owner = TestClient(server.api, raise_server_exceptions=True)
+    login = owner.post(
+        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+    )
+    assert login.status_code == 200, login.text
+    _pic, created = _create_picture_share(owner, server, "share-drain.jpg")
+    share_path = f"/share/{created['token']}.jpg"
+    share_url = f"http://testserver{share_path}"
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    admitted = threading.Event()
+    release_share = threading.Event()
+    lookup_completed = threading.Event()
+    close_started = threading.Event()
+    swap_started = threading.Event()
+    original_close = server.auth.close_auth_for_restore
+    original_swap = server.vault.restore_service._swap_database
+
+    request = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": share_path,
+            "raw_path": share_path.encode(),
+            "query_string": b"",
+            "headers": [],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+        }
+    )
+
+    async def _serve_admitted_share(_request):
+        admitted.set()
+        released = await asyncio.get_running_loop().run_in_executor(
+            None, release_share.wait, 10
+        )
+        assert released, "test did not release admitted share request"
+        matched = share_service.validate_picture_share_token(
+            server.auth, created["token"]
+        )
+        assert matched is not None
+        assert share_service.get_shared_picture(server.vault, matched.resource_id)
+        lookup_completed.set()
+        return Response(status_code=200)
+
+    def _close_and_signal(restore_request_lease=None):
+        close_started.set()
+        return original_close(restore_request_lease)
+
+    def _swap_and_signal(live_db_path, new_db_path):
+        assert lookup_completed.is_set(), "share lookup crossed the database cutover"
+        swap_started.set()
+        return original_swap(live_db_path, new_db_path)
+
+    monkeypatch.setattr(server.auth, "close_auth_for_restore", _close_and_signal)
+    monkeypatch.setattr(
+        server.vault.restore_service, "_swap_database", _swap_and_signal
+    )
+
+    share_outcome = {}
+    restore_outcome = {}
+
+    def _share_request():
+        try:
+            share_outcome["response"] = asyncio.run(
+                server.auth.auth_middleware(
+                    request,
+                    _serve_admitted_share,
+                    allow_origins=[],
+                    allow_origin_regex=None,
+                )
+            )
+        except BaseException as exc:
+            share_outcome["error"] = exc
+
+    def _restore():
+        try:
+            restore_outcome["report"] = server.vault.restore_service.restore_full(cp.id)
+        except BaseException as exc:
+            restore_outcome["error"] = exc
+
+    share_thread = threading.Thread(target=_share_request, daemon=True)
+    restore_thread = threading.Thread(target=_restore, daemon=True)
+    share_thread.start()
+    if not admitted.wait(10):
+        raise AssertionError(
+            "share request never acquired its admission lease: "
+            f"{share_outcome.get('error')!r}"
+        )
+    restore_thread.start()
+    assert close_started.wait(20), "restore never began the admission drain"
+    assert server.auth.is_auth_closed_for_restore()
+    assert not swap_started.wait(0.2), "database swapped before share request drained"
+
+    release_share.set()
+    share_thread.join(timeout=10)
+    restore_thread.join(timeout=30)
+    assert not share_thread.is_alive(), "share request did not finish"
+    assert not restore_thread.is_alive(), "restore did not finish after share drain"
+    assert "error" not in share_outcome, share_outcome.get("error")
+    assert share_outcome["response"].status_code == 200
+    assert lookup_completed.is_set()
+    assert "error" not in restore_outcome, restore_outcome.get("error")
+    assert not restore_outcome["report"].errors
+    assert swap_started.is_set()
+
+    # Restore deletes every token, including one present in the restored
+    # snapshot, so the old share credential cannot resolve a post-swap ID.
+    assert _live_token_count(server) == 0
+    assert not server.auth._token_cache
+    assert TestClient(server.api).get(share_url).status_code == 404
+
+
+def test_full_restore_drains_an_admitted_http_request_before_swap(server, monkeypatch):
+    """The restore request excludes itself but waits for older API traffic."""
+    from fastapi.testclient import TestClient
+
+    restore_client = TestClient(server.api, raise_server_exceptions=True)
+    blocked_client = TestClient(server.api, raise_server_exceptions=True)
+    for client in (restore_client, blocked_client):
+        login = client.post(
+            "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+        )
+        assert login.status_code == 200, login.text
+
+    token_response = restore_client.post(
+        "/api/v1/users/me/token",
+        json={"description": "drain-test", "scope": "READ"},
+    )
+    assert token_response.status_code == 200, token_response.text
+    old_token = token_response.json()["token"]
+
+    _create_file(server, "restore-admission-drain.jpg")
+    _add_picture(server, filename="restore-admission-drain.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    admitted = threading.Event()
+    release_request = threading.Event()
+    close_started = threading.Event()
+    swap_started = threading.Event()
+    original_admitted = server.auth._auth_middleware_admitted
+    original_close = server.auth.close_auth_for_restore
+    original_swap = server.vault.restore_service._swap_database
+
+    async def _pause_after_admission(
+        request, call_next, allow_origins, allow_origin_regex
+    ):
+        if request.headers.get("x-pause-after-admission") == "yes":
+            admitted.set()
+            released = await asyncio.get_running_loop().run_in_executor(
+                None, release_request.wait, 10
+            )
+            assert released, "test did not release admitted request"
+        return await original_admitted(
+            request, call_next, allow_origins, allow_origin_regex
+        )
+
+    def _close_and_signal(restore_request_lease=None):
+        close_started.set()
+        return original_close(restore_request_lease)
+
+    def _swap_and_signal(live_db_path, new_db_path):
+        swap_started.set()
+        return original_swap(live_db_path, new_db_path)
+
+    monkeypatch.setattr(
+        server.auth, "_auth_middleware_admitted", _pause_after_admission
+    )
+    monkeypatch.setattr(server.auth, "close_auth_for_restore", _close_and_signal)
+    monkeypatch.setattr(
+        server.vault.restore_service, "_swap_database", _swap_and_signal
+    )
+
+    blocked_outcome = {}
+    restore_outcome = {}
+
+    def _blocked_request():
+        blocked_outcome["response"] = blocked_client.get(
+            "/api/v1/session/context",
+            headers={"X-Pause-After-Admission": "yes"},
+        )
+
+    def _restore_request():
+        restore_outcome["response"] = restore_client.post(
+            f"/api/v1/snapshots/{cp.id}/restore",
+            json={"dry_run": False, "allow_without_safety": False},
+        )
+
+    blocked_thread = threading.Thread(target=_blocked_request, daemon=True)
+    restore_thread = threading.Thread(target=_restore_request, daemon=True)
+    blocked_thread.start()
+    assert admitted.wait(10), "request never acquired its admission lease"
+    restore_thread.start()
+    assert close_started.wait(20), "restore never began the admission drain"
+    assert server.auth.is_auth_closed_for_restore()
+    assert not swap_started.wait(0.2), "database swapped before prior request drained"
+    unavailable = TestClient(server.api).get("/api/v1/session/context")
+    assert unavailable.status_code == 503, unavailable.text
+
+    release_request.set()
+    blocked_thread.join(timeout=10)
+    restore_thread.join(timeout=30)
+    assert not blocked_thread.is_alive(), "admitted request did not finish"
+    assert not restore_thread.is_alive(), "restore did not finish after drain"
+    assert blocked_outcome["response"].status_code == 200
+    assert restore_outcome["response"].status_code == 200, restore_outcome[
+        "response"
+    ].text
+    assert swap_started.is_set()
+
+    # Both pre-restore credential forms require fresh authentication after the
+    # swap; neither can observe the restored database under its old identity.
+    assert restore_client.get("/api/v1/session/context").status_code == 401
+    assert (
+        TestClient(server.api)
+        .get(
+            "/api/v1/session/context",
+            headers={"Authorization": f"Bearer {old_token}"},
+        )
+        .status_code
+        == 401
+    )
+
+
+def test_restore_admission_drain_timeout_fails_closed(server, monkeypatch):
+    """An undrainable old request aborts without reopening authentication."""
+    lease = server.auth._acquire_restore_http_lease()
+    assert lease is not None
+    monkeypatch.setattr(server.auth, "_RESTORE_DRAIN_TIMEOUT_SECONDS", 0.01)
+    try:
+        with pytest.raises(RuntimeError, match="Timed out draining"):
+            server.auth.close_auth_for_restore()
+        assert server.auth.is_auth_closed_for_restore()
+    finally:
+        server.auth._release_restore_http_lease(lease)
+        server.auth.reopen_auth_after_restore()
+
+
+def test_full_restore_reset_failure_is_not_success_and_keeps_auth_closed(
+    server, monkeypatch
+):
+    """A failed in-memory reset propagates and never reopens authentication."""
+    from fastapi.testclient import TestClient
+
+    owner = TestClient(server.api, raise_server_exceptions=True)
+    login = owner.post(
+        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+    )
+    assert login.status_code == 200, login.text
+    _create_file(server, "restore-auth-reset-failure.jpg")
+    _add_picture(server, filename="restore-auth-reset-failure.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    original_reset = server.auth.reset_after_restore
+
+    def _fail_reset():
+        raise RuntimeError("deterministic auth reset failure")
+
+    monkeypatch.setattr(server.auth, "reset_after_restore", _fail_reset)
+    try:
+        with pytest.raises(
+            RuntimeError, match="authentication state could not be reset"
+        ):
+            server.vault.restore_service.restore_full(cp.id)
+        assert server.auth.is_auth_closed_for_restore()
+        response = owner.get("/api/v1/session/context")
+        assert response.status_code == 503, response.text
+    finally:
+        # Restore the module-scoped server fixture to a safe, usable state for
+        # any subsequently selected tests. Production recovery is a restart.
+        monkeypatch.setattr(server.auth, "reset_after_restore", original_reset)
+        original_reset()
+        server.auth.reopen_auth_after_restore()

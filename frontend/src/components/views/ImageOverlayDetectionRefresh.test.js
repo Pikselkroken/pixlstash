@@ -13,9 +13,20 @@
 //   B. A mounted-component regression driving the real ImageOverlay through the
 //      signal, asserting the detections endpoint is actually re-read.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mount } from "@vue/test-utils";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
+import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+
+// Imported statically, not lazily inside the tests. `vi.mock` is hoisted
+// above every import, so a lazy import buys no mock ordering. It only moves
+// the cost of compiling this 5.7k-line SFC (~7s on a loaded machine) inside
+// the first test's 5s timeout, which is what made this file flake in the full
+// suite while passing on its own.
+import ImageOverlay from "./ImageOverlay.vue";
+
+// A test that fails mid-way must not leave a mounted overlay behind: its
+// window-level keydown listener would answer every later test in this file.
+enableAutoUnmount(afterEach);
 
 // ---- Mounted-component harness (layer B) -----------------------------------
 // A controllable /pictures/{id}/detections response.
@@ -36,6 +47,8 @@ const getMock = vi.fn(async (url) => {
 });
 
 vi.mock("../../utils/apiClient", () => ({
+  onSessionReset: () => () => {},
+  sessionContext: { value: null },
   apiClient: { get: (...a) => getMock(...a), post: vi.fn(), delete: vi.fn() },
   appendShareToken: (u) => u,
   isReadOnly: { value: false },
@@ -128,6 +141,7 @@ describe("ImageOverlay mounted detection refresh", () => {
     },
     OverlayMetadataPanel: true,
     AddToEntityControl: true,
+    CharacterEditor: true,
     StarRatingOverlay: true,
     PluginParametersUI: true,
     ComfyUiRunner: true,
@@ -142,8 +156,6 @@ describe("ImageOverlay mounted detection refresh", () => {
     );
 
   async function openOverlayOnCard7() {
-    // Imported lazily so the vi.mock above is in place first.
-    const { default: ImageOverlay } = await import("./ImageOverlay.vue");
     const wrapper = mount(ImageOverlay, {
       props: {
         open: false,
@@ -186,7 +198,6 @@ describe("ImageOverlay mounted detection refresh", () => {
     const calls = detectionCalls();
     expect(calls.length).toBe(before + 1);
     expect(calls.at(-1)[0]).toContain("/pictures/7/detections");
-    wrapper.unmount();
   });
 
   it("re-reads even when the signal's pictureIds omit the open card (coalesced signals)", async () => {
@@ -200,7 +211,6 @@ describe("ImageOverlay mounted detection refresh", () => {
     await flush();
 
     expect(detectionCalls().length).toBe(before + 1);
-    wrapper.unmount();
   });
 
   it("does not re-read for a repeated signal key", async () => {
@@ -215,7 +225,6 @@ describe("ImageOverlay mounted detection refresh", () => {
     await flush();
 
     expect(detectionCalls().length).toBe(afterFirst);
-    wrapper.unmount();
   });
 
   it("does not re-read while the overlay is closed", async () => {
@@ -229,6 +238,5 @@ describe("ImageOverlay mounted detection refresh", () => {
     await flush();
 
     expect(detectionCalls().length).toBe(before);
-    wrapper.unmount();
   });
 });

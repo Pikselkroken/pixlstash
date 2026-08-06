@@ -113,11 +113,14 @@
   /* ---------------------------------------------------------------------------
      SCRIMS — translucent legibility backings for corner badges/chips that sit on
      top of imagery (lock badges, tag chips). Both are theme-token based; the
-     audit's raw `rgba(0,0,0,…)` chip scrims collapse to these. Two contexts:
+     audit's raw `rgba(0,0,0,…)` chip scrims collapse to these. Three contexts:
      `--scrim-surface` is a light warm chip over the bright grid/sidebar canvas
      (dark glyph on it); `--scrim-photo` is a dark chip over an arbitrary photo
      (light glyph on it), on the theme `scrim` token so it stays reliably dark in
-     both themes and clears contrast on any image underneath.
+     both themes and clears contrast on any image underneath;
+     `--scrim-photo-strong` is that chip deepened for a CHROMATIC glyph, which
+     cannot reach a white glyph's luminance and so needs the darker backing to
+     clear the 3:1 non-text floor (§7).
      `--scrim-drawer` is the odd one out: not a chip backing but a full-surface
      dim under a TRANSIENT floating panel (the auto-hide sidebar drawer). It is
      deliberately lighter than both, because that panel is dismissed by moving
@@ -127,6 +130,7 @@
      --------------------------------------------------------------------------- */
   --scrim-surface: rgba(var(--v-theme-surface), 0.55);
   --scrim-photo: rgba(var(--v-theme-scrim), 0.55);
+  --scrim-photo-strong: rgba(var(--v-theme-scrim), 0.78);
   --scrim-drawer: rgba(var(--v-theme-scrim), 0.28);
 
   /* ---------------------------------------------------------------------------
@@ -158,6 +162,33 @@
      only. See visual-language.md §13. */
   --badge-size: 16px;      /* min height / min-width of a count pill (on-grid; was an ad-hoc 15px) */
   --badge-size-dot: 8px;   /* the no-count activity dot (on-grid; was an ad-hoc 7px) */
+
+  /* The countdown drain hairline on a self-dismissing transient surface: the
+     action receipt today, and the notice card is the obvious second consumer.
+     It is a rendered height rather than padding, so it cannot borrow from the
+     spacing scale; naming it is what stops the next surface picking 3px. */
+  --countdown-h: 2px;
+
+  /* Vertical hairline inside a control band. Rendered lengths rather than gaps,
+     so they cannot borrow from the spacing scale (same reasoning as
+     `--countdown-h`). 24px is not invented: it is already the de-facto value of
+     `.bar-separator` in Toolbar.vue. The taller variant marks a boundary between
+     two CONTEXTS in one container — its one consumer is the grid action pill's
+     search|selection seam (merged-grid-action-pill.md §2). The two differ by
+     height and air only, never by a second colour. */
+  --rule-h: 24px;
+  --rule-h-seam: 32px;
+
+  /* The leading status rail. A vertical stripe that carries a status hue beside
+     a block that must NOT be tinted itself. Its first consumer is the
+     Keep-cover-only confirm (keep-cover-only.md): the headline numeral stays
+     `on-surface`, because a 22px `error` figure would be the loudest object in
+     the app, and the rail carries the consequence instead. A rendered width
+     rather than a gap, so it cannot borrow from the spacing scale, the same
+     reasoning as `--countdown-h`, whose comment says naming it "is what stops
+     the next surface picking 3px". Three components already carry a raw 3px
+     rail. */
+  --rail-w: 3px;
 
   /* Contextual action bar / toolbar band — the full-width bar that holds a count
      + actions above the content area (selection bar, Trash restore/purge bar,

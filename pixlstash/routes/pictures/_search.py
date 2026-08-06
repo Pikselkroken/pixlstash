@@ -20,6 +20,7 @@ from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
     fetch_scope_allowed_picture_ids,
     fetch_set_candidate_ids,
+    narrow_picture_project_ids,
     normalize_set_mode,
     project_membership_exists_clause,
     project_unassigned_clause,
@@ -76,6 +77,7 @@ def register_routes(router, server):
         comfyui_models = []
         comfyui_loras = []
         tags_filter = []
+        stack_state = None
         if request.query_params:
             query_params = dict(request.query_params)
             query = query_params.pop("query", query)
@@ -103,6 +105,7 @@ def register_routes(router, server):
             comfyui_loras = _predicate_filter.comfyui_loras_filter or []
             tags_filter = _predicate_filter.tags_filter or []
             tags_rejected_filter = _predicate_filter.tags_rejected_filter or []
+            stack_state = _predicate_filter.stack_state
         min_score = int(min_score_raw) if min_score_raw is not None else None
         if not query:
             raise HTTPException(
@@ -395,6 +398,7 @@ def register_routes(router, server):
                 comfyui_loras_filter=comfyui_loras or None,
                 tags_filter=tags_filter or None,
                 tags_rejected_filter=tags_rejected_filter or None,
+                stack_state=stack_state,
             )
 
             log_semantic_results("base", results)
@@ -427,6 +431,7 @@ def register_routes(router, server):
                 comfyui_loras_filter=comfyui_loras or None,
                 tags_filter=tags_filter or None,
                 tags_rejected_filter=tags_rejected_filter or None,
+                stack_state=stack_state,
             )
             sorted_results = [(pic, score_map.get(pic.id, 0.0)) for pic in sorted_pics]
             log_semantic_results(f"sorted_{sort_mech.key.name}", sorted_results)
@@ -450,4 +455,10 @@ def register_routes(router, server):
                     if result[0] is not None
                     and getattr(result[0], "id", None) not in hidden_ids
                 ]
-        return [Picture.serialize_with_likeness(r) for r in results]
+        rows = [Picture.serialize_with_likeness(r) for r in results]
+        # Rows come from `metadata_fields()`, which carries the raw
+        # `Picture.project_id`, and `PictureMetadataResponse` sets
+        # `extra="allow"` so the response model filters nothing (issue #719,
+        # §16.6).
+        narrow_picture_project_ids(server, request, rows)
+        return rows

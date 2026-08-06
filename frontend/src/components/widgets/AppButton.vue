@@ -11,6 +11,7 @@
     :disabled="disabled || loading"
     :aria-busy="loading ? 'true' : undefined"
     :title="title"
+    :aria-keyshortcuts="keyShortcut"
   >
     <v-icon
       v-if="loading || iconLeft"
@@ -20,11 +21,14 @@
       {{ loading ? "mdi-loading" : `mdi-${iconLeft}` }}
     </v-icon>
     <span v-if="!iconOnly" class="app-btn__label"><slot /></span>
+    <kbd v-if="keyHint" class="app-btn__key" aria-hidden="true">{{
+      keyLabel
+    }}</kbd>
   </button>
 </template>
 
 <script setup>
-import { nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 const props = defineProps({
@@ -42,7 +46,30 @@ const props = defineProps({
   // prop: the label is the accessible name and must not change mid-flight.
   loading: { type: Boolean, default: false },
   title: { type: String, default: "" },
+  // The visible shortcut affordance from the dialog keyboard contract:
+  // "enter" wears ↵ and "esc" wears Esc; any other single key (e.g. "s" on
+  // the dedup Keep separate) wears its own uppercase label. A shortcut shown
+  // next to the action it triggers is the only kind anyone discovers.
+  keyHint: { type: String, default: "" },
 });
+
+const keyLabel = computed(() =>
+  props.keyHint === "enter"
+    ? "↵"
+    : props.keyHint === "esc"
+      ? "Esc"
+      : props.keyHint.toUpperCase(),
+);
+
+const keyShortcut = computed(() =>
+  props.keyHint === "enter"
+    ? "Enter"
+    : props.keyHint === "esc"
+      ? "Escape"
+      : props.keyHint
+        ? props.keyHint.toUpperCase()
+        : undefined,
+);
 
 const rootEl = ref(null);
 let refocusWhenDone = false;
@@ -62,6 +89,20 @@ watch(
     nextTick(() => rootEl.value?.focus());
   },
 );
+
+/**
+ * Put the keyboard on this button.
+ *
+ * Exposed for the dialogs that have to place initial focus deliberately rather
+ * than let the browser pick. `KeepCoverOnlyDialog` focuses its Cancel on open,
+ * because the user arrives from the duplicate queue with Enter under their
+ * finger. Reaching through `$el` would work, but it hides that intent.
+ */
+function focus() {
+  rootEl.value?.focus();
+}
+
+defineExpose({ focus });
 </script>
 
 <style scoped>
@@ -109,7 +150,15 @@ watch(
   box-shadow: var(--focus-ring);
 }
 
-.app-btn:disabled {
+/* Both spellings of "not allowed" fade the same way. `aria-disabled`, not the
+   attribute, is how this app marks a control that is blocked FOR A REASON
+   (UndoControl, ActionReceipt, ReviewDecisionBar): the button keeps its place
+   in the tab order, so the `aria-describedby` reason it points at stays
+   reachable by keyboard. It still has to LOOK disabled, which is why it shares
+   this fade and why every variant's hover below excludes it: a control that
+   lights up under the pointer promises a press that will not land. */
+.app-btn:disabled,
+.app-btn[aria-disabled="true"] {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
@@ -133,7 +182,7 @@ watch(
   background: rgb(var(--v-theme-accent));
   color: rgb(var(--v-theme-on-accent));
 }
-.app-btn--primary:not(:disabled):hover {
+.app-btn--primary:not(:disabled):not([aria-disabled="true"]):hover {
   filter: brightness(1.08);
 }
 
@@ -142,7 +191,7 @@ watch(
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
 }
-.app-btn--primary_green:not(:disabled):hover {
+.app-btn--primary_green:not(:disabled):not([aria-disabled="true"]):hover {
   filter: brightness(1.08);
 }
 
@@ -151,18 +200,22 @@ watch(
   background: rgb(var(--v-theme-cancel-button));
   color: rgb(var(--v-theme-cancel-button-text));
 }
-.app-btn--secondary:not(:disabled):hover {
+.app-btn--secondary:not(:disabled):not([aria-disabled="true"]):hover {
   filter: brightness(1.08);
 }
 
-/* Danger — destructive. `on-error`, not a hardcoded #fff: white holds 4.86:1 on
-   the light `error` fill but only 3.68:1 on the brighter dark-theme one, so the
-   authored pair flips to the warm near-black there (4.68:1). */
+/* Danger: destructive. `on-error`, not a hardcoded #fff. Both themes author
+   `error: #b54538` with `on-error: #f7f1ea`, the warm near-white, at 4.83:1;
+   main.js says "(same value in both themes)" on that very line. The comment
+   here previously claimed the pair flipped to the warm near-black in dark,
+   which was never true of `error` (it is true of `warning`, whose fill IS
+   brighter in dark). Recorded because a stale contrast note is the kind of
+   thing that gets "corrected" by changing the value instead of the note. */
 .app-btn--danger {
   background: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));
 }
-.app-btn--danger:not(:disabled):hover {
+.app-btn--danger:not(:disabled):not([aria-disabled="true"]):hover {
   filter: brightness(1.08);
 }
 
@@ -171,13 +224,26 @@ watch(
   background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
-.app-btn--ghost:not(:disabled):hover {
+.app-btn--ghost:not(:disabled):not([aria-disabled="true"]):hover {
   background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));
 }
 
 .app-btn__icon {
   flex-shrink: 0;
+}
+
+/* The key-hint badge. currentColor keeps it legible on every variant fill;
+   the reduced opacity keeps it a hint rather than a second label. */
+.app-btn__key {
+  flex-shrink: 0;
+  padding: 0 var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  opacity: 0.55;
 }
 
 /* The spinner keeps spinning under reduced motion. It is a status readout, not

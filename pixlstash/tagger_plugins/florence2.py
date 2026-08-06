@@ -1,25 +1,57 @@
 """Florence-2 captioning service, extracted from picture_tagger.py."""
 
+from __future__ import annotations
+
 import os
 import time
 import traceback
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
-import torch
 from PIL import Image
+
+if TYPE_CHECKING:  # annotations only — see the function-local import note below
+    import torch
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TaggerPlugin
 from pixlstash.utils.model_utils import from_pretrained_local_first
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
+# ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
+# this module. They cost seconds to import, and this module sits on the API
+# server's import path — so importing them at module scope would make server
+# startup and every single test pay that cost before doing any work.
+
 logger = get_logger(__name__)
 
 FLORENCE_BATCH_SIZE_GPU = 32
 FLORENCE_BATCH_SIZE_CPU = 2
 FLORENCE_BASE_VRAM_MB = 900  # Florence-2-base model footprint (fp16 on GPU)
+FLORENCE_LARGE_FT_VRAM_MB = 2600  # Florence-2-large-ft footprint (0.77B, fp16 on GPU)
 FLORENCE_PER_IMAGE_VRAM_MB = 40  # Activation scratch per image in a GPU mini-batch
 FLORENCE_MODEL_REVISION = "00921df66db728a9ceb750f5eca43e5c203a2051"
+
+# Selectable Florence-2 checkpoints. One setting drives BOTH captioning and
+# object detection (Segment) — the service is shared, and loading two variants
+# side by side would double the VRAM for no benefit (issue #512). Every entry
+# pins a revision: an unpinned HuggingFace ref is a silent supply-chain change.
+# `vram_mb` is the model footprint the VRAM gate charges before a batch runs;
+# it MUST follow the chosen variant or the gate under-counts and we spill.
+FLORENCE_MODEL_VARIANTS: dict[str, dict] = {
+    "base": {
+        "model": "florence-community/Florence-2-base",
+        "revision": FLORENCE_MODEL_REVISION,
+        "vram_mb": FLORENCE_BASE_VRAM_MB,
+        "label": "Base (0.23B, ~900 MB)",
+    },
+    "large-ft": {
+        "model": "florence-community/Florence-2-large-ft",
+        "revision": "26b734a54fdfbf9c398351eedfabb7f27fc470b7",
+        "vram_mb": FLORENCE_LARGE_FT_VRAM_MB,
+        "label": "Large fine-tuned (0.77B, ~2.6 GB)",
+    },
+}
+DEFAULT_FLORENCE_VARIANT = "base"
 
 _VIDEO_EXTS = frozenset({".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"})
 
@@ -48,6 +80,8 @@ def _truncate_at_sentence(caption: str) -> str:
 
 def _move_inputs_to_device(inputs: dict, device, dtype) -> dict:
     """Move a HuggingFace processor output dict to *device*/*dtype*."""
+    import torch
+
     return {
         k: (
             v.to(device=device, dtype=dtype)
@@ -72,7 +106,10 @@ class Florence2Service:
         _processor: Loaded Florence-2 processor or None.
         _model_device: torch.device the model is currently resident on.
         _dtype: torch dtype the model is loaded with.
+        _model_variant: Key into :data:`FLORENCE_MODEL_VARIANTS`.
         _model_name: HuggingFace model identifier.
+        _model_revision: Pinned HuggingFace revision for ``_model_name``.
+        _base_vram_mb: Model footprint in MB for the active variant.
         _batch_size: Active batch size for GPU inference.
         _max_tokens: Maximum new tokens per generated caption.
         _last_fallback_reason: Description of the last GPU-to-CPU fallback.
@@ -100,7 +137,11 @@ class Florence2Service:
         self._processor = None
         self._model_device = None
         self._dtype = None
-        self._model_name = "florence-community/Florence-2-base"
+        self._model_variant = DEFAULT_FLORENCE_VARIANT
+        variant = FLORENCE_MODEL_VARIANTS[DEFAULT_FLORENCE_VARIANT]
+        self._model_name = variant["model"]
+        self._model_revision = variant["revision"]
+        self._base_vram_mb = variant["vram_mb"]
         self._batch_size = (
             FLORENCE_BATCH_SIZE_CPU if device == "cpu" else FLORENCE_BATCH_SIZE_GPU
         )
@@ -109,8 +150,68 @@ class Florence2Service:
         self._last_fallback_at: Optional[float] = None
 
     # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def model_variant(self) -> str:
+        """Return the active Florence-2 variant key (see FLORENCE_MODEL_VARIANTS)."""
+        return self._model_variant
+
+    @property
+    def base_vram_mb(self) -> int:
+        """Return the active variant's model footprint in MB.
+
+        The VRAM gate charges this before a batch runs, so it has to track the
+        selected checkpoint rather than staying pinned to base (issue #512).
+        """
+        return self._base_vram_mb
+
+    # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def set_model_variant(self, variant: str) -> None:
+        """Select the Florence-2 checkpoint used for captions and detection.
+
+        Switching variants while a model is resident unloads it so the next
+        :meth:`ensure_ready` picks up the new checkpoint; an unknown key is
+        logged and ignored rather than left to fail deep inside a HuggingFace
+        download.
+
+        Args:
+            variant: A key of :data:`FLORENCE_MODEL_VARIANTS`.
+        """
+        key = str(variant or "").strip() or DEFAULT_FLORENCE_VARIANT
+        spec = FLORENCE_MODEL_VARIANTS.get(key)
+        if spec is None:
+            logger.warning(
+                "Unknown Florence-2 model variant %r; keeping %r. Known variants: %s",
+                variant,
+                self._model_variant,
+                sorted(FLORENCE_MODEL_VARIANTS),
+            )
+            return
+        if key == self._model_variant:
+            return
+        was_loaded = self.is_loaded()
+        logger.info(
+            "Switching Florence-2 variant %r -> %r (%s); loaded=%s",
+            self._model_variant,
+            key,
+            spec["model"],
+            was_loaded,
+        )
+        self._model_variant = key
+        self._model_name = spec["model"]
+        self._model_revision = spec["revision"]
+        self._base_vram_mb = spec["vram_mb"]
+        if was_loaded:
+            # Drop the resident checkpoint; ensure_ready() reloads the new one.
+            self._model = None
+            self._processor = None
+            self._model_device = None
+            self._dtype = None
 
     def is_loaded(self) -> bool:
         """Return True if the model and processor are both loaded."""
@@ -129,7 +230,7 @@ class Florence2Service:
         if self._device == "cuda":
             base_batch = min(
                 base_batch,
-                self._vram_cap_fn(FLORENCE_BASE_VRAM_MB, FLORENCE_PER_IMAGE_VRAM_MB),
+                self._vram_cap_fn(self._base_vram_mb, FLORENCE_PER_IMAGE_VRAM_MB),
             )
         return max(1, base_batch)
 
@@ -137,6 +238,8 @@ class Florence2Service:
         """Return a dict of observable service state for diagnostics."""
         return {
             "florence_loaded": self.is_loaded(),
+            "florence_variant": self._model_variant,
+            "florence_model": self._model_name,
             "florence_fallback_reason": self._last_fallback_reason,
             "florence_fallback_at": self._last_fallback_at,
         }
@@ -209,6 +312,8 @@ class Florence2Service:
         Returns:
             Dict mapping file path → caption string (or None on failure).
         """
+        import torch
+
         logger.debug(
             "_generate_florence_captions_batch called: %d images", len(image_paths)
         )
@@ -314,6 +419,8 @@ class Florence2Service:
             that fail to load are omitted; ``score`` is ``None`` for detectors
             (like Florence ``<OD>``/grounding) that emit no per-box confidence.
         """
+        import torch
+
         if self._model is None:
             logger.error("Florence-2 model is not initialised")
             return {}
@@ -411,13 +518,20 @@ class Florence2Service:
 
     def _init(self) -> None:
         """Load Florence-2 onto the best available device."""
+        import torch
+
         try:
             import transformers
 
             logger.debug("Loading Florence-2 model for captioning...")
             logger.debug("Transformers version: %s", transformers.__version__)
 
-            use_cpu = self._force_cpu_fn() or self._device == "cpu"
+            requested_device = (
+                self._device
+                if isinstance(self._device, torch.device)
+                else torch.device(self._device)
+            )
+            use_cpu = self._force_cpu_fn() or requested_device.type == "cpu"
 
             if use_cpu:
                 logger.debug(
@@ -426,7 +540,7 @@ class Florence2Service:
                 self._load_model(torch.device("cpu"), torch.float32)
                 self._batch_size = FLORENCE_BATCH_SIZE_CPU
                 logger.debug("Florence-2 loaded successfully on CPU")
-            elif torch.cuda.is_available():
+            elif requested_device.type == "cuda" and torch.cuda.is_available():
                 try:
                     logger.debug("Attempting to load Florence-2 on GPU with FP16...")
                     self._load_model(torch.device("cuda"), torch.float16)
@@ -440,22 +554,32 @@ class Florence2Service:
                     self._load_model(torch.device("cpu"), torch.float32)
                     self._batch_size = FLORENCE_BATCH_SIZE_CPU
                     logger.debug("Florence-2 loaded successfully on CPU")
-            else:
-                logger.debug("No GPU available, loading Florence-2 on CPU with FP32...")
-                device = (
-                    self._device
-                    if isinstance(self._device, torch.device)
-                    else torch.device(self._device)
+            elif requested_device.type == "cuda":
+                unavailable = RuntimeError(
+                    "CUDA was explicitly requested but torch.cuda.is_available() is false"
                 )
-                self._load_model(device, torch.float32)
+                self._record_fallback("cuda_unavailable", unavailable)
+                logger.warning(
+                    "CUDA was explicitly requested but is unavailable; loading "
+                    "Florence-2 on CPU with FP32"
+                )
+                self._load_model(torch.device("cpu"), torch.float32)
                 self._batch_size = FLORENCE_BATCH_SIZE_CPU
                 logger.debug("Florence-2 loaded successfully on CPU")
+            else:
+                # Preserve explicitly supported non-CUDA accelerators rather
+                # than silently changing their device. CUDA is special-cased
+                # above because availability has a first-class torch probe.
+                self._load_model(requested_device, torch.float32)
+                self._batch_size = FLORENCE_BATCH_SIZE_CPU
 
         except Exception as e:
             logger.error("Failed to load Florence-2: %s", e)
             logger.error("Try: pip install --upgrade transformers")
 
     def _load_model(self, device: torch.device, dtype) -> None:
+        import torch
+
         from transformers import Florence2Processor, Florence2ForConditionalGeneration
 
         if not isinstance(device, torch.device):
@@ -470,7 +594,7 @@ class Florence2Service:
         self._processor = from_pretrained_local_first(
             Florence2Processor,
             self._model_name,
-            revision=FLORENCE_MODEL_REVISION,
+            revision=self._model_revision,
         )
 
         for attn_impl in ("sdpa", "eager"):
@@ -481,7 +605,7 @@ class Florence2Service:
                     torch_dtype=dtype,
                     device_map=device_map,
                     attn_implementation=attn_impl,
-                    revision=FLORENCE_MODEL_REVISION,
+                    revision=self._model_revision,
                 )
                 break
             except (TypeError, AttributeError, NotImplementedError) as e:
@@ -508,6 +632,8 @@ class Florence2Service:
         logger.warning("[FLORENCE_FALLBACK] %s", reason)
 
     def _reload_on_cpu(self, cause: Optional[Exception] = None) -> bool:
+        import torch
+
         logger.warning(
             "Florence-2 GPU inference failed; attempting to reload on CPU..."
         )
@@ -530,6 +656,8 @@ class Florence2Service:
 
     def _infer_single(self, image: Image.Image) -> Optional[str]:
         """Run inference on a single PIL image and return the caption."""
+        import torch
+
         inputs = self._processor(
             text="<MORE_DETAILED_CAPTION>",
             images=image,
@@ -610,11 +738,28 @@ class Florence2Service:
         return detections
 
     def _is_cuda_error(self, error: Exception) -> bool:
-        return (
-            self._model_device is not None
-            and getattr(self._model_device, "type", "") == "cuda"
-            and "cuda" in str(error).lower()
+        import torch
+
+        if (
+            self._model_device is None
+            or getattr(self._model_device, "type", "") != "cuda"
+        ):
+            return False
+        # PyTorch's typed OOM deliberately does not promise the word "cuda" in
+        # its message. Type identity is the stable signal; the string fallback
+        # retains compatibility with provider/runtime errors raised outside
+        # PyTorch's own exception hierarchy.
+        oom_type = getattr(torch, "OutOfMemoryError", None)
+        cuda_error_type = getattr(torch.cuda, "CudaError", None)
+        typed_cuda_errors = tuple(
+            error_type
+            for error_type in (oom_type, cuda_error_type)
+            if isinstance(error_type, type)
         )
+        if typed_cuda_errors and isinstance(error, typed_cuda_errors):
+            return True
+        message = str(error).lower()
+        return "cuda" in message or "cudnn" in message or "cublas" in message
 
 
 class Florence2Plugin(TaggerPlugin):
@@ -632,7 +777,8 @@ class Florence2Plugin(TaggerPlugin):
     name: str = "florence2"
     display_name: str = "Florence-2"
     description: str = (
-        "Microsoft Florence-2-base — generates natural-language image descriptions."
+        "Microsoft Florence-2 — generates natural-language image descriptions. "
+        "The selected checkpoint also drives the Segment action."
     )
     supports_tags: bool = False
     supports_descriptions: bool = True
@@ -718,6 +864,21 @@ class Florence2Plugin(TaggerPlugin):
                 "default": False,
                 "description": "Use a shorter prompt for faster, less detailed captions.",
             },
+            {
+                "name": "model_variant",
+                "label": "Florence-2 model",
+                "type": "select",
+                "default": DEFAULT_FLORENCE_VARIANT,
+                "options": [
+                    {"value": key, "label": spec["label"]}
+                    for key, spec in FLORENCE_MODEL_VARIANTS.items()
+                ],
+                "description": (
+                    "Larger checkpoints find smaller objects and write richer "
+                    "descriptions, at more VRAM. This one model does both the "
+                    "descriptions and the Segment action."
+                ),
+            },
         ]
 
     def default_params(self) -> dict:
@@ -751,11 +912,16 @@ class Florence2Plugin(TaggerPlugin):
     def init(self, parameters: dict) -> None:
         """Apply parameters and load the model (idempotent).
 
-        Updates ``max_new_tokens`` on the service and then loads the model.
+        Applies ``model_variant`` before ``max_new_tokens`` so a variant switch
+        unloads the previous checkpoint before the reload below.
 
         Args:
-            parameters: Plugin parameters (uses ``max_new_tokens``).
+            parameters: Plugin parameters (uses ``model_variant`` and
+                ``max_new_tokens``).
         """
+        self.service.set_model_variant(
+            parameters.get("model_variant", DEFAULT_FLORENCE_VARIANT)
+        )
         max_tokens = int(parameters.get("max_new_tokens", 120))
         self.service._max_tokens = max_tokens
         self.service.ensure_ready()
@@ -794,7 +960,7 @@ class Florence2Plugin(TaggerPlugin):
         batch = min(max(1, image_count), svc.description_batch_size())
         if svc.is_loaded():
             return int(FLORENCE_PER_IMAGE_VRAM_MB * batch)
-        return int(FLORENCE_BASE_VRAM_MB + FLORENCE_PER_IMAGE_VRAM_MB * batch)
+        return int(svc.base_vram_mb + FLORENCE_PER_IMAGE_VRAM_MB * batch)
 
     def effective_batch_size(self, parameters=None) -> int:
         """Return the VRAM-constrained batch size."""

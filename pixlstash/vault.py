@@ -111,6 +111,14 @@ class Vault:
 
         self.snapshot_service = SnapshotService(self)
         self.restore_service = RestoreService(self)
+        # The server's AuthService, attached by ``Server.__init__`` once it has
+        # been constructed (it takes ``self.db``, so it cannot exist yet here).
+        # The restore path needs it: a full restore replaces the database file,
+        # which invalidates every piece of authentication state held in memory
+        # (see AuthService.reset_after_restore and §18.5). Stays ``None`` for a
+        # Vault built without a Server — tests, the CLI tools — and the restore
+        # path treats that as "nothing to reset".
+        self.auth_service = None
 
         self._engine: InferenceEngine | None = None
         self._force_cpu = force_cpu
@@ -1315,6 +1323,32 @@ class Vault:
                         for t in active_detection_tasks
                     )
                     missing = max(0, total - processed)
+                    worker_active_override = True
+                else:
+                    total = 0
+                    missing = 0
+                    worker_active_override = False
+            elif worker_type == TaskType.DEDUP_SCAN:
+                # A duplicate scan keeps working after it has enumerated every
+                # picture: near buckets and embedding components still remain.
+                # Use the task's cooperative phase counters instead of the
+                # generic library total, which otherwise renders a misleading
+                # "N / N" while the active task is still running.
+                label = "duplicate_scan"
+                active_dedup_tasks = (
+                    self._task_runner.get_active_tasks_of_type("DedupScanTask")
+                    if self._task_runner is not None
+                    else []
+                )
+                if active_dedup_tasks:
+                    snapshots = [task.task_progress() for task in active_dedup_tasks]
+                    total = max(1, sum(snapshot[1] for snapshot in snapshots))
+                    processed = sum(snapshot[0] for snapshot in snapshots)
+                    # The task remains active for a tiny interval after its final
+                    # DB slice returns. Never advertise terminal progress until
+                    # TaskRunner has actually removed it from the active set.
+                    processed = min(processed, total - 1)
+                    missing = total - processed
                     worker_active_override = True
                 else:
                     total = 0

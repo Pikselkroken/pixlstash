@@ -96,6 +96,17 @@
      --------------------------------------------------------------------------- */
   --scrim-surface: rgba(var(--v-theme-surface), 0.55);
   --scrim-photo: rgba(var(--v-theme-scrim), 0.55);
+  /* The same chip, deepened, for a CHROMATIC glyph over an arbitrary photo (the
+     stack badge's per-stack hue). 0.55 is calibrated for a near-white glyph,
+     which reaches for white's luminance and clears 4.76:1 on any photo; a hue
+     cannot. Against 0.55 over a white photo the darkest colour in the stack
+     palette (hue 258) measures 1.62:1 even after normalisation, under the 3:1
+     non-text floor (WCAG 1.4.11). At 0.78 the backing is effectively
+     photo-independent and that worst case reaches 3.98:1. 0.72 was the bare
+     minimum (3.14:1); the extra step is the headroom for a bright photo
+     bleeding through the chip's edge. Only for coloured glyphs: a white glyph
+     stays on `--scrim-photo` so the corner chips keep one weight. */
+  --scrim-photo-strong: rgba(var(--v-theme-scrim), 0.78);
   /* A full-surface dim under a TRANSIENT floating panel (the auto-hide sidebar
      drawer), not a modal. Two jobs: a depth cue that the panel floats over the
      grid, and a tap target for touch dismissal. Deliberately light, because
@@ -124,6 +135,29 @@
      --------------------------------------------------------------------------- */
   --badge-size: 16px; /* min height/width of a count pill (was an ad-hoc 15px) */
   --badge-size-dot: 8px; /* the no-count activity dot (was an ad-hoc 7px) */
+  /* The countdown drain hairline on a self-dismissing transient surface (the
+     action receipt today; the notice card is the obvious second consumer, and
+     naming it now is what stops that surface picking 3px). It is a rendered
+     height, not padding, so it cannot borrow from the spacing scale. */
+  --countdown-h: 2px;
+  /* Vertical hairline inside a control band. Rendered lengths, not gaps, so
+     they cannot borrow from the spacing scale (same reasoning as
+     `--countdown-h`). 24px is not invented — it is already the de-facto value
+     of `.bar-separator` in Toolbar.vue. The taller variant marks a boundary
+     between two CONTEXTS in one container; its one consumer is the grid action
+     pill's search|selection seam (merged-grid-action-pill.md §2). The two
+     differ by height and air only, never by a second colour. */
+  --rule-h: 24px;
+  --rule-h-seam: 32px;
+
+  /* The leading status rail: a vertical stripe that carries a hue beside a
+     block it must not tint. Its first consumer is the Keep-cover-only confirm,
+     where the headline numeral stays `on-surface` (a 22px `error` figure would
+     be the loudest object in the app) and the rail carries the consequence
+     instead. A rendered width, not a gap, for the same reason as
+     `--countdown-h`; three components already carry a raw 3px rail, and naming
+     it is what stops the next one picking a fourth value. */
+  --rail-w: 3px;
   --bar-height: 48px; /* contextual action-bar / toolbar band height */
   /* The right-hand stats rail's fixed column width. Not invented: it is already
      the de-facto constant in `.stats-sidebar` (width/min-width/max-width) and in

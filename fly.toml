@@ -14,6 +14,11 @@ primary_region = 'arn'
 
 [env]
   PIXLSTASH_PORT = '8080'
+  # The demo is a shared instance anyone can reach, including its Settings
+  # pane. Without this it would manufacture install pings in exactly the
+  # cohorts the flag exists to keep clean. Read by
+  # pixlstash/telemetry/sender.py::suppressed_reason.
+  PIXLSTASH_DEMO_MODE = '1'
 
 [http_service]
   internal_port = 8080

@@ -17,7 +17,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
-import { ref, computed } from "vue";
+import { useSelectionStore } from "../../stores/useSelectionStore.js";
+import { useProjectStore } from "../../stores/useProjectStore.js";
+import { useSortStore } from "../../stores/useSortStore.js";
+import { ref } from "vue";
 
 // One seam for every network call: all `src/api/*` modules go through this
 // axios instance, so counting its GETs counts the grid's actual queries.
@@ -27,10 +30,16 @@ const apiPatch = vi.fn();
 const apiPut = vi.fn();
 const apiDelete = vi.fn();
 
-vi.mock("../../utils/apiClient", () => {
-  const isAuthenticated = ref(true);
-  const sessionContext = ref({ scope: "ALL" });
+// Async factory with a local `await import("vue")`: the store imports above
+// pull in apiClient, so this factory runs BEFORE the file's own top-level `vue`
+// import has initialised. Closing over that binding throws "Cannot access
+// __vi_import__ before initialization".
+vi.mock("../../utils/apiClient", async () => {
+  const { ref: makeRef, computed: makeComputed } = await import("vue");
+  const isAuthenticated = makeRef(true);
+  const sessionContext = makeRef({ scope: "ALL" });
   return {
+    onSessionReset: () => () => {},
     apiClient: {
       get: (...args) => apiGet(...args),
       post: (...args) => apiPost(...args),
@@ -43,7 +52,7 @@ vi.mock("../../utils/apiClient", () => {
     checkLoginStatus: vi.fn(),
     checkSession: vi.fn(),
     isAuthenticated,
-    isReadOnly: computed(() => false),
+    isReadOnly: makeComputed(() => false),
     login: vi.fn(),
     logout: vi.fn(),
     sessionContext,
@@ -105,7 +114,25 @@ function gridQueryCount() {
   }).length;
 }
 
-function mountGrid(props = {}) {
+// Selection, project and sort state live in the stores now; the old
+// `mountGrid({ projectViewMode: ... })` prop overrides write them instead.
+function mountGrid(state = {}) {
+  const selectionStore = useSelectionStore();
+  const projectStore = useProjectStore();
+  const sortStore = useSortStore();
+  selectionStore.selectedCharacter = ALL_PICTURES_ID;
+  selectionStore.selectedSet = null;
+  selectionStore.selectedSetIds = [];
+  projectStore.projectViewMode = "global";
+  projectStore.selectedProjectId = null;
+  sortStore.selectedSort = "DATE";
+  sortStore.selectedDescending = true;
+  for (const [key, value] of Object.entries(state)) {
+    if (key in projectStore) projectStore[key] = value;
+    else if (key in sortStore) sortStore[key] = value;
+    else selectionStore[key] = value;
+  }
+
   return mount(ImageGrid, {
     shallow: true,
     global: {
@@ -116,20 +143,7 @@ function mountGrid(props = {}) {
         compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
       },
     },
-    props: {
-      backendUrl: "/api/v1",
-      allPicturesId: ALL_PICTURES_ID,
-      unassignedPicturesId: "UNASSIGNED",
-      scrapheapPicturesId: "SCRAPHEAP",
-      selectedCharacter: ALL_PICTURES_ID,
-      selectedSet: null,
-      selectedSetIds: [],
-      projectViewMode: "global",
-      selectedProjectId: null,
-      selectedSort: "DATE",
-      selectedDescending: true,
-      ...props,
-    },
+    props: { backendUrl: "/api/v1" },
   });
 }
 

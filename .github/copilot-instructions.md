@@ -9,16 +9,36 @@
 
 ## Project Architecture
 
-Use the following architecture documents depending on the scope of the task:
+Use the following architecture documents depending on the scope of the task.
+
+**Read them by section, never end to end.** These are reference manuals, not
+preambles: `backend_architecture.md` is ~82k tokens, `frontend_architecture.md`
+~53k, `integration_architecture.md` ~24k. Reading all three costs ~160k tokens
+before you have looked at a single line of code, and almost all of it will be
+about subsystems you are not touching. The required move is:
+
+1. Read the **Table of Contents** at the top of the relevant document.
+2. Read **only the sections that cover the code you are about to change**, plus
+   any section the ToC or a cross-reference explicitly points you to.
+3. Widen only when what you read turns out to be insufficient.
+
+`grep -n '^## ' docs/backend_architecture.md` gives you the section map and line
+numbers; `sed -n 'START,ENDp'` reads one section. A whole-file read of any of
+these three documents is a mistake unless you are deliberately auditing the
+document itself.
+
+Scope, once you are reading by section:
 
 1. Frontend tasks:
-   Always read and follow `/docs/frontend_architecture.md`.
+   The relevant sections of `/docs/frontend_architecture.md`.
 
 2. Backend tasks:
-   Always read and follow `/docs/backend_architecture.md`.
+   The relevant sections of `/docs/backend_architecture.md`.
 
 3. Full‑stack tasks (involving both frontend and backend):
-   Read and follow both documents plus `/docs/integration_architecture.md` for guidance on how to integrate frontend and backend changes effectively.
+   The relevant sections of both documents, plus the `/docs/integration_architecture.md`
+   sections covering the contract you are changing (§2 API surface, §8 event
+   contract, and whichever feature section applies).
 
 4. Any task that adds or changes UI (a new feature, a component, a screen, a control):
    The **design manual in `/docs/design/` is mandatory, not advisory.** Read
@@ -130,9 +150,31 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 - **Build frontend:** `npm run build` (in `frontend/`)
 - **Dev frontend:** `npm run dev` (in `frontend/`)
 
+## New test files must be gated in CI
+
+Every file under `tests/` must be either listed in the `backend` job's file list in `.github/workflows/ci.yml` (preferred, since it then blocks PRs) or listed in `DEFERRED_FROM_GATE` in `tests/test_ci_shards.py` with a reason if it is not green yet. `tests/test_ci_shards.py::test_every_test_file_is_classified` fails the build on anything unclassified, so a new suite that is written and passing locally still breaks CI until it is listed. Add the file in alphabetical position as part of the same change that adds the test.
+
+**Do not try to place a test in a particular shard.** The blocking gate runs `--ci-shard N/8`, which deals every collected test round-robin by position (`tests/conftest.py`), so all eight shards share one file list and a single file's tests spread across all of them. There is no per-shard list to pick, and assignment shifts for every test collected after an insertion point, so per-shard timings reshuffle on each run anyway.
+
+Shards are therefore equal in test *count*, never in test *time*, and the residual imbalance (measured at 1.62x, roughly 460 s of idle runner) cannot be improved by where a file is added. Closing it needs time-aware assignment fed by real per-test durations, which the gate does not currently record: `PYTEST_FLAGS` carries no `--durations`, so CI exposes per-shard step totals only. That is its own change, not something to improvise while adding a test.
+
 ## Reviews
 
 If asked to do a review on a branch, write the review into docs/reviews/NAME_OF_BRANCH.md
+
+**`docs/reviews/` is gitignored on purpose: reviews stay on the machine that
+wrote them and are not pushed to GitHub.** So do not force-add a review doc, and
+do not "fix" the ignore rule. Two consequences worth knowing:
+
+- The rule only affects *new* files. Review docs added before it exist are still
+  tracked, and `.gitignore` does not apply to a tracked file. Editing one of
+  those: plain `git add` fails with "paths are ignored by one of your .gitignore
+  files", so use `git add -u docs/reviews/<file>`.
+- **Nothing CI-enforced may read a file under `docs/reviews/`**, because a fresh
+  checkout is not guaranteed to have it. Living contract documents therefore live
+  in `docs/` proper, not in `docs/reviews/`. The authz coverage matrix is the
+  worked example: it is `docs/authz-coverage-matrix.md`, tracked, and parsed by
+  `tests/test_architecture_guardrails.py::test_coverage_matrix_document_matches_the_registry`.
 
 ## Security & authorization review process
 
@@ -151,8 +193,8 @@ Mandatory for any change touching authentication, authorization, or access-scope
 
 - **A new or modified data endpoint's only required action is to add its `(method, effective_path) → RoutePolicy(...)` entry to `ROUTE_POLICIES`.** Pick the `AccessPolicy` that fits: `PICTURE_SCOPED` / `SET_SCOPED` / `CHARACTER_SCOPED` / `PROJECT_SCOPED` (+ `id_param=` or `body_ids=`), `SCOPED_LIST`, `OWNER_ONLY`, `LOCAL_OWNER_ONLY` / `LOOPBACK_OWNER_ONLY` (§16.3 host-capability, `justification=` mandatory), `PUBLIC` (`justification=` mandatory), or `ANY_TOKEN` (returns no per-object data). The enum is closed — a genuinely new access level is a deliberate edit to `policy.py` + tests.
 - **Do NOT** add inline `enforce_picture_scope` / `require_unscoped_owner` / `token_scope` ladders in handlers — the gate owns them, and a duplicate check is debt to be removed, not added. Flag any new per-handler authz check in review.
-- **The only surviving inline object checks** are the 4 name-derived `resolved_inline=True` routes (by-name set/character/project — the gate cannot resolve name→id without duplicating handler logic). Do not remove those inline checks until a shared name→id resolver exists. They are recorded in `docs/backend_architecture.md` §16.1 and the coverage matrix.
-- **The disciplines still apply.** The coverage matrix (`docs/reviews/authz-coverage-matrix.md`) must stay arithmetically complete (the CI guardrail enforces it); tests in both directions (out-of-scope 403 AND in-scope 200 — over-blocking is its own regression) are mandatory for any authz change; and an independent adversarial sign-off (author must not certify their own security work) gates any change to the gate, the registry's scope declarations, or the membership helpers. See `docs/backend_architecture.md` §16.2 (shipped design) and §16.3 for the host-capability tiers.
+- **The only surviving inline object checks** are the 4 name-derived `resolved_inline=True` routes (by-name set/character/project — the gate cannot resolve name→id without duplicating handler logic). All four also carry an inline `enforce_project_path_scope` call on the **project** named in their path, which the gate's query-param chokepoint cannot see; it must run on the resolved id *before* any membership query, or the route's 404 branches become a project-existence oracle (#708). Do not remove either inline check until a shared name→id resolver exists. They are recorded in `docs/backend_architecture.md` §16.1 / §16.6 and the coverage matrix.
+- **The disciplines still apply.** The coverage matrix (`docs/authz-coverage-matrix.md`) must stay arithmetically complete (the CI guardrail enforces it); tests in both directions (out-of-scope 403 AND in-scope 200 — over-blocking is its own regression) are mandatory for any authz change; and an independent adversarial sign-off (author must not certify their own security work) gates any change to the gate, the registry's scope declarations, or the membership helpers. See `docs/backend_architecture.md` §16.2 (shipped design) and §16.3 for the host-capability tiers.
 - **Rollback:** `AUTHZ_GATE_ENFORCING = False` in `pixlstash/authz/gate.py` reverts both object-enforcement and unknown-route fail-closed in one line, leaving declarations and helpers in place.
 
 ## Conventions & Patterns

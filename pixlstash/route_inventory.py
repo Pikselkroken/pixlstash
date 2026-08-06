@@ -35,6 +35,7 @@ This is acceptable because WS routes are acknowledged, not gated, in Phase 1.
 from collections.abc import Iterator
 
 import fastapi
+import fastapi.dependencies.models
 import fastapi.routing
 from fastapi.routing import APIWebSocketRoute
 from starlette.routing import WebSocketRoute
@@ -65,6 +66,34 @@ if iter_route_contexts is None:  # pragma: no cover - import-time invariant
         "docs/backend_architecture.md §16.2."
     )
 
+# Fields of FastAPI's ``Dependant`` that :func:`flatten_dependant_fields` walks.
+# This is the whole contract the parameter enumeration rests on, so its absence
+# must surface as a named error rather than a silently empty result.
+#
+# The enumeration deliberately does NOT use
+# ``fastapi.dependencies.utils.get_flat_dependant``. That helper was removed in
+# FastAPI 0.141. ``Dependant`` itself is a plain dataclass whose
+# ``*_params``/``dependencies`` fields are what FastAPI's own flattening has
+# always walked, and they survived that removal — so depending on the shape is
+# both more stable than depending on the helper and, when it does break, breaks
+# naming the missing field.
+#
+# **Checked here, raised in the function** — not at import. The removed helper
+# was guarded by a module-scope ``raise``, so its disappearance took down every
+# importer of this module: ``authz.gate`` imports it, ``server`` imports that,
+# ``conftest`` imports that, and an entire CI shard failed at collection over a
+# capability only a guardrail uses. Nothing in the request path needs these
+# fields (the gate matches raw ``request.query_params``), so a test-only
+# capability must not be able to stop the server from importing. The
+# ``iter_route_contexts`` guard above stays at module scope precisely because
+# the gate genuinely cannot work without it.
+_DEPENDANT_FIELDS = ("query_params", "body_params", "dependencies")
+_MISSING_DEPENDANT_FIELDS = tuple(
+    name
+    for name in _DEPENDANT_FIELDS
+    if not hasattr(fastapi.dependencies.models.Dependant(), name)
+)
+
 # HTTP methods FastAPI/Starlette add automatically for a declared handler. They
 # are not endpoints an author declares a policy for, so the inventory omits them
 # to keep ``(method, path)`` pairs aligned with the coverage matrix's cells.
@@ -79,6 +108,7 @@ ROUTE_MODULE_PREFIX = "pixlstash.routes."
 Endpoint = tuple[str, str]  # (method, path_template), e.g. ("GET", "/pictures/{id}")
 RouteContext = tuple[str, str, object]  # (method, path_template, original_route)
 WebSocketEndpoint = tuple[str, str]  # (name, path_template)
+QueryParam = tuple[str, str, str]  # (method, path_template, query_param_name)
 
 
 def iter_api_route_contexts(app) -> Iterator[RouteContext]:
@@ -130,6 +160,87 @@ def iter_api_endpoints(app) -> Iterator[Endpoint]:
 def api_endpoint_set(app) -> set[Endpoint]:
     """Return the set of ``(method, path_template)`` HTTP endpoints on ``app``."""
     return set(iter_api_endpoints(app))
+
+
+def flatten_dependant_fields(dependant, field_name: str) -> list:
+    """Return ``dependant.<field_name>`` plus every nested ``Depends(...)``'s.
+
+    ``field_name`` is one of :data:`_DEPENDANT_FIELDS` — in practice
+    ``"query_params"`` (the project-filter coverage guardrail, §16.6) or
+    ``"body_params"`` (the body project-reference guardrails). A parameter
+    contributed one level down in a shared dependency is therefore enumerated
+    exactly like one the handler declares itself, which is the whole point: a
+    filter hidden behind ``Depends`` is still a filter the gate must refuse.
+
+    This is the same traversal FastAPI performs internally, kept here rather than
+    borrowed because the helper that used to expose it
+    (``fastapi.dependencies.utils.get_flat_dependant``) was removed in 0.141 —
+    see :data:`_DEPENDANT_FIELDS`. Repeats are skipped by dependant identity, so
+    a dependency shared by several sub-dependencies is walked once and a
+    pathological tree cannot blow up; every caller reduces to a set of names, so
+    the weaker identity-based dedupe (FastAPI keyed on the callable) is not
+    observable in the result.
+
+    Raises ``RuntimeError`` if the installed FastAPI's ``Dependant`` no longer
+    carries the fields this walks — see :data:`_DEPENDANT_FIELDS` for why that is
+    raised here and not at import.
+    """
+    if _MISSING_DEPENDANT_FIELDS:  # pragma: no cover - depends on FastAPI version
+        raise RuntimeError(
+            "fastapi.dependencies.models.Dependant is missing "
+            f"{', '.join(_MISSING_DEPENDANT_FIELDS)} (installed FastAPI "
+            f"{getattr(fastapi, '__version__', 'unknown')}). The route inventory "
+            "walks those fields to enumerate every declared parameter, including "
+            "ones contributed by nested Depends(...), which is what makes the "
+            "project-filter coverage check (§16.6) arithmetic rather than a "
+            "human-remembered rule. Fix pixlstash/route_inventory.py before "
+            "trusting any parameter-coverage claim."
+        )
+    collected: list = []
+    seen: set[int] = set()
+    pending = [dependant]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        collected.extend(getattr(current, field_name))
+        pending.extend(reversed(current.dependencies))
+    return collected
+
+
+def iter_api_query_params(app) -> Iterator[QueryParam]:
+    """Yield ``(method, path_template, name)`` for every declared query parameter.
+
+    The name is the wire name (the ``alias`` when the handler declares one),
+    because that is what arrives in ``request.query_params`` and therefore what
+    ``authz.membership.enforce_project_filter_scope`` matches on. Parameters
+    contributed by nested ``Depends(...)`` are included, via
+    :func:`flatten_dependant_fields`, so a filter parameter hidden one level down
+    in a shared dependency is still enumerated.
+
+    Routes without a ``dependant`` (FastAPI's own ``/docs`` and
+    ``/openapi.json``, which are plain Starlette routes) declare no parameters
+    and are skipped. Shares the walk in :func:`iter_api_route_contexts`, so this
+    and the endpoint inventory can never disagree about which routes exist.
+
+    Blind spot: a handler that takes its query parameters as a single Pydantic
+    model (``Annotated[SomeFilters, Query()]``) contributes that model as ONE
+    field, so its member names are not enumerated here. No route does that today;
+    if one is added, this must expand the model's fields or the §16.6 check will
+    quietly stop covering it.
+    """
+    for method, path, route in iter_api_route_contexts(app):
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        for field in flatten_dependant_fields(dependant, "query_params"):
+            yield (method, path, getattr(field, "alias", None) or field.name)
+
+
+def api_query_param_names(app) -> set[str]:
+    """Return the distinct query-parameter names declared anywhere on ``app``."""
+    return {name for _method, _path, name in iter_api_query_params(app)}
 
 
 def route_module_names(app) -> set[str]:

@@ -17,7 +17,7 @@ from pixlstash.db_models import (
     Tag,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services import scrapheap_service
+from pixlstash.services import import_dedup_service, scrapheap_service
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import (
     normalize_hidden_tags,
@@ -109,8 +109,18 @@ def _create_picture_imports(
 ):
     """
     Given a list of (img_bytes, ext), create Picture objects for new images,
-    skipping duplicates based on pixel_sha hash.
-    Returns (shas, existing_map, new_pictures)
+    skipping content already in the vault (live OR scrapheaped) by pixel_sha.
+    Returns (fingerprints, existing_map, scrapheaped_map, new_picture_map)
+
+    **A scrapheaped match is skipped too, and reported separately.** This call
+    site used to ask ``Picture.find(..., pixel_shas=shas)``, whose
+    ``include_deleted`` defaults to False, so a soft-deleted picture was
+    invisible here and its file imported again as a brand-new second row. The
+    lookup now goes through :mod:`pixlstash.services.import_dedup_service`,
+    which sees soft-deleted rows *for this query only*, ``Picture.find``'s
+    default is unchanged, so no listing, search, count or dedup query gains
+    deleted rows. See that module for the full rationale and for why a
+    permanently purged file is correctly NOT a match.
 
     Args:
         server: The server instance.
@@ -118,48 +128,65 @@ def _create_picture_imports(
         dest_folder: Destination folder for images.
         progress_callback: Optional callable invoked after each image is written
             to disk. Receives no arguments. Used for incremental progress tracking.
+
+    Returns:
+        ``(fingerprints, existing_map, scrapheaped_map, new_picture_map)``.
+        Maps use ``(sampled_sha, size_bytes, full_sha)`` keys, so sampled-hash
+        collisions remain distinct throughout a batch. ``new_picture_map`` has
+        one Picture per unique new file; repeated identical uploads share it.
     """
 
-    def create_sha(img_bytes):
-        return ImageUtils.calculate_hash_from_bytes(img_bytes)
-
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        shas = list(
-            executor.map(create_sha, (img_bytes for img_bytes, *_ in uploaded_files))
+    def create_fingerprint(img_bytes):
+        return (
+            ImageUtils.calculate_hash_from_bytes(img_bytes),
+            len(img_bytes),
+            ImageUtils.calculate_full_hash_from_bytes(img_bytes),
         )
 
-    existing_pictures = server.vault.db.run_immediate_read_task(
-        lambda session: Picture.find(session, pixel_shas=shas, include_unimported=True)
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        fingerprints = list(
+            executor.map(
+                create_fingerprint,
+                (img_bytes for img_bytes, *_ in uploaded_files),
+            )
+        )
+
+    candidates = server.vault.db.run_immediate_read_task(
+        import_dedup_service.load_match_candidates_in_session,
+        [(sampled, size) for sampled, size, _full in fingerprints],
+    )
+    existing_map, scrapheaped_map = import_dedup_service.partition_confirmed_matches(
+        candidates, fingerprints, server.vault.image_root
     )
 
-    existing_map = {pic.pixel_sha: pic for pic in existing_pictures}
-
-    importable = [
-        (entry, sha)
-        for (entry, sha) in zip(uploaded_files, shas)
-        if sha not in existing_map
-    ]
-
-    if importable:
-        new_pictures = []
-        for file_entry, sha in importable:
+    new_picture_map = {}
+    for file_entry, fingerprint in zip(uploaded_files, fingerprints):
+        if (
+            fingerprint in existing_map
+            or fingerprint in scrapheaped_map
+            or fingerprint in new_picture_map
+        ):
+            continue
+        sampled_sha, _size_bytes, _full_sha = fingerprint
+        try:
             img_bytes, ext, original_name = file_entry
             pic_uuid = str(uuid.uuid4()) + ext
             logger.debug(f"Importing picture from uploaded bytes as id={pic_uuid}")
-            pic = ImageUtils.create_picture_from_bytes(
+            new_picture_map[fingerprint] = ImageUtils.create_picture_from_bytes(
                 image_root_path=dest_folder,
                 image_bytes=img_bytes,
                 picture_uuid=pic_uuid,
-                pixel_sha=sha,
+                pixel_sha=sampled_sha,
                 original_file_name=original_name,
             )
-            new_pictures.append(pic)
             if progress_callback is not None:
                 progress_callback()
-    else:
-        new_pictures = []
+        except Exception:
+            # Preserve the existing failure behaviour: creation errors escape to
+            # the task wrapper, which reports the import failed.
+            raise
 
-    return shas, existing_map, new_pictures
+    return fingerprints, existing_map, scrapheaped_map, new_picture_map
 
 
 def _normalise_sidecar_stem(filename: str) -> str:

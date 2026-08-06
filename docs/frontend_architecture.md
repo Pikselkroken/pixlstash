@@ -41,6 +41,7 @@ frontend/src/
 │   └── design-tokens.css        # Design-system tokens: spacing, radius, type ramp, elevation, motion, colour
 │
 ├── stores/                      # Pinia stores (cross-component shared state)
+│   ├── useViewStore.js          # route → view resolution: the app's ONE route watcher (see §4.5)
 │   ├── useSelectionStore.js
 │   ├── useFilterStore.js
 │   ├── useSortStore.js
@@ -56,6 +57,9 @@ frontend/src/
 │   ├── useLockedSetsStore.js    # which pictures are frozen by a locked picture set
 │   ├── useReviewSessionsStore.js # tag-review sessions, health board, and sticker gamification
 │   ├── useEntityNamesStore.js   # id→name maps for the ImageGrid breadcrumb
+│   ├── useEntityListsStore.js   # the shared character/set/project LISTS (stale-while-revalidate)
+│   ├── useOperationStore.js     # the undo/redo stack + the action receipt (backend §21)
+│   ├── useDedupStore.js         # the duplicate triage queue, its live counts and the tier gate
 │   └── useTasksStore.js         # active background work (workers + ComfyUI runs); app-wide activity light
 │
 ├── composables/                 # Extracted logic composables (Phase 8.1 — complete)
@@ -69,8 +73,13 @@ frontend/src/
 │   ├── useGridRealtimeSync.js   # WebSocket picture-event decision table for ImageGrid (see §9)
 │   ├── useBreadcrumb.js         # Current-view breadcrumb trail from route + id→name maps; shared by in-grid nav and TitleBar
 │   ├── useReviewRoute.js        # URL ⇄ tag-review overlay (`?review=…`); mirrors ImageGrid's `?overlay=` mechanics (+ *.test.js)
+│   ├── useActionReceipt.js      # The receipt contract (wording, keycaps, drain, pause, focus) shared by the grid pill and the lightbox's own narration
 │   ├── useVersionCheck.js       # "New version available" check (pixlstash.dev poll); single owner gated by `enabled`
 │   ├── useSidebarExpansion.js   # Which sidebar sections / projects / folders are open; localStorage-backed (+ *.test.js)
+│   ├── useDedupQueueKeyboard.js # The duplicate queue's key model, as a dependency-injected factory (+ *.test.js)
+│   ├── useDedupRowExpansion.js  # The queue row's one stack-expansion band: the "one open, on the focused row" invariant + the lazy member read (+ *.test.js)
+│   ├── useMixedStackQueue.js    # The Mixed stacks queue's view state: focus, selection, stranger marks and the member cursor (+ *.test.js)
+│   ├── useOneTimeNotice.js      # A notice shown once per browser and then never again; localStorage-backed (+ *.test.js)
 │   └── useSubmitGuard.js        # One in-flight submit at a time + the `pending` flag its button wears — see §10.2 (+ *.test.js)
 │
 ├── api/                         # Backend resource modules: the only place URL strings live (see §8)
@@ -83,7 +92,7 @@ frontend/src/
 │   ├── reviews.js               # /reviews — tag-review session bookkeeping
 │   ├── tagSuggestions.js        # /tag_suggestions — per-card review decisions
 │   ├── tagHealth.js             # /tag_health — board rows + cache rebuild
-│   ├── comfyui.js               # /comfyui/* — workflows, run, abort
+│   ├── comfyui.js               # /comfyui/* — workflows, run, recipe read/replay, abort
 │   ├── taggers.js               # /taggers, /tagger/label-thresholds
 │   ├── folders.js               # /reference-folders, /import-folders, /filesystem/*
 │   ├── characters.js            # /characters + faces + reference pictures
@@ -91,17 +100,21 @@ frontend/src/
 │   ├── pictureSets.js           # /picture_sets + membership + locked members
 │   ├── tags.js                  # /tags, /pictures/{id}/tags, tag predictions
 │   ├── pictureImport.js         # streaming-staging import session (was useImportService)
+│   ├── operations.js            # /operations — the undo/redo log, undo-state, undo/redo
 │   ├── stacks.js                # /stacks — create, order, members
 │   └── pictures.js              # /pictures — reads, count, stream, searches, stats
 │                                # every module has a co-located *.test.js
 │
 ├── utils/
 │   ├── apiClient.js             # Axios instance, auth state, session/token helpers
+│   ├── characterCreateFlow.js   # Pure helpers for the context-menu create-person flow: default naming + face-vs-picture assignment choice (+ *.test.js)
 │   ├── clipboard.js             # Cross-browser clipboard write helper
 │   ├── descriptions.js          # Pure helpers for picture-description formatting/normalisation
 │   ├── dockerHelpers.js         # Pure helpers for Docker volume/mount path building
+│   ├── keepCoverOnly.js         # Keep-cover-only: the copy + the two selection computations, pure (+ *.test.js)
 │   ├── media.js                 # File extension lists, file-type predicates, drop-target helpers
 │   ├── setAppearance.js         # Picture-set icon/colour palette constants (kept in sync with backend)
+│   ├── sidebarCounts.js         # Which count field the sidebar reads per view mode, pure (+ *.test.js)
 │   ├── snapshots.js             # Snapshot kind→chip-colour and relative-date helpers (shared by snapshot UIs)
 │   ├── stack.js                 # Pure stack-ordering and leader-selection utilities
 │   ├── tags.js                  # Tag normalisation, deduplication, penalty scoring
@@ -113,8 +126,8 @@ frontend/src/
 └── components/
     ├── TitleBar.vue             # Desktop-only custom window title bar (Electron): wordmark, breadcrumb, window controls, update alert
     ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
-    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, LoginScreen
-    ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbComfyPanel/TbExportPanel/TbImportPanel/GbFilterPanel, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
+    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, LoginScreen
+    ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbComfyPanel/TbExportPanel/TbImportPanel/GbFilterPanel/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
     ├── reviews/     # Tag-review surfaces (see below)
     │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
     │   ├── ReviewRail.vue             # Rail of open review sessions
@@ -129,8 +142,8 @@ frontend/src/
     │   └── tagHealthBoardLogic.js     # Pure board estimate/threshold helpers (+ *.test.js)
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
-    ├── io/          # Import / export / external-service connection
-    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel)
+    ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
+    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), and the Stack* family (badge, edge ticks, expansion strip)
 ```
 
 ---
@@ -141,9 +154,9 @@ frontend/src/
 |---------|--------|
 | Framework | Vue 3 (Composition API, `<script setup>`) |
 | UI component library | Vuetify 3 |
-| State management | **Pinia** — 16 domain stores in `src/stores/`; `App.vue` owns only UI-shell state |
+| State management | **Pinia** — 21 domain stores in `src/stores/`; `App.vue` owns only UI-shell state |
 | HTTP client | Axios (singleton `apiClient`) |
-| Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`) render `App.vue` via `<RouterView>`. `App.vue` watches the route and syncs params to Pinia stores; nav handlers call `router.push()` to update the URL. **The route is the single source of truth for what the grid shows** — only explicit entry clicks push routes; sidebar tab/category switches never do (see Key Design Principles). |
+| Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`, `/duplicates`) render `App.vue` via `<RouterView>`. `useViewStore` owns the app's single route watcher and syncs params to Pinia stores (§4.5); `App.vue`'s nav handlers call `router.push()` to update the URL. `/duplicates` is deliberately NOT a grid view: `parseRouteView` returns `null` for it, so the selection stores keep whatever the user was looking at. **The route is the single source of truth for what the grid shows** — only explicit entry clicks push routes; sidebar tab/category switches never do (see Key Design Principles). |
 | Build tool | Vite 5 |
 | Unit tests | Vitest (jsdom environment) — test files co-located as `*.test.js` in `utils/` |
 | End-to-end tests | Playwright (`frontend/e2e/`) — drives the real SPA against a backend booted on a throwaway copy of the `test-data/` fixture. See `frontend/e2e/README.md`. |
@@ -152,7 +165,7 @@ frontend/src/
 ### Key Design Principles
 
 - **Pinia for cross-component state.** All state shared across more than one component lives in a Pinia store in `src/stores/`. `App.vue` owns only layout-shell state (sidebar/stats visibility, pending import counts) that is not consumed anywhere else.
-- **Sidebar tabs are stateless; the route is the single source of truth for the grid view.** Switching a sidebar tab/category (People / Sets / Projects / Folders, and the Global ↔ Project mode) is a *pure sidebar-display* operation: it only changes which list of entries the sidebar renders. It must **not** call `router.push()`, must **not** emit any `select-*` / navigation event, and must **not** write to the filter / selection / sort / grid stores. The grid keeps showing whatever the current route resolves to. Only an explicit **entry click** (a specific character / set / project) navigates, via `router.push()`. This decoupling is what lets a user stay on a global view, switch to the Projects tab purely to reveal its entries as **drop targets**, and drag the current selection onto a project or one of its characters without losing the view they found the pictures in. See [§5 → SideBar.vue](#sidebarvue--9-320-lines).
+- **Sidebar tabs are stateless; the route is the single source of truth for the grid view.** Switching a sidebar tab/category (People / Sets / Projects / Folders, and the Global ↔ Project mode) is a *pure sidebar-display* operation: it only changes which list of entries the sidebar renders. It must **not** call `router.push()`, must **not** emit any `select-*` / navigation event, and must **not** write to the filter / selection / sort / grid stores. The grid keeps showing whatever the current route resolves to. Only an explicit **entry click** (a specific character / set / project) navigates, via `router.push()`. This decoupling is what lets a user stay on a global view, switch to the Projects tab purely to reveal its entries as **drop targets**, and drag the current selection onto a project or one of its characters without losing the view they found the pictures in. See [§5 → SideBar.vue](#sidebarvue-6989-lines).
 - **Composables for reusable logic.** Complex logic extracted from mega-components lives in `src/composables/` as `useX()` functions. Composables accept dependencies as parameters and are independently unit-testable.
 - **Flat component structure.** All components sit directly in `src/components/` with sub-directories by domain (`views/`, `panels/`, `editors/`, `settings/`, `io/`, `widgets/`). Shared presentational sub-components (e.g. `StarRatingOverlay`, `ProgressOverlay`) live in `widgets/`.
 - **Utilities are pure functions.** Every file in `src/utils/` exports only plain functions and constants; none hold reactive state themselves (except `apiClient.js`, which holds `isAuthenticated`, `sessionContext`, and `isReadOnly`).
@@ -182,10 +195,11 @@ Authentication gate rendered before `App`. On mount:
 
 The application shell. Responsibilities:
 - Owns **layout-shell state** only: sidebar/stats visibility. All domain state has moved to Pinia stores; the pill ids live in `useWsStore`.
+- Owns **route pushing** (`pushAppRoute` / `pushRouteForCurrentSelection`) and calls `useViewStore().startRouteSync(route, { watch })` once. Reading the route back into stores is `useViewStore`'s job, not App.vue's (see §4.5).
 - Renders the three-panel layout: `SideBar` | `ImageGrid` (+ `Toolbar`) | `StatsSidebar`.
 - Manages the `PhotosImportDialog`.
 - Owns the **WebSocket lifecycle only** (connect / reconnect / close / `set_filters`); the picture-event decision table is delegated to `useGridRealtimeSync` (see §9).
-- Handles global keyboard shortcuts, window drag/drop, paste events.
+- Handles global keyboard shortcuts, window drag/drop, paste events. Undo/redo (`Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z`, Meta accepted everywhere) lives in `handleGlobalKeydown` and declines in four cases, each for its own reason: while typing (a text field keeps its native undo stack), in a read-only session, on key auto-repeat (a held `Ctrl+Z` must not walk the stack), and while a modal **dialog** owns the screen — the receipt sits on `--z-floating`, under every dialog scrim, so an undo fired from there would mutate the library with no visible narration. See "Undo has three keyboard owners" below for the two surfaces that own the chord themselves.
 - Fetches user config on startup (`GET /users/me/config`) and applies persisted preferences via the relevant stores.
 - Persists sidebar/stats open state to `localStorage`.
 
@@ -201,6 +215,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 
 | Store | File | Key State |
 |-------|------|-----------|
+| `useViewStore` | `useViewStore.js` | The route's parsed reflection: `view` (the resolved view descriptor) and `activeFolderKey`. Owns the app's **single route watcher** and is the only writer of route-derived selection/project state. Never pushes a route. See §4.5. |
 | `useSelectionStore` | `useSelectionStore.js` | `selectedCharacter`, `selectedCharacterIds`, `selectedSet`, `selectedSetIds`, `selectedFolderFilter` |
 | `useFilterStore` | `useFilterStore.js` | `mediaTypeFilter`, `minScoreFilter`, `maxScoreFilter`, `tagFilter`, `tagRejectedFilter`, `faceBboxFilter`, `sharedOnlyFilter`, `unassignedOnlyFilter`, etc. |
 | `useSortStore` | `useSortStore.js` | `selectedSort`, `selectedDescending`, `sortOptions`, `similarityCharacterOptions`, `selectedSimilarityCharacter` |
@@ -215,7 +230,10 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useReviewSessionsStore` | `useReviewSessionsStore.js` | Tag-review state: the tag-health board, the rail of open review sessions (each = one tag + frozen scope + one scan's results), and the per-session binary/pair card queues. Per-item decisions write through `/tag_suggestions`; session bookkeeping talks to `/reviews`, the board to `/tag_health`. Also owns the opt-in gamification — variable-ratio sticker awards with monotonic XP / level / streak counters; the sticker vocabulary is imported from `setAppearance.js` so sets and stickers never drift. |
 | `useLockedSetsStore` | `useLockedSetsStore.js` | Which pictures are frozen by a locked picture set. Fed by `GET /picture_sets/locked-members`; refreshed on app start and on the same sidebar-refresh / `pictures_changed` ws triggers the sidebar uses. Single source of the lock-tooltip copy reused by the grid badge, overlay chip, and context-menu gating. |
 | `useGenStackPrefsStore` | `useGenStackPrefsStore.js` | Remembered client prefs for whether newly generated / filtered images stack with their source: `stackI2IOutputs` (ComfyUI image-to-image) and `stackFilterOutputs` (plugin "Filters" runs), both default ON and persisted to `localStorage`. |
+| `useEntityListsStore` | `useEntityListsStore.js` | The character / picture-set / project **lists** themselves (`characters`, `pictureSets`, `projects`) plus `fetchedAt` and `pending` per kind. One cache for the three surfaces that need them — the `SideBar` tree, the image context menu's Person/Set/Project flyouts, and the tag-review scope pickers. **Stale-while-revalidate:** a caller renders the cached list immediately and calls `refresh(kind)` *without awaiting it*, so opening a flyout never waits on the network; concurrent callers share one in-flight request (`inFlight`, modelled on `useDedupStore.scopeCounts`). `invalidate(kinds)` is **refetch-only** — a `characters_changed` ws event or a local assignment says "ask again", it never writes the store from a payload (`origin_client_id` is echo-matching, not authority; see §9 and integration_architecture.md §8.1). **These are `SCOPED_LIST` routes, so their content is an authorization decision:** the cache is in-memory only (never `localStorage`/`sessionStorage`), `reset()` drops it on every auth-context transition via the single `onSessionReset` chokepoint in `apiClient` (logout / login / share-token entry / vault switch), and an epoch guard discards any response that was in flight across that transition. Revalidate-on-open is mandatory rather than an optimisation: a share/scoped session receives no ws events (the stream is owner-only), so it is that session's only invalidation path. **The sidebar's row counts ride along on these lists (`include_counts=true`, issue #651):** every character row carries `image_count` and `project_image_count` (scoped to the character's OWN `project_id`, or to "in no project" when it has none) and every project row carries `image_count`, which is what replaced `SideBar.fetchSidebarData`'s one-`/{id}/summary`-per-row fan-out. They live on the shared list rather than in a second counts-bearing cache on purpose (two shapes for one entity would mean two caches, two invalidation paths and two epochs), and the flyout / scope-picker consumers simply ignore the extra fields. Because both scopes are on every row and neither depends on the sidebar's current project selection, one cached response serves both sidebar view modes. Distinct from `useEntityNamesStore`, which holds id→name maps only. |
 | `useEntityNamesStore` | `useEntityNamesStore.js` | `characterNames`, `setNames`, `projectNames`, `refFolderLabels`, `importFolderLabels` (id→name maps). One-directional id→name only (names aren't unique). `SideBar` publishes via `merge*` setters after each fetch; `ImageGrid`'s breadcrumb consumes them to label the route's IDs. |
+| `useOperationStore` | `useOperationStore.js` | The undo/redo stack, mirrored from the backend's append-only operation log (`backend_architecture.md` §21): `operations` (newest 50, newest first), `canUndo`/`canRedo`/`nextUndo`/`nextRedo` from `GET /operations/undo-state`, and the single live `receipt` that narrates what just happened. Computeds `past` (applied steps), `future` (undone, redoable), `historyCount`, `nextUndoIsExternal`. Owns the receipt's dwell timer (5s, 8s destructive, paused on hover/focus/hidden tab) and the multi-step `undoTo` walk. Refreshed on a debounced WS picture/tag/character/description event; the receipt narrates THIS client's operations only (origin read from the event `data`), so another tab's work updates the stack silently. |
+| `useDedupStore` | `useDedupStore.js` | The duplicate triage queue. `openCount` (the sidebar badge), `byTier` (the per-tier split, including tiers that are switched off), `scopeCounts` (the per-object counts the context menus read, cached and de-duplicated while in flight), `scan` (normalised from the server's picture and bucket counters; the percentage is derived here because the server publishes none), `groups` + `windowStart` + `total` + `hasMore` (a contiguous WINDOW of the confidence-descending queue, absolute indices, never loaded whole), `focusIndex` (+ `focusStart`/`focusEnd`/`loadPrevious`/`cancelEndChase`/`endChaseActive`, the one-press random-access End jump onto the tail page and its upward backfill — see §9.2), the per-group `coverChoices` / `exclusions` keyed on signature, and the tier gate (`nearEnabled`, `embeddingEnabled`, `threshold`) whose bounds all come from `GET /dedup/policy`. Owns the verdicts and the auto-advance: resolving a group removes its row and the focus lands on the next open group. Every verdict is recorded server-side (`dedup.stack`; `dedup.keep_separate` since the owner's 2026-07-30 override of #644), so receipts and `Ctrl+Z` come from `useOperationStore` — triggered from the verdict response, gated on its always-populated `batch_id` (see §9.2); against an older backend whose keep-separate returns no `batch_id`, the narration degrades to the transient notice pointing at the **Decided page** (owner call, 2026-07-29 — this replaced the sticky Reopen notice). `showingDecided` / `toggleDecided` flip the queue to `GET /dedup/groups?decided=true`: resolved groups with their live verdict, each row swapping its verdict buttons for a verdict label and a **Clear decision** action (`POST /dedup/verdicts/reopen` — never touches pictures; a reopened stacked group stays stacked until unstacked from the Stacks view). Verdicts and multi-select are inert on the decided page, and its empty state carries its own way back since the header toggle unmounts with the list. **Multi-select (owner request, 2026-07-29):** Ctrl/Cmd+click toggles a group in and out of a selection, Shift+click ranges from the anchor, plain click clears — the grid's own conventions. A verdict on any selected group applies to the whole selection (`verdictTargets`); a bulk stack shares ONE `cli-` batch id so a single Ctrl+Z reverses the gesture, and a bulk keep-separate narrates once for the whole gesture. The bulk scope is stated twice — a header chip ("N groups selected — Stack and Keep separate apply to all") and the verdict buttons themselves rename ("Stack N groups" / "Keep N separate") — because a bulk action must never look like a single one. Escape clears the selection without costing the focus; a reload (scope, tier, rescan) clears it too, since it would silently point at different rows. **`openQueue` is the scan trigger**: the group cache only fills when a scan runs, so opening the queue queues one (`POST /dedup/scan`) and the queue opens over whatever exists while the banner streams — without this the queue reads an empty cache forever, whatever the tier gate says. Loosening the policy (enabling a tier, lowering the threshold) rescans too; narrowing only re-queries. While a scan is `pending`/`running` the store polls counts every 2s and reloads the group list **only while it is empty**, so the first finds surface on their own and a triage in progress is never yanked to the top. |
 | `useTasksStore` | `useTasksStore.js` | `workerSnapshots`, `series` (per-worker throughput history), `systemUsage` (CPU/RAM/VRAM), `comfyuiRuns` (frontend-driven run progress keyed by run id); computeds `activeEntries` (backend workers + ComfyUI runs, merged), `hasActiveTasks`, `activeCount`. The **single poller** of `GET /workers/progress` (adaptive cadence — see §4.4) and the single source of truth for the app-wide "is the app working" indicators. |
 
 Components import stores directly (`import { useFilterStore } from '../../stores/useFilterStore'`) — no prop drilling required.
@@ -248,19 +266,66 @@ Sub-components that manage independent data (e.g. `AccountSection`, `SmartScoreS
 
 All indicator animations honour `prefers-reduced-motion: reduce`.
 
+### 4.5 Route → view resolution (`useViewStore`)
+
+The route is the single source of truth for what the grid shows (§2). `useViewStore` is the one place that turns the URL into the selection/project state the grid renders, and the only writer of that state from the route.
+
+It is split in two so the URL contract is testable on its own:
+
+- **`parseRouteView(route)`** is pure. It resolves a route to a *view descriptor* (project scope, selected character/characters, selected set/sets, multi modes, difference base, category label, folder key), or `null` for a route the grid is not driven from. Every URL shape the router declares is unit-tested here (`useViewStore.test.js`), with no router, grid, or mounted App.
+- **`applyRoute(route)`** writes the descriptor into `useSelectionStore` / `useProjectStore`. Idempotent by construction: values that have not changed are not written, and the character guard compares stringified ids because the id space mixes numbers with the `ALL` / `UNASSIGNED` / `SCRAPHEAP` pseudo-ids.
+
+**`startRouteSync(route, { watch })` installs the app's one and only route watcher**, called once from `App.vue`. `watch` is injected (same pattern as `useReviewRoute`) so the watcher is created in App.vue's effect scope and dies with it, and so the store stays testable. Two rules keep the seam honest:
+
+- The store **never pushes a route**. Route *pushing* stays in `App.vue` (`pushAppRoute` / `pushRouteForCurrentSelection`), next to the nav handlers that own navigation decisions.
+- Folder routes (`ref-folder` / `import-folder`) deliberately do **not** clear `selectedFolderFilter`. The sidebar owns that payload and emits `select-folder` once the folder has loaded, so the route must not wipe what the sidebar just set.
+
+**`?stack_state=` is the one filter the route owns**, and it is **additive only**: an absent or unrecognised value resolves to `null`, which means "leave `useFilterStore.stackStateFilter` alone". Resetting it on every route tick would silently clear a filter the user set in the filter panel the moment they navigated anywhere, which no other filter does. It exists because the Duplicates queue-clear screen routes to All Pictures with the stacked filter applied (`docs/design/keep-cover-only.md` → "The route from Duplicates"), and that destination has to be reloadable and Back-able rather than a state only one click can produce. It is read for every grid route, not just `/`. Adding a second route-owned filter is a design decision, not a copy-paste: the store is otherwise the writer of selection/project state only.
+
+**The URL cannot grant a project scope the credential does not have.** `applyRoute` narrows the parsed descriptor through `scopeProjectToSession` before writing it: a credential with a `resource_type` takes its project scope from the **token**, never from the URL — `project` → its own project (whatever project the URL names), everything else (`character` / `picture_set` / `picture`) → global mode with no project id. An owner session and a whole-library READ share both have **no** `resource_type` and are left exactly as the URL says; narrowing them would be over-blocking, since the backend places no project restriction on either (`visible_project_ids` returns `None`).
+
+This exists because a share link inherits whatever pathname the owner minted it from — Settings is a dialog, not a route, so `AccountSection.shareUrl` builds `/project/5?token=…` from `window.location.pathname` (issue #717). Without the narrowing the recipient's grid sends `project_id=5`, which the AuthzGate refuses for a character/set token (empty visible-project set), and the grid comes back empty with nothing said to the owner. It lives **here rather than in `App.vue`'s mount-time scoped-session block** for two reasons: this store is the single writer of the grid's project scope, and a mount-time write loses to the next route tick (Back onto the shared link would re-break it). `App.vue`'s block keeps normalising what is *selected*. Both directions are covered in `stores/scopedSessionProjectScope.test.js`, which asserts the query string on the wire and pins the mount ordering the defect depended on.
+
+The Phase 0 pin specs `route-as-truth.spec.js` and `stateless-tabs.spec.js` characterise the user-visible half of this contract.
+
+### 4.6 Auth-context transitions — the session-reset chokepoint
+
+Logout is a **reactive flip in the SPA, not a page reload**, so Pinia module state survives a logout → login on the same tab. Any store that caches data from a scope-aware endpoint would therefore render one credential's data under the next one (CWE-524). Issue #655 closed that class; this section is the contract it left behind.
+
+**One mechanism, not one per store.** `utils/apiClient.js` owns it:
+
+- `onSessionReset(handler)` registers a handler and returns an unsubscribe.
+- `notifySessionReset(reason)` runs every handler synchronously, then clears the transport's own identity (`_shareToken`, `sessionContext`).
+
+It fires from exactly three places today — `logout()`, `login()` and `activateShareToken()` — and a store never detects a credential change itself. A store that had to would eventually miss one.
+
+**Ordering is load-bearing, in both directions.** Handlers run *before* `_shareToken` / `sessionContext` are cleared, because a handler may read `sessionContext` while deciding what to drop (`useEntityListsStore.canFetch`). And `activateShareToken()` announces the transition *before* assigning the new token, so the clear cannot wipe the token it just set.
+
+**The rules for a store that caches server data:**
+
+1. Register `reset()` on the chokepoint, and unregister with `onScopeDispose`.
+2. `reset()` bumps an **epoch**, and every read tags itself with the epoch it started in. Clearing state alone leaves the store empty for a few hundred milliseconds and then quietly refilling with the previous credential's rows — the same leak with a delay on it.
+3. `reset()` also stops **timers** and clears **in-flight/dedup bookkeeping**, so nothing re-enters the store after the clear and no caller can join a request belonging to the previous session.
+4. The cache is **in-memory only**. It must never reach `localStorage` / `sessionStorage`, where it would outlive the credential that produced it. Genuine view preferences (the dedup thumbnail size, the review overlay's sticker shelf) are exempt — they carry no authorization decision.
+5. Caches are **refetch-only**: nothing here is ever patched from a WebSocket payload (`origin_client_id` is echo-matching, never authority — integration_architecture.md §8.1).
+
+**Completeness is arithmetic, not judgement.** `stores/sessionReset.test.js` holds the store matrix: every file matching `stores/use*.js` must appear either in its reset table or in its documented `NO_SERVER_DATA` exemption list, and a store in neither fails the test. That is the frontend counterpart of the backend's `test_all_routes_declare_access_policy` guardrail. It asserts **both directions** — empty the instant the context changes, *and* repopulating on the next read — because over-blocking is its own regression.
+
+**The vault switch does not exist yet.** `useEntityListsStore` and `apiClient` name it as a covered transition; multi-library is v1.9 Lane E. `notifySessionReset` is exported so that **whoever builds the vault switch calls it at the switch site** — every registered store then drops its cache for free, and nothing has to be revisited store by store.
+
 ---
 
 ## 5. Component Catalogue
 
 ### Layout and Shell
 
-#### `Root.vue` (59 lines)
+#### `Root.vue` (58 lines)
 Auth gate. Renders `LoginScreen` or `App` based on `isAuthenticated`. Handles `?token=` share links on mount.
 
-#### `App.vue` (~2 580 lines)
+#### `App.vue` (640 lines)
 Application shell. Owns all global state. Renders `SideBar` + `ImageGrid` + `StatsSidebar`. Manages WebSocket, keyboard shortcuts, window drag/drop, paste, config loading, export, update checks.
 
-#### `TitleBar.vue` (~400 lines)
+#### `TitleBar.vue` (417 lines)
 Desktop-only custom window title bar for the Electron shell. All desktop calls go through `window.pixlstashDesktop?.…` optional chaining, so it no-ops in a plain browser. Renders the `WordmarkLogo`, the breadcrumb trail (`useBreadcrumb`), the app version, the "new version available" / security update alert (`useVersionCheck`, with `enabled = Boolean(desktop)` so exactly one owner runs the check), and the OS window controls (minimize / maximize / close, hidden on macOS where the OS draws them). Props: `installType`, `checkForUpdates`.
 
 #### `WordmarkLogo.vue` (30 lines)
@@ -270,7 +335,7 @@ Presentational "PixlStash" brand wordmark in the Tiny5 pixel font (replaced the 
 
 ### Large Stateful Components
 
-#### `ImageGrid.vue` (~7 360 lines)
+#### `ImageGrid.vue` (7933 lines)
 The core image display engine. Responsibilities:
 - Virtualised grid scroll with dynamic thumbnail sizes (via `useVirtualScroll`).
 - Fetches images from `GET /pictures` with all filter params as query args.
@@ -282,6 +347,19 @@ The core image display engine. Responsibilities:
 - Integrates `ImageOverlay`, `ImageImporter`, `Toolbar`, `ImageGridContextMenu`, `EmptyScrapHeap`, `ComfyUiRunner`.
 - Emits: `open-overlay`, `refresh-sidebar`, `clear-search`, `reset-to-all`, `search-all`, `update:selected-sort`, `update:stack-stats`, `import-started`, `import-ended`, `clear-multi-selection`, `update:character-multi-mode`, `update:set-multi-mode`, `update:set-difference-base-id`, `update:embed-watermark`, `update:visible-range-label`, `load-pending-imports`
 - Key props: `thumbnailSize`, `columns`, `selectedCharacter`, `selectedSet`, `searchQuery`, `selectedSort`, `wsTagUpdate`, `wsPluginProgress`, `gridVersion`, `wsUpdateKey`, `publicUrl`, `embedWatermark`, + all filter props.
+
+##### The four grid fetch modes, and the character face search
+
+`useGridFetch` picks one branch per fetch (`fetchMode`): `likeness-groups`, `character-face-search`, `face-likeness-search`, `reverse-image-search`, `text-search`, or `stream`. The first five build an **ordered id list** and re-read the pictures by id, because the ranking *is* the result and a plain id-list read does not preserve order.
+
+**`character-face-search` — "Suggest more pictures of &lt;person&gt;" (#636).** Launched from the sidebar's person context menu (`SideBar` → `suggest-pictures-for-character` → `App.handleSuggestPicturesForCharacter` → the grid's exposed `suggestPicturesForCharacter`, the same Tier-3 route as `confirmEmptyScrapheap`). It queries `POST /pictures/face-search?source_character_id=…&exclude_character_id=…`, i.e. the person's reference faces, minus the pictures already assigned to them.
+
+- **State**: `faceSearchCharacter` (`{id, name}`, null when inactive), `faceSearchThreshold` (default **0.7**, the same cut `SourceFaceLikenessTask.SIMILARITY_THRESHOLD` already uses for "same person"; a second UI-local number would drift from it), `faceSearchMinRefs` (default **1**, which is what `combine=max` gives on its own, so the knob starts where the search has always been and only ever tightens), `faceSearchArmedView`, and `faceSearchRanked` (`{characterId, matches, rowsById}`).
+- **The ranked list and its picture rows are both cached**, so moving **either** knob **re-cuts the same list with no network call**. The request sets `include_reference_scores`, so each match carries `reference_likeness` (the winning face's similarity to every reference) and the agreement knob is a client-side count over that row rather than a server-side k-of-n, which would put a round trip under a drag. Both knobs are in the fetch key (a rebuild that early-returned as a no-op would leave the grid disagreeing with the count), and the rebuild is debounced 200ms while the count in the bar updates synchronously from `faceSearchMatches`.
+- **One cut, two callers.** `utils/faceSuggestionCut.js` owns `cutFaceSuggestions` / `agreeingReferenceCount` / `referenceFaceCount`, and both the grid rebuild (`useGridFetch`) and the pill's count (`faceSearchMatches`) go through it. A count that disagrees with the grid under it is the bug that file exists to prevent. It falls back to the combined `likeness` when `reference_likeness` is absent (older server), which keeps `minRefs = 1` behaving exactly as before.
+- **It is not a character-scoped *view***, and `faceSearchCharacter` is deliberately independent of `props.selectedCharacter`. But since 2026-07-30 a view change **does** drop it (owner call). Leaving it up meant navigating elsewhere and still being shown suggestions for a person with a bulk Assign armed, reading as the new view's contents; navigation is the ordinary way out of a mode. It compares against `faceSearchArmedView`, the view snapshotted when the search was armed, rather than firing on any change: opening the sidebar's person menu can itself select that person, and that selection lands around the same click that arms the search.
+- **The clearing runs inside the view-change watcher, immediately before its refetch, and must never be moved to a watcher of its own.** `fetchAllGridImages` picks its `fetchMode` synchronously (no `await` precedes the read), and Vue runs pre-flush watchers in creation order, so a clearing watcher declared after the fetching one loses every time: the fetch re-issues the search that is still armed, and the later clear then unmounts the pill. That combination shipped briefly and looked like "the view does not change" — a grid full of the old search with no bar to explain or dismiss it. `dropSearchesForViewChange` carries the rule; `ImageGridSuggestionViewChange.test.js` asserts it on the wire.
+- **After the assign, the search is re-run against the server (`force: true`), not pruned locally.** Two correctness reasons: `POST /characters/{id}/faces` is stack-atomic, so it can assign *more* pictures than were named (a suggestion's stack siblings would otherwise linger as un-assigned), and the fetch key is unchanged, so a non-forced call would be dropped by the 1200ms de-dup window. `operationStore.refresh()` then raises the "Assigned N pictures…· Undo" receipt, which is what lets this bulk write skip a confirmation dialog.
 
 ##### Entity-assignment refetch rule (set / project / character)
 
@@ -295,7 +373,7 @@ The core image display engine. Responsibilities:
 
 Every path still emits `refresh-sidebar` (the counts changed) and, under an open overlay, defers its grid work to `pendingOverlayGridRefresh` rather than restructuring the frozen filmstrip (§9.1), but only when a refetch was warranted in the first place, so a deferred redundant reload is not queued either. Regression coverage: `ImageGridProjectAssignRefresh.test.js` (both directions: no refetch in the global view, refetch still fires in the project view).
 
-#### `SideBar.vue` (~9 320 lines)
+#### `SideBar.vue` (6989 lines)
 Left navigation panel. Responsibilities:
 - Tabs: People, Sets, Projects, Folders.
 - Character list with face thumbnails, drag-drop assignment, inline create/edit.
@@ -335,10 +413,10 @@ The tab/category switch is **stateless** (see Key Design Principles). Concretely
   the view and breaks the drag-to-assign flow. Keep navigation in entry-click
   handlers only.
 
-#### `ImageOverlay.vue` (~4 880 lines)
+#### `ImageOverlay.vue` (4413 lines)
 Full-screen image lightbox. Responsibilities:
 - **Frozen navigation backbone (overlay-open deferral, see §9.1).** prev/next and the filmstrip read membership from a snapshot of `allImages` (`frozenAllImages`, captured on open and cleared on close) via the `overlayImages` computed, not from the live `allImages` prop. This keeps left/right working for the overlay's whole lifetime even after the current picture stops matching the active filter (e.g. the user removes the tag the view is filtered on) or a background refetch reshuffles the grid. The currently displayed card stays fresh independently: it lives in `image.value` and is updated by local edits / `fetchOverlayMetadata`, not by the snapshot. Stack expansion still loads fresh members from `/stacks/{id}/pictures`; only the sequence/membership is frozen.
-- Image display with pan/zoom (fit / 1.5× / 2×).
+- **Image display with the zoom family's continuous wheel zoom** (rework 2026-07-30; the old fit/1.5×/2× ladder and its `zoom-hud` are retired). The overlay consumes `composables/useWheelZoom.js` with basis 1 = actual pixels: entry at fit, continuous cursor-anchored exponential wheel (the image point under the pointer stays stationary through every scale change — binding), ceiling `max(ZOOM_MAX_SCALE, fitScale)`. **The floor policy is `rest`**: wheeling out clamps hard at fit with no exit and no hysteresis — the overlay is a destination, not a layer; Escape/backdrop remain the exits (`ZOOM_EXIT_RESISTANCE` stays Compare-only). Fit and 100% are the snap stops: `Z` and the toolbar zoom button toggle them centre-anchored, a double-click toggles them anchored at the click point. Drag pans at any above-fit scale (pointer capture kept) and the pan is **clamped** — the image edge never crosses its viewport edge, and a zoom-out re-clamps so the image re-centres. The pan transport is the `translate(offset) scale(scale/fitScale)` transform on `.overlay-media` (`anchorZoomOffset`), which is **load-bearing** for the face-bbox overlays, the draw-mode rectangle (both render in layout space inside `.overlay-media-inner` and ride the transform; `getDrawPoint` divides the cursor through the CSS scale), and video. The toolbar zoom button carries the live readout: a whole-percent label of natural size beside the icon (`--space-2` gap, `--text-xs`, tabular numerals, `min-width: 5ch` reserved once so the toolbar never jumps); at fit it shows the computed fit percentage (e.g. "37%", follows resize), never the word "Fit"; its title/aria narrate the click semantics ("Zoom 37% (fit) — click for 100% (Z)" / "Zoom 240% — click to fit (Z)"). No `aria-live` on the button — a visually-hidden `role="status"` node announces on settle (500 ms after the last wheel change; snaps announce immediately), timer owned by the composable. Touch is unchanged (swipe/tap; no pinch yet) and the filmstrip's wheel-navigate is untouched.
 - Tag management: add, remove, autocomplete suggestions from `GET /tags/completions`.
 - Object-detection overlay: a `showDetections` toggle button (next to the face-bbox toggle) renders stored detection boxes fetched from `GET /pictures/{id}/detections` (`detectionBboxes` ref, same request-id race guard as faces), drawn with `getOverlayBoxStyle` and coloured per distinct label. Refetched whenever the displayed image id changes, like faces.
 - AI tag predictions (accept/reject).
@@ -347,20 +425,30 @@ Full-screen image lightbox. Responsibilities:
 - Runs ComfyUI workflows on the current image.
 - Runs plugins on the current image.
 - Sidebar panel: metadata, score, dates, file info, penalised-tag indicator.
-- Embeds `AddToEntityControl`, `StarRatingOverlay`, `ProgressOverlay`, `ComfyUiRunner`.
+- Embeds `AddToEntityControl` (set/project in the chrome; one `face`-mode instance per detected face in the Faces panel), `StarRatingOverlay`, `ProgressOverlay`, `ComfyUiRunner`, and its own `CharacterEditor` for the create-person-from-a-face flow (#645). That editor is overlay-hosted because the flow's state (target face, the trigger to refocus) is overlay-local and must not outlive the lightbox. **Escape while that dialog is open is owned by a capture-phase document handler** (`onCreatePersonKeydownCapture`): `AppDialog` stops the event on its own subtree, so a focused field is already safe, but an Escape targeting `<body>` bubbles document → window into `handleKeydown` and would close the whole lightbox behind the dialog, and a bubble-phase guard cannot fix it because `CharacterEditor`'s own document listener has already flipped the flag by then. Same pattern as `ImageGridContextMenu`.
 - Receives `allImages` array from `ImageGrid` for filmstrip navigation.
 - Key props: `open`, `initialImageId`, `allImages`, `tagUpdate`, `hiddenTags`, `applyTagFilter`, `availablePlugins`, `comfyuiProgress`, `guestScore`
 - Emits: `close`, `apply-score`, `set-guest-score`, `add-tag`, `remove-tag`, `update-description`, `overlay-change`, `added-to-set`, `set-project`, `comfyui-run`, `run-plugin`
 
 #### Overlay side-panels (`views/`)
 The overlay's right-hand panels, extracted from `ImageOverlay.vue` so each owns its own markup and state:
-- `OverlayTagsPanel.vue` (~1 230 lines) — tag list, add/remove, autocomplete, AI-prediction accept/reject.
-- `OverlayDescriptionPanel.vue` (~450 lines) — inline description editing (uses `utils/descriptions.js`) and copy.
-- `OverlayMetadataPanel.vue` (~705 lines) — metadata, score, dates, file info, penalised-tag indicator.
-- `OverlayFilmstrip.vue` (~330 lines) — the frozen-navigation filmstrip strip (reads `overlayImages`, see §9.1).
+- `OverlayTagsPanel.vue` (1358 lines) — tag list, add/remove, autocomplete, AI-prediction accept/reject.
+- `OverlayDescriptionPanel.vue` (493 lines) — inline description editing (uses `utils/descriptions.js`) and copy.
+- `OverlayMetadataPanel.vue` (705 lines) — metadata, score, dates, file info, penalised-tag indicator.
+- `OverlayFilmstrip.vue` (338 lines) — the frozen-navigation filmstrip strip (reads `overlayImages`, see §9.1).
 
 #### `Toolbar.vue` (`panels/`, ~1 410 lines)
 Top/grid toolbar. Imports state directly from Pinia stores (`useGridStore`, `useSortStore`, `useFilterStore`, `useSearchStore`, `useExportStore`, `useSidebarStore`) — no `inject` or prop drilling. The selection action UI that used to live here was extracted into `SelectionBar.vue` + `SelectionMenu.vue` (see below); the tag / ComfyUI / export / import / global-filter menu bodies were extracted into the `Tb*Panel` / `GbFilterPanel` sub-panels (see below). `Toolbar` no longer holds any selection state.
+
+**Responsive collapse (the ⋯ overflow pattern).** The bar is a container named
+`selbar toolbar` (the Duplicates bar is `dqbar toolbar`); shared chrome
+(`UndoControl`, `TbGlobalActions`, `TbOverflowMenu`) writes scoped
+`@container toolbar (…)` rules so it degrades identically in both bars. Fold =
+CSS both ways: every foldable control exists as its bar button AND as a
+`TbOverflowMenu` row with the same `v-if`, and container queries flip which of
+the pair is visible — no ResizeObserver, no JS measurement. The ladder and the
+never-fold floor are recorded in `docs/design/toolbar-responsive-decisions.md`;
+undo never enters the overflow.
 
 Responsibilities:
 - Grid bar: sort selector, filter chips (tags, score, media type, resolution), column slider, stack controls, view mode toggles.
@@ -371,25 +459,25 @@ Responsibilities:
 
 #### Toolbar menu panels (`panels/`)
 The individual toolbar menu bodies, extracted from `Toolbar.vue` so each dropdown owns its own markup and state:
-- `TbTagPanel.vue` (~1 480 lines) — the tag filter / tag-management menu body.
-- `TbComfyPanel.vue` (~230 lines) — the ComfyUI-run menu body.
-- `TbExportPanel.vue` (~215 lines) — the export options menu body (type, caption, resolution, tag format, bbox sidecar).
-- `TbImportPanel.vue` (~370 lines) — the import-source menu body.
-- `GbFilterPanel.vue` (~1 240 lines) — the global-filter panel (score / media-type / resolution / tag filter controls) shared by the grid bar.
+- `TbTagPanel.vue` (1530 lines) — the tag filter / tag-management menu body.
+- `TbComfyPanel.vue` (234 lines) — the ComfyUI-run menu body.
+- `TbExportPanel.vue` (213 lines) — the export options menu body (type, caption, resolution, tag format, bbox sidecar).
+- `TbImportPanel.vue` (371 lines) — the import-source menu body.
+- `GbFilterPanel.vue` (1267 lines) — the global-filter panel (score / media-type / resolution / tag filter controls) shared by the grid bar.
 
 #### `SelectionBar.vue` (`panels/`)
 Floating selection action bar shown above the grid when images are selected (the leftover from the Toolbar split). Driven by props from `ImageGrid`; it renders the per-selection plugin/ComfyUI run menus, the tag/caption controls, and the `SelectionMenu` dropdown. Uses the `@container selbar` query against the grid-content wrapper, so its layout responds to the available grid width.
 - Key props: `selectedCount`, `selectedExpandedCount`, `selectedFaceCount`, `selectedGroupName`, `selectedSort`, `visible`, `scrapheapPicturesId`, `backendUrl`, `selectedImageIds`, `selectedMediaSupport`, `comfyuiClientId`, `comfyuiConfigured`, `selectedMultipleStackIds`, `groupingLockReason`, `availablePlugins`, `taggerPlugins`, `captionerPlugins`, `allGridImages`, `selectedCharacter`, `selectedSet`.
 - Exposes: `openTagInput()`, `openPluginPanel()`, `openComfyuiPanel()` (consumed by `ImageGrid` via `selectionBarRef`).
-- Key emits: `clear-selection`, `delete-selected`, `added-to-set`, `add-to-character`, `remove-from-character`, `set-project`, `create-stack`, `remove-from-stack`, `dissolve-stacks`, `create-stacks-from-groups`, `run-plugin`, `comfyui-run`, `tags-applied`, `auto-tag`, `generate-description`, `reverse-image-search`, `remove-from-group`, `selection-menu-open`.
+- Key emits: `clear-selection`, `delete-selected`, `keep-cover-only`, `added-to-set`, `add-to-character`, `remove-from-character`, `set-project`, `create-stack`, `remove-from-stack`, `dissolve-stacks`, `create-stacks-from-groups`, `run-plugin`, `comfyui-run`, `tags-applied`, `auto-tag`, `generate-description`, `reverse-image-search`, `remove-from-group`, `selection-menu-open`.
 
 #### `SelectionMenu.vue` (`panels/`)
-The dropdown menu of bulk actions for the current selection, rendered by `SelectionBar`: add to project/character/set (via `AddToEntityControl`), stack/unstack/dissolve, tag/caption/describe, run plugin/ComfyUI, reverse image search, delete. Native-style menu using `styles/context-menu.css` classes (shares the look of `ImageGridContextMenu`).
-- Key props: `open`, `selectedCount`, `selectedImageIds`, `backendUrl`, `isReadOnly`, `isScrapheapView`, `groupingLockReason`, `taggerPlugins`, `captionerPlugins`, `comfyuiConfigured`, `hasPluginOptions`, `selectedSort`, `selectedGroupName`, `selectedMultipleStackIds`, `showRemoveFromStack`.
+The dropdown menu of bulk actions for the current selection, rendered by `SelectionBar`: add to project/character/set (via `AddToEntityControl`), stack/unstack/dissolve, tag/caption/describe, run plugin/ComfyUI, reverse image search, keep cover only, delete. Native-style menu using `styles/context-menu.css` classes (shares the look of `ImageGridContextMenu`). This is the **only** place `Keep cover only` appears on the pill, never as a top-level pill button, because a floating pill over a photo grid is the wrong place for an `error`-filled control and this is periodic cleanup, not a high-frequency verb.
+- Key props: `open`, `selectedCount`, `selectedImageIds`, `backendUrl`, `isReadOnly`, `isScrapheapView`, `groupingLockReason`, `taggerPlugins`, `captionerPlugins`, `comfyuiConfigured`, `hasPluginOptions`, `selectedSort`, `selectedGroupName`, `selectedMultipleStackIds`, `keepCoverOnlyStackCount`, `keepCoverOnlyLockReason`, `showRemoveFromStack`.
 - Exposes: `focusFirst()`, `containsFocus()`.
 - Key emits: same action set as `SelectionBar` plus `open-tag-input`, `open-plugin-panel`, `open-comfyui-panel`, `close`.
 
-#### `StatsSidebar.vue` (~2 560 lines)
+#### `StatsSidebar.vue` (3152 lines)
 Right-side statistics panel. Responsibilities:
 - Tag frequency charts (top tags, tag co-occurrence).
 - Confidence-score histogram.
@@ -404,7 +492,7 @@ Right-side statistics panel. Responsibilities:
 
 ### Settings Dialog and Sub-sections
 
-#### `UserSettingsDialog.vue` (~320 lines)
+#### `UserSettingsDialog.vue` (363 lines)
 Thin multi-tab settings shell. It now owns only the tab chrome and routing — every tab's content was extracted into its own section component, so the dialog itself holds no inline tab markup. Tabs:
 - **Appearance** → `<AppearanceSection>`
 - **Behaviour** → `<BehaviourSection>` (`!isReadOnly`)
@@ -416,7 +504,7 @@ Thin multi-tab settings shell. It now owns only the tab chrome and routing — e
 
 Emits: `update:public-url`
 
-#### `AppearanceSection.vue` (244 lines)
+#### `AppearanceSection.vue` (544 lines)
 Appearance tab content: sidebar thumbnail size, sidebar width (Full / Dock toggle), theme, date format, keyboard-hint toggle, guest-session clear. Props: `sidebarThumbnailSize`, `themeMode`, `dateFormat`, `showKeyboardHint`. Emits corresponding `update:*` events. Contains own `clearGuestSession()` logic and `hasGuestSessionCookie` state. The sidebar width toggle reads/writes `useSidebarStore.sidebarDocked` directly.
 
 #### `BehaviourSection.vue`
@@ -428,13 +516,13 @@ Workflows tab content (extracted from inline markup): ComfyUI URL, workflow impo
 #### `SnapshotsSection.vue`
 Snapshots tab content. Props: `open: Boolean`. Lists and manages snapshots (reuses `utils/snapshots.js` helpers).
 
-#### `ComputeSection.vue` (~595 lines)
+#### `ComputeSection.vue` (795 lines)
 Desktop-only compute-runtime manager ("Backend" tab). Talks to the Electron preload bridge (`window.pixlstashDesktop`) to switch between the built-in CPU/Metal runtime and an on-demand GPU overlay; the same choice appears on the first-run welcome screen. Switching the runtime restarts the local server (which reloads the page). Props: `open: Boolean`. No-ops outside the desktop shell.
 
-#### `SmartScoreSection.vue` (409 lines)
+#### `SmartScoreSection.vue` (366 lines)
 Penalised-tags configuration. Props: `open: Boolean`. Fetches `GET /users/me/config` on open and on `onMounted`. Saves directly via `PATCH /users/me/config`. Owns all penalised-tag CRUD state internally.
 
-#### `AccountSection.vue` (1 076 lines)
+#### `AccountSection.vue` (1255 lines)
 Account management tab. Props: `open: Boolean`. Emits: `update:public-url`.
 - On `open` change: resets form, fetches auth info, tokens, public URL, watermark preview.
 - Manages: password change, API token CRUD (create/list/delete/copy), share-link builder, public URL config, watermark upload/clear.
@@ -447,45 +535,85 @@ Small presentational building blocks shared by the section components above, so 
 
 ### Editor and Browser Components
 
-#### `CharacterEditor.vue` (458 lines)
-Create/edit/delete character (person) entity. Props: `open`, `character`, `backendUrl`, `projects`. Emits: `close`, `saved`.
+#### `CharacterEditor.vue` (428 lines)
+Create/edit/delete character (person) entity. Props: `open`, `character`, `backendUrl`, `projects`. Emits: `close`, `saved` (payload: the saved record, with the server-assigned id on create, so hosts can chain follow-up work). Hosted by `SideBar` (its own entry points) and by `ImageGrid` (the context menu's create-person-and-assign flow, #645).
 
-#### `PictureSetEditor.vue` (524 lines)
+#### `PictureSetEditor.vue` (618 lines)
 Create/edit/delete picture sets. Props: `open`, `set`, `thumbnailUrl`. Uses `SET_ICONS`, `SET_COLORS`, `SET_ICON_CATEGORIES`, `ICON_CARDS` from `setAppearance.js`. Emits: `close`, `saved`, `deleted`.
 
-#### `ProjectEditor.vue` (130 lines)
+#### `ProjectEditor.vue` (177 lines)
 Create/rename/delete a project. Props: `open`, `project`. Emits: `close`, `saved`, `deleted`.
 
-#### `FolderEditor.vue` (1 198 lines)
+#### `FolderEditor.vue` (1638 lines)
 Configure import/reference folders (add, edit, remove, Docker command generation). Uses `dockerHelpers.js` for volume flag building. Embeds `FolderBrowser`.
 
-#### `FolderBrowser.vue` (255 lines)
+#### `FolderBrowser.vue` (416 lines)
 Server-side directory browser dialog. Props: `open`, `initialPath`. Emits: `select`, `close`. Fetches `GET /folders/browse`.
 
-#### `FolderTreeNode.vue` (202 lines)
+#### `FolderTreeNode.vue` (230 lines)
 Recursive tree node for nested folder display. Props: `node`, `expanded`, `depth`. Emits: `select`, `toggle`.
 
 ---
 
 ### Import Components
 
-#### `PhotosImportDialog.vue` (575 lines)
+#### `PhotosImportDialog.vue` (576 lines)
 Import source selection dialog. Sources: local file picker, Google Photos (OAuth), external API. Embeds `ProjectEditor`. Props: `open`. Emits: `close`, `import`.
 
-#### `ImageImporter.vue` (783 lines)
+#### `ImageImporter.vue` (1185 lines)
 Actual file upload engine. Props: `backendUrl`, `selectedCharacterId`, `allPicturesId`, `unassignedPicturesId`. Emits: `import-started`, `import-finished`, `import-cancelled`, `import-error`. Handles chunked multipart upload with progress tracking.
+
+**The Scrapheap restore offer.** A staged file whose content matches a soft-deleted picture is reported by the backend in its own bucket (`scrapheaped_count` / `scrapheaped_picture_ids`, integration §10.1): it is not imported again and not restored behind the user's back. On completion the component pushes ONE sticky `useNoticeStore` notice whose single action calls `restoreScrapheap` from `api/pictures.js`, the shipped route, not a second restore path, and reports `restored_count` honestly, because retention can sweep a match away between the import and the click. The completion headline is built from the buckets it names, so a run of scrapheap matches can no longer print "All files were duplicates".
 
 ---
 
 ### Shared / Primitive Components
 
 #### App* design-system layer (`widgets/`)
-The house-styled form/control primitives that wrap Vuetify with the PixlStash tokens (`styles/design-tokens.css`), so new UI composes from one consistent kit instead of raw Vuetify: `AppButton.vue` (~140 lines), `AppDialog.vue` (~165 lines), `AppInput.vue` (~95 lines), `AppSelect.vue` (~95 lines), `AppStepper.vue` (~125 lines), `AppTextarea.vue` (~60 lines), plus `FieldLabel.vue` (~15 lines) for consistent field labelling. Presentational; each takes `v-model` / props and emits the matching update events.
+The house-styled form/control primitives that wrap Vuetify with the PixlStash tokens (`styles/design-tokens.css`), so new UI composes from one consistent kit instead of raw Vuetify: `AppButton.vue` (263 lines), `AppDialog.vue` (217 lines), `AppInput.vue` (96 lines), `AppSelect.vue` (182 lines), `AppStepper.vue` (126 lines), `AppTextarea.vue` (61 lines), plus `FieldLabel.vue` (16 lines) for consistent field labelling. Presentational; each takes `v-model` / props and emits the matching update events.
 
 **`AppButton loading`** (2026-07-30, issue #647): the pending state. Forces the button natively `disabled` so a create cannot be double-submitted, swaps the leading icon for `mdi-loading` + `mdi-spin`, sets `aria-busy`, and restores focus to itself when the request settles (a natively-disabled button drops focus to `<body>`, stranding a keyboard user who would otherwise have to tab all the way back). It does **not** dim and it does **not** change the label; there is no loading-text prop. Rationale and the contrast arithmetic: `docs/design/visual-language.md` §11. The behavioural half is `composables/useSubmitGuard.js` (§10.2).
 
-#### `AddToEntityControl.vue` (966 lines)
-Reusable control for assigning images to/from characters and sets. Props: `type` (`'character'`|`'set'`), `imageIds`, `selectedCharacter`, `selectedSet`. Emits: `added`, `removed`, `selected`. Used in `Toolbar`, `ImageOverlay`, `ImageGridContextMenu`.
+**`AppDialog fullscreen`** (2026-07-29): a near-viewport dialog (min(1800px, 96vw) × 94vh, flexing body) for working surfaces where the content is the point — first user: the dedup Compare dialog, per the owner's "take the full space of the grid view". Ordinary forms keep the fixed `width`.
+
+**The dialog keyboard contract (owner decision, 2026-07-29).** Every dialog dismisses on **Escape** and accepts on plain **Enter**, and the buttons wear the keys. `AppDialog` implements both on its own subtree so no page-level Escape owner is consulted first: Escape emits `close` (suppressed while `persistent`), Enter emits `accept`. Enter is deliberately inert where the key already has a meaning — multiline fields, buttons and links (native activation wins, so Enter on a focused Cancel cancels), selects, `<summary>`, ARIA text boxes, and any element that already handled the event (`defaultPrevented`). To adopt: wire the primary action to `@accept`, give the accept/confirm button `AppButton key-hint="enter"` (an ↵ badge, plus `aria-keyshortcuts`) and the cancel/abort button `key-hint="esc"`, and let the disabled state of the button — not the handler — be what gates the keypress (the `accept` handler must check the same `canSubmit` the button uses). New dialogs must follow this; existing dialogs adopt it as they are touched. First adopter: `RemixDialog`.
+
+#### `ActionReceipt.vue` (465 lines, `widgets/`)
+The transient undo pill, built to the owner's "Undo / Redo System" design. One instance, mounted by `ImageGrid` in the selection pill's slot; reads `useOperationStore` directly (the receipt is inherently singular, so there is nothing to prop-drill). Props: `liftPx` — how far to sit above the selection bar, MEASURED by the caller via `useAnchorHeight("selection-bar")`, never assumed. States: default / coalesced (`+N`, grouped by the server's `batch_id`) / undone-with-Redo / not-undoable ("Can't be undone", never a dead button). A `--countdown-h` hairline drains over the dwell window (5s, 8s destructive) as a `scaleX` animation whose `animation-play-state` pauses on hover and focus-within in lockstep with the store's timer (WCAG 2.2.1); it is the one animation that deliberately survives `prefers-reduced-motion`, because it is the time-remaining readout rather than decoration. Sits on `--z-floating` and registers `"action-receipt"` with `useBottomAnchor` — the measured element is the pointer-transparent wrapper (pill + lift), so the notice stack clears the whole thing. Announces through ONE persistent `role="status"` region rather than the remounted pill, throttled so a burst of actions reads once.
+
+**The second sentence.** The server's `summary` says what an operation *did*; an action that deliberately left something alone can add one sentence about what it did **not** do, by calling `useOperationStore.noteNextReceipt(opType, note)` immediately before the `refresh()` that will narrate it. `useActionReceipt` appends it to `text` (and therefore to the announcement) on both surfaces, and drops it once the pill flips to "Undone", where it would describe work that has just been taken back. The note is armed for one op type and consumed by the **first** receipt built afterwards, matching or not, so it can never drift onto an unrelated action. This exists so a skip belongs on the same pill as the move it qualifies: split across a pill and a notice, the half that needed a decision gets dismissed along with the half that did not. First and only consumer: `stack.keep_cover_only`'s skipped stacks.
+
+#### `UndoControl.vue` (`panels/`)
+The toolbar undo/redo pair plus a chevron opening the History popover. Mounted in the **right-side app-wide cluster of every toolbar** — the canonical tail `[separator] [UndoControl] [TbGlobalActions]`, identical in the grid bar and the Duplicates bar (see `docs/design/toolbar-responsive-decisions.md`), and the same position in the Electron shell and in the browser, which is why it is not in the breadcrumb. Under the shared `toolbar` container it collapses in steps: ≤480px the chevron hides (the hosts' ⋯ overflow "History…" row calls the exposed `openHistory()` instead), ≤420px redo hides; **undo itself never folds or hides** — the recovery control stays a single visible target, which also keeps the "Changed elsewhere" warning surfaced. Buttons use `aria-disabled` + a guarded handler rather than the native `disabled`, so they stay tabbable and keep naming the step ("Nothing to undo"), and carry `aria-keyshortcuts`. The popover reuses the shared `.tbm*` menu chrome and is labelled `role="dialog"` (not `menu`): it is a list of ordinary tab-order buttons with no roving arrow-key navigation, so claiming a menu would promise a contract it does not honour. Rows are newest-first, undone steps struck through and inert; hovering **or focusing** a row previews how far back you would go (`--active-wash` + an `--active-bar` inset rail across the whole range), and activating it walks the stack via `undoTo`. Enter is handled explicitly because Vuetify's menu `preventDefault`s it. Focus returns to the chevron on a programmatic close. Exposes `openHistory()`.
+
+#### `OverlayActionReceipt.vue` (`widgets/`)
+The lightbox's own narration of the same single receipt, mounted by `ImageOverlay` as the last child of `.overlay-main`. The owner ruled that undo must work in the lightbox and that the affordance may be fitted differently there, because the lightbox has its own GUI — so this is not the grid pill promoted above the modal layer. Everything the receipt *means* comes from the shared `useActionReceipt` composable, so the two surfaces cannot drift; only the chrome differs: `dark-surface`/`on-dark-surface` at 0.9 (the exact fill `.overlay-topbar` and `.overlay-rail` carry), `--elevation-4` (the rung `visual-language.md` §7 names for lightbox chrome, and the reason the grid pill takes -3), a `0.2` border matching `.overlay-nav`, and its own 64px transient-status lane inset by `--filmstrip-rail-width` / `--sidebar-width` so it centres on the visible image. Three deliberate differences beyond the material: **no live region** (the grid's still speaks from underneath, so a second one would double-speak); **no History popover** (choosing a step is a browsing task whose preview has no referent on a surface showing one picture); and a **scope clause** above one target ("Across 2,700 pictures, not just this one"), derived from the count alone so navigating to the next picture cannot falsify it. Nothing on this surface ever says "this picture". Exposes `containsFocus()` / `dismiss()` for the overlay's Escape guard.
+
+#### Undo has three keyboard owners
+`Ctrl+Z` is one vocabulary with three implementations, because three surfaces own the keyboard:
+
+| Surface | Owner | What the chord does |
+|---|---|---|
+| The grid and the app shell | `App.vue` `handleGlobalKeydown` | `useOperationStore.undo()`, narrated by the grid `ActionReceipt`. |
+| The lightbox | `ImageOverlay.handleKeydown` | The same store, narrated by `OverlayActionReceipt`. |
+| A review session | `ReviewSessionsOverlay.handleKeyDown` → `ReviewSessionView.attemptUndo` | The **review's own** single-step undo (`POST /tag_suggestions/{id}/reopen`), never the operation stack. |
+
+The lightbox and the review overlay both register a `window` keydown listener in their own `onMounted` and stop propagation while open, and a child mounts before its parent — so **App's binding is unreachable from either**, whatever its own guards say. (`isModalOverlayOpen()` never fired for the lightbox in the first place: it looks for a Vuetify scrim, and `.image-overlay` renders its own.) That is why the binding is re-implemented per surface rather than centralised.
+
+The review's stack is separate **on purpose**: a review decision also flips its `tag_suggestion` row's status, and `capture_state_in_session` does not capture that, so putting them on one stack would undo half of each decision. The boundary is stated rather than crossed — the cheat-sheet row reads "Undo the last decision in this review", and an empty review stack answers with a notice naming the toolbar rather than silently reaching past the overlay. `U` remains an alias for the identical request.
+
+Two of the three blockers this note originally listed are now gone (`backend_architecture.md` §21.2): the human-label **ledger** is a captured facet (`tag_predictions`), `anomaly_tag_uncertainty` is **recomputed** on restore rather than needing a facet at all, and the scoped-token question was settled the same way — record regardless of principal, since `/operations*` is `OWNER_ONLY` so only the owner can see or undo the row. What is still missing is a `tag_suggestion.status` facet. Until that exists the two stacks stay separate.
+
+#### `AddToEntityControl.vue` (1417 lines)
+Reusable control for assigning images to/from characters, sets and projects. Props: `type` (`'character'`|`'set'`|`'project'`), `pictureIds`, `placement`, `lockedSetIds`, … Emits: `added`, `removed`, `selected`. Used in `Toolbar`, `SelectionMenu`, `ImageOverlay`, `ImageGridContextMenu`.
+
+**Two data sources, deliberately different (issue #646).** The **entity list** is shared and cached — it is read straight off `useEntityListsStore` and re-rendered from cache the instant the control mounts, with `refresh()` fired on open and *not* awaited. This matters because `ImageGridContextMenu` is `v-if`-mounted: every open destroys and recreates all three flyouts, so component-local caching is impossible by construction. **Membership** (`getPictureSetMembership` / `getProjectMembership` / `getCharacterMembership`) is *not* cached — it answers "is this selection in each entity", which changes on every click. It is fetched alongside the list, never before it: the rows paint at once and the checkmarks hydrate a moment later, with each response stamped with the picture-id set it was asked for and dropped if the selection has moved on. Set/project rows stay inert until membership lands (a toggle is a diff against it); character rows do not need it. An assignment that 404s means the cached list named an entity the server no longer has, so it surfaces the error and invalidates that list.
+
+**The `face` type is a separate single-select mode** (#645), used by `ImageOverlay`'s per-face rows in place of the native `<select>` they replaced (a native `<option>` cannot carry the create row's highlight: macOS Chrome and Safari draw select popups as OS menus that ignore option colour). A face has exactly one person or none, so it renders radio glyphs (`mdi-radiobox-marked` / `mdi-radiobox-blank`, left at `on-dark-surface` in both states so the olive is spent on the create row alone) plus a leading **Unassigned** row, and it is deliberately NOT bolted onto the character path, whose tri-state checkboxes, toggle semantics and picture-id writes are all wrong for a face. It performs **no writes**: it emits `assign` / `unassign` and the host keeps its face-level `addCharacterFacesByFaceId` / `removeCharacterFacesByFaceId` calls. Props `faceId`, `assignedCharacterId`, `assignedCharacterName`; `focusTrigger()` is exposed so a host dialog can hand the keyboard back.
+
+**`floatMenu`** (opt-in, default false) teleports the menu to `<body>` and has `sizeMenu()` position it against the viewport (`position: fixed`, `--z-overlay`, viewport-clamped, flipping upward for a low trigger) instead of rendering it in place. The in-place default is only safe where no ancestor clips or scrolls, which holds for the grid context menu (itself fixed and teleported), `SelectionMenu`, and the overlay's top chrome, but NOT inside the overlay's Faces panel, where `.overlay-sidebar` is `overflow: hidden` and `.face-assign-grid` is `overflow-y: auto`: an absolutely positioned menu there was clipped and inflated the scroller's extent, producing a spurious scrollbar. It is a prop rather than a `type === "face"` branch because host layout, not entity type, decides it. **Incompatible with `placement="right"`**, whose `.ate--flyout` rules position at `left: 100%` of a root the node has left. Position (not just height) is recomputed on the `resize` and capture-phase `scroll` listeners `openMenu()` already registers; capture phase is what catches the sidebar scrolling, since the scrolling ancestor is not the window. It lives in this component rather than in a local overlay menu because the `.ate-*` skin is scoped to this file and one create rule has to serve both call sites.
+
+Both people modes take the opt-in `allowCreate` prop (default false; set by `ImageGridContextMenu` and by the overlay's face rows, because a host that does not handle `create` must never show a dead row, which is why `SelectionMenu` stays opted out): the flyout carries a pinned "New person…" row below the scrolling list, and a no-match search turns the empty state into a Create "query"… row (Enter in the search box activates it). Both rows are disabled exactly like sibling items (readonly / empty selection) and only emit `create` with the typed query; creation itself belongs to the host (`ImageGrid` opens its `CharacterEditor` and assigns the captured selection on save; see #645). Co-located tests: `AddToEntityControl.test.js`.
 
 #### `StarRatingOverlay.vue` (133 lines)
 5-star score widget. Props: `score`, `readonly`. Emits: `set-score`. Used in `ImageOverlay` and `ImageGrid` cells.
@@ -508,33 +636,120 @@ Table of tag-capable plugins (`supports_tags = true`). Columns: Active (radio �
 #### `DescriptionPluginsTable.vue`
 Table of description-capable plugins (`supports_descriptions = true`). Columns: Active (radio — single selection), Plugin name + tooltip, Loaded indicator, Settings gear. Patches `tagger_settings.active_description_plugin` via `PATCH /users/me/config` on change. Props: `plugins`, `settings`. Emits: `update:settings`.
 
-#### `ComfyUiRunner.vue` (1 110 lines)
+#### `ComfyUiRunner.vue` (1097 lines)
 ComfyUI workflow executor embedded in `ImageGrid` and `ImageOverlay`. Connects to the ComfyUI WebSocket for real-time progress. Props: `workflowId`, `clientId`, `imageIds`, `backendUrl`. Emits progress and completion events.
 
 **Grid refresh contract (in-app ComfyUI output):** the new grid card for an in-app ComfyUI result appears via the origin-aware WebSocket `picture_imported` insert (`useGridRealtimeSync.handleForeignUi` → `insertGridImagesById`, [§9](#9-real-time-updates-websocket)), **not** via a full grid refetch. `routes/comfyui.py` broadcasts the import with `source: "ui"` and no origin id, so every owner tab (including the originating one) does a targeted in-place insert at the sorted position with no pill and no reload — the old "image pops in → disappears → comes back" flicker is gone. The runner's `refresh-grid` emit is therefore **no longer wired to a grid refetch**: `ImageGrid.onComfyuiRefreshGrid` now only reconciles an **open** overlay (i2i/upscale) to the freshly-stacked output via `maybeRefreshOverlayForComfyui` (a guarded no-op when the overlay is closed or no comfyui refresh is pending). The same overlay reconcile is also kicked from `insertGridImagesById` after the WS insert lands, so the lightbox catches the new stack member without waiting for the runner's retry backoff. What the runner still drives unchanged: the ComfyUI **progress banner**, the **`refresh-sidebar`** emit (sidebar count), and the open-overlay refresh (including the failure path, which hides the banner / shows the error and no longer refetches the grid).
 
-#### `SearchOverlay.vue` (273 lines)
-Full-screen search input with history. Props: `modelValue`, `history`. Emits: `search`, `close`, `clear-history`. Keyboard: Enter to search, Escape to close.
+#### `RemixDialog.vue` (`io/`, ~600 lines)
+The **"Generate variants…"** modal (Remix v1, v1.9). Opened from `ImageGridContextMenu`'s `open-remix-dialog` emit and mounted in `ImageGrid`. Props: `open`, `image` (the right-clicked picture), `selectedImageIds`, `clientId`, `backendUrl`, `stackOutputs`. Emits: `close`, `run` (`{prompts, pictureId, pictureIds}` — handed straight to `ComfyUiRunner.handleComfyuiRun`), `use-batch`.
 
-#### `SearchResultBar.vue` (95 lines)
-Active-search banner. Props: `query`, `scope`, `resultCount`. Emits: `clear`, `search-all`.
+Two modes, chosen from **side-by-side radio cards** — stacked full-width they read as info boxes rather than a choice (owner feedback, 2026-07-29). Still a radio group with room for a per-option subtitle and, when unavailable, a reason; v1.11's third mode (lock-replay: reproduce the original exactly) joins the row and wraps when it does not fit:
 
-#### `ShareDialog.vue` (286 lines)
+| Mode | What it runs | When it is offered |
+|---|---|---|
+| `template` | `POST /comfyui/run_i2i` with a chosen i2i workflow, the prompt, and a seed | always |
+| `recipe` | `POST /comfyui/run_recipe` — replays the executable graph embedded in the source file with a new seed | only when `GET /comfyui/pictures/{id}/recipe` returns `available` **and** the server's pre-flight passed |
+
+Load-bearing behaviours, each of which is a deliberate decision rather than an incidental one:
+
+- **An unavailable mode is shown disabled with a visible reason, never hidden and never a `title` tooltip.** The row carries `aria-disabled` (not the `disabled` attribute) so keyboard traversal still reaches it and the reason is discoverable; only activation is blocked. The reason text is deliberately NOT at the 38% disabled opacity — it is the one thing on that row that must be read. Three causes are worded differently on purpose, because they send the user to three different places: no embedded workflow, ComfyUI is missing named things, and ComfyUI could not be reached to check at all.
+- **The recipe row has four states, not two** (`recipeState`: `loading` / `blocked` / `unreachable` / `ready`). One computed rather than a pair of booleans, because a pair drifts out of sync. `blocked` is `remix-mode--off` + `aria-disabled`; `unreachable` is `remix-mode--caution` and stays selectable — but cannot run (below).
+- **"Could not check" is not "checked and broken."** They stay different sentences — but an unreachable ComfyUI is now a *refusal*, not a caveat (see the consent section below). Reporting it as a pre-flight *failure* would still be wrong: it would name missing things that are not missing.
+- **No mode is preselected until the check resolves**, so the dialog cannot change its own state under a user who has already committed attention to it. Recipe wins the default only when `recipeState === "ready"` — not merely selectable — and the session-sticky `comfyui_remix_mode` preference does not get to skip that either: landing a user inside the override UI is the habituation path.
+- **There is no strength/denoise slider, on purpose.** No shipped template exposes a denoise input — the Flux2 Klein edit graph samples from an empty latent with the source entering as reference conditioning — so the control would move nothing. A slider that silently does nothing is worse than an absent one: it teaches a false model of cause and effect. Adding one means adding a template that actually has the input.
+- **The prompt's provenance decays.** Prefilled from the picture's Florence-2 `description` with a quiet "from image description" note; the note is replaced by a "Reset to description" button the moment the user types. The grid hands the dialog its own listing row, which carries **no** `description` field, so the dialog fetches `GET /pictures/{id}/metadata` on open whenever the prop lacks a usable description — without that it told users their described pictures had "no description yet". A pending-description sentinel (`__description::…`) is never prefilled. The prompt field is hidden entirely when the selected workflow's `missing_placeholders` includes `{{caption}}`, mirroring `SelectionBar` — otherwise a user writes carefully into a void.
+- **It closes on submit and hands progress to `ComfyUiRunner`**, rather than hosting its own bar. Abort is global (`POST /comfyui/abort` clears the entire ComfyUI queue), so a modal-local control next to it would be a mislabel. A submit *failure* is treated as a form error: the dialog stays open with every input intact and the message in a `role="alert"`.
+- **Scope is disclosed, not silently applied.** The action always targets the right-clicked picture; with a wider selection live the dialog says so and offers a one-click route to the shipped batch path (`open-comfyui-panel`).
+- **Three seed modes in recipe mode, two in template mode.** Random draws fresh. **Incremented** (recipe mode only — templates have no original to increment from) applies a signed delta (default +1, session-sticky) to the original seed read from the recipe response (`seed`, falling back to the first `seed_inputs` value) and shows the resulting value live; it submits as `seed_mode: "fixed"` with the computed seed, so the API surface is unchanged. **Fixed** defaults to the original seed and carries a small warning-toned "same as original" note until edited, because replaying the identical seed re-creates the identical image, which the importer dedupes into silence — flagged, not forbidden. A sticky `incremented` preference falls back to random where it cannot be honoured.
+- **Compare is fullscreen, image-first, with the design system's blink compare.** The dialog takes the grid's full space (`AppDialog fullscreen`); cards grow into the width and preview **down-scaled originals** (browser-decodable formats; RAW/video fall back to the server thumbnail) with the metadata compacted into the design system's two-column label-over-value grid.
+
+  **One card per UNIT, not per candidate** (`mixed-stacks-and-stack-units.md` D2/D4), because a verdict moves units and a strip drawn per candidate compares things no verdict can move apart. Four consequences, each load-bearing:
+  - **A deck's numbers are its LEADER's, labelled `Leader`, never an aggregate.** The metric columns answer "which file is better"; a mean megapixel count answers nothing, and an aggregate would silently break the per-column best-value highlight, which compares individual FILES. The leader is *frequently not a group candidate*, so the dialog fetches its row on open: `listStackMembers(stackId, {limit: 1})`, one member per such deck, on a surface the user opened deliberately. Until it lands every metric cell shows the en dash rather than a confident zero.
+  - **A group-level `Contains` row** (`5 pictures · 42 MB` / `1 picture`) states what a card stands for, because the File column shows only the leader's size and would otherwise be read as the deck's footprint. It follows the same all-or-none discipline as Location and Smart score (every card or none), since the meta grid is what the picture above it gives its leftover height to. The footprint appears only once the **whole** member list is held; the payload carries no total and summing one page would state a stack's size from a fraction of it.
+  - **Expansion is a full-width band BELOW `.dc-strip`, never inside a card** (a card that grew would take the pictures out of register, which is the one thing the surface exists to hold), **at most one open at a time**, opened from the `Contains` value and fetched lazily. It is `StackExpansionStrip`'s **first mount anywhere**: it now takes its size from a `thumbHeight` prop (height fixed, width auto, which is EXIF-rotation correctness rather than a preference, since stored dimensions ignore rotation) and hides its Unstack action behind `showUnstack`, because Compare has no unstack pathway to honour. **Promoting a member to cover survives here** (it was withdrawn from the queue row) as a two-step whose confirmation names the consequence: it re-covers that stack across the library, not just in this group.
+  - **The zoom flips PICTURES, not units**: unit 1's leader, unit 1's remaining known members in stack order, unit 2's leader, and so on, growing to the whole stack once an expansion has fetched it. Eyeballing a stack sibling at 100% is the strongest disclosure available when a group named only one member of a stack. The zoom keys the current picture by **id, not index**, so a sequence that grows underneath it cannot slide onto a different picture; the *cover* gesture inside the zoom stays unit-level for the same reason the row's did. The **zoom** (per the design-system update, 2026-07-29; continuous-wheel rework, 2026-07-30) is a full-screen blink compare teleported above the modal: one candidate at a time flipped in place (←/→ wrap, 1–9 jump) so differences read as motion. **The wheel means ZOOM for the whole gesture** (owner requirement): wheel UP over a candidate's picture opens the zoom at fit and the same motion keeps magnifying, a continuous scale from the fit floor to 8× actual pixels (`utils/zoomMath.js`; wheel deltas normalized across pixel/line/page wheel modes via the shared `normalizeWheelDelta`, and the percentage readout via the shared `formatZoomPercent`, the zoom family's core, see §6), **anchored at the cursor** (binding: the image point under the pointer stays stationary through every scale change, edge-clamped; the thumbnail→surface jump has no meaningful cursor geometry, so the open lands at fit and anchors from the first in-tick). Wheeling out **three full accumulated notches of deliberate resistance** (`ZOOM_EXIT_RESISTANCE`, raised 2026-07-30 from one notch, which exited too easily) while already AT the fit floor closes the zoom back to Compare; the accumulation is the hysteresis (it only counts AT the floor, any zoom-in resets it, and a pause longer than `ZOOM_EXIT_GESTURE_GAP_MS` starts it over, so trackpad crumbs cannot blow through, stale part-gestures do not carry, and the boundary cannot flap because reopening takes a wheel over a thumbnail). **Fit and 100% are snap stops** on the continuum (the header buttons and P, centre-anchored), the live percentage renders in the top bar (100% = actual pixels; it is what makes the same-magnification blink guarantee verifiable), a **drag pans** at every overflowing level (the wheel never scrolls anything, `overflow: hidden` + preventDefault), and a **flip keeps scale and pan** so the blink stays registered (the new image's own fit floor re-clamps on load). Click picks the cover, right-click excludes, Enter/S stack and K keeps separate from inside (amendment #3's verdict key scheme). The zoom's *state* lives in the dialog (exposed as `isZoomOpen/openZoom/closeZoom/flipZoom/zoomTo/toggleZoomPixels/zoomLevel`) but its *keys* live in the queue's one keyboard model, which Escape-peels one layer at a time: zoom → Compare → queue. In the zoom, digits flip; they never silently re-pick the cover.
+- **First adopter of the dialog keyboard contract** (see "App* design-system layer"): Escape dismisses, plain Enter accepts via `AppDialog`'s `accept`, and the footer buttons wear the ↵ / Esc badges. The prompt textarea and seed field stop propagation of ordinary typing so grid shortcuts stay quiet, but deliberately let Escape and Enter through to the dialog — and handle Ctrl/Meta+Enter themselves, since the root-level shortcut cannot hear a stopped event.
+
+**Recipe mode is a consent surface** (review finding R3, CWE-829). The replayed graph is file metadata: whoever made the image authored it, and it runs on the owner's ComfyUI bounded only by their installed node packs. The confirm step's reading order *is* the argument — what came from outside, what could not be checked, what it would run, I accept, run:
+
+- **The node classes are disclosed, not just counted.** `node_classes` is the first row of the `<details>` disclosure, above Prompt, because the summary asks "what will this run" and the class list is the literal answer. Rendered as mono text rather than chips (twenty chips in a 560px dialog is noise and implies an interactivity that is not there), truncated at 12 with an in-place `+n more` expander.
+- **No contact with ComfyUI means nothing generates** (owner decision, 2026-07-29 — superseding the earlier run-unchecked acknowledgement). `preflight.checked === false` puts the row in `unreachable`: it stays selectable — `aria-disabled` would be a lie to assistive tech and would hide "Check again" — but **Generate is disabled in both modes**, template included, since a template run against a dead ComfyUI fails anyway. The `.remix-ack` checkbox and the dialog's `allow_unchecked` are gone; the API keeps `allow_unchecked` for programmatic callers, and **the backend still refuses an uninspected graph without it**, so removing the override here strictly tightened this surface. Reachability is only *knowable* when a recipe pre-flight ran — a picture with no embedded graph reports nothing, and a template run then simply fails at submit with the error kept in the form.
+- **"Check again" is the only way out of the refusal**, offered in the alert in both modes. A success re-enables Generate and announces itself; a failure announces too, because nothing visible changes.
+- **An imported source warns but never gates.** `source_is_imported` renders a `.remix-alert` and force-opens the disclosure with the list untruncated. It gets no checkbox on purpose: every imported ComfyUI PNG trips it, and gating a state most of a library is in is exactly what turns an acknowledgement into a reflex — it would drag the rare unchecked gate down with it. Salience, not clicks, is the right response to "more scrutiny warranted".
+- **The caution styling is not the disabled styling.** `.remix-mode--caution` takes a warning-toned border and an `mdi-alert-outline` glyph (status never rides on colour alone) with **no** opacity drop, because the row can still be chosen. `.remix-alert` text is `on-surface`, never `on-warning`: `on-<x>` is only correct on a solid `<x>` fill and measures ~1.4:1 over an 8% tint.
+- **Nothing fails silently.** The live region announces `unreachable` on resolve, both outcomes of "Check again" (the failure especially — nothing visible changes), and an Enter / Ctrl+Enter that the disabled Generate is blocking, naming the blocker.
+
+#### `GridActionPill.vue` (`panels/`, ~200 lines)
+**The grid's single bottom-edge surface** (`docs/design/merged-grid-action-pill.md`). Props: `searchActive`, `selectionActive`. Emits: `focus-escaped`. Slots: `search`, `selection`.
+
+Before this component the search bar (`bottom: 0`, full width) and the selection pill (`bottom: var(--space-5)`, centred) were independent mounts under independent conditions, so **both could be up at once**, and only the pill called `useBottomAnchor` — so notice cards landed on top of the search bar, and `.grid-breadcrumb` sat inside its band. One owner of the bottom edge retires all of that.
+
+- **It owns the surface, not the actions.** The pill chrome, the seam, the motion and the one `useBottomAnchor("selection-bar", …)` registration live here; the two halves are **slots**, so their wiring stays in `ImageGrid` rather than being drilled through a shell (the selection half alone has ~25 props and ~18 emits). The anchor keeps the old name deliberately: `ActionReceipt` lifts itself by `useAnchorHeight("selection-bar")`.
+- **Two real `role="group"`s** ("Search results" / "Selection actions"), not styled runs: the **group boundary** is what a screen reader navigates by. The seam is `aria-hidden`.
+- **The expand is geometry-stable.** Width is deliberately *not* transitioned — `max-content` is not interpolable, and because the pill is centred with `translateX(-50%)` an animated width moves its **left** edge too, dragging the search half's controls sideways under a live pointer. Height must never animate either: it feeds `--floating-bottom-h` through a `ResizeObserver`, so it would re-target the notice stack *and* the receipt's lift every frame. The cue is carried by the seam (`scaleY 0→1`, `--dur-1`) and the entering segment (`translateX(8px)` + opacity, `--dur-2`), suppressed while `selbar-pop` owns the entrance.
+- **`flex-wrap: nowrap` is load-bearing.** One wrap = a ~40px height jump = the notice stack and the receipt both move mid-interaction. The segments' `@container selbar` ladders exist to make wrapping impossible above the narrow floor.
+- **Focus rescue.** When the half holding focus unmounts (Esc peels the selection), focus is moved to the surviving half; if none survives it emits `focus-escaped` and `ImageGrid` returns focus to the scroll wrapper. Without it focus falls to `<body>` and a keyboard user drops out of the tab order (WCAG 2.4.3). Covered by `GridActionPill.test.js`.
+
+#### `SearchResultBar.vue` (722 lines)
+**The search half of the grid action pill**, a run of controls rather than a surface. Props: `imagesLoading`, `statusCount`, `statusLabel`, `isAllPicturesActive`, `ownsEscape`, plus the person-search set below. Emits: `clear`, `search-all`, `update:threshold`, `update:min-refs`, `assign`.
+
+- **The status is one sentence, and it names the query.** `statusCount` (the numeral) and `statusLabel` (the rest) are separate props so the count can carry its own weight without regex-splitting a string that contains the user's query. The scope is folded in (`42 matches for "sunset" in Landscapes`) rather than standing beside it as a `Searched X only` note. Naming the query is new: nothing else on screen said what was searched once the toolbar popover closed.
+- **Two numerals bracket the pill** — this half's count and the selection half's — in one shared type recipe. That, one identity glyph per half, and a 32px seam gutter against an 8px internal rhythm are how the halves are told apart; a two-tone background was proposed and rejected on measurement (`merged-grid-action-pill.md` §11.1).
+- **One live region for the whole pill**, `role="status"`, permanently mounted (a region that mounts with content already in it announces unreliably), **debounced 300ms** so a slider drag reads once instead of ~40 times, with the threshold folded into the same sentence. The `<output>` carries `aria-live="off"` — it maps to `role="status"` by default and was double-speaking — and the range carries `aria-valuetext`, without which a keyboard user hears `slider, 0.82`.
+- **Loading does not empty the half.** The controls stay mounted and `aria-disabled`; hiding them collapsed the pill and snapped it back to full width when results landed, moving targets under a travelling cursor.
+- **Only the control Esc will actually reach wears the keycap** (`ownsEscape`): a `<kbd>` chip plus `aria-keyshortcuts="Escape"`. An `aria-keyshortcuts` on a button that will not get the key is a 4.1.2 lie.
+
+**Person-search mode (`assignTarget` / `threshold` non-null).** Serves "Suggest more pictures of &lt;person&gt;" (see `ImageGrid` below). Adds two controls, both optional so the text and reverse-image callers render unchanged:
+
+- A **tuning popover** behind one value-carrying trigger (`mdi-tune-variant` + `82%`, plus `· 3/7` once the agreement knob is off its floor). Both knobs are native ranges with a real `<label for>` and an `<output>` in the label line, same pattern as `DedupTierMenu`, so both are keyboard-operable and named. Both emit on `input`, not `change`: the count has to track the drag, not wait for the pointer release.
+  - **Match strength** (`threshold`, `thresholdMin`, `thresholdMax`): the cosine floor. `thresholdMin` is the **fetch floor**, since below it there are no fetched results to reveal.
+  - **Reference faces** (`minRefs`, `referenceCount`): how many of the person's reference faces must clear that same floor. It exists because the backend combines a character query with `combine=max`, so `likeness` alone cannot distinguish "resembles one reference perfectly" from "resembles all of them well", and on a person whose references span years and angles that is the difference between the same person and the same haircut. Dropped entirely below two references: a slider whose only legal position is its minimum is chrome, not a control.
+  - **The popover is the only form** (owner call, 2026-07-30, reversing `merged-grid-action-pill.md` §11's "usability wins: the popover is the narrow and touch form"). The inline `Match ≥ 82%` slider is gone, not hidden: two knobs cannot share a 40px band without taking half the pill, and a pair of sliders is a thing to compare against each other and against the count, which is a panel's job. §12.1 of that doc records the reversal and what was given up. **Vertical remains rejected on arithmetic**: 46 discrete steps in a 40px band is ~0.9px per step.
+- An **assign** action (`assignTarget`, `assignCount`, `assignFromSelection`, `assignBusy`) labelled `Assign N to <person>`. **The count is on the button, never "all"**. The blast radius of a bulk write is stated before the click, and it is what makes the sliders legible. When the grid has an explicit selection the label becomes `Assign N selected to <person>` and the action follows the selection: silently writing the whole result set over a deliberate selection is the error the mode exists to prevent. Disabled at count 0 and while a write is in flight (a double submit would raise two operation-log entries, so Undo would reverse only half). **The person's name is its own element** so the ladder can drop it whole at ≤900px, leaving `Assign 41`; ellipsising the label produced `Assign 2 t…`.
+
+The status text sits in an `aria-live="polite"` region because the count moves with the sliders (WCAG 4.1.3), and **both** knobs are folded into that one sentence rather than speaking separately. Covered by `SearchResultBar.test.js`.
+
+**The selection half** (`SelectionBar.vue`, `panels/`) is the same shape: it renders `display: contents` into the pill and owns no surface of its own. Its menu trigger now reads `12 selected` (or `12 selected · 3 faces` — pictures and faces are different units and are never summed) instead of a bare `(N)`, and the standalone faces span is gone. The trigger gained `aria-haspopup="menu"`, `aria-expanded` and `aria-keyshortcuts="S"`; without the first two a screen-reader user got no signal it opened anything. `Delete` states the outcome it actually has (`Move 12 to Scrapheap (Del)`, or `Delete 12 forever (Del)` inside the scrapheap) and takes a group gap off `Clear selection`, which it previously sat 8px from.
+
+**Esc peels one layer per press** — an open menu, then the selection, then the search — and that ladder already lived in `useGridKeyboardNav`. One gap was fixed with the merge: the final step gated on `props.searchQuery`, so a reverse-image, similar-faces or person face search (all of which have an empty query string) ignored Esc even though `clearSearchQuery` has always reset them. It now takes `searchResultsActive`. Covered by `useGridKeyboardNav.test.js`.
+
+#### `ShareDialog.vue` (290 lines)
 Share link creation. Props: `modelValue` (v-model for open), `pictureId`, `embedWatermark`. Emits: `update:modelValue`, `update:embed-watermark`, `created`. Calls `POST /shares`.
 
-#### `SnapshotsWithDeletedDialog.vue` (~95 lines)
+#### `SnapshotsWithDeletedDialog.vue` (119 lines)
 Post-purge privacy notice. Props: `modelValue` (v-model open), `snapshots` (array of `{id, kind, label, created_at, matched_count}` from the `DELETE /pictures/scrapheap` response's `snapshots_with_deleted`). Emits: `update:modelValue`. Shown by `ImageGrid` after a permanent scrapheap purge when the deleted pictures' metadata still lives in one or more snapshots — the archives are not scrubbed, so it lists those snapshots and points the user to Settings → Snapshots to delete them. Reuses `kindChipColor`/`relativeDate` from `utils/snapshots.js`.
 
-#### `ImageGridContextMenu.vue` (392 lines)
-Right-click context menu for grid cells. Props: `visible`, `x`, `y`, `selectedImageIds`, `selectedMediaSupport`, `selectedCharacter`, `selectedSet`, `selectedSort`, `allPicturesId`, `unassignedPicturesId`. Emits same action events as `Toolbar`. Embeds `AddToEntityControl`.
+#### `ImageGridContextMenu.vue` (1213 lines)
+Right-click context menu for grid cells. Props: `visible`, `x`, `y`, `selectedImageIds`, `selectedMediaSupport`, `selectedCharacter`, `selectedSet`, `selectedSort`, `allPicturesId`, `unassignedPicturesId`, `keepCoverOnlyStackCount`, `keepCoverOnlyLockReason`. Emits same action events as `Toolbar`, plus `create-character` (forwarded from the Person flyout's `create` via the delegate pattern: close the menu, `nextTick`, then emit, so focus handling stays correct) and `keep-cover-only`. Embeds `AddToEntityControl`. Tests: `ImageOverlayContextMenu.test.js`, `ImageGridContextMenuCreatePerson.test.js`, `KeepCoverOnlyMenus.test.js` (which asserts the same danger-group rules against this menu **and** `SelectionMenu`, because a rule enforced in one and forgotten in the other is the shape of bug that file exists to catch).
 
-#### `ProjectFiles.vue` (713 lines)
+#### Confirming a destructive action: two dialogs, deliberately unequal
+
+The app has exactly two bulk-destruction confirms and they are **not** variations of one component. Which ceremony a dialog wears is the only signal the user gets for "recoverable" versus "gone", so borrowing the heavier one flattens the distinction that the whole Scrapheap design rests on.
+
+| | `DeleteForeverDialog.vue` | `KeepCoverOnlyDialog.vue` |
+|---|---|---|
+| What dies | the on-disk original | nothing; rows move to the Scrapheap |
+| Gate | type-to-confirm (`DELETE`) + a server preview | a server preview alone |
+| Undo | none | one op-log batch, one `Ctrl+Z` |
+| Keyboard | the app's convention (Enter accepts) | **inverted**: Cancel is focused, plain Enter does not accept |
+
+`KeepCoverOnlyDialog` is presentational; `ImageGrid` owns the preview, the run and the ghosting, and the design is `docs/design/keep-cover-only.md` (wire contract: integration §2.2). Four rules are load-bearing and each has a test:
+
+- **One computed, two renderings.** `picturesMoving` is `null` until the preview lands and drives *both* the headline figure and the confirm label. Same endpoint is not enough; the neighbouring `DedupAutoStackDialog` reported "62 stacks to create" for work that would create 3 precisely because two renderings read two different things. While the figure is unknown it shows an en dash at full size and the confirm is disabled: never a zero, never a stale number.
+- **Nothing is freed.** `originals deleted from disk: 0` is stated out loud in every state, exactly as the auto-stack dialog states its own zero, and the byte count is a *sentence*, never a figure block: a figure is for what changes now, and nothing is reclaimed until the Scrapheap is emptied. The retention sentence branches on the preview's live `scrapheap_retention_days`, whose default (`null`) means the Scrapheap never empties on its own, so hardcoding "30 days" is the class of error this dialog exists to avoid.
+- **Buckets are summed, never subtracted.** "Stacks skipped" is the sum of the three disjoint, directly-counted skip buckets, so the row cannot report a number no query answered.
+- **Cancel holds focus and Enter does not accept.** The dialog does not listen for `AppDialog`'s `accept`, and focusing Cancel puts Enter on a native button, where `AppDialog`'s `ENTER_EXEMPT` rule hands it to that button's own activation. So Enter cancels. Users arrive here from the duplicate queue with Enter under their finger from the verdict keys; do not "fix" this by adding an `@accept` handler or focusing the confirm.
+
+The menu item (`Keep cover only`, `mdi-layers-minus`) lives in the grid context menu and the selection pill's **overflow only**, never as a top-level pill button, in the trailing `.ctx-item--danger` group, ordered by escalating severity: Keep cover only, then Move to Scrapheap, then Delete forever. Its unit is the stack, so its label counts stacks (`(3 stacks)`) or states partial eligibility (`(12 of 20)`), which is what makes ignoring loose pictures in a mixed selection honest. There is no keyboard shortcut: `Delete` already means "move the selection to the Scrapheap", and a second, differently-scoped destructive key is how the wrong one gets pressed.
+
+#### `ProjectFiles.vue` (732 lines)
 Expandable project file-tree panel inside `SideBar`. Shows imported files grouped by project.
 
-#### `EmptyScrapHeap.vue` (106 lines)
+#### `EmptyScrapHeap.vue` (187 lines)
 Empty-state illustration and caption for the scrapheap (deleted-images holding area) view.
 
-#### `LoginScreen.vue` (209 lines)
+#### `LoginScreen.vue` (274 lines)
 Login/registration form. On mount calls `checkLoginStatus()` to detect first-run (no users exist → show registration form). Calls `login()` from `apiClient.js`.
 
 ---
@@ -594,7 +809,7 @@ Die-cut sticker award. The sticker vocabulary is imported from the Picture Set p
 "Start a review" dialog: pick a tag and freeze the scope for a new session.
 
 #### `TagHealthBoard.vue` (`reviews/`, ~935 lines)
-Landing tag-health board — precision-adjusted estimates and thresholds per tag, the jumping-off point for starting a review. Pure estimate/threshold math lives in `tagHealthBoardLogic.js` (~90 lines).
+Landing tag-health board — precision-adjusted estimates and thresholds per tag, the jumping-off point for starting a review. Pure estimate/threshold math lives in `tagHealthBoardLogic.js` (153 lines).
 
 ---
 
@@ -610,6 +825,8 @@ The single most-imported utility. Exports:
 |--------|------|-------------|
 | `apiClient` | Axios instance | Pre-configured with `baseURL`, 60 s timeout, `withCredentials: true`. Request interceptor rewrites relative paths to `${API_PREFIX}/*`, injects `?token=` for share sessions, and adds the `X-Client-Id` header on mutating (`POST`/`PUT`/`PATCH`/`DELETE`) same-origin requests. Response interceptor triggers `logout()` on 401. |
 | `setRequestClientId(id)` | function | Stores the per-tab client id in module scope (capped at 200 chars) so the request interceptor can attach `X-Client-Id` without a Pinia lookup. Called by `useWsStore` at init. |
+| `newOperationBatchId()` | function | Mints a `cli-…` correlation id for **one user gesture that fans out over several requests**. Unlike `X-Client-Id` it is per-call, not interceptor-injected: the handler passes `{ batchId }` down to every api call of the gesture, which sends it as `X-Operation-Batch-Id`. The backend records it as the operations' `batch_id`, so the gesture is one history step, one receipt (with its `+N`) and one `Ctrl+Z` (`backend_architecture.md` §21.2). The `cli-` namespace is load-bearing — the server mints `srv-` and rejects anything else from a client. Used by `OverlayTagsPanel.removeAllTag`, `TbTagPanel.onDropToRejected` and `TbTagPanel.confirmPredictionOnAll`. |
+| `operationBatchHeaders(batchId)` | function | The axios config carrying that header, or `undefined` when there is no gesture — the one place its spelling lives. Every api module that takes a `batchId` option merges it in. |
 | `isAuthenticated` | `ref<Boolean>` | Global auth state. Set by `login()`, `checkSession()`, `logout()`. |
 | `isReadOnly` | `computed<Boolean>` | `true` when `sessionContext.scope === 'READ'` (share-token session). |
 | `sessionContext` | `ref<Object\|null>` | Session metadata from `GET /session/context`. |
@@ -734,7 +951,51 @@ Pure helpers for constructing Docker run/compose snippets in the folder editor U
 
 ---
 
-## 7. Theming and Styling
+### `zoomMath.js` + `composables/useWheelZoom.js` — the zoom family (mandatory shared core)
+
+**Any new zoom surface MUST build on this core.** Do not re-implement wheel
+zoom per surface — the family exists precisely because two surfaces once had
+divergent wheel behaviour (Compare's raw `deltaY` misbehaved on line-mode
+wheels until it adopted `normalizeWheelDelta`).
+
+Two layers:
+
+- **`utils/zoomMath.js` — the pure arithmetic**, unit-tested invariants:
+  `ZOOM_INTENSITY` (0.002, exponential wheel), `zoomStepScale` (per-event
+  0.5–2× clamp, `[fit, max]` continuum), `atFitFloor`, `ZOOM_MAX_SCALE` (8× of
+  actual pixels), `ZOOM_EXIT_RESISTANCE` + `ZOOM_EXIT_GESTURE_GAP_MS` (Compare's
+  exit hysteresis — three deliberate notches, gesture-gap restart; exit
+  surfaces only), the two **cursor-anchor solvers derived from the same equation** —
+  `anchorZoomScroll` (scroll-container transport: Compare) and
+  `anchorZoomOffset` (translate+scale transform transport: ImageOverlay) —
+  plus `normalizeWheelDelta` (pixel/line/page delta modes → pixels) and
+  `formatZoomPercent` (the one readout format, whole percent of actual
+  pixels).
+- **`composables/useWheelZoom.js` — the stateful glue**: the scale ref (basis
+  1 = actual pixels) and fit-measurement hook (`setMeasurements`), the wheel
+  handler, snap-to-stop and the fit ↔ 100% toggle, floor-policy dispatch,
+  clamped pan, and the settle detection feeding the aria announcer
+  (`ZOOM_SETTLE_MS` 500 ms; snaps announce immediately).
+
+**The parameter split is deliberate.** Shared and non-overridable (the
+family's *feel*): `ZOOM_INTENSITY`, the per-event clamp, the anchor equations,
+the near-stop slack (`NEAR_SCALE_SLACK` 1%), delta normalization, the settle
+window, the percent format. Per-surface: the entry scale (fit), the snap
+stops, `maxScale` (default `ZOOM_MAX_SCALE`; effective ceiling
+`max(maxScale, fitScale)`), the **floor behavior** (`rest` — hard clamp at
+fit, for destination surfaces like ImageOverlay; `exit` + the `ZOOM_EXIT_RESISTANCE`
+hysteresis, for layered surfaces like Compare's blink-zoom), and the **pan
+transport** (transform offsets via the composable, or a scroll container via
+`anchorZoomScroll`).
+
+Named follow-ups (recorded, not yet done):
+
+1. **`ReviewSessionsOverlay` migration onto `useWheelZoom`.** Its `.rs-zoom`
+   full-screen zoom still carries its own scroll-to-magnify implementation;
+   it should become the third consumer of the shared core.
+2. **Pinch support.** The anchor equation takes any `{x, y}` in container
+   space, so a pinch centroid drives `wheelZoom`/`snapTo` unchanged — the
+   composable is pinch-ready; only the gesture recognition is missing.
 
 ### Vuetify custom themes
 
@@ -768,13 +1029,42 @@ Theme is switched at runtime by setting Vuetify's `theme.global.name` from the `
 - `styles/context-menu.css` — Shared styling for custom right-click menus.
 - `<style scoped>` in each component — Component-specific styles. CSS scoping is done by Vue's transform and does not cross component boundaries.
 
+#### Sidecar CSS for the large components
+
+Four components keep their CSS in a **sidecar file next to the `.vue`** rather
+than inline, pulled in with `<style scoped src="./Name.css">`:
+
+| Component | Sidecar |
+|---|---|
+| `App.vue` | `App.css` (unscoped) |
+| `SideBar.vue` | `SideBar.css` (scoped) + `SideBar.global.css` |
+| `ImageGrid.vue` | `ImageGrid.css` (scoped) + `ImageGrid.global.css` |
+| `ImageOverlay.vue` | `ImageOverlay.css` (scoped) |
+
+This is purely a **file-size** measure: these four carried 2 900–3 000 lines of
+CSS each, which is dead weight for anyone (human or agent) navigating the logic,
+and it forced range-reads instead of whole-file reads. The extraction is
+behaviour-neutral — the emitted stylesheet is byte-identical apart from Vue's
+content-derived `data-v-*` scope IDs and hashed `@keyframes` names.
+
+The `.global.css` sidecars hold the **unscoped** blocks. Those exist because
+`::-webkit-scrollbar-*` pseudo-elements are suppressed once a scoped `data-v`
+attribute is added to the selector, so the sidebar and grid scrollbar treatments
+must stay unscoped. They are near-duplicates of each other and carry mutual
+"keep in sync" comments — a real deduplication opportunity, not yet taken.
+
+**Constraint:** `v-bind()` in CSS cannot be used from a sidecar file — it is
+compiled against the component's `setup` scope and only works in an inline
+`<style>` block. None of these four use it. Adding a `v-bind()` to one of them
+means moving that rule back inline.
+
 ### Overlay / title-bar layering
 
 In the Electron desktop shell a custom 34px title bar (`TitleBar.vue`, `.titlebar`) sits at the top of `.app-viewport` and hosts the window drag region and the min/maximize/close controls. No overlay may ever cover it. Three pieces keep that true; new overlays must respect them:
 
 - **`--titlebar-h`** — the reserved title-bar height. Defaults to `0px` on `:root` (a plain browser has no title bar) and is overridden to `34px` on `html.is-desktop` (the class `main.js` adds when `window.pixlstashDesktop` exists). Defined at the root so it inherits everywhere, including Vuetify overlays teleported to `<body>`. The `34px` must stay in sync with `.titlebar { height }` in `TitleBar.vue` (both carry a comment saying so).
 - **The title bar is top-most.** `.titlebar` is `position: relative; z-index: 100000`, above every in-app overlay (the highest is the import-progress modal at `99999`). It is a child of `.app-viewport` alongside the in-app overlays, so this z-index wins over all of them. Bump it if any overlay ever goes higher.
-- **Full-screen overlays anchor their top at `var(--titlebar-h)`.** Any new full-viewport modal backdrop (`position: fixed` + `inset: 0` / `top:0;left:0;right:0;bottom:0` / `100vw`×`100vh`) must start below the title bar: use `inset: var(--titlebar-h) 0 0 0` (or `top: var(--titlebar-h)` with a matching height reduction) so its own top content (close buttons, toolbars) and its centred/scrolled content land in the visible area below the bar. Current insets: `ImageOverlay` `.image-overlay` (via a global `html.is-desktop` rule), `ReviewSessionsOverlay` `.rs-overlay` / `.rs-zoom` (both `inset: var(--titlebar-h) 0 0 0`; its centred child scrims — `.rs-keys-backdrop`, `NewReviewDialog` `.rs-dialog-backdrop`, `ReviewRail` `.rs-abort-backdrop` — stay `inset: 0` because they only centre content and the title bar's higher z-index covers the scrim), `CharacterEditor` `.ref-preview-overlay`, `ImageImporter` `.import-progress-modal`, `SearchOverlay` `.search-overlay`.
+- **Full-screen overlays anchor their top at `var(--titlebar-h)`.** Any new full-viewport modal backdrop (`position: fixed` + `inset: 0` / `top:0;left:0;right:0;bottom:0` / `100vw`×`100vh`) must start below the title bar: use `inset: var(--titlebar-h) 0 0 0` (or `top: var(--titlebar-h)` with a matching height reduction) so its own top content (close buttons, toolbars) and its centred/scrolled content land in the visible area below the bar. Current insets: `ImageOverlay` `.image-overlay` (via a global `html.is-desktop` rule), `ReviewSessionsOverlay` `.rs-overlay` / `.rs-zoom` (both `inset: var(--titlebar-h) 0 0 0`; its centred child scrims — `.rs-keys-backdrop`, `NewReviewDialog` `.rs-dialog-backdrop`, `ReviewRail` `.rs-abort-backdrop` — stay `inset: 0` because they only centre content and the title bar's higher z-index covers the scrim), `CharacterEditor` `.ref-preview-overlay`, `ImageImporter` `.import-progress-modal`.
 
 **Shell-anchored overlays are the exception, and belong to `.file-manager`.** The auto-hide sidebar drawer (`.sidebar-shell.sidebar-overlay`), its hover trigger, and its click-outside scrim (`.sidebar-backdrop`) are `position: absolute` inside `.file-manager` (`position: relative`), not `fixed` + `--titlebar-h`. `.file-manager` already begins below the title bar *and* below anything hoisted above it (e.g. `ThumbnailUpgradeBanner`), so anchoring structurally stays correct in every combination, whereas the manual `--titlebar-h` offset they used to carry silently painted over that banner. Do not "fix" these three into full-viewport `fixed` overlays. Their z-indexes form one local wedge between `--z-sticky` (100) and `--z-floating` (200): trigger `140` < scrim `145` < drawer `150`. The named rungs cannot express "scrim just below its own drawer", so the wedge stays raw and migrates to the ladder as a set, never one rule at a time.
 
@@ -828,7 +1118,9 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/pictureSets.js` | `/picture_sets`, membership, and locked members |
 | `api/tags.js` | `/tags` vocabulary, per-picture tag edits, and tag predictions |
 | `api/pictureImport.js` | the streaming-staging import session (`/pictures/import/staging/*`) |
-| `api/stacks.js` | `/stacks`: grouping, ordering, dissolving |
+| `api/operations.js` | `/operations`: the append-only change log, `undo-state`, and undo / redo / per-operation undo / batch undo (all OWNER_ONLY — callers guard on `isReadOnly`) |
+| `api/stacks.js` | `/stacks`: grouping, ordering, dissolving, and the Keep-cover-only dry run + collapse (`/stacks/keep-cover-only{,/preview}`) |
+| `api/dedup.js` | `/dedup`: the triage queue, the live counts, the scoped scan, the three verdicts, the bulk auto-stack, a deck's lazy members (`/dedup/stacks/{id}/members`), and the Mixed stacks page (`/dedup/mixed-stacks` + its `split` / `unstack` / `keep` sub-resources) |
 | `api/pictures.js` | `/pictures`, the largest resource: reads, count, stream, the searches, stats |
 
 Modules are seeded as their first call site migrates, so a module can legitimately expose one function today and a dozen once the components that use the rest of its resource move over.
@@ -870,12 +1162,62 @@ The WebSocket → grid update policy lives in [`composables/useGridRealtimeSync.
 
 **Hard rule: never splice `allGridImages` directly.** Position-shifting ops mutate `lastFetchedGridImages` and rebuild via `rebuildGridImagesFromLastFetch()` — the single place that reassigns each `img.idx` (virtual-scroll keys embed it) and clamps the scroll window. Splicing `allGridImages` directly corrupts the index.
 
+### `refreshStackFacets`: the stack badge is not a card field
+
+`stack_count` is **derived and listing-only**: the server computes it per stack over LIVE members inside the `fields=grid` projection (`_enrich_stack_counts`), and `GET /pictures/{id}/metadata` does not carry it at all. So `refreshGridImage`, the per-card reconcile every other targeted branch uses, **cannot repair a stack badge**. That is why a "Keep cover only" left its surviving cover rendering "stack of 5" with four of its members already in the Scrapheap.
+
+`ImageGrid.refreshStackFacets(pictureIds)` is the read that can, and it is the only mechanism: there is no optimistic client-side patch, in either direction, because only the server knows the count.
+
+- **The read is per STACK, not per picture.** A `fields=grid` listing represents each stack by the lowest-positioned member *inside the id filter* and reports that stack's live count, so one row repairs every mounted member. This is what lets one call serve both directions: the covers after a collapse, and, from the **restored copies' own ids**, the same covers again after an undo. Chunked at 200 ids per request, because the URL is a repeated `id=` list.
+- **Fields only.** Nothing is inserted, removed or reordered; only `stack_count`/`stackCount` change, on `lastFetchedGridImages`, followed by one `rebuildGridImagesFromLastFetch()`. Both spellings are written because the fetched row carries `stack_count` while `collapseStackImages` writes the card's `stackCount`, which would otherwise win on the next rebuild.
+- **No rebuild when no count moved**, so the steady state reassigns nothing and no watcher on `allGridImages` reads it as "the grid changed under you".
+- **This is the concession that keeps the ghost window.** `debouncedFetchAllGridImages()` would fix the badge and break the feature: a refetch rebuilds the grid without the scrapheaped copies and takes the ghosted tiles off the screen, and with them the one-click undo they advertise. A ghost still mounted survives the field patch; a ghost set with no tiles in this view is forgotten silently by the usual `dropGhosts()` rule, and the receipt is untouched either way.
+- **A failed read leaves the badge stale and logs.** Stale is recoverable; an invented count is not.
+
+Driven from `useGridRealtimeSync`'s stack-facet branch (below), for every origin, never inline by `runKeepCoverOnly`, so one mechanism serves the acting tab, a second tab and the undo alike.
+
 ### The two pills
 
 Both reuse the primary-coloured `pending-imports-pill` styling and never reshuffle the grid under the user without a click:
 
 - **"New pictures"** — raised for `source: "external", change_kind: "added"` (or foreign-UI adds that arrive mid-streaming-fetch). Backed by `useWsStore.pendingExternalImportIds`; click splices the new ids in. Replaces the old import-only "pending imports" pill.
-- **"View changed externally — click to refresh"** — a sibling pill raised when an external `updated` event has `pictureChangeAffectsView(fields) === true`, **or** when an external `tags_changed` arrives while a tag filter is active (`ImageGrid`'s `wsTagUpdate` watcher emits `flag-sort-changed`; `App.vue` skips ids already queued in the "New pictures" pill so a just-imported batch being tagged doesn't double-pill). Backed by `useWsStore.sortChangedExternalIds`; click reconciles/re-sorts.
+- **"View changed externally — click to refresh"** — a sibling pill raised when an external `updated` event has `pictureChangeAffectsView(fields) === true`, **or** when an external `tags_changed` arrives while a tag filter is active (`ImageGrid`'s `wsTagUpdate` watcher emits `flag-sort-changed`; `App.vue` skips ids already queued in the "New pictures" pill so a just-imported batch being tagged doesn't double-pill), **or** for an external `restored` (below). Backed by `useWsStore.sortChangedExternalIds`; click reconciles/re-sorts.
+
+### `fields: ["stack_count"]`: the one update the per-card refresh cannot apply
+
+Decided **before** the origin dispatch, like `detections`, and for a stronger reason: the origin genuinely makes no difference. A stack badge is card content, never a sort or filter position, so this branch raises no pill and reshuffles nothing; and it is uniform across origins because, unlike a tag edit, the acting tab has no optimistic local copy to have applied. The count is server-computed; an undo from `Ctrl+Z`, the toolbar or the lightbox has no local grid op at all. Suppressing the own-origin echo here is exactly what left the collapsing tab rendering a stack of five forever.
+
+One batched `grid.refreshStackFacets(pictureIds)` per event, not a per-id loop, so there is deliberately no `MAX_TARGETED_UPDATE` escalation: one read is not a fetch storm, and the reload it would escalate to is the thing that must not happen while a ghost window is open. Deferred under an open overlay like every other grid mutation (§9.1). **Every** named field must be a stack facet: mixed fields (a cover that also gained a score) fall through to the ordinary dispatch, which is why the backend emits the stack change as an event of its own rather than widening the metadata one. Emitted by `keep_cover_only_service` on the collapse and by `operation_log_service._emit` on the undo and the redo; see integration_architecture.md §2.2.
+
+### `change_kind: "restored"` — a comeback is not an arrival
+
+A scrapheap undo, and `POST /pictures/scrapheap/restore`, announce themselves as `restored`, never `added` (backend_architecture.md §21.1). Both put a card back; only `added` means *new to the vault*, and the SPA acts on that difference in two visible places, both of which were lying about restored pictures:
+
+- **The sidebar's NEW marker.** `refreshSidebar(flash)` raises it on any count that grew since the last fetch. A `restored` event grows "All Pictures" exactly as an import does, so it refreshes the counts with `flash = false`: the marker means "this arrived while you were not looking", which a picture the user just pulled back out of the Scrapheap themselves is not.
+- **The grid's new-picture highlight.** `restored` ids are buffered apart from `addedIds` and inserted with `insertGridImagesById(ids, { highlight: false })`. The flash says "this was not here before", and it strobes the whole grid on a bulk undo.
+
+Per origin: **own-origin is the one echo that is NOT suppressed** (an undo from the toolbar, `Ctrl+Z` or the lightbox has no local optimistic op to have applied it, and the ghosted tiles may already have collapsed — suppressing it is what left the grid stale after an undo); **foreign UI** inserts in place; **external** raises the "View changed externally" pill, never the "New pictures" one, whose copy would call them new. All three defer under an open overlay (§9.1) and fall back to a reload when a restore-all names no ids. The insert is idempotent: an id still mounted as a ghost is already in `lastFetchedGridImages`, so the call is a no-op for it and only the ghost flag clears.
+
+`resolveChangeKind`'s allowlist is one contract with the backend's `WsBroadcasterMixin.CHANGE_KINDS`. Each side degrades an unknown kind silently (the backend drops the field, the SPA falls back to `updated`), so they move together or a lifecycle change leaves a 404-clickable card behind.
+
+### Ghost tiles — a Scrapheap move stays on screen while undo is offered
+
+A move to the Scrapheap does not take its thumbnails away. The tiles stay exactly where they are, ghosted (desaturated, veiled toward the page, hatched via `.image-card--ghost`), for as long as the undo is one click away; only then does the grid close the gap. Undo inside the window un-ghosts them in place — no refetch, no flash.
+
+**The window is the receipt's, never a clock of its own.** `useOperationStore` owns the machine (`GHOST_NONE` → `GHOST_PENDING` → `GHOST_COMMITTED`) precisely because it owns the receipt timer, so the destructive dwell, the hover/focus freeze (WCAG 2.2.1) and the hidden-tab pause apply to the tiles for free. A second timer in `ImageGrid` would drift out of that agreement within one hover.
+
+- **Start.** `deleteSelected` calls `operationStore.markGhosted(ids)` instead of `removeImagesById(ids)`. It declines (returns `false`) in a read-only session, where there is no undo window at all, and the tiles go immediately as they always did. The own-origin `removed` echo of the same delete is suppressed by the decision table, so nothing races to drop them.
+- **Adoption.** Ghosting starts *optimistically*; the receipt cannot arrive before the 400 ms WS trailing edge plus the `/operations` round trip. The first destructive own-origin receipt adopts the set. `GHOST_ADOPT_TIMEOUT_MS` (2.5 s) is the liveness bound on that gap — not a second dwell — and a set that hits it collapses with a logged warning rather than staying ghosted forever behind a dropped socket.
+- **End.** `dismissReceipt` (timer expiry, drained resume, or explicit dismissal) commits the set; a receipt raised for anything else replaces the pill in place, so that set's one-click undo is gone and its tiles go with it. A `blocked` (non-undoable) receipt collapses immediately — a ghost promising an undo that does not exist is a lie.
+- **Collapse.** The store hands the ids back through `collapsingPictureIds`; `ImageGrid.collapseGhostedImages` anchors on the topmost item still on screen, calls `removeImagesById`, then restores that item to the same pixel. Ghosts below the fold move nothing, ghosts on screen close their gap in plain sight, and ghosts scrolled off the top no longer drag the view up under someone who has moved on. This is the concession that makes a *timed* reflow acceptable at all, given the pills exist so nothing reshuffles unprompted.
+- **Virtualization is untouched.** Ghosting FLAGS items; it never splices `allGridImages` or `lastFetchedGridImages`. The only array mutation is the collapse, through the same `removeImagesById` a plain delete always used.
+- **Interaction.** Ghosts are `inert` and carry `.image-card--ghost`. They are never selected (click, Ctrl+click, Shift+range, Ctrl+A, Space all skip them), never hovered (`hoveredImageIdx` drives digit-scoring), never open the lightbox (which would freeze a stale filmstrip, §9.1), and have no context menu (every entry acts on the selection, and a per-tile "Restore" would be a second Undo competing with the live receipt). The arrow cursor **skips** them rather than landing: a cursor on an inert cell makes every following key silently dead, which a user cannot tell from a broken feature.
+- **View changes.** A refetch rebuilds the grid without the scrapheaped pictures, so `dropGhosts()` forgets the set *silently* — no collapse, and the receipt is untouched, because undo is still offered, it just has no tiles left to put back in this view. In the **Scrapheap view** `isImageGhosted` is always false: there the pictures have arrived, not departed, and the view already shows the real auto-purge countdown.
+- **Undo after the collapse** falls through to the `restored` reinsert path above, which is why the two halves are one feature.
+
+### The undo stack's WS hook
+
+The operation log has **no WS event of its own** — a recorded metadata mutation announces itself as an ordinary `pictures_changed` / `tags_changed` / `characters_changed` / `descriptions_changed` event, and that is the signal the undo stack may have moved. `App.vue` routes those four types (and deliberately not `picture_imported`: imports are not undoable in v1.9) to `useOperationStore.onPictureEvent`, which re-reads `GET /operations` + `GET /operations/undo-state` on a 400 ms trailing edge, because a bulk action over thousands of pictures would otherwise poll back to back for the whole run. Origin is read from the event `data` and used for one thing only: whether the change may narrate itself. An own-origin event raises the receipt; anything external updates the stack **silently**, and the toolbar tooltip then says "Changed elsewhere: …" so a later `Ctrl+Z` cannot revert another tab's work unannounced.
 
 ### 9.1 Overlay-open deferral contract
 
@@ -895,6 +1237,538 @@ While the lightbox overlay is open, the user's own in-overlay edits (and any oth
 `grid.isOverlayOpen` / `grid.markOverlayDeferredRefresh` are exposed by `ImageGrid` (Tier-3 imperative API) and forwarded to `useGridRealtimeSync` through `App.vue`'s `gridApi`. Tested in `useGridRealtimeSync.test.js` (both directions: deferred while open, pill still raised when closed).
 
 ---
+
+### 9.2 The Duplicates destination
+
+Duplicate detection is a **destination with a to-do count**, not a sort order or
+a filter. `/duplicates` mounts `DuplicateQueue.vue` in place of `ImageGrid`
+(`App.vue`, `isDuplicatesView`), so the grid is unmounted and its fetches and
+WebSocket reconciliation go quiet while the queue is open. The route branch in
+`applyRouteToStores` deliberately leaves the selection stores untouched: the
+queue shows no pictures, so it has no selection to express, and navigating back
+out of it lands the user on the view they left.
+
+Three rules from the design are load-bearing and are easy to break by accident:
+
+- **Never block on a full pass.** `listQueue` returns whatever has been found
+  plus the scan's progress, so the view renders a partial queue with a streaming
+  banner. There is no state in which a user waits on a complete scan.
+- **Never render the queue whole.** Groups are paged by confidence descending,
+  the row list is windowed around the focus, and only the focused row and the
+  one after it decode real thumbnails (the next group is prefetched into the
+  browser cache and nothing further). Ten groups and ten thousand cost the same
+  to render. Paging **prefers the keyset cursor**: a response carrying
+  `next_cursor` puts `loadMore` on the cursor path and the offset is never sent
+  alongside it, which is what removes the re-serve/skip hazard an offset has over
+  a table a scan is still inserting into. A server that publishes no cursor falls
+  back to the offset path with its mitigations intact — dedupe by signature,
+  advance by the page's *served* length — and either path can hand over to the
+  other mid-queue. See `integration_architecture.md` 2.1.
+- **Auto-advance.** A verdict removes its row and the focus lands on the next
+  open group, so a run of `Enter` presses works the queue with no extra
+  keystrokes.
+- **End means the true end, by random access.** The loaded rows are a
+  contiguous **window** of the queue, not necessarily its head:
+  `useDedupStore.groups` plus `windowStart` (the absolute queue index of
+  `groups[0]`, 0 through all normal top-down paging). Every public index —
+  `focusIndex`, the view's row indices, spacer arithmetic — is absolute,
+  mapped through `windowStart`; the scroll track is sized from the server
+  total, so the queue's bottom exists before its rows do. One `End` press
+  calls `focusEnd()`:
+  - everything loaded → focus the last row, synchronously;
+  - a small gap (≤ 2 browsing pages) → chase it in sequence, no rebase;
+  - a large gap → **jump**: ONE offset request for the last page
+    (`offset = max(0, total − page_size)`, never a cursor — the server 400s
+    the two together and the forward cursor chain is broken by any offset
+    jump), the window REBASED onto it, focus clamped to the last row actually
+    received. The selection is cleared on rebase (it would otherwise point at
+    rows no longer held — same rationale as `loadFirstPage`), and a
+    `windowEpoch` counter makes any ordinary page still in flight discard
+    itself instead of splicing the old window's rows onto the new one.
+  From a jumped tail, `loadPrevious()` backfills **upwards** by offset page
+  (prepends fill spacer, the scroll never moves), driven by the same
+  scroll/growth triggers as the downward chase; `Home` (`focusStart()`)
+  resets to the normal cursor-paged top window. `Ctrl+A` pages upwards first
+  after a jump, so "all" still means the whole queue. Under a running scan
+  the jump re-aims once from the served `total` and otherwise gives up onto
+  the best-known end; offset drift at page seams is tolerated by the same
+  de-dupe-by-signature the offset fallback always had. Cancellation
+  semantics are unchanged: any other focus move, a list rebuild, a scroll
+  away from the tail, or unmounting the view kills a running jump/chase via
+  `cancelEndChase()`. Known limitation: a `from_end`/anchored-tail server
+  parameter would remove the offset-instability window entirely; the
+  frontend is designed against the current contract instead.
+- **The UNIT, not the picture, is what the queue renders** (`docs/design/mixed-stacks-and-stack-units.md`
+  D2/D3). A stack verdict moves whole **stacks**, `_stack_members` folds in
+  every member of any stack the group touches, so the row's smallest
+  addressable thing is a unit: a **loose picture** (`stack_id IS NULL`) or a
+  **deck** (every candidate sharing one `stack_id`, collapsed into one tile).
+  `utils/dedup.js` owns the partition (`groupUnits`, `unitForPictureId`,
+  `isUnitExcluded`, `includedUnits`, `unitCompositionLabel`,
+  `stackVerdictLabel`: pure and unit-tested); the row, the store and
+  `useDedupQueueKeyboard` all read it, so the strip, the digit keys, the floor
+  and the request can never disagree.
+  - **A deck stands for the ENTIRE existing stack.** Its depth is
+    `groups[].stacks[id].member_count` (the stack's live count, routinely larger
+    than the group's own membership) and its face is `leader_picture_id`, which
+    is *frequently not a group candidate at all*, the common case, not an edge
+    one. Sizing a deck from `candidates` would draw a 4-deep stack as one
+    picture and then silently move four. Members are lazy: `listStackMembers`
+    (`GET /dedup/stacks/{id}/members`) fetches them only when an expansion opens.
+  - **The deck reuses the grid's vocabulary**: `StackEdgeTicks` behind the tile
+    (outside `.gthumb`, which clips) and `StackBadge` in the top-right column.
+    That column is an absolutely-positioned **sibling** of `.gthumb`, not a
+    child, because both are `<button>`: the `.dc-zoom` construction.
+  - **Cover, exclusion and Compare are unit-level.** A cover choice on a deck
+    resolves to its **leader**; `X` takes a whole deck out (per-picture
+    exclusion was a silent no-op, because the rest of the stack dragged the
+    picture straight back in); `Compare all N` counts units, and
+    `DedupCompareDialog` renders one card per unit for the same reason (see the
+    Compare bullet below).
+  - **The preselected cover is the deck**, not the server's smart-score pick,
+    whenever a group holds one (deepest wins a tie). Otherwise the default
+    verdict silently re-curates a stack the user already made. This lives in
+    `useDedupStore.coverIdFor` / `pickCoverForUnits`, not in the row.
+  - **Two cover gestures share one channel, and the ID tells them apart.**
+    Passing a unit's `coverPictureId` chooses that UNIT and resolves to the
+    stack's leader (the row's tile, the digits, Compare's card and its zoom, and
+    the automatic move when the cover's unit is excluded all do this). Passing a
+    deck's non-leader MEMBER, which only Compare's expansion band does, is
+    honoured verbatim, because that band's two-step confirmation exists to say
+    the cover changes across the library. Normalising both to the leader made
+    promotion a silent no-op for every member the group had named (it appeared
+    to work only for members outside the group, which fell through the unit
+    lookup by accident). A future gesture meaning "this deck" must therefore
+    keep passing `unit.coverPictureId`, never one of its matched members.
+  - **The button names its outcome** and the header the composition:
+    `Stack 3` / `Add 1 to stack of 4` / `Merge 2 stacks`, over
+    `Stack of 5 + 1 picture`. The button degrades `Add 1 to stack of 4` →
+    `Add 1 to stack` → `Add 1` in CSS both ways, via a `@container grow` query
+    on the row: the toolbar's fold pattern, no measurement. The size never
+    leaves the header.
+  - **The deck's accessible name carries the disclosure until it is opened**:
+    `a stack of 4 pictures, 1 of them matched`. The corner has no budget for a
+    second numeral (the spec's dropped "1 of 4 matched" marker), so that
+    sentence is the only always-present statement of the depth and the overlap.
+  - **Expansion in place (D4), in both the queue row and Compare.** Pressing a
+    deck's `StackBadge`, or `E`, opens that stack's members as a **full-width
+    band below the row's three columns** (`grid-column: 1 / -1`), never inline
+    in `.gstrip`, which is already an `overflow-x` scroller. Compare's band sits
+    below `.dc-strip`, never inside a card, so the cards stay height-registered.
+    Both mount `StackExpansionStrip` at the caller's own picture height
+    (`thumbHeight`; the queue runs a 112–406px slider) with width auto, because
+    stored dimensions ignore EXIF rotation.
+    - **At most one band in the whole queue, and it lives on the FOCUSED row.**
+      Not a preference: `DuplicateQueue` sizes both scroll spacers from a single
+      uniform `rowPitchPx`, so a second variable-height row breaks that
+      arithmetic. `composables/useDedupRowExpansion.js` owns the invariant, the
+      lazy `listStackMembers` read and its loading/failed states; moving the
+      focus collapses the band (`keepOnlyOn`, stated as "keep it only on this
+      row" because the badge focuses an unfocused row *before* it opens it).
+      `measureRowPitch` samples two rows whose first is collapsed, so the band's
+      one-off height never becomes the whole track's pitch.
+    - **Disclosure, not a mode.** Verdicts stay live and unchanged while a band
+      is open, other units keep their numbers, cover and exclusion state, digits
+      still address units (never expanded members), and `Enter` straight after
+      opening does what it would have done anyway.
+    - **The queue row's band is READ-ONLY** (`readOnly`, `showUnstack: false`).
+      `StackExpansionStrip` emits `unstack` and `set-cover`, and both would
+      rewrite the library from inside a panel opened in order to look.
+      **Promotion lives in Compare**, where the two-step confirmation carries
+      the consequence ("it also becomes the picture this stack shows everywhere
+      in your library") in its own text.
+    - `StackBadge` publishes `aria-expanded` + `actionTitle` only where the
+      press really is a disclosure; on the grid, where it jumps or expands the
+      tile itself, it publishes neither.
+- **A stack needs two UNITS.** `useDedupStore.toggleExcluded` refuses an `X`
+  that would leave a single included unit and returns `false`, so a two-unit
+  group accepts no exclusion at all and the Stack button the row is still
+  offering can never be a guaranteed 400. The floor counts units, not pictures:
+  a deck and a loose picture is the smallest group with a decision left in it
+  however deep the deck runs. `DuplicateQueue` narrates the refusal into the
+  live region rather than letting a one-key action read as a dead key, and a
+  verdict that *is* refused by the server surfaces the server's own `detail`
+  instead of a generic sentence.
+- **A locked-set unit is the server's exclusion, not the user's.** A candidate
+  served `stackable: false` is frozen by a locked picture set and can join
+  neither the stack nor the metadata union; a **deck** carries the server's
+  unit-level rollup (`stacks[id].stackable`), which already accounts for a
+  frozen sibling *outside* the group, because a stack moves whole or not at all.
+  The row marks it (dimmed, plus a lock chip distinct from the user-exclusion
+  `X`, tooltip and `aria-label` from `buildLockReason`),
+  `useDedupStore.effectiveExcludedFor` sends **every picture of the frozen
+  unit** as an exclusion so the server never has to skip one, `coverIdFor` keeps
+  the cover off it, and `toggleExcluded` returns `"locked"` rather than `false`
+  so the queue can narrate the one refusal that unlocking, not re-including, is
+  the fix for. A group that keeps two or more stackable units is served whole,
+  frozen members included and marked.
+- **A group with fewer than two stackable candidates never arrives.** The server
+  withholds it (owner call, 2026-07-30) and withholds it from the counts too, so
+  the row's `noLegalStack` branch (Stack disabled with a reason, Keep separate
+  still live) is the **stale-page** case: the lock landed after this page loaded.
+  It is deliberately kept rather than deleted, because that page is exactly when
+  the user is about to press Enter on a group the server will refuse.
+- **A partial stack is a success.** When the lock lands after the page loaded, the
+  server stacks the rest and reports `skipped`; the store carries it up as
+  `gesture_skipped` (aggregated across a bulk gesture) and a bulk run does **not**
+  abort on one. `DuplicateQueue` raises a one-sentence `noticeStore.warning`,
+  because the row has left the queue and there is nothing left to anchor to. A
+  hard 423 keeps the row, so there the anchor is real: the named `picture_ids`
+  flash their lock chip. `serverDetail`, `lockedPictureIds` and
+  `partialStackSentence` live in `utils/dedup.js` (pure, unit-tested) rather than
+  in the view.
+
+**Mixed stacks is a third PAGE of this destination, not a route and not a
+sidebar row** (`docs/design/mixed-stacks-and-stack-units.md` D5). A mixed stack
+is a live stack whose members do not form one connected cluster at the queue's
+similarity threshold. It earns no sidebar row because only a destination with a
+to-do count does, and this is 9 to 26 items; it earns no grid filter value
+because `unresolved` was withdrawn from the filter panel on the grounds that
+"the duplicate queue owns that work".
+
+- **The list is bound to the queue's threshold slider, never to a constant.**
+  `setThreshold` reloads it, and the page states the threshold the SERVER
+  echoed rather than the slider's, because the two differ for exactly as long
+  as a reload is in flight. On the owner's library it is 26 rows at the default
+  0.90 and 9 at the 0.65 floor.
+- **The count rides on the page toggle** (`data-testid="mixed-toggle"`, the
+  shipped `Decided` / `Back to review` construction reused verbatim) and never
+  on the sidebar badge, which has to keep meaning "groups to review".
+- **Flipping the page reloads nothing.** `showMixedStacks` / `hideMixedStacks`
+  only flip a flag: the queue's window, focus, selection and per-group choices
+  stay standing behind it, which is what lets the two-way shortcut offer a
+  return that restores them. Escape is the one-press way back.
+
+**The page is the THIRD QUEUE** (owner reversal, 2026-08-02). The first cut was
+a divider-separated list on the reasoning that a second card stack would be read
+as a second to-do count. The owner rejected it as under-equipped: "no zoom, no
+Compare Group view, no individual selection, no threshold, no multi-select, no
+keyboard shortcuts". Every one of those is queue machinery that already exists,
+so the page now **reuses** it rather than re-deciding it, and the D5 paragraph
+about the row not looking like the queue is superseded.
+
+- **`MixedQueueRow` is a SIBLING of `DedupGroupRow`, not a mode of it.** Same
+  box, same three columns, same focus treatment, same roving tab stop. What
+  differs is everything the row means: its tiles are one existing stack's
+  MEMBERS (never collapsed into a deck, because looking inside is the point),
+  its verdicts are split / unstack / keep, and its evidence describes an object
+  that already exists. `DedupGroupRow` is 1,500 lines; a second variant axis
+  inside it would be a file nobody can change safely.
+- **`DedupPictureStrip` is the shared half**, extracted out of `DedupGroupRow`
+  and mounted by both: the height-driven sizing math (`stripHeightForSizeLevel`,
+  the 2.4:1 panorama ceiling, the placeholder's EXIF-blind shape estimate), the
+  roving tabindex rule, the corner columns and the whole chip system. It keeps
+  the shipped class names (`.gstrip`, `.gunit`, `.gthumb`, `.gt`, `.gtl`,
+  `.gtr`, `.gnum`, `.gcv`, `.glock`, `.gx`, `.gsmart`) on purpose: they are the
+  vocabulary of the tests, the e2e page object and three design documents, and
+  renaming them would hide a real regression inside the noise. Rows hand it
+  plain tile objects and slots for the components that are theirs alone
+  (`StackEdgeTicks`, `StackBadge`, `StarRatingOverlay`).
+- **Marks are the model, and there is ONE stranger treatment.** Members start in
+  the stack; `X` (and a click, and Compare's card) marks a stranger, and the
+  marked ones are what the primary takes out. The server pre-marks the members
+  it believes are strangers, so a row opens with some already marked, exactly as
+  the review queue opens with the server's exclusions applied on an unstackable
+  candidate. An engine mark and a user mark are drawn identically and unmark
+  identically: the button acts on one list, and a user cannot act on a
+  distinction the button does not make. A marked tile takes a `warning` BORDER
+  plus an 18px neutral glyph chip, never `.gthumb--out`'s fade: a marked tile is
+  the evidence, and fading it would say "inert" about the only tiles that are
+  not. **A not-yet-analysed member is never pre-marked** (it carries no hash, so
+  the cohesion fold necessarily lists it as stranded); the row says so in words.
+- **The member cursor is a RAIL, not a ring** (`.gunit--cursor::after`): the
+  tile's border already carries two meanings, accent for the cover and warning
+  for a stranger, and a third would be a third colour on one edge nobody could
+  read. The strip scrolls the cursor into view, since a cursor a digit pushed
+  off the right edge is a cursor the user cannot act on.
+- **The primary names its outcome and predicts it from the marks**: `Split off
+  N` normally, `Unstack all N` (with the icon changing to `layers-off` at the
+  same instant) the moment the marks would leave fewer than two members. It is a
+  PREDICTION; what happened is reported from the response's `stack_dissolved`,
+  because the stack can change between the read and the press.
+- **One call carries both outcomes.** `POST …/split` takes any live member of
+  the stack (widened 2026-08-02, reversing security finding F7 now that the user
+  marks rather than the engine), so an unstack is "every member leaves" and the
+  server applies the two-member floor itself. No client-side routing between two
+  endpoints, so the prediction and the request can never disagree. `Keep`
+  changes no picture, records no operation and is what makes the list drainable;
+  `DELETE` on the same path is the way back, offered on the notice because the
+  row has already left.
+- **A 400 is a STALE row, and it has a handler.** It means a marked member has
+  left the stack since the list was read. Without one the button simply did
+  nothing, which is the definition of a dead control; the store re-reads the
+  list and the page says the stack changed.
+- **`useDedupQueueKeyboard` is reused parameterised, never copied.** The five
+  decline guards, the `preventDefault` + `stopPropagation` claim contract, the
+  Escape layering and the Compare-open branch are identical on both queues.
+  Three hooks carry the three facts that differ: `unitsOf` points `1`-`9` at a
+  stack's members rather than a group's units, `signatureOf` keys a row on its
+  stack id, and `onStackSynonym` takes `S` off the primary. **`S` is bound to
+  nothing here but is still claimed and answered**: a queue-trained user reads it
+  as Stack and would mean Split, which are opposite acts, so the page says "S
+  means Stack in the review queue. Here the primary action is Split off 2; press
+  Enter" rather than running it or going quiet.
+- **Only `Keep` acts in bulk.** Multi-select is inherited whole, but the
+  primary's outcome differs per row (one stack splits, the next dissolves) and a
+  bulk button cannot name an outcome it does not have. The selection bar says
+  `12 rows selected: Keep applies to all`.
+- **The threshold header is sticky inside the list's own scroller**, because
+  every row is a verdict relative to one number and a user who has scrolled that
+  number away is reading the verdict without its premise. The count is the
+  sentence's SUBJECT ("26 stacks don't hang together at 90% similar"), not a
+  figure beside a caption, so the two cannot drift. The slider is
+  `DedupThresholdControl`, extracted so the tier popover and this band cannot
+  differ in label, step or number formatting.
+- **A frozen row keeps its primary reachable.** A locked set refuses split and
+  unstack alike and refuses the WHOLE stack, so every tile fades and none is
+  markable, the reason is a line in the info column, and the button takes
+  `aria-disabled` rather than `disabled` so it stays a tab stop pointing at that
+  reason. The payload rolls the lock up over the stack and names no member, so
+  the per-tile lock chip waits for a 423 that does (`lockChip`, distinct from
+  `locked`, in the strip's tile model): a chip on every tile of a frozen row
+  would be a lock field and the colour would stop meaning anything.
+- **`useMixedStackQueue` holds the page's view state** (focus, selection, marks,
+  member cursor) and the store keeps owning the rows and the writes. Marks are
+  keyed on each stack's `membership_fingerprint`, so an edit is dropped rather
+  than replayed against a stack whose membership changed underneath it, and they
+  are reset wholesale when the threshold moves, because the engine's marks are a
+  function of that number.
+- **Compare is mode-varied, not forked.** One card per member, the card's
+  primary click marks and unmarks (matching the row's `X` exactly), `In the
+  stack` reads `Yes` / `Stranger`, the per-column best-value chip is suppressed
+  (it answers "which is the better file" and this page asks "which does not
+  belong"), the `Contains` row and the expansion band go, and a group-level
+  `Match` row shows each member's strongest edge as a percentage with the en
+  dash for none. The zoom is reused verbatim and is the single largest thing the
+  page gains by being a queue.
+- **The warning chip marks only the STRONG case** (a member joined to nothing
+  else in its stack). At the measured 12% a mark is one tile in eight and
+  becomes a warning field, and the soft cases are often legitimate. It reuses
+  `StackBadge`'s icon slot, freed because the edge ticks already say "this is a
+  stack": `mdi-alert-outline` in `--v-theme-warning` over `--scrim-photo-strong`
+  with a 1px inset warning ring, no motion. Below 168px (the ladder's `small`
+  rung) the dense rule INVERTS: an unflagged deck keeps its numeral and drops
+  the icon, a flagged one keeps the icon and drops the numeral. Badge
+  precedence is expanded > flagged > per-stack tint. **The chip never blocks or
+  disables a verdict**: a mixed stack is one a user may legitimately want to
+  add to.
+- **`useDedupStore.flaggedStackIds` is derived from the loaded page**, not from
+  a second request: the list is ranked stranded-members-descending, so a page
+  that holds the head holds every strong case. The list loads when Mixed stacks
+  is opened, not during ordinary queue startup: after a cache migration the
+  first score is an all-stack operation and must not occupy the serialized
+  database worker for a page the user did not visit. Warning chips appear after
+  that first page load.
+- **The two-way shortcut.** Queue to page: the flagged deck's expansion band
+  carries the link (the badge itself is already the disclosure, and a line in
+  the collapsed row would put a per-row variable into the uniform scroll pitch
+  the spacers are sized from). Page to queue: `showQueueForStack` searches the
+  LOADED window only and returns false rather than guessing, so the row hides
+  the control when there is nowhere real to land.
+
+**Compare is a working surface, not a detour** (owner requirements, 2026-07-30).
+A verdict given inside `DedupCompareDialog` — footer buttons, `Enter`/`S`
+(stack) or `K` (keep separate) —
+does **not** close the dialog: the store's auto-advance moves the focus and the
+dialog, which renders `store.focusedGroup`, flips to the next group in place
+(zoom and fit/actual-pixels reset per group signature). It closes only when the
+queue runs out (`DuplicateQueue`'s `focusedGroup` watcher), and a failed
+verdict leaves the same group showing. Both verdict buttons wear their shortcut
+chips (`Enter`/`K`, via `AppButton key-hint`; S is Stack's unshown synonym,
+taught in copy — amendment #3). A **double-click** on a queue
+row (surface or thumbnail, unmodified, not on the action buttons) opens
+Compare like `C`. The **mouse wheel** over a candidate's picture (wheel up,
+the zoom-in direction) opens the blink-compare zoom on it, and the wheel
+means ZOOM for the whole gesture from there — continuous, cursor-anchored,
+leaving back to Compare three full notches of resistance past the fit floor (see the Compare
+bullet in §5 for the full model). **Escape peels one layer**: zoom → Compare
+→ queue. The
+keyboard model orders it that way, and `DedupCompareDialog.requestClose`
+routes AppDialog's own subtree-Escape/scrim close through the zoom layer so
+no path closes both at once.
+
+**The queue carries the shell chrome and closes the undo loop** (2026-07-30).
+Duplicates replaces the grid, and with it the grid's toolbar, so the queue's
+own bar mounts the same app-wide components: `TbGlobalActions` (Settings +
+stats toggle, shared with `Toolbar.vue`) and `UndoControl` (owner-only, hidden
+read-only), behind one separator. **The grid toolbar now matches**: its
+UndoControl moved out of the left group into the identical right-side tail
+`[separator] [UndoControl] [TbGlobalActions]`, so the position learned in one
+view holds in the other (`docs/design/toolbar-responsive-decisions.md`). Both
+bars also share the `toolbar` container name and the ⋯ overflow's collapse
+ladder, so the shared chrome degrades identically at every width. Undo/redo run through the shared
+`useOperationStore` and its receipt exactly as everywhere else; the queue's
+one addition is a Pinia `$onAction` subscription on that store which, after an
+`undo`/`redo`/`undoTo`/`undoBatchById` that touched a `dedup.*` operation,
+reloads the list (`invalidateScopeCounts` + `loadFirstPage` + `refreshCounts`,
+the same sequence as `reopen()`). That hook exists because the backend's
+post-restore hook reopens the verdict and returns the group to the unresolved
+queue, but the undo's own WebSocket echo is own-origin and suppressed like any
+other, and only the counts refresh via the sidebar path — without the
+subscription the badge said N+1 over a list of N. Scoped to dedup op types so
+an unrelated undo never yanks a triage back to the top.
+
+**A scrapheap move elsewhere** is the mirror case and has its own path, in the
+store rather than the view (it must work whichever route is mounted):
+`useUpdatesSocket` hands every `pictures_changed` frame to
+`useDedupStore.applyPictureEvent`, which for a `removed` event with ids rewrites
+the loaded rows *surgically*, the deleted candidates go, the group's
+`member_count` follows, each deck's depth / `matched_picture_ids` / leader
+follow, and any group left spanning fewer than two units is removed through the
+existing `removeGroup` (so the focus, the selection, the per-group choices and
+the offset are all handled). `loadFirstPage` is deliberately not used: the queue
+is windowed and keyset-paged, and rebuilding it would throw a triage in progress
+back to row 1. A `restored` event (and an untargetable id-less `removed`) does
+**not** insert: the group returns at a position in the confidence ordering the
+client cannot compute and there is no per-signature read, so the badge carries
+it and the row returns with the next page: unless the window is empty, where
+"nothing left to review" would be a lie and there is nothing to disturb, so the
+first page is reloaded. Origin is not consulted, unlike the grid: nothing in
+this store applies a scrapheap move optimistically. The decided page keeps its
+thinned rows and only loses their dead tiles, matching the server.
+
+**Filter persistence:**
+the tier gate and threshold are remembered in `localStorage`
+(`pixlstash:dedupFilters`, written on every deliberate change and on queue
+open) and restored in `openQueue` between `loadPolicy()` and the URL filters,
+so precedence is URL > remembered > server defaults and the restored lens is
+in force for the first page. The Decided flip is deliberately not remembered.
+Account-level persistence in `/users/me/config` would need a backend schema
+change (the PATCH endpoint rejects unknown keys) and is recorded as a
+follow-up.
+
+**One filter button, two filters** (owner call, 2026-07-30). The tier gate says
+nothing about a decision already made — the server ignores the gate and the
+threshold entirely on `decided=true` — so while the Decided page is showing,
+the toolbar's filter button opens `DedupVerdictMenu` instead of
+`DedupTierMenu`, and its label names the verdict filter (`All decisions` /
+`Stacked` / `Kept separate`) rather than a tier the page is not filtered by.
+The rows are built from `bounds.verdicts` and their counts from the decided
+page's `by_verdict`, which is served **without** the filter in force so a
+hidden row says what turning it back on would add rather than reading as "there
+are none". `useDedupStore` holds the gate as the verdicts switched **off**
+(`hiddenVerdicts`), so a verdict the server adds later is included by default;
+`verdictArgs` sends the selection only when it is a strict subset, because
+"everything" must be expressed by absence — a full list would also drop the
+verdict-less tail the server still serves. Switching the **last** verdict off
+is refused in both the store and the menu: an empty gate can only render an
+empty page, which reads as a broken queue rather than a choice. Unlike a tier
+toggle the popover stays open (with two verdicts, hiding one is usually
+followed by hiding or restoring the other) while the keyboard goes back to the
+rows. The selection is mirrored into the URL as `verdict=<comma-joined>`
+alongside `view=decided` — one scalar, so the mirror's identity check needs no
+array handling — but it is not remembered in `localStorage`: like the Decided
+flip itself, it is a place the user visits rather than a lens they set, and
+`openQueue` clears it.
+
+**A committed toolbar change hands the keyboard back to the queue**
+(2026-07-30). A tier toggle closes the popover and focuses the queue root
+(Escape still returns to the trigger); a POINTER-committed threshold or size
+change focuses the queue root while keyboard tuning keeps the slider (each
+arrow fires its own `change`); the Decided flip focuses the list it revealed.
+The tier popover blocks only keys pressed *inside itself*
+(`tierMenuOwnsEvent`, the event now passed to `isBlocked`), so the rows stay
+workable under its live counts, and Escape anywhere in it (including the
+slider, a typing target the key model stands down for) dismisses it via a
+wrap-level handler. Slider thumbs (`role="slider"`) are typing targets, so
+their arrows never double as row moves. Settings/History/undo keep standard
+focus behaviour: the dialog/popover owns focus, and Enter-repeat on undo is
+meaningful. **Inside Compare, Up/Down switch the compared group in
+place** — clamped at the queue's ends, live in read-only, chase-cancelling
+like any focus move; the ZOOM layer keeps all its arrows for candidate
+flipping (one axis, one meaning per layer), and Home/End/Page keys stay quiet
+behind the dialog.
+
+**Undo is not reimplemented for any verdict.** Every verdict is recorded
+server-side — `dedup.stack`, and since the owner's override of the #644
+ruling (2026-07-30) `dedup.keep_separate` too, with the same
+`VerdictResponse` shape and a `batch_id` that is always populated — and
+verdict paths now also emit the standard own-origin `pictures_changed` event.
+The receipt still triggers from the verdict RESPONSE
+(`useDedupStore.narrateVerdictOperation` →
+`useOperationStore.refresh({ narrate: true })` → `narrateNewest`), once per
+gesture, gated on the response's `batch_id`: it is immediate, it covers older
+backends whose keep-separate returns no `batch_id` (those degrade to the
+transient info notice), and the operation store's own-origin/high-water
+guards make the later WS echo idempotent — one receipt per gesture, tested in
+`useOperationStore.test.js`. The queue's `$onAction dedup.*` watcher covers
+undo-reload for both verdict types, and for BOTH sides of the flip: its
+`loadFirstPage` carries `decided: showingDecided`, so an undo taken on the
+Decided screen removes the group from Decided (it is back in the queue) and a
+redo returns it there, counts reconciling on the same pass; a group whose
+lens no longer matches after the reopen simply reloads to an honest empty
+state.
+**The URL filter mirror is gated on `useDedupStore.filtersRestored`**: on a
+full reload the policy landing flipped `policyLoaded` one microtask before
+`openQueue` adopted the URL's filters, the mirror read the still-default gate
+as "the user chose defaults" and replaced the URL without its filter params —
+and because that navigation was still in flight when the mirror re-ran, the
+`same`-query check passed and no corrective write ever happened. The gate
+keeps the mirror silent until the store has adopted the URL (or a deliberate
+filter change makes the state authoritative via `rememberFilters`).
+The queue's only other undo-specific job is to *claim* `Ctrl+Z`
+(`preventDefault` **and** `stopPropagation`, see `useDedupQueueKeyboard.js`) so
+the app shell's global handler does not also fire and undo twice. Any new view
+that owns keys the shell also owns has the same obligation.
+
+**The sidebar badge is reconciled from the server, never inferred from
+WebSocket traffic.** A picture event says something changed, not what the
+counts became, so the optimistic decrement in `useDedupStore` would drift in
+a second tab from the first verdict. Every verdict therefore refetches
+`POST /dedup/counts` behind its optimistic tick (unawaited, so auto-advance is
+not held up), and `syncQueueToRoute` refreshes the counts on queue open even when
+the requested scope is already showing.
+
+**Scope travels in the URL**, not in a store: `/duplicates?scope=set&scope_id=12`.
+That makes a scoped queue reloadable and keeps a back-navigation meaningful.
+`useViewStore.parseRouteView` returns `null` for `/duplicates` (it drives no
+grid, so the selection stores keep whatever the user was looking at), which is
+why `DuplicateQueue` reads the scope off the route itself rather than receiving
+it from the route sync. The
+`Find duplicates in…` context-menu entries in `SideBar.vue` warm the per-scope
+count through `useDedupStore.fetchScopeCount` when the menu opens, then emit
+`select-duplicates` after `closeSidebarCtxMenu()` on the next tick, so the menu's
+teardown cannot race the navigation for focus.
+
+**Stacked / unstacked is a filter, not a place.** `filterStore.stackStateFilter`
+(`all` / `stacked` / `unstacked` / `unresolved`) serialises to `stack_state` in
+both grid query builders. Only Duplicates, which has a to-do count, earns a
+sidebar row. Since the Keep-cover-only lane it is also the one filter a URL may
+carry (`?stack_state=`, additive only; see §4.5).
+
+**Recently changed stacks is a stack-only sort.** The toolbar exposes
+`STACK_UPDATED_AT` only while `stackStateFilter === "stacked"`, marks it with a
+filter glyph whose tooltip explains that boundary, and falls back to Date when
+the user leaves the stacked filter. Stack membership events normally refresh
+only the deck count; under this sort they reload (or defer under the lightbox)
+because the same edit advances `PictureStack.updated_at` and can reorder decks.
+
+**Decided groups show their original candidates, not collapsed decks.** Decks
+remain load-bearing in the active review queue because a verdict moves an
+existing stack as one unit. Decided is read-only history, so both its row and
+Compare Group pass `collapseStacks=false` and show the pictures the decision
+was made over individually. Active-queue deck expansion remains lazy; its
+thumbnail URLs must include `API_BASE_URL`, just like the deck face itself,
+because the SPA and image API may run on different origins.
+
+**The queue-clear screen is the only route to the stacks**, and it goes to the
+**place, not to the action**: a `router.push` to `/` with
+`?stack_state=stacked`, landing in All Pictures with nothing selected and
+nothing armed. A one-click path from a satisfying "Queue clear" screen into a
+confirm for hundreds of deletions is how you get a bad afternoon, so the
+destructive action stays two deliberate steps away (open a selection's menu,
+then confirm). The toolbar is the wrong host for it: it would put the route in
+front of someone mid-triage. It is shown whenever the **library** holds a live
+stack with two or more members (`useDedupStore.mixedLiveStackCount`, loaded on
+every queue open for the deck badges), **never** gated on this session's tally:
+a user can arrive with hundreds of stacks that predate the whole feature, and
+those are exactly the people the route is for. It pushes rather than replaces so
+Back returns to the queue. Covered in `DuplicateQueue.test.js`.
+
+**The Likeness Groups sort order is gone from the menu** (`Toolbar.vue`,
+`filteredSortOptions`). The backend still serves the mechanism, so a saved
+preference naming it keeps working; the menu simply shows a one-time migration
+notice in its place, persisted through `useOneTimeNotice`.
 
 ## 10. Naming and Coding Conventions
 
@@ -976,8 +1850,8 @@ Guarded today: `CharacterEditor`, `PictureSetEditor`, `FolderEditor`, `FolderBro
 | HMR | WebSocket on `ws://localhost:5173` |
 | Test environment | Vitest + jsdom, globals enabled, `src/**/*.test.{js,ts}` |
 
-**Build command:** `npm run build` (in `frontend/`)  
-**Dev command:** `npm run dev` (in `frontend/`)  
+**Build command:** `npm run build` (in `frontend/`)
+**Dev command:** `npm run dev` (in `frontend/`)
 **Test command:** `npm test` (in `frontend/`)
 
 ---
@@ -1145,7 +2019,7 @@ graph LR
         Settings["UserSettingsDialog + sections"]
         Editors["CharacterEditor / PictureSetEditor<br/>/ ProjectEditor / FolderEditor"]
         Import["PhotosImportDialog / ImageImporter"]
-        Shared["StarRatingOverlay / ProgressOverlay<br/>/ AddToEntityControl / PluginParametersUI<br/>/ SearchOverlay / ShareDialog / etc."]
+        Shared["StarRatingOverlay / ProgressOverlay<br/>/ AddToEntityControl / PluginParametersUI<br/>/ ShareDialog / etc."]
     end
 
     main --> Root

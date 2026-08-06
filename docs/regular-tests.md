@@ -8,7 +8,17 @@ suite is pytest — those are not duplicated here.
 - **Location:** `frontend/e2e/specs/*.spec.js`
 - **Run:** from `frontend/` → `npm run test:e2e` (UI mode: `npm run test:e2e:ui`).
   The harness builds the SPA and boots a throwaway backend against the committed
-  `test-data/` fixture (see `frontend/e2e/README.md`).
+  `test-data/` fixture (see `frontend/e2e/README.md`). Both the throwaway work
+  directory and the port are derived from the checkout path, so two working
+  copies of the repo can run the suite at the same time without colliding; set
+  `PIXLSTASH_E2E_PORT` to pin the port.
+- **Keyboard surfaces: wait for focus, not just for paint.** The duplicate
+  queue's keys act on the *focused* row, and the queue sets its focus index only
+  once a load resolves — so a key pressed after the rows appear but before one
+  is focused does nothing at all. `DuplicateQueuePage.goto()` waits for
+  `.grow--focus` for exactly this reason. The window is narrow on a quiet
+  machine and wide on a loaded runner, so the symptom was a spec that looked
+  flaky locally and failed every attempt in CI.
 - **Conventions:** owner session minted in `global-setup.js`; assert
   "at least one" / relative deltas rather than exact counts so fixture pruning
   doesn't break tests; pictures identified by thumbnail `src`
@@ -52,20 +62,25 @@ shrinks as automated coverage grows.
 | reflows the grid when the column count changes | Column slider changes `grid-template-columns` track count (§3.1) | ✅ |
 | search filters, records history, then resets | Search narrows results, term enters history, clearing restores all (§3.3) | ✅ |
 
-## Selection ▾ / Context Menu Parity — manual (plan §3.5)
+## Selection ▾ / Context Menu Parity — `menu-parity.spec.js` (plan §4)
 | Test | Covers | Status |
 |------|--------|--------|
-| both menus list the same items for a set of pictures | Selection ▾ dropdown (`.selection-menu-panel`) and right-click context menu (`.image-ctx-menu`) expose identical selection-scoped actions for the same multi-picture selection | 📝 |
+| both menus list the same actions for a multi-picture selection | Selection ▾ dropdown (`.selection-menu-panel`) and right-click context menu (`.image-ctx-menu`) expose identical selection-scoped actions for the same multi-picture selection | ✅ |
 
-> 📝 **Not automated — no parity spec exists.** The right-click context menu is
-> automated on its own (see the `context-menu.spec.js` section below); the
-> Selection ▾ ↔ context-menu *parity comparison* is manual only.
-> **Known gap — [#403](https://github.com/Pikselkroken/pixlstash/issues/403):**
-> the context menu has actions the Selection ▾ menu lacks — **Restore from
-> snapshot** and **Reverse image search** (plus, for a single selection,
-> **Share image** / **Find similar faces**). Keep this ❌ manually until the
-> menus are reconciled. (Toolbar.vue documents the Selection menu as "mirrors the
-> right-click context menu exactly", so the source intent is parity.)
+> **Why this is automated rather than trusted.** The two menus are separate
+> components (`SelectionMenu.vue`, `ImageGridContextMenu.vue`) that mirror each
+> other by convention — `SelectionMenu.vue` carries a "mirrors
+> ImageGridContextMenu.vue" comment over duplicated handlers. Nothing
+> structural keeps them in step, and the drift has happened twice:
+> [#403](https://github.com/Pikselkroken/pixlstash/issues/403) (Restore from
+> snapshot, Reverse image search) and then **Segment**, which this spec caught
+> on its first run and which was fixed in the same change that added it.
+>
+> Scope is the **multi-picture** selection. Three context-menu items — Share
+> image, Find similar faces, Remove all shares — are deliberately context-only:
+> they act on the specific right-clicked image and its per-image face/share
+> state, which a selection-scoped dropdown has no single target for. They drop
+> out of the context menu above one picture, and the spec asserts that they do.
 
 ## Picture Detail (ImageOverlay) — `overlay.spec.js` (plan §4)
 | Test | Covers | Status |
@@ -228,6 +243,18 @@ notes in the spec. Un-`fixme` each as its behaviour is settled.
 
 ---
 
+## Preferences round-trip — `preferences-persist.spec.js`
+| Test | Covers | Status |
+| --- | --- | --- |
+| a compact-mode change is PATCHed and survives a reload | The whole path a preference travels: control → store → the `useAppConfig` watcher's PATCH to `/users/me/config` → read back on the next load. Asserts the request body carried the new value rather than trusting the store, so a broken persistence watcher cannot pass | ✅ |
+
+## Keyboard shortcuts dialog — `shortcuts-dialog.spec.js`
+| Test | Covers | Status |
+| --- | --- | --- |
+| opens on F1 and lists the grid shortcuts | F1 reaches the global handler and `ShortcutsDialog` renders its table. The dialog is static markup with no unit coverage, so this is its only pin | ✅ |
+
+---
+
 ## Coverage gaps / testing debt (risk-based)
 
 Tracked so they aren't forgotten — weighted by blast radius:
@@ -257,11 +284,12 @@ Tracked so they aren't forgotten — weighted by blast radius:
 - **Image plugins** — applying a plugin and asserting an output picture
   appears is automatable; the "visibly blurrier/brighter" judgement is not.
   Currently fully manual (plan section 7).
-- **Selection ▾ ↔ context-menu parity is not automated.** `context-menu.spec.js`
-  opens the right-click menu and lists its actions, but no spec compares the two
-  menus' *item lists*, and none clicks through each action. Tracked as the #403
-  parity gap (see the "Selection ▾ / Context Menu Parity" section above). Once
-  #403 is fixed, consider a parity spec plus asserting representative actions fire.
+- **Menu parity is asserted, but no spec clicks through each action.**
+  `menu-parity.spec.js` compares the two menus' item *lists* for a multi-picture
+  selection, which is what caught #403's recurrence. It does not invoke the
+  actions, so an item present in both menus but wired to the wrong handler in
+  one of them would still pass. Asserting that representative actions actually
+  fire is the remaining gap.
 - **Review Sessions — partial loop automation + manual-only signals (plan §20).**
   The board is automated (`review-board.spec.js`, 9 cases). The session loop is
   **partly automated**: create, binary decide, and Escape-close run green

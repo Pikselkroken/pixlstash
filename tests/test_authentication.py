@@ -50,7 +50,11 @@ def reset_auth(server):
     server.auth.password_hash = None
     server.auth.username = None
     server.auth.user = None
+    # _clear_all_sessions also drops the session→token maps, which a bare
+    # active_session_ids = {} would leave behind.
     server.auth._clear_all_sessions()
+    # Go through the flush helper so the revocation epoch is bumped too — a
+    # bare _token_cache.clear() skips it (see AuthService._flush_token_cache).
     server.auth._flush_token_cache()
     # The login lockout counter is process-wide, so a test that exercises
     # rejected logins would otherwise lock out the tests that follow it.
@@ -416,11 +420,11 @@ def test_a_token_removed_mid_login_leaves_no_usable_session(server, monkeypatch)
             assert "session_id" not in response.cookies
             assert racer.get(f"{API_PREFIX}/protected").status_code == 401
 
-    # No session is left pointing at a token id that no removal path could
-    # reach again. (The owner's own password session is still live and is
-    # correctly not linked to any token.)
-    assert token_id not in server.auth._sessions_by_token_id
-    assert token_id not in server.auth._token_id_by_session.values()
+    # No session is left pointing at a token that no removal path could reach
+    # again. (The owner's own password session is still live and is correctly
+    # not linked to any token.)
+    assert server.auth._sessions_by_token_public_id == {}
+    assert server.auth._token_public_id_by_session == {}
 
 
 # --- A removed token stops authenticating straight away ---------------------

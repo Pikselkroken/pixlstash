@@ -1,10 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
-
-vi.mock("vuetify/components", () => ({
-  VDialog: { name: "v-dialog", template: "<div><slot /></div>" },
-  VIcon: { name: "v-icon", template: "<i><slot /></i>" },
-}));
 
 import OverlaySaveAsDialog from "./OverlaySaveAsDialog.vue";
 

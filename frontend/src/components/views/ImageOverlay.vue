@@ -379,14 +379,20 @@
             <v-icon size="20">mdi-account-plus</v-icon>
           </button>
 
+          <!-- The zoom readout lives ON the control (owner ruling): a live
+               whole-percent of natural size beside the retained icon. The
+               label width is reserved once (5ch, tabular numerals) so the
+               toolbar never jumps as the value changes. Click semantics match
+               Z: at fit → snap to 100%, otherwise → snap to fit. -->
           <button
             class="overlay-icon-btn zoom-btn"
             type="button"
-            title="Toggle zoom (Z)"
-            aria-label="Toggle zoom (Z)"
-            @click="toggleZoom"
+            :title="zoomButtonTitle"
+            :aria-label="zoomButtonTitle"
+            @click="toggleZoomSnap"
           >
             <v-icon>mdi-magnify</v-icon>
+            <span class="zoom-btn-label">{{ zoomButtonLabel }}</span>
           </button>
           <button
             class="overlay-icon-btn overlay-topbar-sidebar-toggle"
@@ -454,7 +460,7 @@
           @touchstart="onTouchStart"
           @touchmove="onTouchMove"
           @touchend="onTouchEnd"
-          @dblclick="toggleZoom"
+          @dblclick="onCanvasDblClick"
           @wheel.prevent="onWheelZoom"
           @contextmenu="handleMediaContextMenu"
         >
@@ -557,6 +563,15 @@
                   </span>
                 </div>
               </template>
+              <!-- The rubber-band rectangle rides INSIDE the transformed
+                   media (like the face boxes), so the same layout-space math
+                   is correct at every continuous zoom scale; the draw layer
+                   below only owns the pointer events and the hint. -->
+              <div
+                v-if="drawMode && drawRectStyle"
+                class="overlay-draw-rect"
+                :style="drawRectStyle"
+              ></div>
             </div>
           </div>
 
@@ -581,11 +596,6 @@
                 Cancel
               </button>
             </div>
-            <div
-              v-if="drawRectStyle"
-              class="overlay-draw-rect"
-              :style="drawRectStyle"
-            ></div>
           </div>
 
           <button
@@ -609,18 +619,28 @@
             <v-icon>mdi-chevron-right</v-icon>
           </button>
 
-          <div
-            class="zoom-hud"
-            :class="{ hidden: chromeHidden || zoomMode === 'fit' }"
-          >
-            {{ zoomHudLabel }}
-          </div>
+          <!-- The zoom announcer: the button's aria-label carries the live
+               value (no aria-live on the button); this hidden status node
+               announces on settle — 500 ms after the last wheel change, and
+               immediately on a snap stop. The settle timer lives in
+               useWheelZoom. -->
+          <span class="visually-hidden" role="status" aria-live="polite">{{
+            zoomAnnouncement
+          }}</span>
 
-          <div v-if="swipeHintVisible" class="overlay-swipe-hint">
+          <!-- Both hints stand down while a receipt is up: they are ambient
+               teaching with no deadline, the receipt is feedback on a committed
+               action that expires. "Click or Space to show controls" under an
+               Undo button is worse than redundant, because that click is not
+               the click the user wants. They return when the receipt retires. -->
+          <div
+            v-if="swipeHintVisible && !hasReceipt"
+            class="overlay-swipe-hint"
+          >
             <v-icon size="18">mdi-swap-horizontal</v-icon>
             <span>Swipe to navigate</span>
           </div>
-          <div v-if="chromeHidden" class="overlay-chrome-hint">
+          <div v-if="chromeHidden && !hasReceipt" class="overlay-chrome-hint">
             <span>Click or <kbd>Space</kbd> to show controls</span>
           </div>
         </div>
@@ -647,6 +667,7 @@
             :locked="isCurrentLocked"
             :lock-note="currentLockReason"
             @update-description="handleDescriptionUpdate"
+            @editing-finished="focusOverlayCanvas"
           />
 
           <div class="sidebar-section sidebar-section--faces">
@@ -680,37 +701,30 @@
                       >
                         {{ face.label }}
                       </div>
-                      <select
-                        class="face-assign-select"
-                        :disabled="!face.id || isReadOnly"
-                        :value="
-                          face.character_id != null
-                            ? String(face.character_id)
-                            : ''
-                        "
-                        @change="handleFaceAssignChange(face, $event)"
-                      >
-                        <option value="">Unassigned</option>
-                        <option
-                          v-if="
-                            face.character_id != null &&
-                            !hasCharacterOption(face)
-                          "
-                          :value="String(face.character_id)"
-                        >
-                          {{
-                            face.character_name ||
-                            `Character ${face.character_id}`
-                          }}
-                        </option>
-                        <option
-                          v-for="char in sortedCharacters"
-                          :key="char.id"
-                          :value="String(char.id)"
-                        >
-                          {{ char.displayName }}
-                        </option>
-                      </select>
+                      <!-- A native <select> cannot carry the create row's
+                           highlight: macOS Chrome and Safari draw select
+                           popups as OS menus that ignore option colour. This
+                           is the same menu language as the rest of the app
+                           (AddToEntityControl's force-dark skin), in its
+                           single-select face mode. -->
+                      <div class="face-assign-person">
+                        <AddToEntityControl
+                          :ref="(el) => setFaceMenuRef(face.faceKey, el)"
+                          type="face"
+                          allow-create
+                          float-menu
+                          :force-dark="true"
+                          :backend-url="backendUrl"
+                          :face-id="face.id"
+                          :assigned-character-id="face.character_id"
+                          :assigned-character-name="faceAssignedName(face)"
+                          :readonly="isReadOnly"
+                          :disabled="!face.id || isReadOnly"
+                          @assign="handleFaceAssign(face, $event)"
+                          @unassign="unassignFaceCharacter(face)"
+                          @create="openCreatePersonForFace(face, $event)"
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -741,8 +755,33 @@
             :video-duration="videoMeta.duration"
           />
         </aside>
+
+        <!-- The lightbox's own narration of an undoable action. Last child of
+             `.overlay-main` on purpose: this is where `--filmstrip-rail-width`
+             is declared, last-in-DOM is last-in-tab-order, and it escapes
+             `.overlay-canvas`'s `overflow: hidden`, which would clip the focus
+             ring on the Undo button. -->
+        <OverlayActionReceipt
+          v-if="!isReadOnly"
+          ref="receiptRef"
+          :chrome-hidden="chromeHidden"
+        />
       </div>
     </div>
+
+    <!-- New person from a face row (#645). Overlay-hosted: the flow's state
+         (the target face, the select to return focus to) is overlay-local, and
+         living inside the `v-if="open"` root means it cannot outlive the
+         lightbox. `v-dialog` teleports the dialog itself to <body>, so nesting
+         here costs no layout or stacking context. -->
+    <CharacterEditor
+      :open="createPersonOpen"
+      :character="createPersonCharacter"
+      :backend-url="backendUrl"
+      :projects="createPersonProjects"
+      @close="handleCreatePersonClose"
+      @saved="handleCreatePersonSaved"
+    />
     <OverlaySaveAsDialog
       v-if="fallbackSaveDialog.open"
       :open="fallbackSaveDialog.open"
@@ -760,13 +799,12 @@ import {
   onMounted,
   onUnmounted,
   ref,
-  reactive,
   computed,
-  defineAsyncComponent,
   nextTick,
   toRefs,
   watch,
 } from "vue";
+import { useWheelZoom } from "../../composables/useWheelZoom";
 import {
   isSupportedVideoFile,
   getOverlayFormat,
@@ -796,14 +834,21 @@ import {
   runImageToImage,
   getPictureWorkflow,
 } from "../../api/comfyui";
+import { listProjects } from "../../api/projects";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useOperationStore } from "../../stores/useOperationStore";
+import { useProjectStore } from "../../stores/useProjectStore";
+import { nextFreeCharacterName } from "../../utils/characterCreateFlow.js";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
+import CharacterEditor from "../editors/CharacterEditor.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
 import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
 import OverlayTagsPanel from "./OverlayTagsPanel.vue";
+import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
+import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import { faceBoxColor, getStackColor, toggleScore } from "../../utils/utils.js";
@@ -812,9 +857,10 @@ import { dedupeTagList, getTagList } from "../../utils/tags.js";
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
 const noticeStore = useNoticeStore();
-const OverlaySaveAsDialog = defineAsyncComponent(
-  () => import("../widgets/OverlaySaveAsDialog.vue"),
-);
+// Undo/redo is the same stack the grid uses; only the narration differs here
+// (OverlayActionReceipt, in the lightbox's own dark chrome).
+const operationStore = useOperationStore();
+const receiptRef = ref(null);
 const fallbackSaveDialog = ref({
   open: false,
   suggestedName: "",
@@ -852,6 +898,8 @@ function requestFallbackSaveFilename(info) {
     fallbackSaveResolver = resolve;
   });
 }
+/** A receipt is on screen: the two bottom-centre hints stand down while it is. */
+const hasReceipt = computed(() => Boolean(operationStore.receipt));
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -925,9 +973,16 @@ function handleTagsUpdate(newTagsArray) {
 const sidebarOpen = ref(true);
 const chromeHidden = ref(false);
 const chromeRevealTimestamp = ref(0);
-const zoomMode = ref("fit");
-const zoomSteps = ["fit", 1.5, 2];
-const pan = reactive({ x: 0, y: 0 });
+// The zoom family's shared core (Compare's model, adopted here): continuous
+// cursor-anchored wheel zoom, basis 1 = actual pixels, entry at fit, snap
+// stops at fit and 100%. The floor policy is `rest`: the overlay is a
+// DESTINATION, not a layer — wheeling out clamps hard at fit with no exit and
+// no hysteresis (Escape/backdrop remain the exits; ZOOM_EXIT_RESISTANCE stays
+// Compare-only). Pan transport stays the translate+scale transform on
+// `.overlay-media`, which the face-bbox overlays, draw-mode rectangle, and
+// video ride on.
+const zoom = useWheelZoom({ floorPolicy: "rest" });
+const zoomAnnouncement = zoom.announcement;
 const isPanning = ref(false);
 const lastPointer = ref({ x: 0, y: 0 });
 const overlayExpandedStackIds = ref(new Set());
@@ -1089,6 +1144,7 @@ const emit = defineEmits([
   "comfyui-run",
   "run-plugin",
   "request-context-menu",
+  "character-created",
 ]);
 
 const descriptionPanelRef = ref(null);
@@ -1264,8 +1320,7 @@ watch(open, (value) => {
     chromeHidden.value = false;
     chromeRevealTimestamp.value = 0;
     addToSetControlKey.value += 1;
-    zoomMode.value = "fit";
-    resetPan();
+    zoom.reset();
     resetComfyState();
   } else {
     // Snapshot the grid sequence up front so prev/next stay stable for the
@@ -2088,6 +2143,7 @@ function hasNativeCopyContext(target) {
   const selection = typeof window === "undefined" ? null : window.getSelection?.();
   return Boolean(selection && !selection.isCollapsed && selection.toString());
 }
+
 function handleKeydown(e) {
   if (!open.value) return;
   // Prevent other window keydown listeners (e.g. ImageGrid) from seeing this
@@ -2115,6 +2171,20 @@ function handleKeydown(e) {
     }
   }
 
+  // Undo / redo, handled HERE rather than by App's global binding.
+  //
+  // App's handler stands down while `.image-overlay` is in the DOM (an
+  // explicit guard at its top). Do NOT rely on the stopImmediatePropagation()
+  // above to silence it: that only works when this listener registered first,
+  // and the Duplicates view's grid remount re-registers this one LAST — that
+  // ordering flip is exactly how one Ctrl+Z once ran two undos. The owner
+  // ruled that undo must work here, fitted to the lightbox's own GUI:
+  // `OverlayActionReceipt` narrates the result inside the overlay chrome, so
+  // the action is never taken blind.
+  //
+  // Above the `chromeHidden` bail on purpose. The narration is a transient HUD
+  // like the progress cards and the swipe hint, none of which hide with the
+  // chrome, so undo stays reachable on a bare image and still reports itself.
   if (
     (e.ctrlKey || e.metaKey) &&
     !e.altKey &&
@@ -2137,7 +2207,19 @@ function handleKeydown(e) {
       copyMedia(buildContextMenuImage());
       return;
     }
+    if (isReadOnly.value) return;
+    if (commandKey === "z" && !e.shiftKey) {
+      e.preventDefault();
+      operationStore.undo();
+      return;
+    }
+    if (commandKey === "y" || (commandKey === "z" && e.shiftKey)) {
+      e.preventDefault();
+      operationStore.redo();
+      return;
+    }
   }
+
   // When chrome is hidden, only Space and Escape reveal it — other keys still
   // navigate/act but don't bring the chrome back.
   if (chromeHidden.value) {
@@ -2234,6 +2316,17 @@ function handleKeydown(e) {
   }
 
   if (e.key === "Escape") {
+    // Focus is inside the receipt: retire it and hand the keyboard back to the
+    // canvas, without closing the lightbox. A keyboard user who tabbed into the
+    // pill needs an exit that is not "leave the whole surface". Escape is NOT a
+    // general receipt dismissal — the pill blocks nothing and expires on its
+    // own, and making Escape-to-close depend on an invisible countdown would be
+    // a worse failure than a pill that outlived its welcome.
+    if (receiptRef.value?.containsFocus?.()) {
+      receiptRef.value.dismiss();
+      overlayCanvasRef.value?.focus?.();
+      return;
+    }
     if (drawMode.value) {
       clearDrawMode();
     } else if (pluginMenuOpen.value) {
@@ -2247,8 +2340,11 @@ function handleKeydown(e) {
     showPrevImage();
   } else if (["ArrowRight", "Right", "ArrowDown", "Down"].includes(e.key)) {
     showNextImage();
-  } else if (e.key === "z" || e.key === "Z") {
-    toggleZoom();
+  } else if ((e.key === "z" || e.key === "Z") && !e.ctrlKey && !e.metaKey) {
+    // Modifier-blind `z` would make Ctrl+Z and Ctrl+Shift+Z (which reports
+    // `e.key === "Z"`) zoom instead of undo: the worst kind of collision,
+    // because it does something visible and wrong.
+    toggleZoomSnap();
   } else if (e.key === " " || e.key === "Spacebar") {
     e.preventDefault();
     if (!chromeHidden.value) {
@@ -2282,10 +2378,6 @@ const FILMSTRIP_VISIBLE_COUNT = 7;
 const FILMSTRIP_BUFFER_COUNT = 3;
 const FILMSTRIP_GAP = 0;
 const FILMSTRIP_RAIL_PADDING = 8;
-const ZOOM_WHEEL_THRESHOLD = 40;
-const ZOOM_WHEEL_SENSITIVITY = 0.25;
-// Approximate pixels per line for wheel events reported in DOM_DELTA_LINE units.
-const WHEEL_LINE_HEIGHT_PX = 16;
 const windowHeight = ref(0);
 const overlayMainRef = ref(null);
 const filmstripRef = ref(null);
@@ -2295,7 +2387,6 @@ const swipeHintVisible = ref(false);
 let swipeHintTimer = null;
 let touchTapConsumed = false;
 let lastTouchEndTime = 0;
-let zoomWheelAccumulator = 0;
 
 function updateViewportMetrics() {
   if (typeof window !== "undefined") {
@@ -2486,22 +2577,27 @@ function openSidebarFromTeaser() {
   descriptionPanelRef.value?.startEditDescription();
 }
 
-function toggleZoom(event = null) {
+/** The pointer position relative to the zoom viewport (`.overlay-canvas`),
+ * the anchor space every zoom change works in. */
+function canvasCursorFromEvent(event) {
+  const rect = overlayCanvasRef.value?.getBoundingClientRect?.();
+  if (!rect || !Number.isFinite(event?.clientX)) return null;
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+/** Z and the toolbar button: toggle between the snap stops, fit ↔ 100%,
+ * centre-anchored. */
+function toggleZoomSnap() {
+  zoom.toggleSnap();
+}
+
+/** Double-click: the same fit ↔ 100% toggle, anchored at the click point. */
+function onCanvasDblClick(event) {
   const target = event?.target;
   if (target instanceof HTMLElement && target.closest(".overlay-nav")) {
     return;
   }
-  const currentIndex = zoomSteps.findIndex((step) => step === zoomMode.value);
-  const nextIndex = (currentIndex + 1) % zoomSteps.length;
-  zoomMode.value = zoomSteps[nextIndex];
-  if (zoomMode.value === "fit") {
-    resetPan();
-  }
-}
-
-function resetPan() {
-  pan.x = 0;
-  pan.y = 0;
+  zoom.toggleSnap(canvasCursorFromEvent(event));
 }
 
 function onPanStart(event) {
@@ -2519,8 +2615,7 @@ function onPanMove(event) {
   if (!isPanning.value || !isZoomed.value) return;
   const dx = event.clientX - lastPointer.value.x;
   const dy = event.clientY - lastPointer.value.y;
-  pan.x += dx;
-  pan.y += dy;
+  zoom.panBy(dx, dy);
   lastPointer.value = { x: event.clientX, y: event.clientY };
 }
 
@@ -2576,70 +2671,40 @@ function handleMediaDragStart(event) {
   }
 }
 
+/** Continuous cursor-anchored wheel zoom (the shared model): every step is
+ * exponential in the normalized delta, the image point under the pointer
+ * stays stationary, and wheel-out clamps hard at fit — no exit. */
 function onWheelZoom(event) {
   if (!open.value) return;
   handleUserActivity();
-  const deltaY = normalizeZoomWheelDelta(event);
-  if (!Number.isFinite(deltaY) || deltaY === 0) return;
-  zoomWheelAccumulator += deltaY;
-  if (Math.abs(zoomWheelAccumulator) < ZOOM_WHEEL_THRESHOLD) {
-    return;
-  }
-  const direction = Math.sign(zoomWheelAccumulator);
-  zoomWheelAccumulator -= direction * ZOOM_WHEEL_THRESHOLD;
-  const currentIndex = zoomSteps.findIndex((step) => step === zoomMode.value);
-  if (direction < 0 && currentIndex < zoomSteps.length - 1) {
-    zoomMode.value = zoomSteps[currentIndex + 1];
-  } else if (direction > 0 && currentIndex > 0) {
-    zoomMode.value = zoomSteps[currentIndex - 1];
-  } else {
-    zoomWheelAccumulator = 0;
-  }
-  if (zoomMode.value === "fit") {
-    resetPan();
-  }
+  zoom.wheelZoom(event, canvasCursorFromEvent(event));
 }
 
-function normalizeZoomWheelDelta(event) {
-  if (!event) return 0;
-  const raw = Number(event.deltaY ?? 0);
-  if (!Number.isFinite(raw) || raw === 0) return 0;
-  const scaled = raw * ZOOM_WHEEL_SENSITIVITY;
-  if (event.deltaMode === 1) {
-    return scaled * WHEEL_LINE_HEIGHT_PX;
-  }
-  if (event.deltaMode === 2) {
-    const pagePx = Number(windowHeight.value) || 800;
-    return scaled * pagePx;
-  }
-  return scaled;
-}
-
+// The transform transport (translate+scale) is load-bearing for the
+// face-bbox overlays, draw-mode rectangle, and video, which all ride inside
+// `.overlay-media`. Transform scale 1 IS fit: the un-transformed layout
+// already renders the fitted image, so the CSS scale is scale/fitScale.
 const mediaTransformStyle = computed(() => {
-  const scale = zoomScale.value;
+  const { x, y } = zoom.offset.value;
   return {
-    transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+    transform: `translate(${x}px, ${y}px) scale(${zoom.transformScale.value})`,
   };
 });
 
-const zoomScale = computed(() => {
-  if (zoomMode.value === "fit") return 1;
-  const renderedWidth = overlayDims.value.width || 1;
-  const renderedHeight = overlayDims.value.height || 1;
-  const naturalWidth = overlayDims.value.naturalWidth || renderedWidth;
-  const naturalHeight = overlayDims.value.naturalHeight || renderedHeight;
-  const baseScale = Math.min(
-    naturalWidth / renderedWidth,
-    naturalHeight / renderedHeight,
-  );
-  return baseScale * Number(zoomMode.value);
-});
+/** Above the fit floor: drag means pan (clamped), not drag-out. */
+const isZoomed = zoom.aboveFit;
 
-const isZoomed = computed(() => zoomScale.value > 1.01);
+/** The button's live readout: whole percent of natural size — at fit this is
+ * the computed fit percentage (e.g. "37%"), never the word "Fit". Empty only
+ * until the image has measured; the reserved width absorbs it. */
+const zoomButtonLabel = zoom.percentLabel;
 
-const zoomHudLabel = computed(() => {
-  if (zoomMode.value === "fit") return "Fit";
-  return `${Math.round(Number(zoomMode.value) * 100)}%`;
+const zoomButtonTitle = computed(() => {
+  const pct = zoom.percentLabel.value;
+  if (!pct) return "Zoom (Z)";
+  return zoom.atFit.value
+    ? `Zoom ${pct} (fit) — click for 100% (Z)`
+    : `Zoom ${pct} — click to fit (Z)`;
 });
 
 const filmstripCanvasData = computed(() => {
@@ -2841,12 +2906,70 @@ const videoSrc = computed(() => {
 // <img> yields a successful HTTP response followed by a decode error. Wait for
 // the metadata/grid record to provide the real format before creating the
 // native image element.
-const fullImageSrc = computed(() => {
-  const data = image.value;
+function buildFullImageSrc(data) {
   const id = data?.id;
   const fmt = MediaFormat(data);
   if (!id || !fmt || isSupportedVideoFile(`file.${fmt}`)) return "";
   return getFullImageUrl(data);
+}
+
+// The media URL carries `?v=<pixel_sha>` so an in-place pixel edit busts any
+// cached copy. `pixel_sha` is not part of the grid payload, though, so on a
+// normal open it only arrives with fetchOverlayMetadata — a beat AFTER the
+// <img> has already started (usually finished) loading the un-busted URL.
+// Letting that late arrival rewrite the src remounts the element
+// (`:key="fullImageSrc"`) and refetches a URL the HTTP cache has never seen:
+// the blank-then-reload flash on the first view of a picture in a session. It
+// also wasted the neighbour preloads, which build the un-busted URL from the
+// same grid records.
+//
+// Learning the sha is not a pixel change, so the buster baked into the shown
+// URL is pinned for as long as that picture keeps displaying the same bytes. It
+// only moves when the picture changes, when nothing was on screen yet (the cold
+// route, still waiting on the format), or when the sha goes from one KNOWN
+// value to another — a genuine in-place edit, where the reload is the point.
+// Freshness is not at risk in between: the media route answers `no-cache,
+// must-revalidate` with an mtime+size ETag, so the pinned URL is revalidated on
+// every load regardless of the buster.
+const displayedPixelSha = ref(null); // baked into the URL currently rendered
+const knownPixelSha = ref(null); // latest sha observed for that picture
+
+watch(
+  () => {
+    const data = image.value;
+    return {
+      id: data?.id ?? null,
+      sha: data?.pixel_sha ?? null,
+      hasMedia: Boolean(buildFullImageSrc(data)),
+    };
+  },
+  (next, prev) => {
+    const samePicture =
+      prev && next.id !== null && String(next.id) === String(prev.id);
+    if (!samePicture || !prev.hasMedia) {
+      displayedPixelSha.value = next.sha;
+      knownPixelSha.value = next.sha;
+      return;
+    }
+    // A record that simply doesn't carry the field (any grid-shaped refresh of
+    // the same picture) says nothing about the pixels — keep what we know.
+    if (next.sha === null || next.sha === knownPixelSha.value) return;
+    const firstSighting = knownPixelSha.value === null;
+    knownPixelSha.value = next.sha;
+    if (!firstSighting) displayedPixelSha.value = next.sha;
+  },
+  { immediate: true },
+);
+
+const fullImageSrc = computed(() => {
+  const data = image.value;
+  if (!data) return "";
+  const pinned = displayedPixelSha.value;
+  // Rebuilt from the live record so a backend-url, format or share-token change
+  // still flows through; only the cache-buster is held back.
+  return buildFullImageSrc(
+    pinned === (data.pixel_sha ?? null) ? data : { ...data, pixel_sha: pinned },
+  );
 });
 const overlayDims = ref({
   width: 1,
@@ -2880,8 +3003,12 @@ function getDrawPoint(event) {
   if (!innerEl) return null;
   const rect = innerEl.getBoundingClientRect();
   const dims = overlayDims.value;
-  const localX = event.clientX - rect.left - (dims.offsetX || 0);
-  const localY = event.clientY - rect.top - (dims.offsetY || 0);
+  // The bounding rect is the TRANSFORMED box (pan + continuous scale), while
+  // dims are layout-space, so the cursor divides through the CSS scale before
+  // the layout-space mapping. At fit the scale is 1 and this is a no-op.
+  const cssScale = zoom.transformScale.value || 1;
+  const localX = (event.clientX - rect.left) / cssScale - (dims.offsetX || 0);
+  const localY = (event.clientY - rect.top) / cssScale - (dims.offsetY || 0);
   const clampedX = clamp(localX, 0, dims.width);
   const clampedY = clamp(localY, 0, dims.height);
   const imgX = (clampedX * dims.naturalWidth) / dims.width;
@@ -3035,6 +3162,25 @@ function updateOverlayDims() {
   } else {
     videoMeta.value = { duration: null };
   }
+  syncZoomMeasurements();
+}
+
+/** Feed the zoom core its fit measurement whenever the media or the viewport
+ * re-measures: entry lands at fit, a resize keeps a fit-parked scale on the
+ * new fit (the button percentage follows), a navigation keeps the scale and
+ * re-clamps it (and the pan) to the new image's floor. */
+function syncZoomMeasurements() {
+  if (!overlayReady.value) return;
+  const canvas = overlayCanvasRef.value;
+  const containerWidth = canvas?.clientWidth || 0;
+  const containerHeight = canvas?.clientHeight || 0;
+  if (containerWidth <= 1 || containerHeight <= 1) return;
+  zoom.setMeasurements({
+    containerWidth,
+    containerHeight,
+    naturalWidth: overlayDims.value.naturalWidth,
+    naturalHeight: overlayDims.value.naturalHeight,
+  });
 }
 
 watch(image, () => scheduleOverlayDimsUpdate());
@@ -3081,6 +3227,7 @@ onMounted(() => {
   updateViewportMetrics();
   window.addEventListener("resize", updateViewportMetrics);
   window.addEventListener("keydown", handleKeydown);
+  document.addEventListener("keydown", onCreatePersonKeydownCapture, true);
   window.addEventListener("pointerdown", handleOverlayPointerDown, true);
   if (typeof ResizeObserver !== "undefined" && overlayMainRef.value) {
     overlayResizeObserver = new ResizeObserver(() => {
@@ -3098,6 +3245,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("resize", updateViewportMetrics);
   window.removeEventListener("keydown", handleKeydown);
+  document.removeEventListener("keydown", onCreatePersonKeydownCapture, true);
   window.removeEventListener("pointerdown", handleOverlayPointerDown, true);
   clearComfyuiCloseTimer();
   if (overlayResizeObserver) {
@@ -3118,7 +3266,6 @@ onUnmounted(() => {
 
 watch(open, (isOpen) => {
   if (!isOpen) {
-    zoomWheelAccumulator = 0;
     swipeHintVisible.value = false;
     if (swipeHintTimer) {
       clearTimeout(swipeHintTimer);
@@ -3299,10 +3446,13 @@ async function fetchOverlayMetadata(imageId) {
     if (data.tags !== undefined) {
       merged.tags = dedupeTagList(dataTags);
     }
-    if (
-      image.value?.description == null ||
-      image.value.description.startsWith("__description::")
-    ) {
+    if (data.description !== undefined) {
+      // The server is authoritative for the description, same reasoning as
+      // smartScore above: this fetch is how an undo/redo (whose WS
+      // descriptions_changed event triggers it) reaches an open overlay, and
+      // the old local-wins rule kept the field stale until reopen. The one
+      // race — a fetch that left before a local save — is closed at the
+      // source: handleDescriptionUpdate invalidates in-flight requests.
       merged.description = data.description ?? null;
     }
     const currentMeta = image.value?.metadata;
@@ -3586,26 +3736,185 @@ async function unassignFaceCharacter(face) {
   }
 }
 
-function handleFaceAssignChange(face, event) {
-  const rawValue = event?.target?.value ?? "";
-  const nextId = rawValue === "" ? null : rawValue;
-  if (!nextId) {
-    unassignFaceCharacter(face);
-    return;
-  }
-  const character = sortedCharacters.value.find(
-    (char) => String(char.id) === String(nextId),
-  );
-  if (character) {
-    assignFaceToCharacter(face, character);
-  }
+// The face menu performs no writes of its own, so the existing (and unchanged)
+// face-level assign path stays the single place that talks to the API.
+function handleFaceAssign(face, payload) {
+  const character =
+    sortedCharacters.value.find(
+      (char) => String(char.id) === String(payload?.characterId),
+    ) ??
+    (payload?.characterId != null
+      ? { id: payload.characterId, name: payload.characterName }
+      : null);
+  if (character) assignFaceToCharacter(face, character);
 }
 
-function hasCharacterOption(face) {
-  if (!face?.character_id) return false;
-  return sortedCharacters.value.some(
+// What the trigger reads when the face already has someone: prefer the stored
+// name, fall back to the character list, and finally to the id, which is what
+// the select's fallback <option> used to do.
+function faceAssignedName(face) {
+  if (face?.character_id == null) return "";
+  if (face.character_name) return face.character_name;
+  const known = sortedCharacters.value.find(
     (char) => String(char.id) === String(face.character_id),
   );
+  return known?.displayName || `Character ${face.character_id}`;
+}
+
+// Per-face menu instances, so focus can return to the one that opened the
+// dialog. A plain Map (not a ref): nothing renders from it.
+const faceMenuRefs = new Map();
+
+function setFaceMenuRef(key, el) {
+  if (el) faceMenuRefs.set(key, el);
+  else faceMenuRefs.delete(key);
+}
+
+// ── Create a person from a face row (#645) ───────────────────────────────────
+// The face id and the invoking select are captured at flow start so they
+// survive the dialog: on save the new person is assigned to exactly that face,
+// and either outcome returns focus to the select that opened the dialog.
+const projectStore = useProjectStore();
+const createPersonOpen = ref(false);
+const createPersonCharacter = ref(null);
+const createPersonProjects = ref([]);
+let createPersonFaceId = null;
+let createPersonFaceKey = null;
+
+async function openCreatePersonForFace(face, query) {
+  if (!face?.id || isReadOnly.value) return;
+  createPersonFaceId = face.id;
+  createPersonFaceKey = face.faceKey;
+  const typed = typeof query === "string" ? query.trim() : "";
+  const projects = await listProjects({ baseUrl: backendUrl.value }).catch(
+    (e) => {
+      console.warn("Couldn't list projects for the person editor", e);
+      return [];
+    },
+  );
+  createPersonProjects.value = Array.isArray(projects) ? projects : [];
+  createPersonCharacter.value = {
+    id: null,
+    // The menu has a search box, so an unmatched query is the name the user
+    // just typed; with nothing typed, the default series the sidebar and the
+    // grid flow use.
+    name: typed || nextFreeCharacterName(characters.value),
+    description: "",
+    extra_metadata: "",
+    // Same project pre-fill as the grid flow, read from the store rather than
+    // prop-drilled (frontend_architecture.md §4: Pinia for cross-component
+    // state).
+    project_id:
+      projectStore.projectViewMode === "project"
+        ? projectStore.selectedProjectId
+        : null,
+  };
+  createPersonOpen.value = true;
+}
+
+/**
+ * Own Escape while the person dialog is open, so it closes the dialog and
+ * never the lightbox underneath.
+ *
+ * Verified rather than assumed. `AppDialog` calls `stopPropagation()` on its
+ * own subtree, so an Escape from a focused field inside the dialog already
+ * never reaches this component's window handler. But an Escape whose target is
+ * OUTSIDE that subtree (focus resting on `<body>`) bubbles document → window
+ * straight into `handleKeydown`, which emits "close" and drops the whole
+ * lightbox behind the still-open dialog. A bubble-phase guard cannot fix that
+ * one: `CharacterEditor`'s own document listener runs first and has already
+ * flipped `createPersonOpen` to false by the time the window handler reads it.
+ * So the key is taken in the CAPTURE phase, ahead of every bubble listener,
+ * exactly as `ImageGridContextMenu` does, and the dialog is closed here.
+ */
+function onCreatePersonKeydownCapture(e) {
+  if (!createPersonOpen.value || e.key !== "Escape") return;
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  handleCreatePersonClose();
+}
+
+function restoreCreatePersonFocus() {
+  const key = createPersonFaceKey;
+  createPersonFaceKey = null;
+  if (key == null) return;
+  nextTick(() => faceMenuRefs.get(key)?.focusTrigger?.());
+}
+
+function handleCreatePersonClose() {
+  createPersonOpen.value = false;
+  createPersonCharacter.value = null;
+  createPersonFaceId = null;
+  restoreCreatePersonFocus();
+}
+
+async function handleCreatePersonSaved(savedCharacter) {
+  createPersonOpen.value = false;
+  createPersonCharacter.value = null;
+  const faceId = createPersonFaceId;
+  createPersonFaceId = null;
+  restoreCreatePersonFocus();
+  const characterId = savedCharacter?.id;
+  const name = savedCharacter?.name || "person";
+  if (characterId == null || faceId == null) {
+    // Defensive only: CharacterEditor unwraps `CharacterMutationResponse` and
+    // withholds `saved` unless the record has an id, so this must never fire in
+    // normal operation. If it does, the payload shape is wrong.
+    console.error(
+      "create-person: cannot assign the face. Expected the unwrapped record " +
+        "{id, name, ...}; if the payload looks like {status, character} the " +
+        "CharacterMutationResponse unwrap in CharacterEditor has regressed.",
+      {
+        payloadKeys:
+          savedCharacter && typeof savedCharacter === "object"
+            ? Object.keys(savedCharacter)
+            : typeof savedCharacter,
+        savedCharacter,
+        faceId,
+      },
+    );
+    noticeStore.error(
+      `Created ${name}, but the face couldn't be assigned. Pick the person from the face menu.`,
+      { key: "overlay-create-person" },
+    );
+    await fetchCharacters();
+    emit("character-created");
+    return;
+  }
+  const capturedImageId = image.value?.id ?? null;
+  try {
+    // Always the face-level path: the user pointed at one specific detection,
+    // so a picture-level assignment would claim faces they did not choose.
+    await addCharacterFacesByFaceId(characterId, [faceId], {
+      baseUrl: backendUrl.value,
+    });
+    if (Array.isArray(faceBboxes.value)) {
+      faceBboxes.value = faceBboxes.value.map((entry) =>
+        entry?.id === faceId
+          ? { ...entry, character_id: characterId, character_name: name }
+          : entry,
+      );
+    }
+    noticeStore.success(`Created ${name}, assigned to this face.`, {
+      key: "overlay-create-person",
+    });
+    if (capturedImageId) {
+      emit("overlay-change", {
+        imageId: capturedImageId,
+        fields: { faces: true },
+      });
+    }
+  } catch (e) {
+    console.error("Failed to assign the new person to the face", e);
+    noticeStore.error(
+      `Created ${name}, but couldn't assign this face. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      { key: "overlay-create-person" },
+    );
+  }
+  // Either way the person now exists: refresh the overlay's own list so every
+  // face select offers them, and tell the grid to refresh the sidebar.
+  await fetchCharacters();
+  emit("character-created");
 }
 
 // Keep preload Image objects alive so the browser doesn't discard the
@@ -3799,7 +4108,16 @@ function getOverlayBoxStyle(bbox, color) {
   };
 }
 
+/** Return the keyboard to the overlay once a sidebar edit ends. */
+function focusOverlayCanvas() {
+  overlayCanvasRef.value?.focus?.();
+}
+
 function handleDescriptionUpdate(imageId, newDescription) {
+  // Invalidate any in-flight metadata fetch: it left before this save and
+  // would land carrying the pre-save description, which the merge below now
+  // treats as authoritative.
+  metadataRequestId += 1;
   if (image.value && image.value.id === imageId) {
     image.value = { ...image.value, description: newDescription };
   }
@@ -4092,1251 +4410,4 @@ function canvasToBlob(canvas, type) {
 
 defineExpose({ saveMedia, saveMediaAs, copyMedia });
 </script>
-
-<style scoped>
-.image-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(var(--v-theme-scrim), 0.92);
-  z-index: 1000;
-}
-
-.overlay-shell {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  --rail-width: 52px;
-  --rail-open-width: 170px;
-  --sidebar-width: 0px;
-  --topbar-height: 40px;
-  position: relative;
-}
-
-.overlay-shell.sidebar-open {
-  --sidebar-width: 320px;
-}
-
-.overlay-topbar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-2) 10px;
-  min-height: var(--topbar-height);
-  background: rgba(var(--v-theme-dark-surface), 0.9);
-  color: rgb(var(--v-theme-on-dark-surface));
-  transition: opacity 0.2s ease;
-  z-index: 5;
-}
-
-.overlay-topbar.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.overlay-progress {
-  position: absolute;
-  right: calc(16px + var(--sidebar-width));
-  z-index: 6;
-  background: rgba(var(--v-theme-dark-surface), 0.75);
-  color: rgb(var(--v-theme-on-dark-surface));
-  padding: var(--space-3) 10px;
-  border-radius: var(--radius-md);
-  box-shadow: 0 4px 12px rgba(var(--v-theme-shadow), 0.25);
-  backdrop-filter: blur(6px);
-}
-
-.overlay-progress--comfyui {
-  bottom: 64px;
-  min-width: 180px;
-}
-
-.overlay-progress--plugin {
-  bottom: 128px;
-  min-width: 220px;
-}
-
-.overlay-progress--error {
-  background: rgba(var(--v-theme-error), 0.95);
-}
-
-.overlay-progress-title {
-  font-size: var(--text-2xs);
-  margin-bottom: 6px;
-  white-space: pre-line;
-}
-
-.overlay-progress-bar {
-  width: 100%;
-  height: 6px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.2);
-  border-radius: var(--radius-pill);
-  overflow: hidden;
-}
-
-.overlay-progress-fill {
-  height: 100%;
-  background: rgb(var(--v-theme-accent));
-  width: 0;
-  transition: width 0.2s ease;
-}
-
-.overlay-progress-meta {
-  margin-top: 6px;
-  font-size: var(--text-2xs);
-  opacity: 0.85;
-}
-
-.overlay-close {
-  border: none;
-  background: rgba(var(--v-theme-primary), 0.7);
-  color: rgb(var(--v-theme-on-primary));
-  padding: 6px 14px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  cursor: pointer;
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-}
-.overlay-close:hover {
-  background: rgba(var(--v-theme-accent), 0.85);
-}
-
-.overlay-title {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
-  flex: 1;
-}
-
-.overlay-desc-teaser {
-  border: none;
-  background: transparent;
-  color: rgba(var(--v-theme-on-dark-surface), 0.7);
-  text-align: left;
-  font-size: var(--text-sm);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  padding: 0;
-}
-
-.overlay-desc-teaser:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-.overlay-top-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-/* Persistent translucent lock chip — signals the picture is frozen by a locked
-   set. Same warm-shadow translucency the overlay chrome uses elsewhere. */
-.overlay-lock-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: 32px;
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-pill);
-  background: rgba(var(--v-theme-shadow), 0.4);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  line-height: var(--leading-snug);
-}
-
-.overlay-top-actions .star-overlay {
-  position: static;
-  top: auto;
-  right: auto;
-  z-index: auto;
-  padding: 6px 14px;
-  height: 32px;
-  background: none;
-  border-radius: var(--radius-sm);
-}
-
-.star-overlay:hover {
-  background: rgba(var(--v-theme-primary), 0.6);
-}
-
-.overlay-icon-btn {
-  border: none;
-  background: none;
-  color: rgb(var(--v-theme-on-dark-surface));
-  height: 32px;
-  padding: 6px 14px;
-  min-width: 32px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  font-size: var(--text-base);
-}
-.overlay-icon-btn:hover {
-  background: rgba(var(--v-theme-primary), 0.6);
-}
-
-.overlay-icon-btn--active {
-  background: rgba(var(--v-theme-primary), 0.25);
-  color: rgb(var(--v-theme-primary));
-}
-
-.overlay-star-mobile-btn {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.overlay-star-mobile-label {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-bold);
-  color: rgb(var(--v-theme-on-dark-surface));
-  min-width: 10px;
-}
-
-.overlay-star-menu {
-  background: rgba(var(--v-theme-dark-surface), 0.97);
-  border-radius: 10px;
-  padding: var(--space-2);
-  display: flex;
-  flex-direction: column;
-  min-width: 160px;
-  box-shadow: var(--elevation-4);
-}
-
-.overlay-star-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: var(--space-3) var(--space-4);
-  border: none;
-  background: transparent;
-  border-radius: 6px;
-  cursor: pointer;
-  color: rgb(var(--v-theme-on-dark-surface));
-  width: 100%;
-  text-align: left;
-}
-
-.overlay-star-menu-item:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-}
-
-.overlay-star-menu-item--active {
-  background: rgba(var(--v-theme-accent), 0.15);
-}
-
-.overlay-star-menu-stars {
-  display: flex;
-  gap: var(--space-1);
-}
-
-.overlay-star-menu-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.8);
-}
-
-.overlay-comfy-activator {
-  gap: 6px;
-}
-
-.overlay-comfy-activator-label {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-}
-
-.overlay-comfy-panel {
-  padding: var(--space-4);
-  min-width: 420px;
-  background: rgba(var(--v-theme-dark-surface), 0.96);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: 10px;
-  box-shadow: var(--elevation-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.overlay-comfy-header {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-}
-
-.overlay-comfy-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.overlay-comfy-field-label {
-  font-size: var(--text-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.overlay-comfy-checkbox-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-2xs);
-  color: rgb(var(--v-theme-on-dark-surface));
-  cursor: pointer;
-}
-
-.overlay-comfy-checkbox-row input {
-  cursor: pointer;
-}
-
-.overlay-comfy-select,
-.overlay-comfy-textarea {
-  width: 100%;
-  background: rgba(var(--v-theme-shadow), 0.45);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: var(--radius-md);
-  padding: 6px var(--space-3);
-  font-size: var(--text-2xs);
-}
-
-.overlay-comfy-textarea-wrap {
-  position: relative;
-}
-
-.overlay-comfy-help {
-  position: absolute;
-  left: 12px;
-  top: 10px;
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.5);
-  pointer-events: none;
-}
-
-.overlay-comfy-textarea {
-  resize: vertical;
-  min-height: 220px;
-}
-
-.overlay-comfy-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-3);
-}
-
-.overlay-comfy-run {
-  border: none;
-  background: rgba(var(--v-theme-primary), 0.8);
-  color: rgb(var(--v-theme-on-primary));
-  padding: 6px var(--space-4);
-  border-radius: var(--radius-pill);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-}
-
-.overlay-comfy-run:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.overlay-comfy-warning,
-.overlay-comfy-error,
-.overlay-comfy-success {
-  border-radius: var(--radius-md);
-  padding: 6px var(--space-3);
-  font-size: var(--text-2xs);
-}
-
-/* These chips are a 20% TINT on the dark lightbox, not a solid status fill, so
-   `on-warning` / `on-error` are the wrong tokens here — they are authored for a
-   solid fill and resolve to a near-black that vanishes into the tint (1.4:1).
-   The right foreground is the surface's own, matching `.overlay-comfy-note` and
-   `.overlay-comfy-status` directly above; the hue comes from the dark-surface
-   status set because the lightbox is dark in both themes. 9.18:1 – 11.24:1. */
-.overlay-comfy-warning {
-  background: rgba(var(--v-theme-dark-surface-warning), 0.2);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.overlay-comfy-note {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.65);
-}
-
-.overlay-comfy-status {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.75);
-}
-
-.overlay-comfy-error {
-  background: rgba(var(--v-theme-dark-surface-error), 0.2);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.overlay-comfy-success {
-  background: rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.zoom-btn {
-  width: auto;
-  min-width: 84px;
-  padding: 6px 14px;
-  gap: 6px;
-  justify-content: flex-start;
-}
-
-.zoom-btn .v-icon {
-  flex: 0 0 18px;
-}
-
-.overlay-main {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 1fr;
-  height: 100%;
-  min-height: 0;
-  position: relative;
-}
-
-.overlay-canvas {
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  min-height: 0;
-  user-select: none;
-}
-
-.overlay-media {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  max-width: 100%;
-  max-height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transform-origin: center;
-  transition: transform 0.15s ease;
-  cursor: grab;
-}
-
-.overlay-media-inner {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  max-width: 100%;
-  max-height: 100%;
-  z-index: 1;
-}
-
-.overlay-media.panning {
-  transition: none;
-  cursor: grabbing;
-}
-
-.overlay-img,
-.overlay-video {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
-  object-fit: contain;
-  background: rgb(var(--v-theme-dark-surface));
-  box-shadow: 0 12px 30px rgba(var(--v-theme-shadow), 0.45);
-  position: relative;
-  z-index: 1;
-}
-
-.overlay-img {
-  border-radius: 0;
-}
-
-.overlay-video {
-  border-radius: var(--radius-lg);
-}
-
-.overlay-video-error {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-5);
-  padding: 40px;
-  border-radius: var(--radius-lg);
-  background: rgba(var(--v-theme-dark-surface), 0.8);
-  color: rgb(var(--v-theme-on-dark-surface));
-  text-align: center;
-  min-width: 280px;
-}
-
-.overlay-video-error-msg {
-  margin: 0;
-  font-size: var(--text-sm);
-  opacity: 0.75;
-  max-width: 300px;
-}
-
-.overlay-image-error {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-5);
-  padding: 40px;
-  border-radius: var(--radius-lg);
-  background: rgba(var(--v-theme-dark-surface), 0.8);
-  color: rgb(var(--v-theme-on-dark-surface));
-  text-align: center;
-  min-width: 280px;
-}
-
-.overlay-image-error-msg {
-  margin: 0;
-  font-size: var(--text-sm);
-  opacity: 0.75;
-}
-
-.overlay-video-download-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: var(--space-3) 20px;
-  border-radius: 6px;
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  text-decoration: none;
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-}
-
-.overlay-video-download-btn:hover {
-  opacity: 0.85;
-}
-
-.overlay-nav {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius-pill);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
-  background: rgba(var(--v-theme-shadow), 0.35);
-  color: rgb(var(--v-theme-on-dark-surface));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: opacity 0.2s ease;
-  z-index: 4;
-}
-
-.overlay-nav.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.overlay-nav-left {
-  left: calc(16px + var(--filmstrip-rail-width));
-}
-
-.overlay-nav-right {
-  right: calc(16px + var(--sidebar-width));
-}
-
-.zoom-hud {
-  position: absolute;
-  bottom: 16px;
-  left: calc(16px + var(--filmstrip-rail-width, 0px));
-  padding: var(--space-2) 10px;
-  border-radius: var(--radius-pill);
-  background: rgba(var(--v-theme-shadow), 0.55);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  transition:
-    opacity 0.2s ease,
-    left 0.2s ease;
-  z-index: 4;
-}
-
-.zoom-hud.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.overlay-swipe-hint {
-  position: absolute;
-  bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px var(--space-4);
-  background: rgba(var(--v-theme-shadow), 0.55);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: var(--radius-pill);
-  font-size: var(--text-xs);
-  z-index: 4;
-}
-.overlay-chrome-hint {
-  position: absolute;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 3px 10px;
-  background: rgba(var(--v-theme-scrim), 0.35);
-  color: rgba(var(--v-theme-on-dark-surface), 0.55);
-  border-radius: var(--radius-pill);
-  font-size: var(--text-2xs);
-  pointer-events: none;
-  z-index: 4;
-  white-space: nowrap;
-}
-.overlay-chrome-hint kbd {
-  font-family: inherit;
-  font-size: inherit;
-  background: rgba(var(--v-theme-on-dark-surface), 0.15);
-  border-radius: 3px;
-  padding: 0 var(--space-2);
-}
-
-.overlay-sidebar {
-  position: absolute;
-  top: var(--topbar-height);
-  right: 0;
-  bottom: 0;
-  width: var(--sidebar-width);
-  background: rgba(var(--v-theme-dark-surface), 0.6);
-  color: rgb(var(--v-theme-on-dark-surface));
-  transition: width 0.2s ease;
-  overflow: hidden;
-  padding: 0;
-  height: calc(100% - var(--topbar-height));
-  z-index: 4;
-}
-
-.overlay-sidebar.open {
-  width: 320px;
-  padding: 10px var(--space-4) 44px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.overlay-sidebar.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.sidebar-section {
-  margin-bottom: 6px;
-}
-
-.sidebar-section--description {
-  flex: 1 1 114px;
-  display: flex;
-  flex-direction: column;
-  min-height: 114px;
-  overflow: visible;
-}
-
-.sidebar-section--description.sidebar-section--collapsed {
-  flex: 0 0 auto;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* The Tags / Rejected Tags section layout lives in OverlayTagsPanel's own
-   scoped block: that component has multiple root nodes, so this file's scope id
-   is never stamped onto them and rules written here would not match. */
-
-.section-header--collapsible {
-  cursor: pointer;
-  user-select: none;
-}
-
-.section-header--collapsible:hover {
-  opacity: 0.85;
-}
-
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  margin-bottom: var(--space-2);
-  padding: var(--space-1) 0;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.rejected-threshold-label {
-  margin-left: 6px;
-  font-size: 0.64rem;
-  opacity: 0.5;
-  font-weight: 400;
-  letter-spacing: 0.01em;
-}
-
-.section-header-title-with-meta {
-  display: inline-flex;
-  align-items: baseline;
-}
-
-.section-meta {
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.description-editor {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.description-editor textarea {
-  flex: 1;
-  width: 100%;
-  min-height: 56px;
-  border-radius: var(--radius-md);
-  font-size: var(--text-xs);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
-  background: rgba(var(--v-theme-shadow), 0.35);
-  color: rgb(var(--v-theme-on-dark-surface));
-  padding: 6px;
-  resize: vertical;
-}
-
-.description-actions {
-  margin-top: 6px;
-  display: flex;
-  gap: var(--space-3);
-}
-
-.face-assign-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-  max-height: 210px;
-  overflow-y: auto;
-  padding-right: var(--space-1);
-  /* Same treatment as the two tag lists in OverlayTagsPanel: this sidebar's
-     three scroll regions share one bar, keyed to the dark surface. */
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
-}
-
-.face-assign-grid:hover {
-  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.55) transparent;
-}
-
-.face-assign-card {
-  background: rgba(var(--v-theme-on-dark-surface), 0.06);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-  border-radius: 6px;
-  padding: 3px;
-}
-
-.face-assign-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.face-assign-thumb {
-  border-radius: 2px;
-  flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-}
-
-.face-assign-crop {
-  border-radius: 2px;
-  border: 1px solid transparent;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: cover;
-  margin: 0 auto;
-}
-
-.face-assign-meta {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-  flex: 1;
-}
-
-.face-assign-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.9);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.face-assign-select {
-  width: 100%;
-  background: rgba(var(--v-theme-shadow), 0.45);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: var(--radius-md);
-  padding: 1px var(--space-2);
-  font-size: var(--text-2xs);
-  height: 22px;
-}
-
-.face-assign-select:disabled {
-  opacity: 0.6;
-}
-
-.face-assign-empty {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  padding: var(--space-2) 6px;
-}
-
-.metadata-empty {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.metadata-tabbox {
-  display: flex;
-  flex-direction: column;
-  border-radius: 10px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.06);
-  overflow: hidden;
-}
-
-.metadata-tab-strip {
-  display: flex;
-  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.1);
-}
-
-.metadata-tab-btn {
-  flex: 1;
-  padding: 6px var(--space-3);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  border: none;
-  background: transparent;
-  color: rgba(var(--v-theme-on-dark-surface), 0.5);
-  cursor: pointer;
-  transition:
-    color 0.15s,
-    background 0.15s;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.metadata-tab-btn:first-child {
-  border-radius: 10px 0 0 0;
-}
-
-.metadata-tab-btn:last-child {
-  border-radius: 0 10px 0 0;
-}
-
-.metadata-tab-btn:only-child {
-  border-radius: 10px 10px 0 0;
-}
-
-.metadata-tab-btn.active {
-  color: rgb(var(--v-theme-on-dark-surface));
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-}
-
-.metadata-tab-btn:hover:not(.active) {
-  color: rgba(var(--v-theme-on-dark-surface), 0.8);
-  background: rgba(var(--v-theme-on-dark-surface), 0.04);
-}
-
-.metadata-tab-panel {
-  padding: 10px;
-}
-
-.metadata-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.metadata-info-card,
-.metadata-comfy-card {
-  display: flex;
-  flex-direction: column;
-  padding: 10px;
-  border-radius: 10px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.06);
-}
-
-.metadata-info-card {
-  gap: var(--space-3);
-}
-
-.metadata-info-header {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  color: rgba(var(--v-theme-on-dark-surface), 0.85);
-}
-
-.metadata-info-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3) var(--space-4);
-}
-
-.metadata-info-item {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.metadata-info-item--full-width {
-  grid-column: 1 / -1;
-}
-
-.metadata-info-item--clickable {
-  cursor: pointer;
-}
-
-.metadata-info-item--clickable:hover .metadata-info-value {
-  text-decoration: underline;
-}
-
-.metadata-info-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.metadata-info-value {
-  font-size: var(--text-2xs);
-  color: rgb(var(--v-theme-on-dark-surface));
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.metadata-comfy-card {
-  gap: 10px;
-}
-
-.metadata-comfy-header {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.85);
-}
-
-.metadata-comfy-subtitle {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-medium);
-  color: rgba(var(--v-theme-on-dark-surface), 0.65);
-}
-
-.metadata-comfy-details {
-  background: rgba(var(--v-theme-shadow), 0.25);
-  border-radius: var(--radius-md);
-  padding: var(--space-3) 10px;
-}
-
-.metadata-comfy-details summary {
-  cursor: pointer;
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.75);
-}
-
-.metadata-comfy-details summary::-webkit-details-marker {
-  display: none;
-}
-
-.metadata-comfy-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.metadata-comfy-summary-left {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.metadata-comfy-workflow-action {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  border: none;
-  background: transparent;
-  color: rgba(var(--v-theme-on-dark-surface), 0.75);
-  font-size: var(--text-2xs);
-  padding: var(--space-1) var(--space-1);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.metadata-comfy-workflow-action:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.12);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.metadata-comfy-textarea {
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-  min-height: 160px;
-  max-height: 280px;
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
-  background: rgba(var(--v-theme-shadow), 0.35);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  line-height: 1.4;
-  padding: var(--space-3);
-  resize: vertical;
-  overflow: auto;
-  white-space: pre;
-  word-break: normal;
-}
-
-.metadata-comfy-details:not([open]) .metadata-comfy-textarea {
-  display: none;
-}
-
-.metadata-comfy-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.metadata-comfy-field-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.metadata-comfy-field-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.metadata-comfy-prompt-block {
-  display: flex;
-  flex-direction: column;
-}
-
-.metadata-comfy-prompt {
-  min-height: 70px;
-  max-height: 160px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.metadata-comfy-chips-block {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.metadata-comfy-chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.metadata-comfy-chip {
-  display: inline-block;
-  font-size: var(--text-2xs);
-  background: rgba(var(--v-theme-on-dark-surface), 0.1);
-  color: rgba(var(--v-theme-on-dark-surface), 0.85);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) 6px;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.face-bbox-empty {
-  position: absolute;
-  left: 8px;
-  top: 8px;
-  color: rgb(var(--v-theme-dark-surface-error));
-  background: rgba(var(--v-theme-on-dark-surface), 0.12);
-  z-index: 1001;
-  font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-sm);
-}
-
-.face-bbox-label {
-  position: absolute;
-  left: 0;
-  top: 0;
-  background: rgba(var(--v-theme-scrim), 0.6);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  padding: 1px var(--space-2);
-  border-bottom-right-radius: 6px;
-}
-
-.face-bbox-overlay {
-  box-sizing: border-box;
-  position: absolute;
-  pointer-events: none;
-  z-index: 1000 !important;
-}
-
-.overlay-draw-layer {
-  position: absolute;
-  inset: 0;
-  pointer-events: auto;
-  z-index: 5000;
-  cursor: crosshair;
-}
-
-.overlay-draw-rect {
-  position: absolute;
-  border: 2px dashed rgba(var(--v-theme-on-dark-surface), 0.8);
-  background: rgba(var(--v-theme-on-dark-surface), 0.12);
-  box-sizing: border-box;
-  z-index: 2001;
-}
-
-.overlay-draw-hint {
-  position: absolute;
-  left: 50%;
-  top: 72px;
-  transform: translateX(-50%);
-  padding: var(--space-3) 14px;
-  border-radius: var(--radius-pill);
-  background: rgba(var(--v-theme-scrim), 0.85);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  box-shadow: var(--elevation-3);
-  pointer-events: none;
-  z-index: 2002;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.overlay-draw-cancel {
-  pointer-events: auto;
-  border: 0;
-  background: rgb(var(--v-theme-error));
-  color: rgb(var(--v-theme-on-error));
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-xs);
-  padding: var(--space-2) 10px;
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-  box-shadow: var(--elevation-2);
-}
-
-.overlay-draw-cancel:hover {
-  filter: brightness(0.95);
-}
-
-@media (max-width: 900px) {
-  .overlay-sidebar {
-    display: none !important;
-  }
-
-  .overlay-topbar-sidebar-toggle {
-    display: none !important;
-  }
-
-  .overlay-close span {
-    display: none;
-  }
-
-  .overlay-comfy-activator-label {
-    display: none;
-  }
-
-  .overlay-title {
-    display: none;
-  }
-
-  .overlay-character-names {
-    display: none;
-  }
-
-  :deep(.add-to-set-label) {
-    display: none;
-  }
-
-  .zoom-btn {
-    min-width: 32px;
-    width: 32px;
-    padding: 6px;
-  }
-}
-
-@media (max-width: 720px) {
-  .overlay-shell.sidebar-open {
-    --sidebar-width: 78%;
-  }
-
-  .overlay-main {
-    grid-template-columns: 1fr;
-  }
-
-  .overlay-sidebar {
-    position: absolute;
-    top: var(--topbar-height);
-    right: 0;
-    height: calc(100% - var(--topbar-height));
-    width: 0;
-  }
-
-  .overlay-sidebar.open {
-    width: 78%;
-  }
-
-  .overlay-nav {
-    display: none;
-  }
-}
-</style>
+<style scoped src="./ImageOverlay.css"></style>

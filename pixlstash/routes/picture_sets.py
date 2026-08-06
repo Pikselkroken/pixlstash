@@ -4,14 +4,16 @@ import sys
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field as PydanticField
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 from sqlalchemy import desc, exists, func, nullslast
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-from pixlstash.authz.membership import enforce_set_scope
+from pixlstash.authz.membership import (
+    enforce_project_path_scope,
+    enforce_set_scope,
+)
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
@@ -20,24 +22,37 @@ from pixlstash.db_models import (
     Project,
     PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
     SortMechanism,
     Tag,
+    picture_set_in_no_project,
+    picture_set_in_project,
 )
 from pixlstash.event_types import EventType
+from pixlstash.services import operation_log_service
 from pixlstash.services.project_membership_service import (
-    reconcile_entity_project_change,
+    picture_set_project_ids,
+    reconcile_entity_projects_change,
+    set_picture_set_projects,
 )
 from pixlstash.services.set_lock_service import (
     enforce_set_not_locked,
 )
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
+from pixlstash.utils.service.filter_helpers import (
+    fetch_scope_allowed_picture_ids,
+    filter_visible_project_ids,
+    narrow_picture_project_ids,
+    narrow_project_fields,
+    visible_project_ids,
+)
 from pixlstash.picture_scoring import (
     find_pictures_by_character_likeness,
     find_pictures_by_smart_score,
     get_smart_score_penalised_tags_from_request,
 )
+from pixlstash.utils.http_cache import conditional_file_response
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.path_utils import resolve_path_within
@@ -58,7 +73,21 @@ class PictureSetResponse(BaseModel):
     id: Optional[int] = None
     name: Optional[str] = None
     description: Optional[str] = None
-    project_id: Optional[int] = None
+    project_id: Optional[int] = PydanticField(
+        default=None,
+        description=(
+            "The set's primary project — the lowest id in ``project_ids``, or null "
+            "when it belongs to no project. Kept for backwards compatibility; "
+            "prefer ``project_ids``, which lists every project."
+        ),
+    )
+    project_ids: list[int] = PydanticField(
+        default_factory=list,
+        description=(
+            "Every project this picture set belongs to, lowest id first. A set may "
+            "be shared across several projects."
+        ),
+    )
     set_icon: Optional[str] = None
     set_color: Optional[str] = None
     locked: bool = False
@@ -91,6 +120,10 @@ class PictureSetPicturesResponse(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     project_id: Optional[int] = None
+    project_ids: list[int] = PydanticField(
+        default_factory=list,
+        description="Every project this picture set belongs to, lowest id first.",
+    )
     set_icon: Optional[str] = None
     set_color: Optional[str] = None
     locked: bool = False
@@ -167,16 +200,27 @@ class LockedSetMembersResponse(BaseModel):
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
-    def _ensure_unique_set_name(session, name: str, project_id, exclude_set_id=None):
+    def _ensure_unique_set_name(session, name: str, project_ids, exclude_set_id=None):
         """Raises 409 if a set with the same name (case-insensitive) already
-        exists in the given project.  Unscoped sets (project_id None) are
+        exists in **any** of the given projects.  Unscoped sets (no projects) are
         exempt — they have no uniqueness requirement.
+
+        Since issue #125 a set can be in several projects at once, so the clash
+        check spans every project it is joining, not just its primary one.
         """
-        if project_id is None:
+        wanted = sorted({int(pid) for pid in (project_ids or []) if pid is not None})
+        if not wanted:
             return
-        stmt = select(PictureSet).where(
-            PictureSet.project_id == project_id,
-            func.lower(PictureSet.name) == name.lower(),
+        stmt = (
+            select(PictureSet.id)
+            .join(
+                PictureSetProjectMember,
+                PictureSetProjectMember.set_id == PictureSet.id,
+            )
+            .where(
+                PictureSetProjectMember.project_id.in_(wanted),
+                func.lower(PictureSet.name) == name.lower(),
+            )
         )
         if exclude_set_id is not None:
             stmt = stmt.where(PictureSet.id != exclude_set_id)
@@ -185,6 +229,51 @@ def create_router(server) -> APIRouter:
                 status_code=409,
                 detail=f"A picture set named '{name}' already exists in this project.",
             )
+
+    def _resolve_target_project_ids(payload: dict, current: list[int] | None):
+        """Resolve the requested project membership set from a request payload.
+
+        Accepts the multi-project ``project_ids`` list (issue #125) and the legacy
+        single ``project_id`` scalar, in that precedence order.
+
+        Args:
+            payload: The parsed request body.
+            current: The set's existing project ids, returned unchanged when the
+                payload mentions neither key. ``None`` for a create.
+
+        Returns:
+            ``(target_project_ids, provided)`` — the full target membership set,
+            and whether the payload asked for a project change at all.
+
+        Raises:
+            HTTPException: ``400`` when either key is not an integer / list of
+                integers.
+        """
+        if "project_ids" in payload:
+            raw_ids = payload.get("project_ids")
+            if raw_ids is None:
+                return [], True
+            if not isinstance(raw_ids, (list, tuple, set)):
+                raise HTTPException(
+                    status_code=400, detail="project_ids must be a list"
+                )
+            try:
+                return sorted({int(v) for v in raw_ids if v is not None}), True
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400, detail="Invalid project_id"
+                ) from exc
+        if "project_id" in payload:
+            raw = payload.get("project_id")
+            if raw is None:
+                return [], True
+            try:
+                return [int(raw)], True
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400, detail="Invalid project_id"
+                ) from exc
+        return (list(current) if current is not None else []), False
 
     def _project_membership_exists(project_id_value: int):
         return exists(
@@ -289,6 +378,32 @@ def create_router(server) -> APIRouter:
         normalized = normalize_hidden_tags(getattr(user, "hidden_tags", None))
         return normalized or []
 
+    def _hidden_tag_condition(hidden_tags: list[str]):
+        """SQL predicate: the correlated ``Picture`` carries no hidden tag.
+
+        The in-SQL counterpart of ``_filter_hidden_picture_ids``, for query
+        paths that must not read a picture id list into Python first (issue
+        #651). Same matching rule: a picture is hidden when it has ANY tag whose
+        lowercased value is in ``hidden_tags``.
+
+        Args:
+            hidden_tags: Tag names to hide, matched case-insensitively.
+
+        Returns:
+            A correlated ``NOT EXISTS`` expression, or ``None`` when there is
+            nothing to hide and the caller should add no condition at all.
+        """
+        hidden_tag_set = {str(tag).strip().lower() for tag in hidden_tags or [] if tag}
+        if not hidden_tag_set:
+            return None
+        return ~exists(
+            select(Tag.picture_id).where(
+                Tag.picture_id == Picture.id,
+                Tag.tag.is_not(None),
+                func.lower(Tag.tag).in_(hidden_tag_set),
+            )
+        )
+
     def _filter_hidden_picture_ids(
         session, picture_ids: list[int], hidden_tags: list[str]
     ) -> list[int]:
@@ -350,6 +465,9 @@ def create_router(server) -> APIRouter:
         elif token_scope is not None and token_scope.resource_type is not None:
             # Any other scoped token (e.g. character) has no access to picture sets
             return []
+        # A scoped token may read the set but must not learn which *other*
+        # projects it belongs to (issue #125 / R1).
+        visible_projects = visible_project_ids(server, request)
         hidden_tags = _get_hidden_tags_from_request(request)
 
         project_filter = None
@@ -357,12 +475,12 @@ def create_router(server) -> APIRouter:
         if project_id is not None:
             if project_id == "UNASSIGNED":
                 project_filter = _project_membership_unassigned()
-                set_project_id_filter = PictureSet.project_id.is_(None)
+                set_project_id_filter = picture_set_in_no_project()
             else:
                 try:
                     _pid_int = int(project_id)
                     project_filter = _project_membership_exists(_pid_int)
-                    set_project_id_filter = PictureSet.project_id == _pid_int
+                    set_project_id_filter = picture_set_in_project(_pid_int)
                 except (TypeError, ValueError):
                     raise HTTPException(status_code=400, detail="Invalid project_id")
 
@@ -377,42 +495,106 @@ def create_router(server) -> APIRouter:
             if scope_set_id_filter is not None:
                 sets_query = sets_query.where(PictureSet.id == scope_set_id_filter)
             sets = session.exec(sets_query).all()
+            # One query for every listed set's project membership, so the
+            # multi-project set is exposed without an N+1 (issue #125).
+            listed_ids = [int(s.id) for s in sets if s.id is not None]
+            project_ids_by_set: dict[int, list[int]] = {}
+            if listed_ids:
+                for sid, pid in session.exec(
+                    select(
+                        PictureSetProjectMember.set_id,
+                        PictureSetProjectMember.project_id,
+                    ).where(PictureSetProjectMember.set_id.in_(listed_ids))
+                ).all():
+                    project_ids_by_set.setdefault(int(sid), []).append(int(pid))
+            # Counts and previews for EVERY listed set in two queries, not two
+            # per set (issue #651). The previous shape read the complete member
+            # id list of every set into Python, passed it back as an `IN` bind
+            # list to filter hidden tags, counted it with `len(set(...))`, and
+            # passed it back a third time to pick the top 3. On a large library
+            # that is the dominant cost of the sidebar's set list, and the bind
+            # list is unbounded: past SQLITE_LIMIT_VARIABLE_NUMBER (a
+            # compile-time constant, 250k on the build this was measured on,
+            # but as low as 32766 elsewhere) the endpoint fails outright.
+            #
+            # Nothing here materialises a member id in Python any more, so the
+            # only `IN` list left is over the LISTED SETS, which is bounded by
+            # what the sidebar can show.
+            counts_by_set: dict[int, int] = {}
+            top_ids_by_set: dict[int, list[int]] = {}
+            if listed_ids:
+                member_conditions = [
+                    PictureSetMember.set_id.in_(listed_ids),
+                    Picture.deleted.is_(False),
+                ]
+                if project_filter is not None:
+                    member_conditions.append(project_filter)
+                hidden_condition = _hidden_tag_condition(hidden_tags)
+                if hidden_condition is not None:
+                    member_conditions.append(hidden_condition)
+
+                # DISTINCT in its own subquery, not on the ranked select: a
+                # window function is evaluated BEFORE DISTINCT, so duplicate
+                # member rows would each receive a different row_number and
+                # survive the de-duplication. The old code de-duplicated
+                # implicitly (`len(set(...))`, and `IN` collapsing repeats), so
+                # this preserves the counts it produced.
+                visible_members = (
+                    select(
+                        PictureSetMember.set_id.label("set_id"),
+                        PictureSetMember.picture_id.label("picture_id"),
+                    )
+                    .join(Picture, Picture.id == PictureSetMember.picture_id)
+                    .where(*member_conditions)
+                    .distinct()
+                    .subquery()
+                )
+
+                for set_id, member_count in session.exec(
+                    select(visible_members.c.set_id, func.count())
+                    .select_from(visible_members)
+                    .group_by(visible_members.c.set_id)
+                ).all():
+                    counts_by_set[int(set_id)] = int(member_count)
+
+                ranked_members = (
+                    select(
+                        visible_members.c.set_id,
+                        visible_members.c.picture_id,
+                        func.row_number()
+                        .over(
+                            partition_by=visible_members.c.set_id,
+                            order_by=(
+                                nullslast(desc(Picture.score)),
+                                nullslast(desc(Picture.aesthetic_score)),
+                                nullslast(desc(Picture.imported_at)),
+                                desc(Picture.id),
+                            ),
+                        )
+                        .label("rank"),
+                    )
+                    .select_from(visible_members)
+                    .join(Picture, Picture.id == visible_members.c.picture_id)
+                    .subquery()
+                )
+
+                for set_id, picture_id in session.exec(
+                    select(ranked_members.c.set_id, ranked_members.c.picture_id)
+                    .where(ranked_members.c.rank <= 3)
+                    .order_by(ranked_members.c.set_id, ranked_members.c.rank)
+                ).all():
+                    if picture_id is None:
+                        continue
+                    top_ids_by_set.setdefault(int(set_id), []).append(int(picture_id))
+
             result = []
             for s in sets:
-                members_query = (
-                    select(PictureSetMember.picture_id)
-                    .join(Picture, Picture.id == PictureSetMember.picture_id)
-                    .where(
-                        PictureSetMember.set_id == s.id,
-                        Picture.deleted.is_(False),
-                    )
-                )
-                if project_filter is not None:
-                    members_query = members_query.where(project_filter)
-                members = session.exec(members_query).all()
-                filtered_ids = _filter_hidden_picture_ids(
-                    session,
-                    [m for m in members if m is not None],
-                    hidden_tags,
-                )
-                count = len(set(filtered_ids))
                 set_dict = safe_model_dict(s)
-                set_dict["picture_count"] = count
-                top_picture_ids = []
-                if filtered_ids:
-                    top_rows = session.exec(
-                        select(Picture.id)
-                        .where(Picture.id.in_(filtered_ids))
-                        .order_by(
-                            nullslast(desc(Picture.score)),
-                            nullslast(desc(Picture.aesthetic_score)),
-                            nullslast(desc(Picture.imported_at)),
-                            desc(Picture.id),
-                        )
-                        .limit(3)
-                    ).all()
-                    top_picture_ids = [row for row in top_rows if row is not None]
-                set_dict["top_picture_ids"] = top_picture_ids
+                narrow_project_fields(
+                    set_dict, project_ids_by_set.get(int(s.id), []), visible_projects
+                )
+                set_dict["picture_count"] = counts_by_set.get(int(s.id), 0)
+                set_dict["top_picture_ids"] = top_ids_by_set.get(int(s.id), [])
                 set_dict["thumbnail_url"] = f"/picture_sets/{s.id}/thumbnail"
                 result.append(set_dict)
             return result
@@ -452,7 +634,7 @@ def create_router(server) -> APIRouter:
             if scope_set_id is not None:
                 sets_query = sets_query.where(PictureSet.id == scope_set_id)
             if scope_project_id is not None:
-                sets_query = sets_query.where(PictureSet.project_id == scope_project_id)
+                sets_query = sets_query.where(picture_set_in_project(scope_project_id))
             locked_sets = session.exec(
                 sets_query.order_by(func.lower(PictureSet.name))
             ).all()
@@ -491,21 +673,40 @@ def create_router(server) -> APIRouter:
     def get_picture_set_by_name(
         request: Request, project_name: str, picture_set_name: str
     ):
+        visible_projects = visible_project_ids(server, request)
+
         def fetch(session):
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
             ).first()
+            # Scope guard on the PROJECT half of the path, before the membership
+            # query below can answer from it (#708 condition 2). Without it the
+            # three outcomes — set in this project (200), project exists but does
+            # not hold it (404 "Picture set not found"), project does not exist
+            # (404 "Project not found") — told a set-scoped token which projects
+            # exist and which hold its set. A token that may not see the project
+            # now gets the same 403 in all three cases; an owner is unaffected
+            # and still gets the 404s below.
+            enforce_project_path_scope(
+                server, request, int(project.id) if project is not None else None
+            )
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
             picture_set = session.exec(
                 select(PictureSet).where(
-                    PictureSet.project_id == project.id,
+                    picture_set_in_project(project.id),
                     func.lower(PictureSet.name) == picture_set_name.lower(),
                 )
             ).first()
             if picture_set is None:
                 raise HTTPException(status_code=404, detail="Picture set not found")
-            return safe_model_dict(picture_set)
+            payload = safe_model_dict(picture_set)
+            narrow_project_fields(
+                payload,
+                picture_set_project_ids(session, int(picture_set.id)),
+                visible_projects,
+            )
+            return payload
 
         result = server.vault.db.run_immediate_read_task(fetch)
         # Scope guard (BOLA): a resource-scoped token may only read its own set —
@@ -587,13 +788,25 @@ def create_router(server) -> APIRouter:
         "mdi-gamepad-variant",
     ]
 
-    def _auto_assign_icon_color(session, project_id):
-        """Return (icon, color) not already used by sibling sets."""
+    def _auto_assign_icon_color(session, project_ids):
+        """Return (icon, color) not already used by sibling sets.
+
+        Args:
+            session: A pre-opened session.
+            project_ids: The projects the new set is joining. Siblings are the
+                sets sharing any of them; with no projects, every set is a
+                sibling (the pre-#125 unscoped behaviour).
+        """
+        wanted = sorted({int(pid) for pid in (project_ids or []) if pid is not None})
         existing = session.exec(
-            select(PictureSet.set_icon, PictureSet.set_color).where(
-                PictureSet.project_id == project_id
+            select(PictureSet.set_icon, PictureSet.set_color)
+            .join(
+                PictureSetProjectMember,
+                PictureSetProjectMember.set_id == PictureSet.id,
             )
-            if project_id is not None
+            .where(PictureSetProjectMember.project_id.in_(wanted))
+            .distinct()
+            if wanted
             else select(PictureSet.set_icon, PictureSet.set_color)
         ).all()
         used_icons = {row[0] for row in existing if row[0] and row[0] != "cards"}
@@ -611,38 +824,50 @@ def create_router(server) -> APIRouter:
     @router.post(
         "/picture_sets",
         summary="Create picture set",
-        description="Creates a new picture set with name and optional description.",
+        description=(
+            "Creates a new picture set with name and optional description. Accepts "
+            "``project_ids`` (a list of projects the set joins) or the legacy "
+            "single ``project_id``."
+        ),
         response_model=PictureSetCreateResponse,
     )
     def create_picture_set(payload: dict = Body(...)):
         name = payload.get("name")
         description = payload.get("description", "")
-        project_id = payload.get("project_id") or None
+        project_ids, _provided = _resolve_target_project_ids(payload, None)
         set_icon = payload.get("set_icon", _UNSET)
         set_color = payload.get("set_color", _UNSET)
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
 
-        def create_set(session, name, description, project_id, set_icon, set_color):
-            _ensure_unique_set_name(session, name, project_id)
-            auto_icon, auto_color = _auto_assign_icon_color(session, project_id)
+        def create_set(session, name, description, project_ids, set_icon, set_color):
+            _ensure_unique_set_name(session, name, project_ids)
+            auto_icon, auto_color = _auto_assign_icon_color(session, project_ids)
             picture_set = PictureSet(
                 name=name,
                 description=description,
-                project_id=project_id,
                 set_icon=set_icon if set_icon is not _UNSET else auto_icon,
                 set_color=set_color if set_color is not _UNSET else auto_color,
             )
             session.add(picture_set)
             session.commit()
             session.refresh(picture_set)
-            return picture_set.dict()
+            if project_ids:
+                # Single write path for the join rows and the primary-project FK.
+                set_picture_set_projects(session, picture_set, project_ids)
+                session.commit()
+                session.refresh(picture_set)
+            created = picture_set.dict()
+            created["project_ids"] = picture_set_project_ids(
+                session, int(picture_set.id)
+            )
+            return created
 
         set_dict = server.vault.db.run_task(
             create_set,
             name,
             description,
-            project_id,
+            project_ids,
             set_icon,
             set_color,
             priority=DBPriority.IMMEDIATE,
@@ -733,25 +958,22 @@ def create_router(server) -> APIRouter:
             set_id: int,
             active_hidden_tags: list[str],
         ):
-            member_rows = session.exec(
-                select(PictureSetMember.picture_id)
-                .join(Picture, Picture.id == PictureSetMember.picture_id)
-                .where(
-                    PictureSetMember.set_id == set_id,
-                    Picture.deleted.is_(False),
-                )
-            ).all()
-            member_ids = [row for row in member_rows if row is not None]
-            filtered_ids = _filter_hidden_picture_ids(
-                session,
-                member_ids,
-                active_hidden_tags,
-            )
-            if not filtered_ids:
-                return []
+            # One query, and no member id list in Python. The list endpoint's
+            # per-set scan was the same shape and had the same unbounded `IN`
+            # (issue #651); this is that fix applied to the single-set path,
+            # picking the same top 3 by the same ordering.
+            conditions = [
+                PictureSetMember.set_id == set_id,
+                Picture.deleted.is_(False),
+            ]
+            hidden_condition = _hidden_tag_condition(active_hidden_tags)
+            if hidden_condition is not None:
+                conditions.append(hidden_condition)
             rows = session.exec(
                 select(Picture.id)
-                .where(Picture.id.in_(filtered_ids))
+                .join(PictureSetMember, PictureSetMember.picture_id == Picture.id)
+                .where(*conditions)
+                .distinct()
                 .order_by(
                     nullslast(desc(Picture.score)),
                     nullslast(desc(Picture.aesthetic_score)),
@@ -779,7 +1001,7 @@ def create_router(server) -> APIRouter:
                     and meta.get("picture_ids") == top_ids
                     and meta.get("hidden_key") == hidden_key
                 ):
-                    return FileResponse(cache_path, media_type="image/png")
+                    return conditional_file_response(request, cache_path)
             except Exception as exc:
                 logger.debug("Failed to read picture set thumbnail cache: %s", exc)
 
@@ -928,7 +1150,7 @@ def create_router(server) -> APIRouter:
                     )
             except Exception as exc:
                 logger.debug("Failed to write picture set thumbnail metadata: %s", exc)
-            return FileResponse(cache_path, media_type="image/png")
+            return conditional_file_response(request, cache_path)
         except Exception:
             from io import BytesIO
 
@@ -1002,10 +1224,15 @@ def create_router(server) -> APIRouter:
                 except (TypeError, ValueError):
                     raise HTTPException(status_code=400, detail="Invalid project_id")
 
+        # A scoped token may read the set but must not learn which *other*
+        # projects it belongs to (issue #125 / R1). Both serialisation sites
+        # below reuse the narrowed list returned here.
+        visible_projects = visible_project_ids(server, request)
+
         def fetch_set(session, id):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
-                return None, None
+                return None, None, []
             members_query = (
                 select(PictureSetMember.picture_id)
                 .join(Picture, Picture.id == PictureSetMember.picture_id)
@@ -1026,10 +1253,16 @@ def create_router(server) -> APIRouter:
                     continue
                 seen.add(pic_id)
                 picture_ids.append(pic_id)
-            return picture_set, picture_ids
+            return (
+                picture_set,
+                picture_ids,
+                filter_visible_project_ids(
+                    picture_set_project_ids(session, id), visible_projects
+                ),
+            )
 
-        picture_set, picture_ids = server.vault.db.run_immediate_read_task(
-            fetch_set, id
+        picture_set, picture_ids, set_project_ids = (
+            server.vault.db.run_immediate_read_task(fetch_set, id)
         )
         if not picture_set:
             raise HTTPException(status_code=404, detail="Picture set not found")
@@ -1077,6 +1310,7 @@ def create_router(server) -> APIRouter:
 
         if info:
             set_dict = picture_set.dict()
+            narrow_project_fields(set_dict, set_project_ids, visible_projects)
             set_dict["picture_count"] = len(picture_ids)
             return set_dict
 
@@ -1096,7 +1330,13 @@ def create_router(server) -> APIRouter:
             if deduplicate_stacks:
                 pictures = deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
-            return {"pictures": pictures, "set": safe_model_dict(picture_set)}
+            narrow_picture_project_ids(server, request, pictures)
+            return {
+                "pictures": pictures,
+                "set": narrow_project_fields(
+                    safe_model_dict(picture_set), set_project_ids, visible_projects
+                ),
+            }
 
         if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
             if not reference_character_id:
@@ -1116,7 +1356,13 @@ def create_router(server) -> APIRouter:
             if deduplicate_stacks:
                 pictures = deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
-            return {"pictures": pictures, "set": safe_model_dict(picture_set)}
+            narrow_picture_project_ids(server, request, pictures)
+            return {
+                "pictures": pictures,
+                "set": narrow_project_fields(
+                    safe_model_dict(picture_set), set_project_ids, visible_projects
+                ),
+            }
 
         def fetch_pics(session, picture_ids):
             pics = Picture.find(
@@ -1150,46 +1396,54 @@ def create_router(server) -> APIRouter:
 
         pictures = server.vault.db.run_immediate_read_task(fetch_pics, picture_ids)
         pictures = _enrich_with_stack_counts(pictures)
-        return {"pictures": pictures, "set": safe_model_dict(picture_set)}
+        # The set's own scalar is narrowed just below; the member rows carry the
+        # raw `Picture.project_id` from `metadata_fields()` and need the same
+        # treatment, one payload shape at a time (issue #719, §16.6).
+        narrow_picture_project_ids(server, request, pictures)
+        set_payload = safe_model_dict(picture_set)
+        narrow_project_fields(set_payload, set_project_ids, visible_projects)
+        return {"pictures": pictures, "set": set_payload}
 
     @router.patch(
         "/picture_sets/{id}",
         summary="Update picture set",
-        description="Updates picture set name and/or description.",
+        description=(
+            "Updates picture set name and/or description.\n\n"
+            "**Project membership.** Send ``project_ids`` (a list) to set the full "
+            "set of projects the picture set belongs to — a set may be in several "
+            "at once. The legacy single ``project_id`` is still accepted and means "
+            "the same as a one-element ``project_ids``; ``null`` on either key "
+            "removes the set from every project. ``project_ids`` wins when both "
+            "are present. Member pictures follow: they join every project the set "
+            "joins, and leave a project it leaves unless another character or "
+            "picture set still anchors them there. Re-sending the set's existing "
+            "projects is an idempotent repair that heals missing membership rows. "
+            "Returns 409 on a name clash inside any target project and 404 for an "
+            "unknown project id."
+        ),
         response_model=PictureSetUpdateResponse,
     )
     def update_picture_set(id: int, request: Request, payload: dict = Body(...)):
         origin_client_id = getattr(request.state, "origin_client_id", None)
         name = payload.get("name")
         description = payload.get("description")
-        raw_project_id = payload.get("project_id", _UNSET)
         set_icon = payload.get("set_icon", _UNSET)
         set_color = payload.get("set_color", _UNSET)
         locked_param = payload.get("locked", _UNSET)
         if locked_param is not _UNSET:
             locked_param = bool(locked_param)
-        project_id = raw_project_id
-        if raw_project_id is not _UNSET:
-            if raw_project_id is None:
-                project_id = None
-            else:
-                try:
-                    project_id = int(raw_project_id)
-                except (TypeError, ValueError) as exc:
-                    raise HTTPException(
-                        status_code=400, detail="Invalid project_id"
-                    ) from exc
 
-        def update_set(
-            session, id, name, description, project_id, set_icon, set_color, locked
-        ):
+        def update_set(session, id, name, description, set_icon, set_color, locked):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
                 return False
 
-            # Capture the project the set is leaving before we mutate it, so we
-            # can disassociate its member pictures from that old project.
-            old_project_id = picture_set.project_id
+            # Capture the projects the set is in before we mutate it, so we can
+            # disassociate its member pictures from the ones it leaves.
+            old_project_ids = picture_set_project_ids(session, id)
+            target_project_ids, project_provided = _resolve_target_project_ids(
+                payload, old_project_ids
+            )
 
             # Lock rule: while a set is locked the only accepted PATCH is one that
             # changes nothing but `locked` (i.e. an unlock). Compare each field to
@@ -1203,9 +1457,9 @@ def create_router(server) -> APIRouter:
                 set_color is not _UNSET and set_color != picture_set.set_color
             )
             name_effective_change = name is not None and name != picture_set.name
-            project_effective_change = (
-                project_id is not _UNSET and project_id != picture_set.project_id
-            )
+            project_effective_change = project_provided and sorted(
+                target_project_ids
+            ) != sorted(old_project_ids)
             other_effective_change = (
                 name_effective_change
                 or description_changing
@@ -1220,51 +1474,42 @@ def create_router(server) -> APIRouter:
 
             locked_changed = locked is not _UNSET and bool(locked) != picture_set.locked
 
-            # Resolve the final (name, project_id) that would result from this
+            # Resolve the final (name, projects) that would result from this
             # update and check uniqueness before touching anything.
             final_name = name if name is not None else picture_set.name
-            final_project_id = (
-                project_id if project_id is not _UNSET else picture_set.project_id
-            )
             name_changing = name is not None and name != picture_set.name
-            project_changing = (
-                project_id is not _UNSET and project_id != picture_set.project_id
-            )
+            project_changing = project_effective_change
             if name_changing or project_changing:
                 _ensure_unique_set_name(
-                    session, final_name, final_project_id, exclude_set_id=id
+                    session, final_name, target_project_ids, exclude_set_id=id
                 )
 
-            project_id_payload_provided = project_id is not _UNSET
-            project_assignment_requested = (
-                project_id_payload_provided and project_id is not None
-            )
-            project_id_changed = (
-                project_id_payload_provided and project_id != picture_set.project_id
-            )
+            project_assignment_requested = project_provided and bool(target_project_ids)
             pictures_changed = False
             if name is not None:
                 picture_set.name = name
             if description is not None:
                 picture_set.description = description
-            if project_id_payload_provided and project_id is not None:
-                project = session.get(Project, project_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
 
-            if project_id_changed:
-                picture_set.project_id = project_id
+            # Single write path for both the join rows and the primary-project FK;
+            # raises 404 for an unknown project id.
+            project_change = None
+            if project_provided:
+                project_change = set_picture_set_projects(
+                    session, picture_set, target_project_ids
+                )
             if set_icon is not _UNSET:
                 picture_set.set_icon = set_icon
             if set_color is not _UNSET:
                 picture_set.set_color = set_color
 
             # Reconcile member-picture project membership when this update sets
-            # or changes the project. A same-project re-assign (project provided
+            # or changes the projects. A same-project re-assign (projects provided
             # but unchanged) is the idempotent-repair path that heals historical
-            # drift where members are missing membership rows; a project change
-            # also removes members from the old project (reference-aware). Shared
-            # with character updates via project_membership_service.
+            # drift where members are missing membership rows; leaving a project
+            # also removes members from it (reference-aware). Shared with
+            # character updates via project_membership_service.
+            project_id_changed = bool(project_change and project_change.changed)
             if project_assignment_requested or project_id_changed:
                 member_ids = [
                     pic_id
@@ -1275,11 +1520,13 @@ def create_router(server) -> APIRouter:
                     ).all()
                     if pic_id is not None
                 ]
-                reconcile_result = reconcile_entity_project_change(
+                reconcile_result = reconcile_entity_projects_change(
                     session,
                     picture_ids=member_ids,
-                    old_project_id=old_project_id,
-                    new_project_id=project_id,
+                    ensure_project_ids=target_project_ids,
+                    remove_project_ids=(
+                        project_change.removed if project_change else []
+                    ),
                     exclude_set_id=id,
                 )
                 pictures_changed = reconcile_result.changed
@@ -1313,7 +1560,6 @@ def create_router(server) -> APIRouter:
                 id,
                 name,
                 description,
-                project_id,
                 set_icon,
                 set_color,
                 locked_param,
@@ -1477,33 +1723,32 @@ def create_router(server) -> APIRouter:
                 if exists is None:
                     session.add(PictureSetMember(set_id=id, picture_id=picture.id))
                     added_any = True
-                if picture_set.project_id is not None:
-                    membership = session.exec(
-                        select(PictureProjectMember).where(
-                            PictureProjectMember.picture_id == picture.id,
-                            PictureProjectMember.project_id == picture_set.project_id,
-                        )
-                    ).first()
-                    if membership is None:
-                        session.add(
-                            PictureProjectMember(
-                                picture_id=picture.id,
-                                project_id=picture_set.project_id,
-                            )
-                        )
-                    if picture.project_id != picture_set.project_id:
-                        picture.project_id = picture_set.project_id
-                    session.add(picture)
+            # Issue #125: the set may belong to several projects, so the picture
+            # joins *all* of them. Reading the primary FK here would leave the
+            # picture out of every secondary project the set is shared with.
+            reconcile_entity_projects_change(
+                session,
+                picture_ids=[picture.id for picture in pictures],
+                ensure_project_ids=picture_set_project_ids(session, id),
+                remove_project_ids=[],
+            )
             session.add(picture_set)
-            session.commit()
+            session.flush()
             return added_any
 
-        success = server.vault.db.run_task(
+        # Set membership is stack-atomic, so the snapshot expands to the whole
+        # stack — otherwise undo would leave the stack siblings in the set.
+        success, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
             add_member,
             id,
             picture_id,
             reference_character_id=reference_character_id,
-            priority=DBPriority.IMMEDIATE,
+            op_type="picture_sets.members.add",
+            picture_ids=[picture_id],
+            expand_stacks=True,
+            summary="Added a picture to a set",
+            **operation_log_service.request_context(request),
         )
         if success:
             try:
@@ -1566,15 +1811,22 @@ def create_router(server) -> APIRouter:
                 return False
             for m in members:
                 session.delete(m)
-            session.commit()
+            session.flush()
             return True
 
-        success = server.vault.db.run_task(
+        # Stack-atomic like the add above: the removal takes the whole stack out,
+        # so the snapshot has to cover the whole stack too.
+        success, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
             remove_member,
             id,
             picture_id,
             reference_character_id=reference_character_id,
-            priority=DBPriority.IMMEDIATE,
+            op_type="picture_sets.members.remove",
+            picture_ids=[picture_id],
+            expand_stacks=True,
+            summary="Removed a picture from a set",
+            **operation_log_service.request_context(request),
         )
         if success:
             if reference_character_id is not None:
@@ -1625,6 +1877,7 @@ def create_router(server) -> APIRouter:
                 ).all()
             )
             added = 0
+            added_ids: list[int] = []
             for pic_id in picture_ids:
                 if pic_id in existing:
                     continue
@@ -1632,29 +1885,30 @@ def create_router(server) -> APIRouter:
                 if not pic or pic.deleted:
                     continue
                 session.add(PictureSetMember(set_id=set_id, picture_id=pic_id))
-                if picture_set.project_id is not None:
-                    membership = session.exec(
-                        select(PictureProjectMember).where(
-                            PictureProjectMember.picture_id == pic_id,
-                            PictureProjectMember.project_id == picture_set.project_id,
-                        )
-                    ).first()
-                    if membership is None:
-                        session.add(
-                            PictureProjectMember(
-                                picture_id=pic_id,
-                                project_id=picture_set.project_id,
-                            )
-                        )
-                    pic.project_id = picture_set.project_id
-                    session.add(pic)
+                added_ids.append(pic_id)
                 existing.add(pic_id)
                 added += 1
-            session.commit()
+            # Issue #125: propagate to every project the set belongs to, not just
+            # the primary FK.
+            reconcile_entity_projects_change(
+                session,
+                picture_ids=added_ids,
+                ensure_project_ids=picture_set_project_ids(session, set_id),
+                remove_project_ids=[],
+            )
+            session.flush()
             return added
 
-        added = server.vault.db.run_task(
-            bulk_add, id, picture_ids, priority=DBPriority.IMMEDIATE
+        added, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            bulk_add,
+            id,
+            picture_ids,
+            op_type="picture_sets.members.add",
+            picture_ids=picture_ids,
+            expand_stacks=True,
+            summary=f"Added {len(picture_ids)} picture(s) to a set",
+            **operation_log_service.request_context(request),
         )
         if added is None:
             raise HTTPException(status_code=404, detail="Picture set not found")
@@ -1709,6 +1963,7 @@ def create_router(server) -> APIRouter:
             # Add new members
             added = 0
             seen = set()
+            member_ids: list[int] = []
             for pic_id in picture_ids:
                 if pic_id in seen:
                     continue
@@ -1717,28 +1972,38 @@ def create_router(server) -> APIRouter:
                 if not pic or pic.deleted:
                     continue
                 session.add(PictureSetMember(set_id=set_id, picture_id=pic_id))
-                if picture_set.project_id is not None:
-                    membership = session.exec(
-                        select(PictureProjectMember).where(
-                            PictureProjectMember.picture_id == pic_id,
-                            PictureProjectMember.project_id == picture_set.project_id,
-                        )
-                    ).first()
-                    if membership is None:
-                        session.add(
-                            PictureProjectMember(
-                                picture_id=pic_id,
-                                project_id=picture_set.project_id,
-                            )
-                        )
-                    pic.project_id = picture_set.project_id
-                    session.add(pic)
+                member_ids.append(pic_id)
                 added += 1
-            session.commit()
+            # Issue #125: propagate to every project the set belongs to, not just
+            # the primary FK.
+            reconcile_entity_projects_change(
+                session,
+                picture_ids=member_ids,
+                ensure_project_ids=picture_set_project_ids(session, set_id),
+                remove_project_ids=[],
+            )
+            session.flush()
             return added
 
-        added = server.vault.db.run_task(
-            bulk_replace, id, picture_ids, priority=DBPriority.IMMEDIATE
+        def _current_members(session):
+            # A replace-all also EVICTS members the request never named. They must
+            # be in the snapshot or undo would re-add the new members and never
+            # restore the evicted ones — a half-reversible operation.
+            return session.exec(
+                select(PictureSetMember.picture_id).where(PictureSetMember.set_id == id)
+            ).all()
+
+        added, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            bulk_replace,
+            id,
+            picture_ids,
+            op_type="picture_sets.members.replace",
+            picture_ids=picture_ids,
+            resolve_picture_ids=_current_members,
+            expand_stacks=True,
+            summary=f"Replaced a set's members with {len(picture_ids)} picture(s)",
+            **operation_log_service.request_context(request),
         )
         if added is None:
             raise HTTPException(status_code=404, detail="Picture set not found")

@@ -246,6 +246,7 @@ import {
   pairAction,
 } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import {
   LOCKED_UNDO_CHIP_LABEL,
   blockedDecisionMessage,
@@ -265,6 +266,10 @@ const props = defineProps({
 
 const store = useReviewSessionsStore();
 const lockedSetsStore = useLockedSetsStore();
+// "Nothing to undo" is reported on the notice surface rather than the card's
+// live region: the region is assertive and cleared on every card change, and
+// this message has to be visible to a sighted user who pressed a shortcut.
+const noticeStore = useNoticeStore();
 
 const current = computed(() => store.current);
 
@@ -550,13 +555,46 @@ function attemptPair(corner) {
   store.answerPair(corner);
 }
 
+/**
+ * The one gate every undo goes through: the bar's button, `U`, and Ctrl+Z.
+ *
+ * Three outcomes, all of them answered. A locked picture set makes the decision
+ * final (announced and flashed on the chip). An empty stack says so, and says
+ * where the other stack is: the app-wide Ctrl+Z history is deliberately NOT
+ * this one, and a user who made forty edits before opening the review would
+ * otherwise conclude it had been thrown away. Otherwise the decision is
+ * reopened and the card comes back.
+ */
 function attemptUndo() {
   if (undoBlockedReason.value) {
     announceBlocked(undoBlockedReason.value);
     return;
   }
+  if (!store.canUndo) {
+    announcement.value = "";
+    noticeStore.push({
+      level: "info",
+      text: "Nothing to undo in this review. Earlier changes are still undoable from the toolbar after you close it.",
+      key: "review-nothing-to-undo",
+    });
+    return;
+  }
   announcement.value = "";
-  store.undo();
+  undoAndAnnounce();
+}
+
+/**
+ * Undo, then say so — in that order, and after the card has landed.
+ *
+ * The `current` watcher clears `announcement` on every card change, and a
+ * successful undo IS a card change (the reopened card returns to the head of
+ * the queue). Announcing before that lands means the watcher wipes it and the
+ * success is silent, which looks exactly like a working feature.
+ */
+async function undoAndAnnounce() {
+  await store.undo();
+  await nextTick();
+  announcement.value = "Undone. The last decision is back in the queue.";
 }
 
 function confirmPending() {
@@ -601,7 +639,8 @@ const pendingMessage = computed(() => {
 //
 // Returns true when the key was consumed. Y/N/S/U on binary; B/N/L/R/S/U on
 // pair; Enter/Escape resolve a pending consistency confirm; H toggles the
-// evidence region.
+// evidence region. `"undo"` is the same request as `U`, sent by the overlay
+// when the user presses Ctrl+Z: one undo vocabulary, two ways to say it.
 function handleKey(key) {
   if (pendingDecision.value) {
     if (key === "enter") {
@@ -613,16 +652,22 @@ function handleKey(key) {
       return true;
     }
     // Swallow decision keys while a confirm is staged.
-    return ["y", "n", "b", "l", "r", "s", "u"].includes(key);
+    return ["y", "n", "b", "l", "r", "s", "u", "undo"].includes(key);
+  }
+  // Undo sits ABOVE the `current` guard on purpose: it does not act on the card
+  // in front of you, it puts the LAST one back — which is exactly what you want
+  // when the queue has just run dry and there is no current card at all.
+  // It always consumes the key: `attemptUndo` answers all three outcomes
+  // (blocked, nothing to undo, done), so the press was answered rather than
+  // swallowed.
+  if (key === "u" || key === "undo") {
+    attemptUndo();
+    return true;
   }
   const item = current.value;
   if (!item) return false;
   if (key === "s") {
     doSkip();
-    return true;
-  }
-  if (key === "u") {
-    attemptUndo();
     return true;
   }
   if (key === "h") {

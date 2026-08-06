@@ -16,6 +16,9 @@ logger = get_logger(__name__)
 # MP4/MOV timestamps count seconds since midnight, 1 January 1904 (UTC).
 _MP4_EPOCH = datetime(1904, 1, 1, tzinfo=timezone.utc)
 
+# Supported video file extensions (lowercase).
+VIDEO_EXTENSIONS = (".mp4", ".webm", ".avi", ".mov", ".mkv")
+
 
 class VideoUtils:
     """Utility methods for video file handling."""
@@ -24,7 +27,7 @@ class VideoUtils:
     def is_video_file(file_path: str) -> bool:
         """Return True if the file is a supported video format."""
         ext = os.path.splitext(file_path)[1].lower()
-        return ext in [".mp4", ".webm", ".avi", ".mov", ".mkv"]
+        return ext in VIDEO_EXTENSIONS
 
     @staticmethod
     def extract_created_at_from_bytes(data: bytes) -> Optional[datetime]:

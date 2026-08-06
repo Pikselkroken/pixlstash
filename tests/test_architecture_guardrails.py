@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).parent.parent
+PIXLSTASH_DIR = REPO_ROOT / "pixlstash"
 ROUTES_DIR = REPO_ROOT / "pixlstash" / "routes"
 TASKS_DIR = REPO_ROOT / "pixlstash" / "tasks"
 SERVICES_DIR = REPO_ROOT / "pixlstash" / "services"
@@ -137,7 +138,12 @@ def test_services_no_direct_db_calls():
     # set once it is migrated to accept a Session.
     _direct_db_call_service_allowlist = {
         "pixlstash/services/config_service.py",  # vault-injection pattern
+        "pixlstash/services/dedup_sweep_service.py",  # vault-injection pattern; read-only wrapper around plan_sweep_in_session
+        "pixlstash/services/dedup_tier_service.py",  # vault-injection pattern; thin wrappers around the *_in_session queue reads and the scan request
+        "pixlstash/services/dedup_verdict_service.py",  # vault-injection pattern; thin wrappers around the *_in_session verdict writers
         "pixlstash/services/impossible_tag_clear_service.py",  # vault-injection pattern; bulk impossible-tag clear/undo
+        "pixlstash/services/keep_cover_only_service.py",  # vault-injection pattern; thin wrappers around the *_in_session keep-cover-only preview and collapse
+        "pixlstash/services/mixed_stack_service.py",  # vault-injection pattern; thin wrappers around the *_in_session mixed-stack list, actions and Keep
         "pixlstash/services/picture_stats.py",  # pending session injection refactor
         "pixlstash/services/search_query_service.py",  # vault-injection pattern; DB queries for search endpoints
         "pixlstash/services/share_service.py",  # vault-injection pattern
@@ -155,6 +161,10 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/restore/preview.py",  # vault-injection pattern; restore previews + hash compare
         "pixlstash/services/comfyui_service.py",  # vault-injection pattern; owns ComfyUI output-import orchestration
         "pixlstash/services/scrapheap_service.py",  # vault-injection pattern; thin wrappers around the *_in_session purge/retention functions
+        # The op-log's whole point is that capture -> mutation -> capture ->
+        # record run in ONE queued task; the wrapper owning that submission is
+        # the atomicity guarantee, not transitional debt.
+        "pixlstash/services/operation_log_service.py",  # vault-injection pattern; atomic record-with-mutation task
     }
 
     violations = []
@@ -423,6 +433,12 @@ _LABEL_SINK_EXEMPT = {
     # NB: characters.py::alter_char now SKIPS the description clear for locked pics
     # (keeps character reassignment + text_embedding invalidation), so it is
     # guarded, not exempt.
+    # --- Op-log undo/redo: the guard lives at the single restore sink ---
+    ("pixlstash/services/operation_log_service.py", "_apply_tags"): (
+        "module-private tag reconciliation reached only from "
+        "apply_state_in_session, which calls enforce_pictures_not_locked over "
+        "the whole recorded state (every facet) before dispatching"
+    ),
     # --- CSO-named, documented NON-sinks (no Tag/ledger/label write reaches a
     # picture here). Kept for the record; excluded from the stale-prune below
     # because the scanner never flags them (they don't match a sink pattern). ---
@@ -673,6 +689,7 @@ _EXPECTED_ROUTE_MODULES = frozenset(
         "pixlstash.routes.filesystem",
         "pixlstash.routes.guest_scores",
         "pixlstash.routes.import_folders",
+        "pixlstash.routes.operations",
         "pixlstash.routes.picture_sets",
         "pixlstash.routes.pictures._anomaly",
         "pixlstash.routes.pictures._character_likeness",
@@ -786,6 +803,150 @@ def test_all_routes_declare_access_policy(built_app):
     )
 
 
+# ---------------------------------------------------------------------------
+# Guardrail: the written coverage matrix matches the registry, row for row
+# ---------------------------------------------------------------------------
+
+# Lives in docs/ rather than docs/reviews/ on purpose: docs/reviews/ is
+# gitignored so review write-ups stay local, and a blocking CI gate must not
+# read a file that a fresh checkout is not guaranteed to have.
+COVERAGE_MATRIX_MD = REPO_ROOT / "docs" / "authz-coverage-matrix.md"
+
+# Sections of the matrix document whose tables carry one row per declared route.
+# The main table plus the conditionally-mounted waiver table together must
+# account for every key in ROUTE_POLICIES.
+_MATRIX_ROW_SECTIONS = (
+    "## The matrix (one row per route)",
+    "## Conditionally-mounted routes",
+)
+
+# | METHOD | `/effective/path` | policy | ... |. The policy cell may be wrapped in
+# ** or ` for emphasis, which carries no meaning and is stripped.
+_MATRIX_ROW_RE = re.compile(
+    r"^\|\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\|"
+    r"\s*`([^`]+)`\s*\|"
+    r"\s*([^|]*?)\s*\|"
+)
+
+
+def _parse_coverage_matrix_rows() -> list[tuple[str, str, str, int]]:
+    """Extract (method, path, policy, line_no) from the matrix document's tables.
+
+    Only lines inside the row-bearing sections are considered, so the many
+    narrative tables elsewhere in the document (policy meanings, sign-off
+    findings) cannot contribute phantom rows.
+    """
+    text = COVERAGE_MATRIX_MD.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    rows: list[tuple[str, str, str, int]] = []
+    sections_found = 0
+    inside = False
+    for lineno, line in enumerate(lines, start=1):
+        if line.startswith("## "):
+            inside = any(line.startswith(h) for h in _MATRIX_ROW_SECTIONS)
+            if inside:
+                sections_found += 1
+            continue
+        if not inside:
+            continue
+        match = _MATRIX_ROW_RE.match(line)
+        if match:
+            method, path, policy = match.groups()
+            rows.append(
+                (method, path, policy.replace("*", "").replace("`", "").strip(), lineno)
+            )
+
+    # FAIL-LOUD anti-vacuity: this test's whole value is that it actually reads
+    # the document. A renamed heading or a reformatted table would otherwise
+    # silently reduce it to comparing two empty sets and passing.
+    assert sections_found == len(_MATRIX_ROW_SECTIONS), (
+        f"Expected to find {len(_MATRIX_ROW_SECTIONS)} row-bearing section heading(s) in "
+        f"{COVERAGE_MATRIX_MD.relative_to(REPO_ROOT).as_posix()} but found {sections_found}. "
+        "A heading was renamed; update _MATRIX_ROW_SECTIONS so the rows are still parsed."
+    )
+    assert len(rows) >= 200, (
+        f"Parsed only {len(rows)} route row(s) from the coverage matrix. The document "
+        "declares well over 200, so the row regex has stopped matching the table format. "
+        "Fix _MATRIX_ROW_RE rather than letting this comparison go vacuous."
+    )
+    return rows
+
+
+def test_coverage_matrix_document_matches_the_registry():
+    """The written matrix is machine-checked against ROUTE_POLICIES, both ways.
+
+    docs/authz-coverage-matrix.md is the human-readable coverage matrix
+    the security process depends on ("completeness must be arithmetic, not
+    judgement"). Before this test nothing read it: the sibling
+    test_all_routes_declare_access_policy compares the registry against the
+    *live app* and never opens the markdown, so the document was free to drift
+    from the code it claims to document, and it did: six declared routes had no
+    row at all and one row was duplicated.
+
+    Failing in BOTH directions is the point. A new route that lands a registry
+    declaration but no row leaves the matrix incomplete, which is exactly the
+    BOLA-by-omission mechanism this repo has shipped three times; a row with no
+    declaration means the document asserts coverage that does not exist. The
+    policy check catches the subtler drift: a row that exists but names the
+    wrong access level is worse than a missing row, because it reads as
+    reviewed.
+    """
+    from pixlstash.authz.registry import ROUTE_POLICIES
+
+    rows = _parse_coverage_matrix_rows()
+
+    seen: dict[tuple[str, str], int] = {}
+    duplicated: list[str] = []
+    for method, path, _policy, lineno in rows:
+        key = (method, path)
+        if key in seen:
+            duplicated.append(f"  {method} {path} (lines {seen[key]} and {lineno})")
+        else:
+            seen[key] = lineno
+
+    assert not duplicated, (
+        "Route(s) appear more than once in the coverage matrix. Duplicated rows break the "
+        "'one row per route' arithmetic and let two rows disagree about a policy:\n"
+        + "\n".join(duplicated)
+    )
+
+    tabled = set(seen)
+    declared = set(ROUTE_POLICIES)
+
+    missing_rows = declared - tabled
+    assert not missing_rows, (
+        "Route(s) are declared in ROUTE_POLICIES but have no row in "
+        f"{COVERAGE_MATRIX_MD.relative_to(REPO_ROOT).as_posix()}. The matrix is the "
+        "artefact the security review reads; a declaration with no row is coverage that "
+        "was never written down:\n"
+        + "\n".join(f"  {m} {p}" for m, p in sorted(missing_rows))
+    )
+
+    orphan_rows = tabled - declared
+    assert not orphan_rows, (
+        "Coverage-matrix row(s) name a route that is not declared in ROUTE_POLICIES "
+        "(route removed or renamed, or the path is mistyped). The document is claiming "
+        "coverage that does not exist:\n"
+        + "\n".join(f"  {m} {p}" for m, p in sorted(orphan_rows))
+    )
+
+    policy_drift: list[str] = []
+    for method, path, policy, lineno in rows:
+        actual = ROUTE_POLICIES[(method, path)].policy.name.lower()
+        if policy.lower() != actual:
+            policy_drift.append(
+                f"  line {lineno}: {method} {path}: document says {policy!r}, "
+                f"registry says {actual!r}"
+            )
+
+    assert not policy_drift, (
+        "Coverage-matrix row(s) name a different access policy than the registry enforces. "
+        "A row that reads as reviewed but states the wrong access level is worse than a "
+        "missing row:\n" + "\n".join(policy_drift)
+    )
+
+
 def test_route_enumeration_is_not_silently_undercounting(built_app):
     """FAIL-LOUD: the enumeration cannot collapse and fake complete coverage.
 
@@ -833,6 +994,575 @@ def test_websocket_routes_are_acknowledged(built_app):
         "chokepoint — the HTTP authz gate does not cover WebSockets).\n"
         f"  added:   {sorted(live_ws - _KNOWN_WEBSOCKET_ROUTES)}\n"
         f"  removed: {sorted(_KNOWN_WEBSOCKET_ROUTES - live_ws)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# The project-filter chokepoint's coverage is arithmetic, not remembered (§16.6)
+# ---------------------------------------------------------------------------
+#
+# `authz.membership.enforce_project_filter_scope` runs on every declared route
+# and refuses a `project_id` filter a scoped token may not name (#708). It reads
+# `request.query_params` and matches against the fixed tuple
+# `PROJECT_FILTER_QUERY_PARAMS`, so a route that spells the parameter any other
+# way is silently uncovered — the omission class §16.2 exists to abolish.
+#
+# Anything whose *name* mentions a project is treated as a candidate filter, not
+# just the two spellings already listed: the point is to catch a NEW spelling
+# (`projects`, `filter_project`, `project_id_in`), which a narrow
+# `^project_ids?$` match would sail straight past.
+_PROJECT_PARAM_RE = re.compile(r"project", re.IGNORECASE)
+
+# Query parameters whose name mentions a project but which are NOT a filter over
+# the project space (so the gate must not refuse them). Every entry needs a
+# reason; an empty mapping is the healthy state, and a new entry is a deliberate,
+# reviewable claim rather than a loosened regex.
+_NON_PROJECT_FILTER_QUERY_PARAMS: dict[str, str] = {}
+
+# Routes that take a project in a request BODY or FORM field **and declare it in
+# the annotation**, so introspection can see it. `_iter_body_project_refs` reads
+# each body parameter's declared type: it enumerates a *typed* body (a Pydantic
+# request model, a `project_id: int | None = Form(...)`) exactly, and it sees
+# NOTHING inside a body declared `payload: dict = Body(...)`. The opaque half is
+# a real and acknowledged blind spot — see _PROJECT_REFS_IN_OPAQUE_BODY below.
+# This set is therefore **not** the complete list of routes that take a project
+# in a body; it is the complete list of the ones a machine can find.
+#
+# All of them are outside `enforce_project_filter_scope` (which reads the query
+# string only), and nothing else checks the payload half. Today every one is a
+# write, and a resource-scoped token can only be minted READ, so `auth.py`'s
+# "block non-GET for a READ token" refuses them before the payload is ever read —
+# unless the path is in `auth.READ_SAFE_POST_PATHS`, which none of these is. That
+# argument is what the READ-reachability assertion below actually tests; the
+# enumeration exists so a NEW typed body field has to be looked at.
+# See docs/backend_architecture.md §16.6.
+_PROJECT_REFS_IN_TYPED_BODY = frozenset(
+    {
+        ("POST", "/api/v1/pictures/import", "project_id"),
+        ("POST", "/api/v1/pictures/import/staging", "payload.project_id"),
+        ("POST", "/api/v1/reviews", "payload.project_id"),
+        ("POST", "/api/v1/tag_suggestions/bulk-accept", "payload.project_id"),
+        ("POST", "/api/v1/tag_suggestions/scan", "payload.project"),
+    }
+)
+
+# Routes whose body is an OPAQUE mapping (`payload: dict = Body(...)`) and which
+# read a project id out of it.
+#
+# **This list is hand-made, and no test can tell you it is complete.** A `dict`
+# annotation declares no keys, so nothing about the payload of these routes is
+# visible to introspection; the set was built by reading the handlers on
+# 2026-08-04 and it will go stale silently as handlers change. It is written down
+# so the known cases are known, NOT so the set can be treated as exhaustive. Do
+# not build an argument that rests on this being everything.
+#
+# (A source grep for `project_id` over the opaque-bodied handlers was tried as a
+# machine substitute and rejected: on the current tree it returns 8 routes, of
+# which 3 — POST /characters/{id}/faces, POST+PUT /picture_sets/{id}/members —
+# never read a project from the body at all and only mention the word while
+# reconciling membership they derive themselves. A check with a 38% false-positive
+# rate that still cannot prove absence buys the appearance of coverage, not
+# coverage.)
+_PROJECT_REFS_IN_OPAQUE_BODY = frozenset(
+    {
+        ("PATCH", "/api/v1/pictures/project", "payload.project_id"),
+        ("POST", "/api/v1/characters", "payload.project_ids|payload.project_id"),
+        ("POST", "/api/v1/picture_sets", "payload.project_ids|payload.project_id"),
+        (
+            "PATCH",
+            "/api/v1/picture_sets/{id}",
+            "payload.project_ids|payload.project_id",
+        ),
+        ("POST", "/api/v1/comfyui/run_t2i", "payload.project_id"),
+    }
+)
+
+# The one thing about opaque bodies that IS arithmetic: which routes have one,
+# and which of those a READ (resource-scoped) token can actually reach. For a
+# route a READ token cannot reach, "we cannot see inside the body" costs nothing —
+# the payload is never read. For a route it CAN reach, the blind spot is live, so
+# every such route is hand-vetted here with what its handler actually reads. The
+# intersection is enumerable even though the payloads are not, which is what keeps
+# the blind spot bounded instead of open-ended.
+_READ_REACHABLE_OPAQUE_BODY_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/api/v1/pictures/thumbnails"): (
+        "reads payload['ids'] only — a picture id list, narrowed by the gate's "
+        "picture-scope policy. Names no project. Hand-checked 2026-08-04."
+    ),
+}
+
+
+def _models_in(annotation):
+    """Return EVERY Pydantic model reachable in ``annotation``, in no order.
+
+    Returning only the *first* model made unions order-dependent: a stack-based
+    walk of ``WithProject | Plain`` popped ``Plain`` first and stopped, so the
+    project field on the other branch was never visited, while
+    ``Plain | WithProject`` was caught. A caller may send either branch, so every
+    branch has to be walked.
+    """
+    import typing
+
+    from pydantic import BaseModel
+
+    found = []
+    pending = [annotation]
+    while pending:
+        current = pending.pop()
+        if current is None:
+            continue
+        args = typing.get_args(current)
+        if args:
+            pending.extend(args)
+        elif isinstance(current, type) and issubclass(current, BaseModel):
+            if current not in found:
+                found.append(current)
+    return found
+
+
+def _iter_body_project_refs(app):
+    """Yield ``(method, path, dotted_field)`` for project-ish TYPED body fields.
+
+    Walks each route's flattened body parameters, descending into every Pydantic
+    model reachable from the declared annotation so a field on a request schema is
+    found under its dotted path. Only the leaf name is matched against
+    :data:`_PROJECT_PARAM_RE`, so a model merely *called* ``ProjectFoo`` does not
+    trip it — only a field that names a project.
+
+    **What it cannot see.** It reads ``field_info.annotation`` and nothing else, so
+    a body declared ``payload: dict = Body(...)`` (or ``Any``, or ``list[dict]``)
+    contributes nothing at all: the annotation declares no keys, so a project id
+    read as ``payload["project_id"]`` is invisible here. That is the blind spot
+    recorded in :data:`_PROJECT_REFS_IN_OPAQUE_BODY`, and it is why the
+    exact-equality assertion below is scoped to *typed* bodies rather than claimed
+    over all of them.
+
+    Nesting is unbounded (recursion terminates on models already open on the
+    current path, so a self-referential schema is safe). An earlier ``depth <= 4``
+    cap descended through at most five nested models and silently dropped anything
+    below that; a ``project_id`` six models down was measured as missed.
+    """
+    from pixlstash.route_inventory import (
+        flatten_dependant_fields,
+        iter_api_route_contexts,
+    )
+
+    def _walk(name, annotation, out, seen=frozenset()):
+        descended = False
+        for model in _models_in(annotation):
+            if model in seen:
+                continue
+            descended = True
+            for sub_name, sub_field in model.model_fields.items():
+                _walk(
+                    f"{name}.{sub_name}" if name else sub_name,
+                    sub_field.annotation,
+                    out,
+                    seen | {model},
+                )
+        if descended:
+            return
+        if _PROJECT_PARAM_RE.search(name.rsplit(".", 1)[-1]):
+            out.append(name)
+
+    for method, path, route in iter_api_route_contexts(app):
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        found: list[str] = []
+        for field in flatten_dependant_fields(dependant, "body_params"):
+            annotation = getattr(getattr(field, "field_info", None), "annotation", None)
+            _walk(getattr(field, "alias", None) or field.name, annotation, found)
+        for dotted in sorted(set(found)):
+            yield (method, path, dotted)
+
+
+def _iter_opaque_body_routes(app):
+    """Yield ``(method, path)`` for routes whose body admits keys nothing declares.
+
+    A body parameter annotated ``dict`` / ``dict[...]`` / ``Any`` (directly or
+    inside a container or union) carries arbitrary keys, so
+    :func:`_iter_body_project_refs` can say nothing about its contents. Which
+    *routes* are in that state is still perfectly enumerable, and that is what this
+    yields.
+    """
+    import typing
+
+    from pixlstash.route_inventory import (
+        flatten_dependant_fields,
+        iter_api_route_contexts,
+    )
+
+    def _is_opaque(annotation):
+        pending = [annotation]
+        while pending:
+            current = pending.pop()
+            if current is None:
+                continue
+            if current is typing.Any or current is dict:
+                return True
+            if typing.get_origin(current) is dict:
+                return True
+            pending.extend(typing.get_args(current))
+        return False
+
+    for method, path, route in iter_api_route_contexts(app):
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        for field in flatten_dependant_fields(dependant, "body_params"):
+            annotation = getattr(getattr(field, "field_info", None), "annotation", None)
+            if _models_in(annotation):
+                continue
+            if _is_opaque(annotation):
+                yield (method, path)
+                break
+
+
+def test_project_filter_params_are_declared(built_app):
+    """Every project-ish QUERY parameter is known to the project-filter gate.
+
+    ``enforce_project_filter_scope`` can only refuse a filter it can see, and it
+    sees exactly the names in ``PROJECT_FILTER_QUERY_PARAMS``. A route that takes
+    the same question under a different name is a hole that no coverage matrix
+    cell records, because the matrix records a route's *policy*, not the
+    parameters it accepts (§16.6). This makes that second axis arithmetic.
+
+    One-directional on purpose: declaring a name no route takes is harmless
+    (``project_ids`` is declared ahead of a route using it), while a route taking
+    an undeclared name is the bug.
+
+    **What "machine-checked" does NOT mean here.** This walks *declared* query
+    parameters and matches their *wire* names. Three shapes defeat it, and the
+    third also weakens the anti-vacuity assertion below:
+
+    1. **A wire name that does not say "project".** ``project_id: str =
+       Query(None, alias="proj")`` is enumerated as ``proj``, which this regex does
+       not match — and the gate is defeated by the same fact, because it matches
+       ``request.query_params`` against ``PROJECT_FILTER_QUERY_PARAMS`` and the
+       wire name really is ``proj``. Guardrail and gate fail together, which is
+       precisely the case where a guardrail is worth nothing.
+    2. **An undeclared parameter read straight off the request.** A handler doing
+       ``request.query_params.get("owning_project")`` declares nothing, so it is
+       invisible to this enumeration. Not hypothetical: ``routes/pictures/
+       _misc.py`` and ``routes/pictures/_listing.py`` already read ``project_id``
+       directly off ``request.query_params``, so the pattern is in-tree and
+       available to copy. (Those two are covered *by the gate*, which reads the
+       raw query string — but only because they kept the declared spelling.)
+    3. **The nested-``Depends`` capability is not what the anti-vacuity assertion
+       protects.** ``iter_api_query_params`` flattens the dependency tree so a
+       parameter contributed one level down is enumerated, and §16.6 advertises
+       that. But the assertion only requires ``project_id`` to be found *somewhere*,
+       and ``project_id`` is taken at top level by a dozen routes: stub
+       ``flatten_dependant_fields`` to a no-op and the assertion still passes while every
+       nested parameter silently vanishes. No route today contributes a
+       project-ish parameter *only* via a nested ``Depends``, so the capability is
+       covered synthetically by
+       ``test_query_parameter_enumeration_descends_nested_depends`` instead. That
+       keeps the flattening honest; it does not make *this* test notice a real
+       nested parameter disappearing, so do not assume it would.
+    """
+    from pixlstash.authz.membership import PROJECT_FILTER_QUERY_PARAMS
+    from pixlstash.route_inventory import iter_api_query_params
+
+    declared = set(PROJECT_FILTER_QUERY_PARAMS)
+
+    found: dict[str, set[str]] = {}
+    for method, path, name in iter_api_query_params(built_app):
+        if _PROJECT_PARAM_RE.search(name):
+            found.setdefault(name, set()).add(f"{method} {path}")
+
+    # Anti-vacuity: the whole check is worthless if the parameter enumeration
+    # silently returns nothing (a FastAPI internal moving, a dependant model
+    # change). `project_id` is taken by a dozen routes and cannot legitimately
+    # vanish, so its absence means the introspection broke, not that the codebase
+    # got cleaner.
+    assert "project_id" in found, (
+        "The query-parameter enumeration found no `project_id` anywhere. That is "
+        "not plausible — pixlstash/route_inventory.py::iter_api_query_params has "
+        "stopped seeing route parameters (FastAPI internals moved?), so this "
+        "guardrail is proving nothing. Fix the enumeration before trusting it."
+    )
+
+    undeclared = {
+        name: routes
+        for name, routes in found.items()
+        if name not in declared and name not in _NON_PROJECT_FILTER_QUERY_PARAMS
+    }
+    assert not undeclared, (
+        "Query parameter(s) name a project but are NOT in "
+        "authz.membership.PROJECT_FILTER_QUERY_PARAMS, so the authz gate will "
+        "not refuse them for a token with no project visibility — a scoped token "
+        "can use them as a membership oracle (#708, §16.6).\n"
+        "Fix: add the spelling to PROJECT_FILTER_QUERY_PARAMS (preferred), or — "
+        "if it genuinely does not filter over the project space — add it to "
+        "_NON_PROJECT_FILTER_QUERY_PARAMS in this file WITH a reason. Do not "
+        "narrow the regex.\n"
+        + "\n".join(
+            f"  {name}: {sorted(routes)}" for name, routes in sorted(undeclared.items())
+        )
+    )
+
+    stale = set(_NON_PROJECT_FILTER_QUERY_PARAMS) - set(found)
+    assert not stale, (
+        "Entr(y/ies) in _NON_PROJECT_FILTER_QUERY_PARAMS no longer match any "
+        "mounted route's query parameters. Prune them so the exemption list "
+        "cannot rot into cover for a future parameter of the same name:\n"
+        + "\n".join(f"  {name}" for name in sorted(stale))
+    )
+
+
+def test_query_parameter_enumeration_descends_nested_depends():
+    """A filter parameter contributed by a nested ``Depends`` is still enumerated.
+
+    ``test_project_filter_params_are_declared`` cannot prove this and says so: it
+    only needs ``project_id`` found *somewhere*, and a dozen routes take it at top
+    level, so the flattening could be a no-op and that assertion would still pass.
+    No route in the tree contributes a project-ish parameter *only* via a nested
+    dependency, so nothing else exercises the capability §16.6 advertises. This
+    does, on a synthetic app, which is the only way to make the claim non-vacuous
+    without adding a real route for the sake of a test.
+
+    It is also the regression test for the flattening itself.
+    ``pixlstash.route_inventory.flatten_dependant_fields`` is a local walk over
+    ``Dependant``'s own fields precisely because the FastAPI helper it replaced
+    (``get_flat_dependant``) was removed in 0.141 — and a walk that silently
+    stopped descending would report *fewer* parameters, i.e. false coverage, with
+    every other guardrail still green.
+    """
+    from fastapi import Depends, FastAPI, Query
+
+    from pixlstash.route_inventory import iter_api_query_params
+
+    def _two_levels_down(deep_project_id: str = Query(None)):
+        return deep_project_id
+
+    def _one_level_down(
+        _deep=Depends(_two_levels_down),
+        aliased: str = Query(None, alias="wire_project"),
+    ):
+        return aliased
+
+    app = FastAPI()
+
+    @app.get("/synthetic")
+    def _handler(top_level: str = Query(None), _dep=Depends(_one_level_down)):
+        return {}  # pragma: no cover - never called, only introspected
+
+    found = {
+        name
+        for method, path, name in iter_api_query_params(app)
+        if path == "/synthetic"
+    }
+    assert found == {"top_level", "wire_project", "deep_project_id"}, (
+        "The query-parameter enumeration did not descend the whole Depends chain. "
+        "It must yield the handler's own parameter, one contributed a level down "
+        "(under its WIRE name, not the Python name), and one two levels down. "
+        f"Got: {sorted(found)}. Fix flatten_dependant_fields in "
+        "pixlstash/route_inventory.py — a partial walk reports false coverage."
+    )
+
+
+def test_project_references_outside_the_query_chokepoint(built_app):
+    """The project-filter gate's boundary is acknowledged, not assumed (§16.6).
+
+    ``enforce_project_filter_scope`` reads the query string only. A project named
+    in a JSON body or form field is invisible to it, and the only thing keeping
+    those routes safe today is that they are writes a READ-scoped token cannot
+    reach. This is an acknowledgment inventory in the spirit of
+    ``_KNOWN_WEBSOCKET_ROUTES``: it gates nothing, it just makes a new one
+    impossible to add without someone looking at it.
+
+    **Read the scope of each assertion; they are deliberately different.**
+
+    1. Exact equality on **typed** bodies only (:data:`_PROJECT_REFS_IN_TYPED_BODY`).
+       ``_iter_body_project_refs`` reads declared annotations, so this half is
+       arithmetic over routes whose body has a declared shape, and nothing more.
+       A body declared ``payload: dict = Body(...)`` declares no keys and
+       contributes nothing — see assertion 3.
+    2. **READ-reachability, over typed *and* known-opaque project routes.** This is
+       the assertion that carries the actual safety argument: the paths yielded by
+       the inventory are the same ``/api/v1/…`` strings ``READ_SAFE_POST_PATHS``
+       holds and ``auth.py`` compares ``request.url.path`` against, so a project
+       body field becoming READ-reachable fails here.
+    3. Every route with an **opaque** body that a READ token can reach is on a
+       hand-vetted list. Nothing can enumerate a ``dict`` body's keys, so this does
+       not claim to know what those handlers read; it claims only that the set of
+       routes where the blind spot is *live* stays small and looked-at. Today it is
+       one route.
+
+    What none of this covers: which opaque-bodied WRITE routes take a project.
+    :data:`_PROJECT_REFS_IN_OPAQUE_BODY` names the five found by reading the
+    handlers, and that list cannot be machine-verified in either direction.
+    """
+    live = frozenset(_iter_body_project_refs(built_app))
+    assert live == _PROJECT_REFS_IN_TYPED_BODY, (
+        "The set of routes taking a project in a DECLARED (typed) request "
+        "BODY/FORM field changed. These are outside enforce_project_filter_scope "
+        "(§16.6): confirm the new route cannot be reached by a resource-scoped "
+        "token (it must be a non-GET that is NOT in auth.READ_SAFE_POST_PATHS), "
+        "then update _PROJECT_REFS_IN_TYPED_BODY and the §16.6 boundary list.\n"
+        f"  added:   {sorted(live - _PROJECT_REFS_IN_TYPED_BODY)}\n"
+        f"  removed: {sorted(_PROJECT_REFS_IN_TYPED_BODY - live)}"
+    )
+
+    from pixlstash.auth import READ_SAFE_POST_PATHS
+
+    reachable = sorted(
+        f"{method} {path}"
+        for method, path, _field in live | _PROJECT_REFS_IN_OPAQUE_BODY
+        if method in ("GET", "HEAD") or path in READ_SAFE_POST_PATHS
+    )
+    assert not reachable, (
+        "A route taking a project in its body/form is reachable by a READ token "
+        "(it is a GET, or it is exempted in auth.READ_SAFE_POST_PATHS). Nothing "
+        "checks the payload half of the project filter, so a resource-scoped "
+        "token can now use it as a membership oracle. Either narrow the project "
+        "id in the handler against visible_project_ids, or keep the route out of "
+        "READ_SAFE_POST_PATHS:\n" + "\n".join(f"  {entry}" for entry in reachable)
+    )
+
+    opaque_reachable = {
+        (method, path)
+        for method, path in _iter_opaque_body_routes(built_app)
+        if method in ("GET", "HEAD") or path in READ_SAFE_POST_PATHS
+    }
+    unvetted = sorted(opaque_reachable - set(_READ_REACHABLE_OPAQUE_BODY_ROUTES))
+    assert not unvetted, (
+        "Route(s) with an OPAQUE body (dict/Any — no declared keys) are reachable "
+        "by a READ token. Introspection cannot see what the handler reads out of "
+        "such a payload, so the 'it is a write a READ token cannot reach' argument "
+        "that covers every other body-borne project reference does not apply here "
+        "(§16.6). Read the handler; if it names no project, add it to "
+        "_READ_REACHABLE_OPAQUE_BODY_ROUTES in this file WITH what it actually "
+        "reads and the date you checked. If it does name a project, it is a "
+        "membership oracle for a resource-scoped token — narrow it against "
+        "visible_project_ids or take the path out of READ_SAFE_POST_PATHS:\n"
+        + "\n".join(f"  {method} {path}" for method, path in unvetted)
+    )
+
+    stale_vetted = sorted(set(_READ_REACHABLE_OPAQUE_BODY_ROUTES) - opaque_reachable)
+    assert not stale_vetted, (
+        "Entr(y/ies) in _READ_REACHABLE_OPAQUE_BODY_ROUTES no longer describe a "
+        "READ-reachable opaque-bodied route. Prune them so the vetting note cannot "
+        "rot into cover for a future route of the same name:\n"
+        + "\n".join(f"  {method} {path}" for method, path in stale_vetted)
+    )
+
+
+# `Picture.metadata_fields()` is "every scalar column minus the large binaries"
+# (`db_models/picture.py`), and six routes serialise its result to the wire
+# through response models that all set `extra="allow"`, so nothing downstream
+# filters it (§16.6). A column added to the `picture` table therefore joins those
+# payloads with no code change and no failing test, which is how the scalar
+# `project_id` reached a picture-scoped token that `GET /projects/{id}` 403s
+# (#719). Pinning the membership does not decide whether a new column is safe to
+# disclose; it forces the question to be asked once, by whoever adds it.
+_PICTURE_METADATA_FIELDS = {
+    "aesthetic_score",
+    "anomaly_tag_uncertainty",
+    "comfyui_loras",
+    "comfyui_models",
+    "comfyui_positive_prompt",
+    "created_at",
+    "deleted",
+    "deleted_at",
+    "description",
+    "description_file",
+    "description_file_mtime",
+    "file_path",
+    "format",
+    "height",
+    "id",
+    "import_source_folder",
+    "imported_at",
+    "is_video",
+    "metadata_hash",
+    "original_file_name",
+    "pending_character_id",
+    "perceptual_hash",
+    "pixel_sha",
+    "project_id",
+    "reference_folder_id",
+    "score",
+    "size_bin_index",
+    "size_bytes",
+    "smart_score",
+    "source_picture_id",
+    "square_crop_side",
+    "square_crop_x",
+    "square_crop_y",
+    "stack_id",
+    "stack_position",
+    "tag_uncertainty",
+    "tags_file",
+    "tags_file_mtime",
+    "text_score",
+    "thumbnail_height",
+    "thumbnail_width",
+    "width",
+}
+
+
+def test_picture_metadata_fields_membership_is_pinned():
+    """A new picture column cannot join the six serialised payloads unnoticed.
+
+    Adding a column is fine. Adding one that carries membership, ownership or
+    host information, and letting it ride into `GET /pictures/{id}/metadata`,
+    `GET /pictures/{id}/{field}`, `GET /pictures/search`,
+    `GET /pictures/likeness-groups`, `GET /picture_sets/{id}` and
+    `GET /stacks/{stack_id}/pictures?fields=full` without narrowing it, is the
+    #719 defect repeated. If the new column is safe for a scoped token, add it to
+    the set below. If it is not, narrow it at those six sites the way
+    `narrow_picture_project_ids` does.
+
+    **Membership in the set below does NOT certify a column as safe.** The set is
+    the *current* projection, pinned so a change is noticed; it is not a list of
+    columns anyone has cleared. Three members are known disclosures to a scoped
+    token, reproduced during the #719 review and deliberately left unnarrowed
+    pending a decision, so nothing here should be read as their having been
+    reviewed and passed:
+
+    * ``pending_character_id`` — a character FK, while ``GET /characters/{id}``
+      is ``CHARACTER_SCOPED`` and 403s the same token. Not transient: the dedup
+      verdict and keep-cover-only services set it on pictures whose face
+      extraction has already run, so it persists. Narrowing it needs a
+      ``visible_character_ids`` ladder, which does not exist yet.
+    * ``source_picture_id`` — points at a picture the token may not be granted
+      (verified: that picture's own endpoints 403 the same token).
+    * ``reference_folder_id`` — same shape, and additionally in ``grid_fields()``,
+      so it rides every listing rather than only these six routes.
+
+    ``import_source_folder``, ``pixel_sha``, ``original_file_name`` and the
+    ComfyUI prompt columns are a separate host-information question (§16.3).
+    """
+    from pixlstash.db_models import Picture
+
+    actual = set(Picture.metadata_fields())
+    # Anti-vacuity: an empty projection would make both assertions below pass
+    # while pinning nothing at all.
+    assert len(actual) > 20, (
+        f"Picture.metadata_fields() returned {len(actual)} fields; the pin is "
+        f"vacuous if the projection collapses"
+    )
+
+    added = sorted(actual - _PICTURE_METADATA_FIELDS)
+    assert not added, (
+        "New picture column(s) now ride every payload built from "
+        "Picture.metadata_fields(), including the six routes that serialise it "
+        'raw through an `extra="allow"` response model (§16.6). Decide whether '
+        "a picture-, set- or project-scoped token may learn each one. If yes, "
+        "add it here. If no, narrow it at those six sites the way "
+        "narrow_picture_project_ids does for project_id (#719):\n"
+        + "\n".join(f"  {name}" for name in added)
+    )
+
+    removed = sorted(_PICTURE_METADATA_FIELDS - actual)
+    assert not removed, (
+        "Picture column(s) disappeared from metadata_fields(), so this pin now "
+        "describes a projection that no longer exists. Prune them, and check the "
+        "six serialisation sites still return what their consumers expect:\n"
+        + "\n".join(f"  {name}" for name in removed)
     )
 
 
@@ -1127,4 +1857,288 @@ def test_fastapi_floor_covers_route_inventory_dependency():
     assert min(floors) >= Version("0.138.0"), (
         "fastapi.routing.iter_route_contexts (required by "
         "pixlstash/route_inventory.py) first appears in 0.138.0"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: every SQLite engine comes from create_configured_engine (#651/#709)
+# ---------------------------------------------------------------------------
+# The §13 connection settings arrive in two halves: ``connect_args={"timeout":
+# SQLITE_BUSY_TIMEOUT_S}`` and the ``connect`` listener that sets the PRAGMAs
+# and registers the custom SQL functions. A call site that builds its own
+# engine gets neither and silently runs on SQLite's defaults: a 5 s busy
+# timeout, a 2 MiB page cache, a rollback journal and foreign keys OFF. That
+# has been a real bug twice (#651, #709).
+#
+# This is AST-based and recursive on purpose. The first version of this
+# guardrail was a non-recursive text grep over one package directory, and every
+# one of the shapes in _ENGINE_GUARDRAIL_ESCAPES walked straight past it.
+
+# SQLAlchemy / SQLModel entry points that construct an Engine.
+_ENGINE_FACTORIES = ("create_engine", "engine_from_config")
+
+# Repo-relative path -> why that file is allowed to build its own engine.
+# Every entry is a deliberate architectural exception, and
+# ``test_engine_factory_allowlist_has_no_dead_entries`` keeps the list honest.
+_ENGINE_FACTORY_ALLOWLIST = {
+    "pixlstash/database.py": (
+        "Defines create_configured_engine itself. This is the single sanctioned "
+        "create_engine call that every other call site routes through."
+    ),
+    "pixlstash/migrations/env.py": (
+        "Alembic owns its own connection. It builds an engine with "
+        "engine_from_config from alembic.ini and runs migrations with foreign "
+        "keys OFF, and its render_as_batch=True table recreation (copy into a "
+        "new table, drop, rename) would be hazardous with FK enforcement on. "
+        "Deliberately not routed through create_configured_engine."
+    ),
+}
+
+
+def _engine_factory_offenders(source: str) -> list[tuple[int, str]]:
+    """Return ``(lineno, snippet)`` for every engine construction in *source*.
+
+    Detects, in addition to a plain ``create_engine(...)`` call:
+
+    - an aliased import (``from sqlmodel import create_engine as _ce``) and any
+      later use of that alias, including binding it to another name first;
+    - a qualified call (``sa.create_engine(...)``);
+    - a dynamic lookup (``getattr(sa, "create_engine")(...)``).
+
+    Args:
+        source: Python source text of a single module.
+
+    Returns:
+        Sorted ``(lineno, stripped source line)`` pairs, one per offending
+        line.
+    """
+    tree = ast.parse(source)
+
+    aliases = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name in _ENGINE_FACTORIES:
+                    aliases.add(alias.asname or alias.name)
+
+    lines = source.splitlines()
+    hits: dict[int, str] = {}
+
+    def _record(node) -> None:
+        lineno = getattr(node, "lineno", 0)
+        snippet = lines[lineno - 1].strip() if 0 < lineno <= len(lines) else ""
+        hits.setdefault(lineno, snippet)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in aliases:
+            _record(node)
+        elif isinstance(node, ast.Attribute) and node.attr in _ENGINE_FACTORIES:
+            _record(node)
+        elif isinstance(node, ast.Constant) and node.value in _ENGINE_FACTORIES:
+            _record(node)
+
+    return sorted(hits.items())
+
+
+def _scan_for_engine_factories(root: Path, base: Path) -> dict[str, list]:
+    """Walk *root* recursively and map each offending module to its hits.
+
+    Args:
+        root: Directory tree to scan.
+        base: Directory the reported keys are made relative to.
+
+    Returns:
+        ``{posix relative path: [(lineno, snippet), ...]}`` for modules that
+        build an engine of their own.
+    """
+    found: dict[str, list] = {}
+    for path in sorted(root.rglob("*.py")):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            pytest.fail(f"could not read {path}: {exc}")
+        try:
+            hits = _engine_factory_offenders(source)
+        except SyntaxError as exc:
+            pytest.fail(f"could not parse {path}: {exc}")
+        if hits:
+            found[path.relative_to(base).as_posix()] = hits
+    return found
+
+
+def test_no_engine_is_built_outside_create_configured_engine():
+    """Arithmetic completeness: nothing under ``pixlstash/`` builds its own engine.
+
+    Scoped to the whole package, not one directory. A bare engine planted in
+    ``services/snapshot_service.py`` left the previous, restore-package-only
+    version of this guardrail entirely green.
+    """
+    found = _scan_for_engine_factories(PIXLSTASH_DIR, REPO_ROOT)
+
+    offenders = []
+    for rel, hits in sorted(found.items()):
+        if rel in _ENGINE_FACTORY_ALLOWLIST:
+            continue
+        for lineno, snippet in hits:
+            offenders.append(f"  {rel}:{lineno}: {snippet}")
+
+    assert not offenders, (
+        "SQLite engines must be built by pixlstash.database.create_configured_engine "
+        "(docs/backend_architecture.md §13). A bare engine gets neither the busy "
+        "timeout (connect_args) nor the PRAGMAs and custom SQL functions (the "
+        "connect listener), so it silently runs on SQLite's defaults: 5 s busy "
+        "timeout, 2 MiB page cache, rollback journal, foreign keys OFF (#651, "
+        "#709).\n\nOffending call sites:\n"
+        + "\n".join(offenders)
+        + "\n\nFix: call create_configured_engine(path), or "
+        "services/restore/schema_upgrade.snapshot_engine(path) for a snapshot "
+        "file. If a call site genuinely must own its engine, add its repo-relative "
+        "path to _ENGINE_FACTORY_ALLOWLIST in this file together with the reason."
+    )
+
+
+def test_engine_factory_allowlist_has_no_dead_entries():
+    """An allowlist entry that no longer names a real engine build is a lie.
+
+    A stale entry would silently re-permit the file the day someone puts an
+    unconfigured engine back into it.
+    """
+    found = _scan_for_engine_factories(PIXLSTASH_DIR, REPO_ROOT)
+    stale = sorted(set(_ENGINE_FACTORY_ALLOWLIST) - set(found))
+    assert not stale, (
+        "these _ENGINE_FACTORY_ALLOWLIST entries no longer build an engine and "
+        "must be removed from the allowlist:\n  " + "\n  ".join(stale)
+    )
+
+
+# Every shape that escaped the original text-grep guardrail, plus the ones a
+# naive AST check would still miss. Each is planted in a throwaway tree below
+# and must be caught.
+_ENGINE_GUARDRAIL_ESCAPES = {
+    "aliased import": (
+        "from sqlmodel import create_engine as _ce\n\nE = _ce('sqlite:///x.db')\n"
+    ),
+    "qualified call": (
+        "import sqlalchemy as sa\n\nE = sa.create_engine('sqlite:///x.db')\n"
+    ),
+    "dynamic lookup": (
+        "import sqlalchemy as sa\n\nE = getattr(sa, 'create_engine')('sqlite:///x.db')\n"
+    ),
+    "indirect binding": (
+        "from sqlalchemy import create_engine\n\n"
+        "_factory = create_engine\nE = _factory('sqlite:///x.db')\n"
+    ),
+    "alembic style": (
+        "from sqlalchemy import engine_from_config\n\nE = engine_from_config({})\n"
+    ),
+    "plain call": (
+        "from sqlmodel import create_engine\n\nE = create_engine('sqlite:///x.db')\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_ENGINE_GUARDRAIL_ESCAPES))
+def test_engine_guardrail_detects_every_known_escape_shape(shape, tmp_path):
+    """The guardrail's own regression test.
+
+    Each shape is planted inside a **nested subpackage**, which also pins the
+    recursion: the previous ``os.listdir`` version never descended, so a new
+    subpackage under ``services/restore/`` was a free pass.
+    """
+    nested = tmp_path / "pkg" / "sub" / "deeper"
+    nested.mkdir(parents=True)
+    (nested / "sneaky.py").write_text(_ENGINE_GUARDRAIL_ESCAPES[shape])
+
+    found = _scan_for_engine_factories(tmp_path, tmp_path)
+    assert "pkg/sub/deeper/sneaky.py" in found, (
+        f"the {shape!r} escape shape was not detected: {found}"
+    )
+
+
+def test_engine_guardrail_does_not_flag_the_configured_helpers(tmp_path):
+    """Over-blocking is its own regression: the sanctioned calls must pass."""
+    (tmp_path / "ok.py").write_text(
+        "from pixlstash.database import create_configured_engine\n"
+        "from .schema_upgrade import snapshot_engine\n\n"
+        "E = create_configured_engine('/tmp/x.db')\n"
+        "S = snapshot_engine('/tmp/y.sqlite')\n"
+    )
+    assert _scan_for_engine_factories(tmp_path, tmp_path) == {}
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: the ML stack must not be imported on the server's import path
+# ---------------------------------------------------------------------------
+#
+# `torch` and friends cost ~2.8 s to import, against 0.29 s for the whole web
+# stack. Because tests/conftest.py imports Server, a single module-scope
+# `import torch` anywhere on that path makes EVERY test process pay for it
+# before running one assertion (measured: 4.17 s -> 1.38 s for a targeted run
+# once the ML imports were made function-local). See backend_architecture §3,
+# "ML import discipline". This guardrail is what stops that regressing.
+
+_ML_MODULES = (
+    "torch",
+    "torchvision",
+    "transformers",
+    "sentence_transformers",
+    "open_clip",
+    "insightface",
+    "onnxruntime",
+)
+
+_ML_PROBE = (
+    "import sys, json\n"
+    "__import__({target!r})\n"
+    "print(json.dumps([m for m in {names!r} if m in sys.modules]))\n"
+)
+
+
+def _ml_modules_loaded_by(target: str) -> list[str]:
+    """Import *target* in a FRESH interpreter, return which ML libs it pulled.
+
+    A subprocess is mandatory: by the time this test runs, some earlier test in
+    the same session has almost certainly imported torch already, so an
+    in-process check would be meaningless.
+    """
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _ML_PROBE.format(target=target, names=_ML_MODULES)],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        timeout=300,
+    )
+    assert proc.returncode == 0, (
+        f"probe failed to import {target!r}:\n{proc.stdout}\n{proc.stderr}"
+    )
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_server_import_pulls_no_ml_libraries():
+    """Importing the server must not drag in torch/onnxruntime/etc."""
+    loaded = _ml_modules_loaded_by("pixlstash.server")
+    assert loaded == [], (
+        "pixlstash.server imported these ML libraries at module scope: "
+        f"{loaded}. Move the import inside the function that uses it "
+        "(see docs/backend_architecture.md §3, 'ML import discipline'). "
+        "Watch for indirect pullers: importing a plain constant from a module "
+        "that itself imports open_clip is enough to trip this."
+    )
+
+
+def test_ml_import_probe_has_teeth():
+    """Meta-check: the probe must actually DETECT a module that loads torch.
+
+    Without this, `test_server_import_pulls_no_ml_libraries` could pass simply
+    because the probe never observes anything. `wd14` deliberately keeps its
+    module-scope ML imports (it is off the server's import path), so it is a
+    stable positive control.
+    """
+    loaded = _ml_modules_loaded_by("pixlstash.tagger_plugins.wd14")
+    assert "torch" in loaded and "onnxruntime" in loaded, (
+        "the ML-import probe failed to notice a module that definitely imports "
+        f"torch and onnxruntime; it reported {loaded}"
     )

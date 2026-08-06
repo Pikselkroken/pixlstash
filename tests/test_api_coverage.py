@@ -128,6 +128,60 @@ def test_patch_user_config():
         gc.collect()
 
 
+def test_initial_telemetry_choice_is_one_atomic_config_patch():
+    temp_dir, client, server = _setup()
+    try:
+        choice = {
+            "check_for_updates": True,
+            "telemetry_send_install_id": True,
+            "telemetry_consent_prompted": True,
+        }
+
+        resp = client.patch("/users/me/config", json=choice)
+
+        assert resp.status_code == 200
+        config = resp.json()["config"]
+        for key, value in choice.items():
+            assert config[key] is value
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_decline_then_delayed_opt_in_stays_out_of_new_cohort(monkeypatch):
+    marked = []
+    monkeypatch.setattr(
+        "pixlstash.routes.config.mark_install_established",
+        lambda path: marked.append(path),
+    )
+    temp_dir, client, server = _setup()
+    try:
+        decline = client.patch(
+            "/users/me/config",
+            json={
+                "check_for_updates": False,
+                "telemetry_send_install_id": False,
+                "telemetry_consent_prompted": True,
+            },
+        )
+        assert decline.status_code == 200
+        assert marked == [server.server_config_path]
+
+        # A later settings opt-in retries the idempotent demotion. This matters
+        # if the config directory was temporarily unwritable at decline time.
+        marked.clear()
+        opt_in = client.patch(
+            "/users/me/config", json={"telemetry_send_install_id": True}
+        )
+        assert opt_in.status_code == 200
+        assert marked == [server.server_config_path]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_patch_user_config_penalised_tags_wakes_workers_without_error():
     temp_dir, client, server = _setup()
     try:
@@ -275,6 +329,8 @@ def test_get_sort_mechanisms():
         data = resp.json()
         assert isinstance(data, list)
         assert len(data) > 0
+        stack_time = next(item for item in data if item["key"] == "STACK_UPDATED_AT")
+        assert stack_time["description"] == "Recently changed stacks"
     finally:
         server.vault.close()
         temp_dir.cleanup()

@@ -8,6 +8,7 @@ function makeHarness(overrides = {}) {
   const grid = {
     insertGridImagesById: vi.fn(),
     refreshGridImage: vi.fn(),
+    refreshStackFacets: vi.fn(),
     repositionImageByScore: vi.fn(),
     repositionImageBySmartScore: vi.fn(),
     refreshSmartScoreForImage: vi.fn(),
@@ -404,6 +405,169 @@ describe("useGridRealtimeSync — card-content-only updates (detections)", () =>
   });
 });
 
+// The reported bug: "Keep cover only" collapsed a stack of five to its cover and
+// the surviving cover went on rendering a stack badge of five, forever. The
+// count is DERIVED per stack by the listing endpoint and is absent from the
+// /pictures/{id}/metadata read `refreshGridImage` performs, so the per-card
+// refresh every other branch uses cannot repair it, hence a branch, and a grid
+// method, of its own. Both directions are covered: the collapse announces the
+// covers, and the undo/redo announces the surviving members of every stack the
+// lifecycle move touched.
+describe("useGridRealtimeSync: stack-facet updates (stack_count)", () => {
+  it("own-origin echo is NOT suppressed: the acting tab has no local count", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: [1, 2],
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("stack-facet-refresh");
+    // ONE batched read for the whole set, not one per card.
+    expect(h.grid.refreshStackFacets).toHaveBeenCalledTimes(1);
+    expect(h.grid.refreshStackFacets).toHaveBeenCalledWith([1, 2]);
+    // Never the per-card path: it would fetch /metadata, which carries no count.
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+    expect(h.reload).not.toHaveBeenCalled();
+  });
+
+  it("foreign-ui update converges the second tab", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [5],
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+    expect(res.reason).toBe("stack-facet-refresh");
+    expect(h.grid.refreshStackFacets).toHaveBeenCalledWith([5]);
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+  });
+
+  it("external update refreshes in place and raises no pill", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      origin_client_id: null,
+      picture_ids: [6],
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+    expect(res.reason).toBe("stack-facet-refresh");
+    expect(h.grid.refreshStackFacets).toHaveBeenCalledWith([6]);
+    // A badge is card content, never a reposition: nothing may reshuffle the
+    // grid under the user for it.
+    expect(h.wsStore.addSortChangedExternalIds).not.toHaveBeenCalled();
+    expect(h.wsStore.addPendingExternalImportIds).not.toHaveBeenCalled();
+  });
+
+  it("reloads when stack membership changes the active stack-time order", () => {
+    const h = makeHarness({ selectedSort: "STACK_UPDATED_AT" });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: [6],
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+
+    expect(res.action).toBe("reload");
+    expect(res.reason).toBe("stack-time-sort-changed");
+    expect(h.reload).toHaveBeenCalledTimes(1);
+    expect(h.grid.refreshStackFacets).not.toHaveBeenCalled();
+  });
+
+  it("defers a stack-time reorder while the lightbox is open", () => {
+    const h = makeHarness({
+      selectedSort: "STACK_UPDATED_AT",
+      overlayOpen: true,
+    });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      picture_ids: [6],
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+
+    expect(res.action).toBe("deferred");
+    expect(res.reason).toBe("stack-time-sort-changed-overlay-deferred");
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a large batch stays one read, never an escalated reload", () => {
+    const h = makeHarness();
+    const manyIds = Array.from({ length: 400 }, (_, i) => i + 1);
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: manyIds,
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+    // The per-id cap exists to stop a fetch storm; there is no storm here, and
+    // a reload would drop the ghosted copies the undo window is holding.
+    expect(res.reason).toBe("stack-facet-refresh");
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.grid.refreshStackFacets).toHaveBeenCalledTimes(1);
+  });
+
+  it("defers under an open overlay, like every other grid mutation", () => {
+    const h = makeHarness({ overlayOpen: true });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: [7],
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("stack-facet-refresh-overlay-deferred");
+    expect(h.grid.refreshStackFacets).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("mixed fields follow the OLD path: a lifted score still needs its sort", () => {
+    const h = makeHarness({ selectedSort: "SMART_SCORE" });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [8],
+      change_kind: "updated",
+      fields: ["stack_count", "smart_score"],
+    });
+    expect(res.reason).toBe("foreign-ui-updated");
+    expect(h.grid.refreshStackFacets).not.toHaveBeenCalled();
+  });
+
+  it("a removal is never swallowed by the branch", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [9],
+      change_kind: "removed",
+      fields: ["stack_count"],
+    });
+    // The copies of a collapse are `removed`, and a vanished card must still
+    // vanish; only the covers are `updated`.
+    expect(res.reason).toBe("foreign-ui-removed");
+    expect(h.grid.refreshStackFacets).not.toHaveBeenCalled();
+  });
+});
+
 describe("useGridRealtimeSync — pills deferred while the overlay is open", () => {
   it("external sort-affecting update defers to overlay close, raises no pill", () => {
     const h = makeHarness({ selectedSort: "SMART_SCORE", overlayOpen: true });
@@ -605,6 +769,7 @@ function makeCoalescingHarness(overrides = {}) {
   const grid = {
     insertGridImagesById: vi.fn(),
     refreshGridImage: vi.fn(),
+    refreshStackFacets: vi.fn(),
     repositionImageByScore: vi.fn(),
     repositionImageBySmartScore: vi.fn(),
     refreshSmartScoreForImage: vi.fn(),
@@ -756,5 +921,149 @@ describe("useGridRealtimeSync — coalescing window", () => {
     h.tick();
     expect(h.reload).toHaveBeenCalledTimes(1);
     expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// change_kind: "restored" — a scrapheap comeback is not an import
+// ---------------------------------------------------------------------------
+//
+// A picture coming back out of the Scrapheap puts a card back, exactly as an
+// import does, and for a while both said `added`. The difference the SPA acts
+// on is that `added` means NEW TO THE VAULT: the sidebar answers it with its
+// NEW marker and the grid answers it with the new-picture flash. Neither is
+// true of a picture that has been in the library the whole time, which is why
+// `restored` is a kind of its own.
+
+describe("useGridRealtimeSync — restored (scrapheap comeback)", () => {
+  function restored(overrides = {}) {
+    return {
+      type: "pictures_changed",
+      source: "ui",
+      change_kind: "restored",
+      picture_ids: [3, 4],
+      ...overrides,
+    };
+  }
+
+  it("reinserts on this tab's OWN undo instead of suppressing the echo", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
+    // The bug this fixes: suppressed as "my own optimistic op already did it",
+    // when nothing local had. The grid kept showing the pre-undo state.
+    expect(res.action).toBe("targeted");
+    expect(h.grid.insertGridImagesById).toHaveBeenCalledWith([3, 4], {
+      highlight: false,
+    });
+    expect(h.grid.removeImagesById).not.toHaveBeenCalled();
+  });
+
+  it("reinserts without the new-picture flash — it is a comeback, not an arrival", () => {
+    const h = makeHarness();
+    h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
+    const [, options] = h.grid.insertGridImagesById.mock.calls[0];
+    expect(options).toEqual({ highlight: false });
+
+    // …whereas a genuine import still flashes (no options at all).
+    h.grid.insertGridImagesById.mockClear();
+    h.sync.handleMessage({
+      type: "picture_imported",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [9],
+    });
+    expect(h.grid.insertGridImagesById).toHaveBeenCalledWith([9]);
+  });
+
+  it("refreshes the sidebar WITHOUT raising its NEW marker", () => {
+    const h = makeHarness();
+    h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
+    // The counts really did change (All Pictures up, Scrapheap down), so the
+    // sidebar must re-read — it just must not call it new.
+    expect(h.refreshSidebar).toHaveBeenCalledWith(false);
+
+    h.refreshSidebar.mockClear();
+    h.sync.handleMessage({
+      type: "picture_imported",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [9],
+    });
+    expect(h.refreshSidebar).toHaveBeenCalledWith(true);
+  });
+
+  it("applies another owner tab's restore in place", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage(restored({ origin_client_id: OTHER_ID }));
+    expect(res.action).toBe("targeted");
+    expect(h.grid.insertGridImagesById).toHaveBeenCalledWith([3, 4], {
+      highlight: false,
+    });
+  });
+
+  it("raises the view-changed pill for an external restore, never the new-pictures one", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage(
+      restored({ source: "external", origin_client_id: null }),
+    );
+    expect(res.action).toBe("pill");
+    expect(h.wsStore.addSortChangedExternalIds).toHaveBeenCalledWith([3, 4]);
+    // "↑ 2 new pictures, click to load" would be a lie about these pictures.
+    expect(h.wsStore.addPendingExternalImportIds).not.toHaveBeenCalled();
+    expect(h.grid.insertGridImagesById).not.toHaveBeenCalled();
+  });
+
+  it("reloads when a restore-all names no ids", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage(
+      restored({ origin_client_id: MY_ID, picture_ids: [] }),
+    );
+    // `POST /pictures/scrapheap/restore` with no subset broadcasts an empty id
+    // list; a per-id insert would silently do nothing.
+    expect(res.action).toBe("reload");
+    expect(h.reload).toHaveBeenCalled();
+  });
+
+  it("defers under an open overlay rather than restructuring the filmstrip", () => {
+    const h = makeHarness({ overlayOpen: true });
+    const res = h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
+    expect(res.action).toBe("targeted");
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalled();
+    expect(h.grid.insertGridImagesById).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the view-changed pill while a streaming fetch owns the grid", () => {
+    const h = makeHarness();
+    h.grid.isImagesLoading.mockReturnValue(true);
+    const res = h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
+    expect(res.action).toBe("pill");
+    expect(h.wsStore.addSortChangedExternalIds).toHaveBeenCalledWith([3, 4]);
+    expect(h.wsStore.addPendingExternalImportIds).not.toHaveBeenCalled();
+  });
+
+  it("still treats a re-scrapheap on redo as a removal", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      change_kind: "removed",
+      picture_ids: [3, 4],
+    });
+    expect(res.action).toBe("targeted");
+    expect(h.grid.removeImagesById).toHaveBeenCalledWith([3, 4]);
+  });
+
+  it("degrades an unknown kind to updated, exactly as before", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      change_kind: "resurrected",
+      fields: ["tags"],
+      picture_ids: [3],
+    });
+    expect(res.reason).toBe("foreign-ui-updated");
   });
 });

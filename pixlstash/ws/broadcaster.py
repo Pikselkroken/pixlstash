@@ -120,12 +120,20 @@ class WsBroadcasterMixin:
             return list(data)
         return []
 
+    #: The closed set of wire values for ``change_kind``. An emit site that sets
+    #: anything else has its hint DROPPED (not rejected), and the SPA then falls
+    #: back to ``"updated"`` — which for a lifecycle change leaves a stale,
+    #: 404-clickable card behind. Adding a value here is therefore half of the
+    #: contract; the other half is ``resolveChangeKind`` in
+    #: ``frontend/src/composables/useGridRealtimeSync.js``.
+    CHANGE_KINDS = ("added", "updated", "removed", "restored")
+
     @staticmethod
     def _change_kind_from(data) -> str | None:
-        """Optional ``added``/``updated``/``removed`` hint from ``data``."""
+        """Optional ``added``/``updated``/``removed``/``restored`` hint from ``data``."""
         if isinstance(data, dict):
             kind = data.get("change_kind")
-            if kind in ("added", "updated", "removed"):
+            if kind in WsBroadcasterMixin.CHANGE_KINDS:
                 return kind
         return None
 
@@ -263,24 +271,29 @@ class WsBroadcasterMixin:
             if ws_auth is None:
                 await websocket.close(code=1008)
                 return
-            await websocket.accept()
-            # Always refresh _ws_loop so it tracks the currently-running event loop.
-            # In production (uvicorn) this is always the same loop; in tests each
-            # WebSocket session may run on a different loop than HTTP requests.
-            self._ws_loop = asyncio.get_running_loop()
-            # Only owner-level connections receive the global vault-activity
-            # stream. A resource-scoped / READ token may connect (authenticated)
-            # but is never sent events outside its grant — see
-            # ``_broadcast_ws_event``.
-            client = {
-                "ws": websocket,
-                "filters": {},
-                "owner": ws_auth.is_owner,
-                "client_id": None,
-            }
-            with self._ws_clients_lock:
-                self._ws_clients.append(client)
+            admission_lease = self.auth.register_authenticated_websocket(websocket)
+            if admission_lease is None:
+                await websocket.close(code=1012)
+                return
+            client = None
             try:
+                await websocket.accept()
+                # Always refresh _ws_loop so it tracks the currently-running event loop.
+                # In production (uvicorn) this is always the same loop; in tests each
+                # WebSocket session may run on a different loop than HTTP requests.
+                self._ws_loop = asyncio.get_running_loop()
+                # Only owner-level connections receive the global vault-activity
+                # stream. A resource-scoped / READ token may connect (authenticated)
+                # but is never sent events outside its grant — see
+                # ``_broadcast_ws_event``.
+                client = {
+                    "ws": websocket,
+                    "filters": {},
+                    "owner": ws_auth.is_owner,
+                    "client_id": None,
+                }
+                with self._ws_clients_lock:
+                    self._ws_clients.append(client)
                 while True:
                     message = await websocket.receive_text()
                     if not message:
@@ -310,5 +323,6 @@ class WsBroadcasterMixin:
                 logger.debug("WebSocket client disconnected normally.")
             finally:
                 with self._ws_clients_lock:
-                    if client in self._ws_clients:
+                    if client is not None and client in self._ws_clients:
                         self._ws_clients.remove(client)
+                self.auth.unregister_authenticated_websocket(admission_lease)

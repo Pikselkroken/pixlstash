@@ -28,8 +28,9 @@
       />
       <AppSelect
         v-model="projectSelection"
-        label="Project"
+        label="Projects"
         :options="projectOptions"
+        :multiple="true"
       />
       <div v-if="character?.id" class="ref-pictures-section">
         <div class="ref-pictures-header">
@@ -110,6 +111,7 @@ import {
 import { listPicturesByIds } from "../../api/pictures";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { getEntityProjectIds } from "../../utils/projectMembership";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -128,20 +130,14 @@ const props = defineProps({
   projects: { type: Array, default: () => [] },
 });
 
-// Native <select> carries string values, so map the "no project" sentinel to an
-// empty string and back to a null project_id.
-const projectOptions = computed(() => [
-  { value: "", label: "— No project —" },
-  ...props.projects.map((p) => ({ value: String(p.id), label: p.name })),
-]);
+const projectOptions = computed(() =>
+  props.projects.map((p) => ({ value: String(p.id), label: p.name })),
+);
 
 const projectSelection = computed({
-  get: () =>
-    localCharacter.value.project_id == null
-      ? ""
-      : String(localCharacter.value.project_id),
+  get: () => localCharacter.value.project_ids.map(String),
   set: (v) => {
-    localCharacter.value.project_id = v === "" ? null : Number(v);
+    localCharacter.value.project_ids = v.map(Number);
   },
 });
 
@@ -152,7 +148,7 @@ const localCharacter = ref({
   name: "",
   description: "",
   extra_metadata: "",
-  project_id: null,
+  project_ids: [],
 });
 
 const nameInputRef = ref(null);
@@ -224,7 +220,7 @@ watch(
         name: newChar.name || "",
         description: newChar.description || "",
         extra_metadata: newChar.extra_metadata || "",
-        project_id: newChar.project_id ?? null,
+        project_ids: getEntityProjectIds(newChar),
       };
     } else {
       localCharacter.value = {
@@ -232,7 +228,7 @@ watch(
         name: "",
         description: "",
         extra_metadata: "",
-        project_id: null,
+        project_ids: [],
       };
     }
   },
@@ -273,12 +269,50 @@ function handleKeydown(event) {
 async function saveCharacter(charData) {
   try {
     const opts = { baseUrl: props.backendUrl };
+    let envelope;
     if (charData.id) {
-      await patchCharacter(charData.id, charData, opts);
+      envelope = await patchCharacter(charData.id, charData, opts);
     } else {
-      await createCharacter(charData, opts);
+      envelope = await createCharacter(charData, opts);
     }
-    emit("saved");
+    // BOTH routes answer with `CharacterMutationResponse`, i.e. `{status,
+    // character}`, so the record, and the server-assigned id on create, is
+    // nested under `.character` (pixlstash/routes/characters.py: the POST at
+    // ~1240 and the PATCH at ~589 share the model). The api module returns the
+    // whole body by its documented convention, so the unwrap belongs here, at
+    // the one place both paths pass through.
+    //
+    // Read the documented location and nothing else. A `?? envelope` style
+    // fallback would "work" against either shape and is precisely what hid the
+    // create-and-assign bug: every host read `.id` off the envelope, got
+    // undefined, and fell into its own guard.
+    const saved = envelope?.character ?? null;
+    if (!saved?.id) {
+      // The write itself succeeded; the response just did not carry the record,
+      // so nothing downstream can chain off it. Report it rather than emitting
+      // a payload that breaks `saved`'s contract.
+      console.error(
+        "Character mutation response carried no character record. Expected " +
+          "CharacterMutationResponse {status, character:{id,...}}.",
+        {
+          operation: charData.id ? "patch" : "create",
+          characterId: charData.id ?? null,
+          receivedKeys:
+            envelope && typeof envelope === "object"
+              ? Object.keys(envelope)
+              : typeof envelope,
+        },
+      );
+      noticeStore.error(
+        "That person was saved, but the server did not return the record, so the follow-up steps were skipped.",
+        { key: "character-save" },
+      );
+      return;
+    }
+    // Carries the saved RECORD (with the server-assigned id on create) so hosts
+    // can chain follow-up work, e.g. the create-and-assign flows. Existing
+    // listeners that ignore the payload are unaffected.
+    emit("saved", saved);
   } catch (e) {
     console.error("Failed to save character", e);
     noticeStore.error(

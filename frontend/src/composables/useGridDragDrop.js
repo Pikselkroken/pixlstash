@@ -5,6 +5,8 @@ import {
   isVideo,
 } from "../utils/media.js";
 import { useNoticeStore } from "../stores/useNoticeStore";
+import { useSelectionStore } from "../stores/useSelectionStore";
+import { useProjectStore } from "../stores/useProjectStore";
 
 /**
  * Manages all drag-and-drop interactions in the image grid:
@@ -19,6 +21,8 @@ import { useNoticeStore } from "../stores/useNoticeStore";
  * @param {Object} deps.thumbnailRefs - { [id]: HTMLImageElement }
  * @param {Object} deps.dragPreviewRefs - { [id]: HTMLImageElement }
  * @param {Function} deps.prefetchFullImage - fn(img) — prefetches full image
+ * @param {Function} [deps.isImageGhosted] - fn(img) — true for a tile held in
+ *   the grid only while its move-to-Scrapheap can still be undone.
  * @param {Object} props - component props (backendUrl, selectedCharacter, selectedProjectId)
  */
 export function useGridDragDrop(
@@ -30,9 +34,12 @@ export function useGridDragDrop(
     dragPreviewRefs,
     prefetchFullImage,
     reviewOverlayOpen,
+    isImageGhosted = () => false,
   },
   props,
 ) {
+  const selectionStore = useSelectionStore();
+  const projectStore = useProjectStore();
   // Drag/drop failures are reported through the notice surface rather than a
   // blocking native alert() (docs/design/notice-surface.md §1). Called during
   // the host component's setup, so Pinia is active.
@@ -188,10 +195,10 @@ export function useGridDragDrop(
     if (imageImporterRef.value && files.length) {
       imageImporterRef.value.startImport(files, {
         backendUrl: props.backendUrl,
-        selectedCharacterId: props.selectedCharacter,
+        selectedCharacterId: selectionStore.selectedCharacter,
         allPicturesId: "ALL",
         unassignedPicturesId: "UNASSIGNED",
-        projectId: props.selectedProjectId ?? null,
+        projectId: projectStore.selectedProjectId ?? null,
       });
     }
   }
@@ -206,9 +213,7 @@ export function useGridDragDrop(
     );
     const height = Math.max(
       1,
-      Math.round(
-        rect?.height || element.clientHeight || element.height || 90,
-      ),
+      Math.round(rect?.height || element.clientHeight || element.height || 90),
     );
     const computed =
       typeof window !== "undefined" && element instanceof Element
@@ -315,6 +320,14 @@ export function useGridDragDrop(
 
   function handleContainerDragStart(img, event) {
     if (!img || !event?.dataTransfer) return;
+    // A ghosted tile is already in the Scrapheap; dragging it into a set or a
+    // character would file a picture that is on its way out. The card carries
+    // `inert`, which stops this in browsers that support it — this is the same
+    // rule stated where it can be tested.
+    if (isImageGhosted(img)) {
+      event.preventDefault();
+      return;
+    }
     if (reviewOverlayOpen?.value) {
       event.preventDefault();
       return;

@@ -25,6 +25,17 @@ someone says which, and that is a failure:
   partition — every collected test in exactly one shard — by actually running
   pytest's collection, not by re-implementing the arithmetic.
 
+``--ci-shard`` no longer deals by position: it places tests
+longest-processing-time-first from the committed
+``tests/ci_test_durations.json`` so the gate's shards finish together rather
+than merely holding the same number of tests. That turns a data file into an
+input to the partition, and eight independent processes have to derive the
+identical partition from it, so the guardrails below cover the degraded inputs
+as well as the happy one: an absent, truncated, wrongly-shaped or
+negative-valued map, and tests the map has never heard of. All of them must
+still yield a complete, disjoint partition — a slower gate is an acceptable
+outcome, a dropped test is not.
+
 The second property these protect is the release-prep sweep's *ordering*
 control. The blocking gate deals tests round-robin (``--ci-shard``); the sweep
 runs the same suite in contiguous blocks of collection order
@@ -34,17 +45,53 @@ the gate's own algorithm would audit that algorithm with itself, so
 ``test_each_job_uses_the_sharding_mode_it_needs`` pins the mode per job.
 """
 
+import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 import yaml
-from tests.conftest import _block_shard_bounds
+from tests import conftest as shard_conftest
+from tests.conftest import (
+    _block_shard_bounds,
+    _load_recorded_durations,
+    _time_balanced_shard_assignment,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 TESTS_DIR = REPO_ROOT / "tests"
+DURATIONS_PATH = TESTS_DIR / "ci_test_durations.json"
+
+# These workflows can publish packages/images/pages, create release issues or
+# PRs, attach signed artifacts, mint OIDC tokens, or consume release-signing
+# secrets. Their action and shell boundaries therefore need stronger invariants
+# than an ordinary read-only CI job.
+PRIVILEGED_WORKFLOW_PATHS = tuple(
+    REPO_ROOT / ".github" / "workflows" / name
+    for name in (
+        "certum-signer-image.yml",
+        "docker-publish.yml",
+        "electron.yml",
+        "pages.yml",
+        "publish-pypi.yml",
+        "release-test-issues.yml",
+        "release-version.yml",
+        "windows-installer.yml",
+        "windows-signing-test.yml",
+    )
+)
+
+_ACTION_USE_RE = re.compile(
+    r"^\s*(?:-\s*)?uses:\s*([^#\s]+)\s*(?:#\s*(.+?))?\s*$", re.MULTILINE
+)
+_FULL_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_VERSION_COMMENT_RE = re.compile(r"^v[0-9]+(?:\.[0-9]+){1,3}(?:[-+._][0-9A-Za-z.-]+)?$")
+_RELEASE_SECRET_RE = re.compile(
+    r"secrets\.(?:APPLE_|CERTUM_|DOCKERHUB_|RELEASE_BOT_TOKEN)"
+)
 
 # Which `--ci-*shard` option each sharded job is required to use. Round-robin
 # balances wall clock and is right for the blocking gates; contiguous blocks
@@ -106,9 +153,9 @@ MUST_BLOCK_ON_EVERY_PR = frozenset(
         # The ComfyUI membership filter is the one leaf `Picture.find()` does not
         # delegate to `PredicateFilter`: it hand-rolls a raw `text()` WHERE
         # fragment. An unparenthesised `OR` in it let the stack-member branch
-        # escape the id/project scope narrowing, so a scoped share token could
-        # read grid metadata library-wide. Same risk class as
-        # test_pictures_stream.py above.
+        # escape the id/project scope narrowing for ~10 weeks (shipped in
+        # 84ffdd22), so a scoped token could read outside its scope. Same risk
+        # class as test_pictures_stream.py above.
         "test_comfyui_stack_filter.py",
         # Deleted-picture retention: proves scrapheap rows stay scoped and are
         # actually reaped rather than lingering readable.
@@ -116,6 +163,24 @@ MUST_BLOCK_ON_EVERY_PR = frozenset(
         # Staged async import: uploads land in a per-session staging area before
         # they exist as scoped objects, so this is where scope is established.
         "test_async_import_staging.py",
+    }
+)
+
+# Release-critical suites changed across the RC branch. These are intentionally
+# stronger than ordinary classification: moving one back to DEFERRED would
+# leave face-search, membership authz, undo/reviews, stacks, worker routes or
+# WebSocket event contracts visible only in the informational sweep.
+RELEASE_CRITICAL_MUST_BLOCK = frozenset(
+    {
+        "test_characters_api.py",
+        "test_likeness_and_face_search.py",
+        "test_project_membership_service.py",
+        "test_projects_api.py",
+        "test_reviews_api.py",
+        "test_stacks_api.py",
+        "test_stacks_membership.py",
+        "test_workers_api.py",
+        "test_ws_broadcaster.py",
     }
 )
 
@@ -138,7 +203,6 @@ DEFERRED_FROM_GATE = frozenset(
         "test_api_coverage.py",
         "test_batch_apply_scores.py",
         "test_build_desktop_runtime.py",
-        "test_characters_api.py",
         "test_default_device_override.py",
         "test_detection_florence.py",
         "test_detection_model.py",
@@ -155,24 +219,18 @@ DEFERRED_FROM_GATE = frozenset(
         "test_impossible_filter.py",
         "test_insightface_model_pack.py",
         "test_justified_thumbnails.py",
-        "test_likeness_and_face_search.py",
         "test_near_neighbor.py",
         "test_person_tags.py",
         "test_predicate_filter.py",
-        "test_project_membership_service.py",
-        "test_projects_api.py",
         "test_quality_task_shutdown.py",
         "test_reference_folder_listing_count_parity.py",
         "test_reference_folder_sidecars.py",
-        "test_reviews_api.py",
         "test_rocm_device_check.py",
         "test_server_external_listener.py",
         "test_server_simple.py",
         "test_smart_score_invalidation.py",
         "test_snapshot_compression.py",
         "test_stack_position_invariant.py",
-        "test_stacks_api.py",
-        "test_stacks_membership.py",
         "test_startup_banner_encoding.py",
         "test_stats_api.py",
         "test_tag_health_api.py",
@@ -183,8 +241,6 @@ DEFERRED_FROM_GATE = frozenset(
         "test_tagger_plugin_registry.py",
         "test_tagger_runs_api.py",
         "test_user_settings_tagger_settings.py",
-        "test_workers_api.py",
-        "test_ws_broadcaster.py",
     }
 )
 
@@ -201,6 +257,161 @@ def _pytest_steps(job: dict) -> list[dict]:
     return [
         step for step in job.get("steps", []) if "pytest" in (step.get("run") or "")
     ]
+
+
+def _privileged_workflows() -> list[tuple[Path, dict, str]]:
+    """Load the release-capable workflows protected by the static guards."""
+    loaded = []
+    for path in PRIVILEGED_WORKFLOW_PATHS:
+        assert path.is_file(), f"Missing privileged workflow: {path}"
+        text = path.read_text(encoding="utf-8")
+        loaded.append((path, yaml.safe_load(text), text))
+    return loaded
+
+
+def _grants_write_permission(value) -> bool:
+    """Return whether a parsed workflow node grants any write permission."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "permissions":
+                if child == "write-all" or (
+                    isinstance(child, dict) and "write" in child.values()
+                ):
+                    return True
+            if _grants_write_permission(child):
+                return True
+    elif isinstance(value, list):
+        return any(_grants_write_permission(child) for child in value)
+    return False
+
+
+def test_privileged_workflow_inventory_is_complete():
+    """New write/OIDC/release-secret workflows must enter the guarded set."""
+    expected = set(PRIVILEGED_WORKFLOW_PATHS)
+    discovered = set()
+    for path in (REPO_ROOT / ".github" / "workflows").glob("*.yml"):
+        text = path.read_text(encoding="utf-8")
+        data = yaml.safe_load(text)
+        if _grants_write_permission(data) or _RELEASE_SECRET_RE.search(text):
+            discovered.add(path)
+    assert discovered == expected, (
+        "Keep PRIVILEGED_WORKFLOW_PATHS aligned with workflows that grant write "
+        "permissions or consume release credentials; "
+        f"missing={sorted(discovered - expected)}, "
+        f"stale={sorted(expected - discovered)}"
+    )
+
+
+def test_privileged_workflow_actions_are_immutable():
+    """Third-party code in release-capable jobs must use reviewed commits."""
+    for path, _workflow, text in _privileged_workflows():
+        matches = list(_ACTION_USE_RE.finditer(text))
+        assert matches, f"Expected at least one action in {path}"
+        for match in matches:
+            action, version_comment = match.groups()
+            if action.startswith("./"):
+                continue
+            action_name, separator, ref = action.rpartition("@")
+            assert separator and action_name, (
+                f"Malformed action reference in {path}: {action}"
+            )
+            assert _FULL_COMMIT_SHA_RE.fullmatch(ref), (
+                f"Privileged workflow action must use an exact 40-character "
+                f"commit SHA, not a mutable tag: {path}: {action}"
+            )
+            assert version_comment and _VERSION_COMMENT_RE.fullmatch(version_comment), (
+                f"Pinned action must retain a machine-readable version comment "
+                f"for updates: {path}: {action}"
+            )
+
+
+def test_privileged_workflow_run_blocks_do_not_interpolate_expressions():
+    """Event/ref/input expressions cross into shells only through quoted env."""
+    for path, workflow_data, _text in _privileged_workflows():
+        for job_name, job in workflow_data.get("jobs", {}).items():
+            for step in job.get("steps", []):
+                run = step.get("run")
+                assert not run or "${{" not in run, (
+                    f"Move GitHub expressions from `run` into a step `env` value "
+                    f"and quote the environment variable in the shell: "
+                    f"{path}:{job_name}:{step.get('name', '<unnamed>')}"
+                )
+
+
+def test_privileged_workflow_checkouts_do_not_persist_credentials():
+    """Release jobs must not leave checkout credentials available to later code."""
+    for path, workflow_data, _text in _privileged_workflows():
+        for job_name, job in workflow_data.get("jobs", {}).items():
+            for step in job.get("steps", []):
+                uses = step.get("uses", "")
+                if not uses.startswith("actions/checkout@"):
+                    continue
+                assert step.get("with", {}).get("persist-credentials") is False, (
+                    f"Set persist-credentials: false on checkout in {path}:{job_name}"
+                )
+
+
+def test_electron_apple_signing_requires_validated_release_tag():
+    """Branch dispatch cannot receive Apple credentials or sign a macOS build."""
+    path = REPO_ROOT / ".github" / "workflows" / "electron.yml"
+    workflow_data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    wheel_job = workflow_data["jobs"]["build-wheel"]
+    electron_job = workflow_data["jobs"]["build-electron"]
+
+    assert electron_job["needs"] == "build-wheel"
+    assert "environment" not in electron_job, (
+        "Branch/dispatch matrix builds must not enter a signing environment"
+    )
+    assert wheel_job["outputs"]["validated_release_tag"] == (
+        "${{ steps.release-ref.outputs.validated_release_tag }}"
+    )
+
+    steps_by_name = {
+        step.get("name"): step for step in wheel_job["steps"] + electron_job["steps"]
+    }
+    validation = steps_by_name["Classify and validate release ref"]
+    assert "if" not in validation, "Ref classification must run for branch dispatch too"
+    assert validation["env"] == {
+        "RELEASE_REF": "${{ github.ref }}",
+        "RELEASE_TAG": "${{ github.ref_name }}",
+        "EXPECTED_VERSION": "${{ steps.version.outputs.version }}",
+    }
+    assert "validated_release_tag=false" in validation["run"]
+    assert "validated_release_tag=true" in validation["run"]
+    assert '"refs/tags/$RELEASE_TAG"' in validation["run"]
+    assert "^v[0-9]+" in validation["run"]
+    assert '"v$EXPECTED_VERSION"' in validation["run"]
+
+    unsigned = steps_by_name["Build unsigned Electron installers"]
+    assert unsigned["if"] == (
+        "matrix.os != 'mac' || "
+        "needs.build-wheel.outputs.validated_release_tag != 'true'"
+    )
+    assert set(unsigned.get("env", {})) == {"TARGET_OS"}
+    assert "CSC_IDENTITY_AUTO_DISCOVERY=false" in unsigned["run"]
+    assert "-unsigned.${ext}" in unsigned["run"]
+
+    signed = steps_by_name["Build signed macOS Electron installer"]
+    assert signed["if"] == (
+        "matrix.os == 'mac' && "
+        "needs.build-wheel.outputs.validated_release_tag == 'true'"
+    )
+    assert set(signed["env"]) == {
+        "CSC_LINK",
+        "CSC_KEY_PASSWORD",
+        "APPLE_ID",
+        "APPLE_APP_SPECIFIC_PASSWORD",
+        "APPLE_TEAM_ID",
+    }
+
+    secret_steps = [
+        step
+        for step in electron_job["steps"]
+        if "secrets.APPLE_" in yaml.safe_dump(step)
+    ]
+    assert secret_steps == [signed], (
+        "Apple credentials must exist only in the validated tag-only signing step"
+    )
 
 
 def _shard_matrix(job: dict) -> list:
@@ -338,6 +549,105 @@ def test_security_suites_cannot_be_quietly_deferred(workflow):
         "survived five days undetected. Fix the suite or delete it; parking it "
         "is not an option."
     )
+
+
+def test_release_critical_suites_cannot_remain_informational(workflow):
+    """Changed RC contracts must block rather than live only in the sweep."""
+    gated = _gated_files(workflow)
+    missing_files = sorted(
+        name for name in RELEASE_CRITICAL_MUST_BLOCK if not (TESTS_DIR / name).is_file()
+    )
+    assert not missing_files, (
+        f"RELEASE_CRITICAL_MUST_BLOCK names missing suites: {missing_files}"
+    )
+
+    ungated = sorted(
+        f"tests/{name}"
+        for name in RELEASE_CRITICAL_MUST_BLOCK
+        if f"tests/{name}" not in gated
+    )
+    assert not ungated, (
+        f"These release-critical suites do not block the stable backend gate: {ungated}"
+    )
+
+    parked = sorted(RELEASE_CRITICAL_MUST_BLOCK & DEFERRED_FROM_GATE)
+    assert not parked, (
+        "These release-critical suites were parked in the informational sweep: "
+        f"{parked}"
+    )
+
+
+def test_stable_aggregate_requires_playwright_and_fixture_fails_closed(workflow):
+    """The stable check cannot pass when Playwright did not prove the RC UI."""
+    aggregate = workflow["jobs"]["build"]
+    needs = aggregate.get("needs", [])
+    assert "e2e" in needs, "The stable `build` aggregate must require e2e"
+    aggregate_steps = "\n".join(
+        step.get("run", "") for step in aggregate.get("steps", [])
+    )
+    assert "E2E_RESULT" in aggregate_steps
+    assert "e2e)" in aggregate_steps
+
+    e2e = workflow["jobs"]["e2e"]
+    fixture_steps = [
+        step for step in e2e.get("steps", []) if step.get("id") == "fixture"
+    ]
+    assert len(fixture_steps) == 1, "Expected one authoritative fixture check"
+    fixture_script = fixture_steps[0].get("run", "")
+    assert "git ls-files --error-unmatch test-data/images/vault.db" in fixture_script
+    assert "test -f test-data/images/vault.db" in fixture_script
+    assert "present=false" not in fixture_script
+    assert "skipping Playwright" not in fixture_script
+
+
+def test_cheap_electron_tests_are_in_the_stable_checks(workflow):
+    """Desktop shell logic runs without invoking packaging."""
+    steps = workflow["jobs"]["checks"].get("steps", [])
+    electron = [step for step in steps if step.get("working-directory") == "electron"]
+    assert electron, "The stable checks job must run Electron unit tests"
+    commands = "\n".join(step.get("run", "") for step in electron)
+    assert "npm ci" in commands
+    assert "npm test" in commands
+    assert "electron-builder" not in commands
+    assert "npm run dist" not in commands
+
+
+def test_telemetry_worker_config_and_d1_contract_are_validated(workflow):
+    """CI checks both Worker behavior and Wrangler's deploy-time config."""
+    steps = workflow["jobs"]["checks"].get("steps", [])
+    telemetry = [
+        step
+        for step in steps
+        if step.get("working-directory") == "website/telemetry-worker"
+    ]
+    commands = "\n".join(step.get("run", "") for step in telemetry)
+    for required in ("npm ci", "npm test", "npm run check:config"):
+        assert required in commands, f"Telemetry CI is missing {required!r}"
+
+    worker_root = REPO_ROOT / "website/telemetry-worker"
+    package = json.loads((worker_root / "package.json").read_text(encoding="utf-8"))
+    config_text = (REPO_ROOT / "website/telemetry-worker/wrangler.jsonc").read_text(
+        encoding="utf-8"
+    )
+    config = json.loads(
+        "\n".join(line.split("//", 1)[0] for line in config_text.splitlines())
+    )
+    scripts = package.get("scripts", {})
+    assert scripts.get("test") == "npm run test:unit && npm run test:d1"
+    assert scripts.get("test:d1") == "node --test test/d1-integration.test.js"
+    assert (worker_root / "test/d1-integration.test.js").is_file()
+    assert scripts.get("check:config", "").startswith(
+        "WRANGLER_LOG_PATH=.wrangler/logs wrangler deploy --dry-run"
+    )
+    assert scripts.get("deploy") == (
+        "wrangler deploy --no-x-provision --no-x-auto-create"
+    )
+    d1_bindings = config.get("d1_databases", [])
+    assert any(binding.get("binding") == "DB" for binding in d1_bindings)
+    assert all("database_id" not in binding for binding in d1_bindings)
+    assert config.get("triggers", {}).get("crons") == ["*/5 * * * *"]
+    assert config.get("limits", {}).get("cpu_ms") == 30000
+    assert config.get("observability", {}).get("enabled") is True
 
 
 def test_deferred_files_still_run_in_the_informational_sweep(workflow):
@@ -615,6 +925,457 @@ def test_shard_modes_are_mutually_exclusive():
     )
     assert result.returncode != 0, "Both shard modes at once was accepted"
     assert "mutually exclusive" in (result.stdout + result.stderr)
+
+
+class _StubItem:
+    """The only part of a collected item the sharding hook reads."""
+
+    def __init__(self, nodeid: str):
+        self.nodeid = nodeid
+
+
+class _StubHook:
+    """Captures the ``pytest_deselected`` call the hook makes."""
+
+    def __init__(self):
+        self.deselected: list[_StubItem] = []
+
+    def pytest_deselected(self, items):
+        self.deselected.extend(items)
+
+
+class _StubConfig:
+    """A minimal ``config`` exposing just the two shard options."""
+
+    def __init__(self, options: dict):
+        self._options = options
+        self.hook = _StubHook()
+
+    def getoption(self, name):
+        return self._options[name]
+
+
+def _shard_via_hook(nodeids: list[str], option: str, spec: str) -> list[str]:
+    """Run the real conftest hook over *nodeids* and return what it kept."""
+    items = [_StubItem(nodeid) for nodeid in nodeids]
+    config = _StubConfig(
+        {
+            _ROUND_ROBIN_OPTION: spec if option == _ROUND_ROBIN_OPTION else None,
+            _BLOCK_OPTION: spec if option == _BLOCK_OPTION else None,
+        }
+    )
+    shard_conftest.pytest_collection_modifyitems(config, items)
+    return [item.nodeid for item in items]
+
+
+def _synthetic_nodeids(count: int) -> list[str]:
+    return [f"tests/test_synthetic.py::test_{index:04d}" for index in range(count)]
+
+
+def _shard_loads(
+    nodeids: list[str], assignment: list[int], total: int, durations: dict
+) -> list[float]:
+    loads = [0.0] * total
+    for nodeid, shard in zip(nodeids, assignment):
+        loads[shard] += durations.get(nodeid, 0.0)
+    return loads
+
+
+def _round_robin_loads(nodeids: list[str], total: int, durations: dict) -> list[float]:
+    return _shard_loads(
+        nodeids,
+        [position % total for position in range(len(nodeids))],
+        total,
+        durations,
+    )
+
+
+@pytest.mark.parametrize("count", [0, 1, 7, 8, 9, 63, 200])
+@pytest.mark.parametrize("total", [1, 2, 3, 8])
+@pytest.mark.parametrize("coverage", ["none", "partial", "full"])
+def test_time_balanced_assignment_is_a_total_partition(count, total, coverage):
+    """Every collected test lands in exactly one shard, for every input.
+
+    This is the property the whole mechanism is subordinate to. Balancing by
+    recorded time introduces a *data file* into the partition decision, so the
+    ways to break it multiply: a test the data has never seen, a data set that
+    covers nothing, an awkward count/shard ratio. None of them may drop or
+    duplicate a test, and the sweep here is arithmetic rather than a judgement
+    call about which combinations are interesting.
+    """
+    nodeids = _synthetic_nodeids(count)
+    if coverage == "none":
+        durations = {}
+    elif coverage == "partial":
+        # Every third test known, with a wide spread so LPT actually moves them.
+        durations = {
+            nodeid: float((index % 17) ** 2)
+            for index, nodeid in enumerate(nodeids)
+            if index % 3 == 0
+        }
+    else:
+        durations = {
+            nodeid: float((index % 17) ** 2) for index, nodeid in enumerate(nodeids)
+        }
+
+    assignment = _time_balanced_shard_assignment(nodeids, total, durations)
+
+    assert len(assignment) == count, "One shard decision per collected test"
+    assert all(0 <= shard < total for shard in assignment), (
+        f"Assignment left the 0..{total - 1} range: {sorted(set(assignment))}"
+    )
+
+    covered = sorted(
+        position
+        for shard in range(total)
+        for position, chosen in enumerate(assignment)
+        if chosen == shard
+    )
+    assert covered == list(range(count)), (
+        "Shards are not a complete, disjoint partition of the collection for "
+        f"count={count} total={total} coverage={coverage}"
+    )
+
+
+def test_no_recorded_durations_reproduces_the_round_robin_deal():
+    """An empty map must be byte-for-byte the behaviour it replaced.
+
+    "Degrades to today's behaviour" has to be exact, not approximate: it is the
+    fallback every other failure path funnels into, so if it were subtly
+    different the safety argument for all of them would be untested.
+    """
+    nodeids = _synthetic_nodeids(50)
+    for total in (2, 3, 8):
+        assert _time_balanced_shard_assignment(nodeids, total, {}) == [
+            position % total for position in range(50)
+        ]
+
+
+def test_unknown_tests_keep_their_round_robin_position():
+    """A test the durations map has never seen is still placed, positionally.
+
+    New and renamed tests are the normal state of the map between refreshes.
+    They must not need the map to exist, and they must not be quietly excluded
+    from the deal, which is the failure that would look like a passing gate.
+    """
+    nodeids = _synthetic_nodeids(40)
+    known = {nodeid: 10.0 for index, nodeid in enumerate(nodeids) if index % 2 == 0}
+    total = 4
+
+    assignment = _time_balanced_shard_assignment(nodeids, total, known)
+
+    unknown_positions = [index for index in range(40) if index % 2 == 1]
+    assert [assignment[index] for index in unknown_positions] == [
+        index % total for index in unknown_positions
+    ], "Unknown tests must keep the positional fallback"
+
+
+def test_time_balanced_assignment_is_deterministic():
+    """The same collection and data give the identical partition, every time.
+
+    The shards decide independently, one process per runner, and never
+    compare notes. If the decision depended on dict/set
+    iteration order, a hash seed, or the order the data happened to be written
+    in, two shards could disagree and a test would be run twice or not at all —
+    with a green tick on it either way.
+    """
+    nodeids = _synthetic_nodeids(300)
+    durations = {
+        nodeid: float((index * 7919) % 401) / 3.0
+        for index, nodeid in enumerate(nodeids)
+        if index % 4 != 0
+    }
+    reversed_durations = dict(reversed(list(durations.items())))
+
+    baseline = _time_balanced_shard_assignment(nodeids, 8, durations)
+    for _ in range(5):
+        assert _time_balanced_shard_assignment(nodeids, 8, durations) == baseline
+    assert (
+        _time_balanced_shard_assignment(nodeids, 8, reversed_durations) == baseline
+    ), "Assignment changed when the durations map was written in another order"
+
+
+def test_ties_do_not_depend_on_collection_order_of_equal_tests():
+    """Equal durations break on nodeid, so the deal is stable and reproducible."""
+    nodeids = _synthetic_nodeids(64)
+    durations = dict.fromkeys(nodeids, 5.0)
+    assignment = _time_balanced_shard_assignment(nodeids, 8, durations)
+
+    counts = [assignment.count(shard) for shard in range(8)]
+    assert counts == [8] * 8, f"Equal-cost tests should deal evenly, got {counts}"
+    assert _time_balanced_shard_assignment(nodeids, 8, durations) == assignment
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("truncated.json", '{"durations": {"tests/a.py::t": 1.0'),
+        ("not_json.json", "this is a CI log, not the durations map"),
+        ("wrong_shape.json", '["tests/a.py::t", 1.0]'),
+        ("no_durations_key.json", '{"version": 1}'),
+        ("durations_not_object.json", '{"durations": []}'),
+        ("empty.json", ""),
+    ],
+)
+def test_unusable_duration_maps_degrade_to_round_robin(tmp_path, name, content):
+    """A corrupt or missing map yields ``{}`` and a warning, never an error.
+
+    A build must not fail because an optimisation input rotted, and it must not
+    silently keep using half of a truncated file either. The loud-but-harmless
+    middle is the only acceptable behaviour: warn, and fall back to the deal
+    that needs no data at all.
+    """
+    path = tmp_path / name
+    path.write_text(content, encoding="utf-8")
+
+    with pytest.warns(UserWarning):
+        assert _load_recorded_durations(path) == {}
+
+    with pytest.warns(UserWarning):
+        assert _load_recorded_durations(tmp_path / "absent.json") == {}
+
+
+def test_nonsense_duration_values_are_dropped_not_trusted(tmp_path):
+    """Negative, non-finite and non-numeric durations are rejected per entry.
+
+    A single ``-1e9`` would otherwise make one shard look infinitely cheap and
+    collect the entire suite, which is a balanced-looking green run that tested
+    everything on one runner.
+    """
+    path = tmp_path / "durations.json"
+    path.write_text(
+        json.dumps(
+            {
+                "durations": {
+                    "tests/a.py::good": 1.5,
+                    "tests/a.py::negative": -3.0,
+                    "tests/a.py::infinite": float("inf"),
+                    "tests/a.py::text": "12.0",
+                    "tests/a.py::boolean": True,
+                    "tests/a.py::integer": 4,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.warns(UserWarning):
+        durations = _load_recorded_durations(path)
+
+    assert durations == {"tests/a.py::good": 1.5, "tests/a.py::integer": 4.0}
+
+
+def test_committed_durations_map_is_well_formed():
+    """The shipped map parses, is non-trivial, and names plausible tests."""
+    assert DURATIONS_PATH.is_file(), (
+        f"Missing {DURATIONS_PATH}. --ci-shard still partitions without it, but "
+        "the gate falls back to count-balanced shards; regenerate it with "
+        "scripts/record_test_durations.py."
+    )
+    durations = _load_recorded_durations(DURATIONS_PATH)
+    assert len(durations) > 500, (
+        f"Only {len(durations)} durations recorded; the gate collects far more "
+        "than that, so this map was probably built from a truncated log."
+    )
+    malformed = [nodeid for nodeid in durations if "::" not in nodeid]
+    assert not malformed, f"Durations keys must be pytest nodeids: {malformed[:5]}"
+    outside = [nodeid for nodeid in durations if not nodeid.startswith("tests/")]
+    assert not outside, f"Durations keys must be rooted at tests/: {outside[:5]}"
+
+
+def test_recorded_durations_actually_balance_the_gate(workflow):
+    """The whole point, asserted: LPT flattens the shards, round-robin does not.
+
+    Modelled over the committed map at whatever shard count the gate currently
+    declares, read from the workflow rather than hardcoded — a resize must
+    re-prove the balance, not silently keep asserting it about the old N.
+    Balance matters MORE as N falls: with fewer, larger buckets a single
+    misplaced slow file moves the critical path further.
+
+    The positional baseline is computed in sorted-nodeid order, which is a
+    stand-in for collection order rather than the real thing — good enough to
+    show the difference in kind, and it is the *balanced* side that carries the
+    assertion. If a single test ever grows past a shard's share this fails, and
+    it should: no assignment can balance that, and the fix is the test.
+    """
+    durations = _load_recorded_durations(DURATIONS_PATH)
+    nodeids = sorted(durations)
+    total = len(_shard_matrix(workflow["jobs"][_GATE_JOB]))
+
+    assignment = _time_balanced_shard_assignment(nodeids, total, durations)
+    balanced = _shard_loads(nodeids, assignment, total, durations)
+    positional = _round_robin_loads(nodeids, total, durations)
+
+    assert max(balanced) < max(positional), (
+        f"Time-balanced shards ({max(balanced):.1f}s) are no faster than the "
+        f"positional deal ({max(positional):.1f}s) on the recorded data"
+    )
+    assert max(balanced) / min(balanced) < 1.05, (
+        "Time-balanced shards are still uneven on the recorded data: "
+        f"{[round(load, 1) for load in balanced]}"
+    )
+
+
+def test_negligible_tests_do_not_all_land_on_one_shard():
+    """Sub-millisecond tests must still be dealt, not dumped.
+
+    A greedy "cheapest shard wins" loop never changes which shard is cheapest
+    when the item it just placed cost 0.0, so every test that rounds to zero
+    goes to the same runner. Measured on the real map before the per-test floor
+    was added: 648 tests on shard 6 against ~153 on each of the others. Total
+    recorded load was perfectly level and the deal was still a valid partition,
+    so nothing else in this file noticed — a *balanced* wrong answer is the
+    hardest kind to see.
+    """
+    nodeids = _synthetic_nodeids(800)
+    durations = {
+        nodeid: (30.0 if index < 8 else 0.0) for index, nodeid in enumerate(nodeids)
+    }
+
+    assignment = _time_balanced_shard_assignment(nodeids, 8, durations)
+    counts = [assignment.count(shard) for shard in range(8)]
+
+    assert max(counts) <= 2 * min(counts), (
+        f"Zero-cost tests piled onto one shard instead of being dealt: {counts}"
+    )
+
+
+def test_duration_parser_reads_the_ids_pytest_actually_prints():
+    """The recorder must not quietly skip tests whose ids are awkward.
+
+    Requiring the nodeid to be a single non-space token dropped 19 real tests
+    from an otherwise complete map — every one of them a parametrised id
+    containing spaces. Nothing failed: the map simply had a hole, and the tests
+    in it were balanced as if brand new, forever. The GitHub log prefix is
+    covered here too, since ``gh run view --log`` is the intended refresh path.
+    """
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    try:
+        from record_test_durations import parse_durations
+    finally:
+        sys.path.pop(0)
+
+    parsed = parse_durations(
+        [
+            "0.42s call     tests/test_a.py::test_plain",
+            "0.01s setup    tests/test_a.py::test_plain",
+            "12.34s call     tests/test_b.py::test_p[Clementine holding a rifle]",
+            "backend\tRun tests\t2026-08-04T00:00:00.0Z 1.50s teardown "
+            "tests/test_b.py::test_p[Clementine holding a rifle]",
+            "5.00s call     not_tests/elsewhere.py::test_out_of_tree",
+            "note: 3.00s call is mentioned in prose",
+        ]
+    )
+
+    assert parsed == {
+        "tests/test_a.py::test_plain": 0.43,
+        "tests/test_b.py::test_p[Clementine holding a rifle]": 13.84,
+    }
+
+
+def test_block_shard_mode_never_consults_the_durations_map(monkeypatch):
+    """The sweep's contiguous blocks stay a pure function of collection order.
+
+    ``--ci-block-shard`` is an ordering control: re-dealing its blocks by
+    recorded time would preserve the partition and destroy the only property
+    the sweep exists to provide. Asserting "the blocks are still contiguous"
+    would not catch a well-behaved reordering, so this asserts the stronger
+    thing — block mode does not so much as *read* the data — by making the
+    read explode.
+    """
+
+    def _explode(path=None):
+        raise AssertionError("--ci-block-shard must not read the durations map")
+
+    monkeypatch.setattr(shard_conftest, "_load_recorded_durations", _explode)
+
+    nodeids = _synthetic_nodeids(20)
+    union: list[str] = []
+    for index in range(1, 5):
+        block = _shard_via_hook(nodeids, _BLOCK_OPTION, f"{index}/4")
+        start, stop = _block_shard_bounds(len(nodeids), index - 1, 4)
+        assert block == nodeids[start:stop]
+        union.extend(block)
+    assert union == nodeids
+
+    with pytest.raises(AssertionError, match="must not read the durations map"):
+        _shard_via_hook(nodeids, _ROUND_ROBIN_OPTION, "1/4")
+
+
+def test_hook_partitions_the_collection_with_the_committed_map():
+    """End to end through the real hook: the shards tile the collection.
+
+    Deliberately a fixed N rather than the gate's current one — this exercises
+    the hook itself, so it should keep testing a multi-shard split even if the
+    matrix is later resized down to two.
+    """
+    nodeids = _synthetic_nodeids(120) + sorted(_load_recorded_durations(DURATIONS_PATH))
+    total = 8
+
+    union: list[str] = []
+    for index in range(1, total + 1):
+        union.extend(_shard_via_hook(nodeids, _ROUND_ROBIN_OPTION, f"{index}/{total}"))
+
+    assert sorted(union) == sorted(nodeids), (
+        "The hook's shards are not a partition of the collection; "
+        f"missing={sorted(set(nodeids) - set(union))[:5]}, "
+        f"duplicated={len(union) - len(set(union))}"
+    )
+
+
+def test_shard_selection_is_reproducible_across_processes():
+    """Two independent pytest processes select the identical shard.
+
+    The unit tests above prove the algorithm is deterministic; this proves the
+    *process* is, which is the form the gate actually relies on — eight
+    interpreters, eight collections, one agreed partition.
+    """
+    targets = [
+        str(TESTS_DIR / "test_scope_table.py"),
+        str(TESTS_DIR / "test_ci_shards.py"),
+    ]
+
+    def collect() -> list[str]:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--collect-only",
+                "-q",
+                *targets,
+                "--ci-shard=2/4",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+        return [line for line in result.stdout.splitlines() if "::" in line]
+
+    first = collect()
+    assert first, "Expected shard 2/4 of the probe modules to be non-empty"
+    assert collect() == first, "Two runs of the same shard selected different tests"
+
+
+def test_backend_flags_record_the_durations_the_sharder_needs(workflow):
+    """CI must keep emitting the data the committed map is rebuilt from.
+
+    Dropping ``--durations`` would not break a single run — it would quietly
+    make the map unrefreshable, so it would rot until the gate was back to a
+    count-balanced deal with a stale file explaining why it should not be.
+    """
+    flags = workflow["env"]["PYTEST_FLAGS"]
+    assert "--durations=0" in flags, (
+        "PYTEST_FLAGS must keep --durations=0 so scripts/record_test_durations.py "
+        f"can rebuild tests/ci_test_durations.json; got {flags!r}"
+    )
+    assert "--durations-min=0" in flags, (
+        "PYTEST_FLAGS must keep --durations-min=0; pytest otherwise hides tests "
+        "under 5 ms, and a hidden test is indistinguishable from a new one, "
+        f"which the sharder charges the median cost. Got {flags!r}"
+    )
 
 
 @pytest.mark.parametrize("option", ["--ci-shard", "--ci-block-shard"])

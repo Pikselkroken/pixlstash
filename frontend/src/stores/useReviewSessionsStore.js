@@ -14,8 +14,9 @@
 // streak counters are monotonic — Undo never decrements them, and stickers are
 // never clawed back.
 
-import { ref, computed } from "vue";
+import { ref, computed, onScopeDispose } from "vue";
 import { defineStore } from "pinia";
+import { onSessionReset } from "../utils/apiClient";
 import { getUserConfig } from "../api/config";
 import {
   listReviews,
@@ -36,10 +37,8 @@ import {
   bulkReopenTagSuggestions,
 } from "../api/tagSuggestions";
 import { getTagHealth, rebuildTagHealth } from "../api/tagHealth";
-import { listCharacters } from "../api/characters";
-import { listProjects } from "../api/projects";
-import { listPictureSets } from "../api/pictureSets";
 import { getAnomalyRegion } from "../api/pictures";
+import { useEntityListsStore } from "./useEntityListsStore";
 import { SET_ICONS, SET_COLORS } from "../utils/setAppearance";
 
 const PAGE_SIZE = 200;
@@ -218,6 +217,11 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // archived receipt vs nothing once both lists exist.
   const pendingRestoreViewId = ref(null);
 
+  // Bumped by resetSession(). Every server read here belongs to exactly one
+  // authentication epoch; a response that lands after the credential changed
+  // is dropped rather than written into the next session's board.
+  let sessionEpoch = 0;
+
   // --- Sessions (open + archived reviews) -----------------------------------
   const sessions = ref([]); // OPEN reviews from GET /reviews?status=OPEN
   const archived = ref([]); // ARCHIVED reviews (same endpoint, status=ARCHIVED)
@@ -261,9 +265,15 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   const createError = ref(null);
 
   // --- Scope options (for the creation dialog) --------------------------------
-  const projects = ref([]);
-  const sets = ref([]);
-  const characters = ref([]);
+  // Read straight off the shared entity-list store: the same three lists the
+  // sidebar and the image context menu use (§4). `reference_pictures` is the
+  // system-owned set behind character references and is never a review scope.
+  const entityLists = useEntityListsStore();
+  const projects = computed(() => entityLists.projects);
+  const sets = computed(() =>
+    entityLists.pictureSets.filter((s) => s?.name !== "reference_pictures"),
+  );
+  const characters = computed(() => entityLists.characters);
 
   // Smart-score penalised ("anomaly") tags, lowercased, from the user config.
   const anomalyTags = ref(new Set());
@@ -399,21 +409,27 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
 
   async function fetchSessions() {
     sessionsLoading.value = true;
+    const requestEpoch = sessionEpoch;
     try {
       const rows = await listReviews("OPEN");
+      if (requestEpoch !== sessionEpoch) return;
       sessions.value = Array.isArray(rows) ? rows : [];
     } catch (e) {
+      if (requestEpoch !== sessionEpoch) return;
       error.value = e?.message || "Failed to load reviews";
     } finally {
-      sessionsLoading.value = false;
+      if (requestEpoch === sessionEpoch) sessionsLoading.value = false;
     }
   }
 
   async function fetchArchived() {
+    const requestEpoch = sessionEpoch;
     try {
       const rows = await listReviews("ARCHIVED");
+      if (requestEpoch !== sessionEpoch) return;
       archived.value = Array.isArray(rows) ? rows : [];
     } catch {
+      if (requestEpoch !== sessionEpoch) return;
       archived.value = [];
     }
   }
@@ -491,6 +507,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
 
   async function fetchHealth() {
     healthLoading.value = true;
+    const requestEpoch = sessionEpoch;
     try {
       const s = healthScope.value;
       const params = {};
@@ -499,7 +516,11 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       if (s.characterId != null) params.character_id = s.characterId;
       const body = await getTagHealth(params);
       // A stale response for a scope the user has already navigated away
-      // from must not clobber the current scope's rows.
+      // from must not clobber the current scope's rows. The epoch check is the
+      // same guard one level up: a different CREDENTIAL, not just a different
+      // scope, and `healthScope` is reset to the same object shape so identity
+      // alone would not catch it.
+      if (requestEpoch !== sessionEpoch) return;
       if (healthScope.value !== s) return;
       const data = body ?? {};
       healthRows.value = Array.isArray(data.rows) ? data.rows : [];
@@ -510,9 +531,10 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       healthStale.value = !!data.stale;
       scheduleHealthPoll();
     } catch (e) {
+      if (requestEpoch !== sessionEpoch) return;
       error.value = e?.message || "Failed to load tag health";
     } finally {
-      healthLoading.value = false;
+      if (requestEpoch === sessionEpoch) healthLoading.value = false;
     }
   }
 
@@ -578,32 +600,11 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     }
   }
 
-  // Populate the creation dialog's scope dropdowns (mirrors the old store: each
-  // call independent, degrades to an empty list on error).
-  async function fetchScopeOptions() {
-    listProjects()
-      .then((rows) => {
-        projects.value = Array.isArray(rows) ? rows : [];
-      })
-      .catch(() => {
-        projects.value = [];
-      });
-    listPictureSets()
-      .then((rows) => {
-        sets.value = Array.isArray(rows)
-          ? rows.filter((s) => s?.name !== "reference_pictures")
-          : [];
-      })
-      .catch(() => {
-        sets.value = [];
-      });
-    listCharacters()
-      .then((rows) => {
-        characters.value = Array.isArray(rows) ? rows : [];
-      })
-      .catch(() => {
-        characters.value = [];
-      });
+  // Populate the creation dialog's scope dropdowns. Whatever is cached renders
+  // at once; this only revalidates it. Each list degrades independently — the
+  // store keeps the last good one and logs the failure.
+  function fetchScopeOptions() {
+    return entityLists.invalidate();
   }
 
   // --- Anomaly-region overlay (heatmap + box) ---------------------------------
@@ -792,6 +793,53 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     tallies.value = {};
     seededReceipts.clear();
   }
+
+  /**
+   * Drop everything the PREVIOUS CREDENTIAL could see (issue #655 item 3).
+   *
+   * Deliberately a second function rather than a widening of `reset()`.
+   * `reset()` is the overlay-close path (`ReviewSessionsOverlay.vue`), and it
+   * leaves `sessions` / `archived` / the health rows in place on purpose so a
+   * reopen renders the board immediately while `load()` revalidates. Clearing
+   * those on every close would trade this fix for a flash of empty board on a
+   * far more common interaction. An auth-context change is the case where the
+   * cached board must NOT survive, so it gets its own entry point.
+   *
+   * The epoch bump is what closes the in-flight window: `load()` fans out five
+   * reads at once, and any of them can still be on the wire when the credential
+   * changes.
+   */
+  function resetSession() {
+    sessionEpoch += 1;
+    reset();
+    sessions.value = [];
+    archived.value = [];
+    sessionsLoading.value = false;
+    healthRows.value = [];
+    healthBuilding.value = false;
+    healthProgress.value = 0;
+    healthComputedAt.value = null;
+    healthLoading.value = false;
+    healthStale.value = false;
+    healthScope.value = { projectId: null, setId: null, characterId: null };
+    creating.value = false;
+    anomalyTags.value = new Set();
+    regionInFlight.clear();
+    // Session bookkeeping, not the persisted shelf: `stickers` and `gamify`
+    // are localStorage UI preferences (confirmed non-scope-sensitive in the
+    // #646 review) and stay, but the running count belongs to the sitting that
+    // just ended.
+    decisionsCount.value = 0;
+    decisionTick.value = 0;
+    awardState.since = 0;
+    awardState.next = 1;
+    awardState.lastIcon = -1;
+  }
+
+  // Logout / login / share-token entry all funnel through the one chokepoint in
+  // apiClient (`notifySessionReset`).
+  const unsubscribeSessionReset = onSessionReset(resetSession);
+  onScopeDispose(() => unsubscribeSessionReset());
 
   // --- Session lifecycle ----------------------------------------------------------
 
@@ -1277,6 +1325,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     openSession,
     openArchived,
     reset,
+    resetSession,
     createReview,
     refreshSession,
     archiveSession,

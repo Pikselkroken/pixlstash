@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "pixlstash-telemetry",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-03",
+
+  // Keep the static site off the Worker and make telemetry independently
+  // blockable by self-hosters.
+  "routes": [
+    { "pattern": "t.pixlstash.dev/v1/*", "zone_name": "pixlstash.dev" }
+  ],
+
+  // database_id is deliberately absent from source control. Create the EU-
+  // jurisdiction database with the documented command, which updates this
+  // local config with its real UUID. The deploy script disables Wrangler's
+  // automatic provisioning so it cannot silently create a non-EU database.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "pixlstash-telemetry" }
+  ],
+
+  "ratelimits": [
+    {
+      "name": "RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 20, "period": 60 }
+    }
+  ],
+
+  // Each trigger performs a bounded, restartable slice. A frequent trigger is
+  // needed to make progress through the five-million-row storage ceiling.
+  "triggers": { "crons": ["*/5 * * * *"] },
+
+  // The Free plan's 10 ms Cron CPU limit cannot support this workload. This
+  // explicit limit makes Workers Paid a deployment prerequisite.
+  "limits": { "cpu_ms": 30000 },
+
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "head_sampling_rate": 1
+    },
+    "traces": { "enabled": true, "head_sampling_rate": 0.05 }
+  }
+}

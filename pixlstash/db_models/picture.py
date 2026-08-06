@@ -6,10 +6,11 @@ import numpy as np
 from datetime import datetime
 
 from enum import Enum, auto, IntEnum
-from sqlalchemy import Float, String, desc, func, or_, text
+from sqlalchemy import Float, Index, String, desc, func, or_, text
 from sqlalchemy.orm import aliased, load_only, selectinload
 from sqlalchemy.types import LargeBinary
 from sqlmodel import (
+    Boolean,
     Column,
     DateTime,
     SQLModel,
@@ -22,6 +23,12 @@ from sqlmodel import (
 from typing import ClassVar, Optional, List, Union, TYPE_CHECKING
 
 from .character import Character
+from .entity_project import (
+    character_in_no_project,
+    character_in_project,
+    picture_set_in_no_project,
+    picture_set_in_project,
+)
 from .face import Face
 from .picture_project import PictureProjectMember
 from .picture_set import PictureSet, PictureSetMember
@@ -56,6 +63,7 @@ class SortMechanism:
         IMAGE_SIZE = auto()
         SMART_SCORE = auto()
         TEXT_CONTENT = auto()
+        STACK_UPDATED_AT = auto()
 
     MECHANISMS = {
         Keys.DATE: {
@@ -81,6 +89,10 @@ class SortMechanism:
         Keys.TEXT_CONTENT: {
             "field": None,  # Special case, requires Quality join
             "description": "Text Content",
+        },
+        Keys.STACK_UPDATED_AT: {
+            "field": None,  # Special case, orders through PictureStack
+            "description": "Recently changed stacks",
         },
         Keys.CHARACTER_LIKENESS: {
             "field": "character_likeness",
@@ -313,6 +325,36 @@ class Picture(SQLModel, table=True):
         default=None,
         sa_column=Column("metadata_hash", String, default=None, nullable=True),
     )
+    # Whether this picture is a video. Replaces the CASE over five
+    # ``file_path ILIKE '%.ext'`` tests that ``fetch_best_picture_id`` used to
+    # sort on. That is a constant-factor win (five LIKEs per row, not one column
+    # read) and NOT a sargability fix: the ordering still needs a temp B-tree,
+    # because that query drives from ``face`` while the ordering key lives on
+    # ``picture``, so no index on ``picture`` alone can serve it. Measured on
+    # 200k pictures, 45k faces on one character: 82 ms to 48 ms, temp B-tree in
+    # both plans. Do not read this column as having made that endpoint O(1).
+    #
+    # NOT NULL with a server default is load-bearing, not tidiness. SQLite sorts
+    # NULL FIRST, so a NULL here would outrank ``False`` and hand the character
+    # thumbnail to a row of unknown type ahead of a genuine still image, which
+    # the CASE it replaces could never do since it only ever yielded 0 or 1. A
+    # NULL would also be invisible to the ``= 0`` backfill guard in 0096 and so
+    # never repaired.
+    #
+    # Best-effort, and deliberately not one definition. Three writers disagree
+    # at the edges: the main import path (``create_picture_from_bytes``) sets it
+    # when PIL fails to decode the bytes, the reference-folder scan sets it from
+    # the extension, and 0096's backfill used the extension list of the day. So
+    # a ``.wmv`` is True on import and False from a scan, and a HEIC that PIL
+    # cannot open is True. Read it as "the decode path treated this as a video",
+    # not as a content-type. Fine for ordering preference; check before relying
+    # on it for anything that must be exact.
+    is_video: bool = Field(
+        default=False,
+        sa_column=Column(
+            "is_video", Boolean, nullable=False, server_default="0", index=False
+        ),
+    )
 
     # Relationships
     quality: Optional["Quality"] = Relationship(
@@ -383,6 +425,42 @@ class Picture(SQLModel, table=True):
             "cascade": "all, delete-orphan",
             "passive_deletes": True,
         },
+    )
+
+    # Partial indexes for the two hottest idle work probes (issue #651). The
+    # WorkPlanner sweeps every finder on a short interval, so both of these run
+    # continuously even on a fully-processed library, where they match nothing.
+    # Without them SQLite serves both from ``ix_picture_deleted`` and walks EVERY
+    # non-deleted row to prove there is no work; scoped to the matching rows the
+    # probe is O(rows that actually need work), i.e. free when idle.
+    #
+    # Column order is load-bearing, not cosmetic. The obvious ``(id)``-only form
+    # does NOT get chosen: this database never runs ``ANALYZE``, so there is no
+    # ``sqlite_stat1``, and without statistics SQLite scores a partial index by the
+    # table's default row estimate. It only wins when it can claim MORE equality
+    # terms than the index it competes with. Leading with the nullable column makes
+    # ``<col> IS NULL`` a usable equality term (SQLite treats ``IS NULL`` as one),
+    # and ``deleted`` a second, which beats single-term ``ix_picture_deleted``
+    # outright rather than tying with it and losing on a creation-order tie-break.
+    # Trailing ``id`` keeps ``ORDER BY picture.id`` free (no temp B-tree).
+    # Measured on 200k rows with 3 matching: 17.9 ms -> under 0.01 ms per probe.
+    __table_args__ = (
+        # MissingThumbnailFinder: thumbnail_width IS NULL AND deleted IS 0.
+        Index(
+            "ix_picture_thumbnail_missing",
+            "thumbnail_width",
+            "deleted",
+            "id",
+            sqlite_where=text("thumbnail_width IS NULL"),
+        ),
+        # MissingSmartScoreFinder: smart_score IS NULL AND deleted IS 0.
+        Index(
+            "ix_picture_smart_score_missing",
+            "smart_score",
+            "deleted",
+            "id",
+            sqlite_where=text("smart_score IS NULL"),
+        ),
     )
 
     class Config:
@@ -462,6 +540,7 @@ class Picture(SQLModel, table=True):
         comfyui_loras_filter: Optional[List[str]] = None,
         tags_filter: Optional[List[str]] = None,
         tags_rejected_filter: Optional[List[str]] = None,
+        stack_state: Optional[str] = None,
     ) -> List["Picture"]:
         """
         Hybrid semantic search: combines fuzzy tag search (levenshtein SQL function) and embedding similarity (cosine_similarity SQL function).
@@ -609,6 +688,7 @@ class Picture(SQLModel, table=True):
             comfyui_loras_filter=comfyui_loras_filter,
             tags_filter=tags_filter,
             tags_rejected_filter=tags_rejected_filter,
+            stack_state=stack_state,
             only_deleted=only_deleted,
             include_deleted=include_deleted,
             include_unimported=include_unimported,
@@ -706,6 +786,7 @@ class Picture(SQLModel, table=True):
         tags_confidence_below_filter: Optional[List[str]] = None,
         hidden_tags_filter: Optional[List[str]] = None,
         face_filter: Optional[str] = None,
+        stack_state: Optional[str] = None,
         impossible_sources: Optional[List[str]] = None,
         min_score: Optional[int] = None,
         max_score: Optional[int] = None,
@@ -804,6 +885,7 @@ class Picture(SQLModel, table=True):
             tags_confidence_above_filter=tags_confidence_above_filter,
             tags_confidence_below_filter=tags_confidence_below_filter,
             face_filter=face_filter,
+            stack_state=stack_state,
             impossible_sources=impossible_sources,
             file_path_prefix=file_path_prefix,
             only_deleted=only_deleted,
@@ -828,7 +910,96 @@ class Picture(SQLModel, table=True):
         # was unacceptably slow on large libraries.
         if stack_leaders_only:
             project_scope = search.get("project_id", _NO_PROJECT_SCOPE)
-            if project_scope is _NO_PROJECT_SCOPE or isinstance(
+            id_scope: list[int] = []
+            raw_id_scope = search.get("id")
+            if isinstance(raw_id_scope, (list, tuple, set)):
+                for raw in raw_id_scope:
+                    try:
+                        id_scope.append(int(raw))
+                    except (TypeError, ValueError):
+                        continue
+            if id_scope:
+                # An explicit id filter (a picture set, a share token's scope, a
+                # split) narrows the grid to those pictures. Represent each
+                # stack by its lowest-positioned member INSIDE that filter:
+                # the global position-0 leader may not be in it, and requiring
+                # it rendered NEITHER picture — a set containing only a
+                # non-cover stack member showed 5 tiles for its 6 members and
+                # no stack at all (the owner's #670/#1746 report). Same rule
+                # as the project-scoped branch below, scoped to the id list.
+                #
+                # The rank is resolved ONCE, in a derived table, instead of per
+                # candidate row.  The first cut of this branch compared each row
+                # against an aliased picture and re-tested the whole id list
+                # inside that subquery, so it cost (id-list size x stacked
+                # fraction).  Measured on a 19,822-picture vault: a 6,641-id set
+                # view spent 102 ms on the COUNT(*) that every grid load runs,
+                # against 4.6 ms for the unscoped fast path below, and the same
+                # shape took seconds once most rows in scope were stacked.
+                # Ranking is the same operation for every member of a stack, so
+                # it belongs in a single pass: the same set view now costs 9.7 ms
+                # and returns the identical id set.  The EXISTS below still
+                # correlates, but only against that already-computed
+                # one-row-per-stack result, which SQLite materialises once and
+                # probes through an automatic index.
+                cur_pos = func.coalesce(cls.stack_position, 999999)
+                # One row per (stack, in-scope member), ranked by the SAME
+                # ordering the correlated form compared on: NULL positions sort
+                # last (999999), ties broken by ascending id.
+                ranked_members = (
+                    select(
+                        cls.stack_id.label("stack_id"),
+                        cls.id.label("member_id"),
+                        func.coalesce(cls.stack_position, 999999).label("member_pos"),
+                        func.row_number()
+                        .over(
+                            partition_by=cls.stack_id,
+                            order_by=(
+                                func.coalesce(cls.stack_position, 999999),
+                                cls.id,
+                            ),
+                        )
+                        .label("member_rank"),
+                    )
+                    .where(
+                        cls.stack_id.is_not(None),
+                        cls.deleted.is_(False),
+                        cls.id.in_(id_scope),
+                    )
+                    .subquery("scoped_stack_members")
+                )
+                # rank 1 is the highest-ranked in-scope member of each stack,
+                # exactly the row the correlated EXISTS was searching for.
+                scoped_leader = (
+                    select(
+                        ranked_members.c.stack_id,
+                        ranked_members.c.member_id,
+                        ranked_members.c.member_pos,
+                    )
+                    .where(ranked_members.c.member_rank == 1)
+                    .subquery("scoped_stack_leader")
+                )
+                # Testing the one leader row is equivalent to the old "does ANY
+                # sibling outrank me" test: if any member outranks this row,
+                # the best-ranked one does, and a row never outranks itself.
+                # A stack with no in-scope, non-deleted member at all (the trash
+                # view, where every candidate row is deleted) has no leader row,
+                # so nothing outranks the candidate and it is kept, exactly as
+                # the sibling EXISTS left it.
+                leader_outranks_candidate = exists(
+                    select(scoped_leader.c.member_id).where(
+                        scoped_leader.c.stack_id == cls.stack_id,
+                        or_(
+                            scoped_leader.c.member_pos < cur_pos,
+                            (scoped_leader.c.member_pos == cur_pos)
+                            & (scoped_leader.c.member_id < cls.id),
+                        ),
+                    )
+                )
+                query = query.where(
+                    or_(cls.stack_id.is_(None), ~leader_outranks_candidate)
+                )
+            elif project_scope is _NO_PROJECT_SCOPE or isinstance(
                 project_scope, (list, tuple)
             ):
                 # Unscoped (or multi-project) grid: fast path — leader is the
@@ -916,6 +1087,20 @@ class Picture(SQLModel, table=True):
                     query = query.order_by(cls.text_score.desc(), cls.id.desc())
                 else:
                     query = query.order_by(cls.text_score.asc(), cls.id.asc())
+            elif sort_mech.key == SortMechanism.Keys.STACK_UPDATED_AT:
+                # A stack-level sort: every member shares the stack timestamp,
+                # while the collapsed grid contributes one leader row. Keep
+                # loose pictures after real stacks if a client deep-links this
+                # mechanism outside the stacked-only view where the UI offers
+                # it. The PK join is one-to-one and cannot duplicate pictures.
+                query = query.outerjoin(PictureStack, PictureStack.id == cls.stack_id)
+                query = query.order_by(
+                    cls.stack_id.is_(None).asc(),
+                    PictureStack.updated_at.desc()
+                    if sort_mech.descending
+                    else PictureStack.updated_at.asc(),
+                    cls.id.desc() if sort_mech.descending else cls.id.asc(),
+                )
             elif sort_mech.key == SortMechanism.Keys.SCORE and guest_session_id:
                 # Guest session: sort by the guest's own score, falling back to
                 # picture.score when no guest_score row exists for this picture.
@@ -1057,6 +1242,7 @@ class Picture(SQLModel, table=True):
         tags_confidence_below_filter: Optional[List[str]] = None,
         hidden_tags_filter: Optional[List[str]] = None,
         face_filter: Optional[str] = None,
+        stack_state: Optional[str] = None,
         impossible_sources: Optional[List[str]] = None,
         picture_ids: Optional[List[int]] = None,
         guest_session_id: Optional[str] = None,
@@ -1110,6 +1296,7 @@ class Picture(SQLModel, table=True):
             tags_confidence_above_filter=tags_confidence_above_filter,
             tags_confidence_below_filter=tags_confidence_below_filter,
             face_filter=face_filter,
+            stack_state=stack_state,
             impossible_sources=impossible_sources,
             apply_deleted_filter=False,
         ).apply(query)
@@ -1193,6 +1380,17 @@ class Picture(SQLModel, table=True):
                     else Picture.text_score.asc(),
                     Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
                 )
+            elif sort_mech.key == SortMechanism.Keys.STACK_UPDATED_AT:
+                query = query.outerjoin(
+                    PictureStack, PictureStack.id == Picture.stack_id
+                )
+                query = query.order_by(
+                    Picture.stack_id.is_(None).asc(),
+                    PictureStack.updated_at.desc()
+                    if sort_mech.descending
+                    else PictureStack.updated_at.asc(),
+                    Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
+                )
             elif sort_mech.key == SortMechanism.Keys.SCORE and guest_session_id:
                 # Guest session: sort by the guest's own score, falling back to
                 # picture.score when no guest_score row exists for this picture.
@@ -1236,14 +1434,16 @@ class Picture(SQLModel, table=True):
         so all pictures in that stack are excluded from unassigned queries.
 
         When assignment project scope is provided, assignment is evaluated only
-        against characters/sets in that same project scope.
+        against characters/sets in that same project scope. Since issue #125 a
+        character or set may belong to several projects, so the scope predicates
+        read the membership join tables rather than the primary-project FK.
         """
         if assignment_unassigned_project:
-            project_scope = Character.project_id.is_(None)
-            set_scope = PictureSet.project_id.is_(None)
+            project_scope = character_in_no_project()
+            set_scope = picture_set_in_no_project()
         elif assignment_project_id is not None:
-            project_scope = Character.project_id == assignment_project_id
-            set_scope = PictureSet.project_id == assignment_project_id
+            project_scope = character_in_project(assignment_project_id)
+            set_scope = picture_set_in_project(assignment_project_id)
         else:
             project_scope = None
             set_scope = None

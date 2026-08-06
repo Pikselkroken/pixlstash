@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ref } from "vue";
+import { setActivePinia, createPinia } from "pinia";
+import { useGridStore } from "../stores/useGridStore.js";
+import { useSearchStore } from "../stores/useSearchStore.js";
 
 // The composable imports the singleton apiClient for isReadOnly; mock it so no
 // real axios instance is constructed and read-only is deterministic.
@@ -21,6 +24,10 @@ function makeNav({
   justified = null,
   scrollWrapper = null,
   lastSelectedImageId = null,
+  ghostedIndexes = [],
+  showSelectionBar = true,
+  searchResultsActive = false,
+  searchQuery = "",
 } = {}) {
   const selectedImageIds = ref(["a", "b"]);
   const deleteSelected = vi.fn();
@@ -33,7 +40,8 @@ function makeNav({
     visibleStart: ref(0),
     overlayOpen: ref(false),
     reviewOverlayOpen: ref(reviewOverlayOpen),
-    showSelectionBar: ref(true),
+    showSelectionBar: ref(showSelectionBar),
+    searchResultsActive: ref(searchResultsActive),
     selectedImageIds,
     lastSelectedImageId,
     cursorIdx: ref(cursorIdx),
@@ -43,23 +51,40 @@ function makeNav({
     toolbarSelectionMenuOpen: ref(false),
     isJustifiedMode: ref(justified !== null),
     justifiedLayout: ref(justified),
+    isGhosted: (index) => ghostedIndexes.includes(index),
   };
 
+  const openOverlay = vi.fn();
+  const clearSearchQuery = vi.fn();
   const callbacks = {
     clearFaceSelection: vi.fn(),
-    clearSearchQuery: vi.fn(),
+    clearSearchQuery,
     scrollCursorIntoView: vi.fn(),
-    openOverlay: vi.fn(),
+    openOverlay,
     deleteSelected,
     selectionBarRef: ref({ openTagInput: vi.fn() }),
     applyScoresForSelection,
     setScore: vi.fn(),
   };
 
-  const props = { columns: 3, searchQuery: "" };
+  // The composable takes the column count from the grid store; size level 6
+  // ("huge") is the 3-column step these navigation cases are written against.
+  useGridStore().sizeLevel = 6;
+  // It also reads the text query from the search STORE now (App.vue slim-down,
+  // #661), not from a prop, so the helper's `searchQuery` has to be seeded
+  // there or the Esc-clears-search cases would exercise an empty query.
+  useSearchStore().searchQuery = searchQuery;
+  const props = {};
   const emit = vi.fn();
   const { handleKeyDown } = useGridKeyboardNav(deps, props, emit, callbacks);
-  return { handleKeyDown, deps, deleteSelected, applyScoresForSelection };
+  return {
+    handleKeyDown,
+    deps,
+    deleteSelected,
+    applyScoresForSelection,
+    openOverlay,
+    clearSearchQuery,
+  };
 }
 
 function keyEvent(overrides) {
@@ -68,6 +93,8 @@ function keyEvent(overrides) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The composable reads the grid's column count from the store.
+  setActivePinia(createPinia());
 });
 
 describe("useGridKeyboardNav — review-overlay guard (F1)", () => {
@@ -180,14 +207,7 @@ describe("useGridKeyboardNav — justified vertical navigation", () => {
     handleKeyDown(keyEvent({ key: "PageDown", shiftKey: true }));
     // Row 2's nearest-center item from center 50 is idx 5 (center 50).
     expect(deps.cursorIdx.value).toBe(5);
-    expect(deps.selectedImageIds.value).toEqual([
-      "a",
-      "b",
-      "c",
-      "d",
-      "e",
-      "f",
-    ]);
+    expect(deps.selectedImageIds.value).toEqual(["a", "b", "c", "d", "e", "f"]);
   });
 
   it("square mode keeps the uniform index ± columns arithmetic", () => {
@@ -200,5 +220,144 @@ describe("useGridKeyboardNav — justified vertical navigation", () => {
     expect(deps.cursorIdx.value).toBe(4); // 1 + columns(3)
     handleKeyDown(keyEvent({ key: "ArrowUp" }));
     expect(deps.cursorIdx.value).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scrapheap ghosts
+// ---------------------------------------------------------------------------
+//
+// A ghosted tile is on screen but inert — already in the Scrapheap, held there
+// only while its undo is one click away. The cursor SKIPS them: parking on one
+// would make every following key (Space, Enter, a digit) silently do nothing,
+// which is indistinguishable from a broken feature.
+
+describe("useGridKeyboardNav — ghosted tiles", () => {
+  it("skips a ghosted tile in the direction of travel", () => {
+    const { handleKeyDown, deps } = makeNav({
+      images: NINE_IMAGES,
+      cursorIdx: 0,
+      ghostedIndexes: [1, 2],
+    });
+    handleKeyDown(keyEvent({ key: "ArrowRight" }));
+    expect(deps.cursorIdx.value).toBe(3);
+    handleKeyDown(keyEvent({ key: "ArrowLeft" }));
+    expect(deps.cursorIdx.value).toBe(0);
+  });
+
+  it("stays put when every cell ahead is ghosted", () => {
+    const { handleKeyDown, deps } = makeNav({
+      images: NINE_IMAGES,
+      cursorIdx: 6,
+      ghostedIndexes: [7, 8],
+    });
+    handleKeyDown(keyEvent({ key: "ArrowRight" }));
+    expect(deps.cursorIdx.value).toBe(6);
+  });
+
+  it("skips ghosts on the vertical move too", () => {
+    const { handleKeyDown, deps } = makeNav({
+      images: NINE_IMAGES,
+      cursorIdx: 0,
+      ghostedIndexes: [3],
+    });
+    // Down lands on 3 (0 + columns), which is ghosted → scan forward to 4.
+    handleKeyDown(keyEvent({ key: "ArrowDown" }));
+    expect(deps.cursorIdx.value).toBe(4);
+  });
+
+  it("leaves ghosts out of a Shift+arrow range", () => {
+    const { handleKeyDown, deps } = makeNav({
+      images: NINE_IMAGES,
+      cursorIdx: 0,
+      lastSelectedImageId: "a",
+      ghostedIndexes: [1],
+    });
+    handleKeyDown(keyEvent({ key: "ArrowRight", shiftKey: true }));
+    // The cursor skips the ghost at 1 and lands on 2; the span 0..2 then drops
+    // the ghost silently — a count that included it would be the surprise.
+    expect(deps.selectedImageIds.value).toEqual(["a", "c"]);
+  });
+
+  it("leaves ghosts out of Ctrl+A", () => {
+    const { handleKeyDown, deps } = makeNav({
+      images: NINE_IMAGES,
+      ghostedIndexes: [0, 5],
+    });
+    handleKeyDown(keyEvent({ key: "a", ctrlKey: true }));
+    // "Select all" has to mean "all a bulk action can act on".
+    expect(deps.selectedImageIds.value).not.toContain("a");
+    expect(deps.selectedImageIds.value).not.toContain("f");
+    expect(deps.selectedImageIds.value).toHaveLength(7);
+  });
+
+  it("does not open the lightbox on a ghost the cursor was already sitting on", () => {
+    const { handleKeyDown, openOverlay } = makeNav({
+      images: NINE_IMAGES,
+      cursorIdx: 2,
+      ghostedIndexes: [2],
+    });
+    handleKeyDown(keyEvent({ key: "Enter" }));
+    expect(openOverlay).not.toHaveBeenCalled();
+  });
+
+  it("does not toggle selection with Space on a ghost under the cursor", () => {
+    const { handleKeyDown, deps } = makeNav({
+      images: NINE_IMAGES,
+      cursorIdx: 2,
+      ghostedIndexes: [2],
+    });
+    const before = [...deps.selectedImageIds.value];
+    handleKeyDown(keyEvent({ key: " " }));
+    expect(deps.selectedImageIds.value).toEqual(before);
+  });
+});
+
+// Esc peels one layer per press: an open menu, then the selection, then the
+// search. The grid action pill puts an Esc keycap on whichever button the key
+// will actually reach, so the ladder has to match what the keycap promises
+// (merged-grid-action-pill.md §6.1).
+describe("Escape ladder", () => {
+  it("clears the selection first and leaves the search alone", () => {
+    const { handleKeyDown, deps, clearSearchQuery } = makeNav({
+      showSelectionBar: true,
+      searchQuery: "sunset",
+    });
+    handleKeyDown(keyEvent({ key: "Escape" }));
+    expect(deps.selectedImageIds.value).toEqual([]);
+    expect(clearSearchQuery).not.toHaveBeenCalled();
+  });
+
+  it("clears a text search once nothing is selected", () => {
+    const { handleKeyDown, clearSearchQuery } = makeNav({
+      showSelectionBar: false,
+      searchQuery: "sunset",
+    });
+    handleKeyDown(keyEvent({ key: "Escape" }));
+    expect(clearSearchQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a search that has no query string behind it", () => {
+    // Reverse image, similar faces and a person face search all produce results
+    // with an empty `searchQuery`. The gate only ever asked about the text
+    // query, so Esc silently did nothing in those modes even though
+    // `clearSearchQuery` has always reset them.
+    const { handleKeyDown, clearSearchQuery } = makeNav({
+      showSelectionBar: false,
+      searchResultsActive: true,
+      searchQuery: "",
+    });
+    handleKeyDown(keyEvent({ key: "Escape" }));
+    expect(clearSearchQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not clear a search that is not running", () => {
+    const { handleKeyDown, clearSearchQuery } = makeNav({
+      showSelectionBar: false,
+      searchResultsActive: false,
+      searchQuery: "",
+    });
+    handleKeyDown(keyEvent({ key: "Escape" }));
+    expect(clearSearchQuery).not.toHaveBeenCalled();
   });
 });

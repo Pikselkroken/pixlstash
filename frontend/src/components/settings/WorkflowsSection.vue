@@ -361,6 +361,11 @@ function extractWorkflowInputs(payload) {
   return entries;
 }
 
+// Nodes that end a graph with an image PixlStash can own: SaveImage writes a
+// file the backend collects, the ComfyUI-PixlStash saver uploads to the vault
+// itself. Keep in sync with SAVE_NODE_CLASSES in services/comfyui_service.py.
+const SAVE_NODE_TYPES = new Set(["SaveImage", "PixlStashPictureSaver"]);
+
 function extractWorkflowOutputs(payload) {
   const entries = [];
   if (!payload || typeof payload !== "object") return entries;
@@ -373,7 +378,7 @@ function extractWorkflowOutputs(payload) {
     Object.entries(prompt).forEach(([nodeId, node]) => {
       if (isNodeDisabled(node)) return;
       const nodeType = node?.class_type || node?.type || "Node";
-      if (nodeType !== "SaveImage") return;
+      if (!SAVE_NODE_TYPES.has(nodeType)) return;
       entries.push({
         id: String(nodeId),
         label: `${nodeType} · ${nodeId}`,
@@ -400,7 +405,7 @@ function extractWorkflowOutputs(payload) {
       Object.entries(payload).forEach(([nodeId, node]) => {
         if (isNodeDisabled(node)) return;
         const nodeType = node?.class_type || node?.type || "Node";
-        if (nodeType !== "SaveImage") return;
+        if (!SAVE_NODE_TYPES.has(nodeType)) return;
         entries.push({
           id: String(nodeId),
           label: `${nodeType} · ${nodeId}`,
@@ -416,7 +421,7 @@ function extractWorkflowOutputs(payload) {
     payload.nodes.forEach((node, nodeIndex) => {
       if (isNodeDisabled(node)) return;
       const nodeType = node?.type || node?.class_type || "Node";
-      if (nodeType !== "SaveImage") return;
+      if (!SAVE_NODE_TYPES.has(nodeType)) return;
       entries.push({
         id: String(nodeIndex),
         label: `${nodeType} · ${nodeIndex + 1}`,
@@ -806,7 +811,7 @@ watch(
           :items="workflowOutputNodeOptions"
           item-title="title"
           item-value="value"
-          label="SaveImage outputs"
+          label="Output nodes"
           multiple
           density="compact"
           variant="outlined"
@@ -814,10 +819,10 @@ watch(
           :disabled="!workflowOutputNodeOptions.length"
         />
         <div v-if="!workflowOutputNodeOptions.length" class="wf-dialog-note">
-          No SaveImage nodes detected. Outputs will be auto-detected.
+          No save nodes detected. Outputs will be auto-detected.
         </div>
         <div v-else class="wf-status">
-          Leave empty to use all SaveImage nodes.
+          Leave empty to use all save nodes.
         </div>
         <div v-if="workflowImportError" class="wf-error">
           {{ workflowImportError }}

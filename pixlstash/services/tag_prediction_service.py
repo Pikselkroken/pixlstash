@@ -21,6 +21,7 @@ from pixlstash.utils.service.label_ledger import (
     record_human_label,
 )
 from pixlstash.utils.service.smart_score_invalidation import (
+    InteractiveRescoreRegistry,
     invalidate_on_anomaly_change,
 )
 from pixlstash.utils.service.tag_prediction_utils import (
@@ -57,10 +58,82 @@ def get_predictions(
     return vault.db.run_immediate_read_task(_fetch)
 
 
+def confirm_tag_prediction_in_session(
+    session: Session,
+    pic_id: int,
+    tag: str,
+    registry: "InteractiveRescoreRegistry | None" = None,
+    origin_client_id: str | None = None,
+    *,
+    commit: bool = True,
+) -> None:
+    """Mark a prediction as CONFIRMED and ensure the Tag row exists.
+
+    Session-level so the route can hand it to
+    :func:`~pixlstash.services.operation_log_service.run_recorded_metadata_task`,
+    which snapshots the picture's facets on either side of this call inside the
+    same queued DB task (§21.2). The lock guard runs *here*, before anything is
+    written, so a refused confirm records no operation.
+
+    Args:
+        session: Active DB session.
+        pic_id: Picture ID owning the prediction.
+        tag: Tag value to confirm.
+        registry: The vault's interactive rescore registry (see :func:`confirm_tag_prediction`).
+        origin_client_id: The originating tab's ``X-Client-Id``.
+        commit: Commit before returning. The operation-log wrapper passes
+            ``False`` so it owns the mutation and receipt transaction.
+
+    Raises:
+        KeyError: If no prediction with the given tag exists for the picture.
+    """
+    # Confirming promotes a prediction to a Tag and writes a human POS — label
+    # data frozen when the picture is in a locked set.
+    enforce_pictures_not_locked(session, [pic_id], "confirm a tag on a locked picture")
+    prediction = session.exec(
+        select(TagPrediction).where(
+            TagPrediction.picture_id == pic_id,
+            TagPrediction.tag == tag,
+        )
+    ).first()
+    if prediction is None:
+        raise KeyError(f"Prediction not found: picture_id={pic_id} tag={tag!r}")
+
+    # Confirming an anomaly tag folds its probability to 1.0 in the scorer's
+    # inputs, so the cached smart score must be dropped for recompute.
+    with invalidate_on_anomaly_change(
+        session,
+        [pic_id],
+        context="confirm tag prediction",
+        registry=registry,
+        origin_client_id=origin_client_id,
+    ):
+        # Record the human acceptance, snapshotting the tagger version/confidence the
+        # reviewer agreed with (frozen in label_model_version/label_confidence).
+        record_human_label(session, pic_id, tag, POS)
+
+        existing_tag = session.exec(
+            select(Tag).where(Tag.picture_id == pic_id, Tag.tag == tag)
+        ).first()
+        if existing_tag is None:
+            session.add(Tag(picture_id=pic_id, tag=tag))
+
+        session.flush()
+        recompute_anomaly_tag_uncertainty(session, pic_id)
+    if commit:
+        session.commit()
+    else:
+        session.flush()
+
+
 def confirm_tag_prediction(
     vault: "Vault", pic_id: int, tag: str, origin_client_id: str | None = None
 ) -> None:
     """Mark a prediction as CONFIRMED and ensure the Tag row exists.
+
+    The vault-level wrapper, for callers that are not recording an operation. The
+    HTTP route records one, so it calls :func:`confirm_tag_prediction_in_session`
+    through the operation log instead.
 
     Args:
         vault: Application vault, used for DB task dispatch.
@@ -76,52 +149,72 @@ def confirm_tag_prediction(
     Raises:
         KeyError: If no prediction with the given tag exists for the picture.
     """
+    vault.db.run_task(
+        confirm_tag_prediction_in_session,
+        pic_id,
+        tag,
+        vault.interactive_rescore_registry,
+        origin_client_id,
+    )
 
-    def _confirm(session: Session) -> None:
-        # Confirming promotes a prediction to a Tag and writes a human POS — label
-        # data frozen when the picture is in a locked set.
-        enforce_pictures_not_locked(
-            session, [pic_id], "confirm a tag on a locked picture"
-        )
-        prediction = session.exec(
-            select(TagPrediction).where(
-                TagPrediction.picture_id == pic_id,
-                TagPrediction.tag == tag,
-            )
-        ).first()
-        if prediction is None:
-            raise KeyError(f"Prediction not found: picture_id={pic_id} tag={tag!r}")
 
-        # Confirming an anomaly tag folds its probability to 1.0 in the scorer's
-        # inputs, so the cached smart score must be dropped for recompute.
-        with invalidate_on_anomaly_change(
-            session,
-            [pic_id],
-            context="confirm tag prediction",
-            registry=vault.interactive_rescore_registry,
-            origin_client_id=origin_client_id,
-        ):
-            # Record the human acceptance, snapshotting the tagger version/confidence the
-            # reviewer agreed with (frozen in label_model_version/label_confidence).
-            record_human_label(session, pic_id, tag, POS)
+def reject_tag_prediction_in_session(
+    session: Session,
+    pic_id: int,
+    tag: str,
+    registry: "InteractiveRescoreRegistry | None" = None,
+    origin_client_id: str | None = None,
+    *,
+    commit: bool = True,
+) -> None:
+    """Mark a prediction as REJECTED (or create a synthetic REJECTED row).
 
-            existing_tag = session.exec(
-                select(Tag).where(Tag.picture_id == pic_id, Tag.tag == tag)
-            ).first()
-            if existing_tag is None:
-                session.add(Tag(picture_id=pic_id, tag=tag))
+    Session-level for the same reason as
+    :func:`confirm_tag_prediction_in_session`: the route wraps it in a recorded
+    operation so the rejection is undoable, and the lock guard runs here so a
+    refused reject records nothing.
 
-            session.flush()
-            recompute_anomaly_tag_uncertainty(session, pic_id)
+    Args:
+        session: Active DB session.
+        pic_id: Picture ID owning the prediction.
+        tag: Tag value to reject.
+        registry: The vault's interactive rescore registry (see :func:`reject_tag_prediction`).
+        origin_client_id: The originating tab's ``X-Client-Id``.
+        commit: Commit before returning. The operation-log wrapper passes
+            ``False`` so it owns the mutation and receipt transaction.
+    """
+    # Rejecting writes a human NEG onto the picture — label data frozen when
+    # the picture is in a locked set.
+    enforce_pictures_not_locked(session, [pic_id], "reject a tag on a locked picture")
+    # Rejecting an anomaly tag folds its probability to 0.0 in the scorer's
+    # inputs, so the cached smart score must be dropped for recompute.
+    with invalidate_on_anomaly_change(
+        session,
+        [pic_id],
+        context="reject tag prediction",
+        registry=registry,
+        origin_client_id=origin_client_id,
+    ):
+        # Record the human rejection as durable NEG supervision (snapshotting the
+        # tagger version/confidence overruled). Creates a synthetic 'manual' row if
+        # the tag was added manually, so the reject persists through fetches.
+        record_human_label(session, pic_id, tag, NEG)
+        session.flush()
+        recompute_anomaly_tag_uncertainty(session, pic_id)
+    if commit:
         session.commit()
-
-    vault.db.run_task(_confirm)
+    else:
+        session.flush()
 
 
 def reject_tag_prediction(
     vault: "Vault", pic_id: int, tag: str, origin_client_id: str | None = None
 ) -> None:
     """Mark a prediction as REJECTED (or create a synthetic REJECTED row).
+
+    The vault-level wrapper, for callers that are not recording an operation. The
+    HTTP route records one, so it calls :func:`reject_tag_prediction_in_session`
+    through the operation log instead.
 
     Args:
         vault: Application vault, used for DB task dispatch.
@@ -133,31 +226,13 @@ def reject_tag_prediction(
             origin-stamped ``smart_score`` grid refresh for that card instead of the
             deferred bulk-drain path.
     """
-
-    def _reject(session: Session) -> None:
-        # Rejecting writes a human NEG onto the picture — label data frozen when
-        # the picture is in a locked set.
-        enforce_pictures_not_locked(
-            session, [pic_id], "reject a tag on a locked picture"
-        )
-        # Rejecting an anomaly tag folds its probability to 0.0 in the scorer's
-        # inputs, so the cached smart score must be dropped for recompute.
-        with invalidate_on_anomaly_change(
-            session,
-            [pic_id],
-            context="reject tag prediction",
-            registry=vault.interactive_rescore_registry,
-            origin_client_id=origin_client_id,
-        ):
-            # Record the human rejection as durable NEG supervision (snapshotting the
-            # tagger version/confidence overruled). Creates a synthetic 'manual' row if
-            # the tag was added manually, so the reject persists through fetches.
-            record_human_label(session, pic_id, tag, NEG)
-            session.flush()
-            recompute_anomaly_tag_uncertainty(session, pic_id)
-        session.commit()
-
-    vault.db.run_task(_reject)
+    vault.db.run_task(
+        reject_tag_prediction_in_session,
+        pic_id,
+        tag,
+        vault.interactive_rescore_registry,
+        origin_client_id,
+    )
 
 
 def delete_tag_predictions(

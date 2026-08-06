@@ -475,18 +475,31 @@ lifting.
 ### Scrims (badges over imagery)
 
 A corner badge or chip that sits on top of a photo needs a translucent backing so
-its glyph stays legible over unknown content. Two tokens cover it, and neither is a
+its glyph stays legible over unknown content. Three tokens cover it, and none is a
 raw `rgba(0,0,0,…)`:
 
 | Token | Use |
 |---|---|
 | `--scrim-surface` | Light warm chip over the **bright grid/sidebar canvas** (dark glyph). Matches the other grid badges. |
 | `--scrim-photo` | Dark chip **directly over an arbitrary photo** (light glyph, `on-dark-surface`). On the theme `scrim` token so it stays reliably dark in both themes. |
+| `--scrim-photo-strong` | The same chip deepened to 0.78, for a **coloured** glyph over an arbitrary photo (the stack badge's per-stack hue). |
+
+The strong variant exists because contrast is not a property of the glyph alone.
+`--scrim-photo` at 0.55 is sized for a near-white glyph, which reaches for white's
+luminance and clears 4.76:1 over even a white photo. A hue cannot: normalised to the
+badge tint, the darkest colour in the stack palette measures **1.62:1** on that chip
+and is effectively invisible on a bright photo. Deepening the chip to 0.78 makes the
+backing photo-independent and lifts that worst case to **3.98:1**, over the 3:1
+non-text floor (WCAG 1.4.11). So: a coloured glyph over imagery buys its legibility
+with a darker chip, never by darkening the colour until it stops reading as a colour.
+Small text is not covered by this: no hue in the palette reaches 4.5:1 on any usable
+chip opacity, which is why the stack badge's **count stays `on-dark-surface`** and
+only its icon takes the hue (§13).
 
 Pick by what the chip sits on, and match the sibling chips already on that surface
 (a lock badge on a review card matches that card's tag chips; a lock badge on the
 grid matches the grid badges). Full-screen backdrops still use `rgba(var(--v-theme-scrim), …)`
-directly at their own tuned opacity; these two tokens are for the corner-chip case.
+directly at their own tuned opacity; these tokens are for the corner-chip case.
 
 ---
 
@@ -675,7 +688,31 @@ rules and tokens they collapse onto.
   is the sidebar task/upload badge's pulse-on-landing. Loop the **attention pulse**
   only while work is genuinely live; stop it when idle.
 
-## 13. Contextual action bar (toolbars over content)
+### The outline count pill (a count in a different unit)
+
+A count that is **not pictures** must not wear the filled count pill, or it
+reads as one more picture count sitting in a column of them. The outline
+variant — no fill, a 1px border, tabular numerals, same pill radius and size —
+is the answer when such a count must be shown, with a tooltip naming the unit.
+
+*History:* introduced 2026-07-29 for the Duplicates sidebar count, and retired
+from that spot the same day: the group count moves with the tier gate and the
+threshold, so it read as churn, and the owner replaced it with the plain
+**attention dot** ("there are duplicates to review" — the queue's own header
+carries the numbers). The variant remains available for a stable non-picture
+count.
+
+### The key-hint badge (`kbd`)
+
+Dialog action buttons wear their keys (owner decision, 2026-07-29; the behavioural
+contract lives in `frontend_architecture.md`, "App* design-system layer"): the
+accept/confirm button carries an **↵** badge and the cancel/abort button an **Esc**
+badge, rendered by `AppButton`'s `key-hint` prop as a `<kbd>` chip — `--font-mono` at
+`--text-2xs`, a 1px `currentColor` border at `--radius-sm`, the whole chip at 0.55
+opacity. `currentColor` is what makes it legal on every variant fill without a new
+token pair, and the opacity is what keeps it a hint rather than a second label. It is
+`aria-hidden` (the accessible name must stay the verb); the machine-readable copy is
+`aria-keyshortcuts` on the button itself.
 
 The full-width bar that appears above the grid to act on a context — the bulk
 **selection bar**, the image-overlay top bar, and the new **Trash restore/purge
@@ -704,6 +741,29 @@ bar** — is one pattern. It reuses the grid; only the bar changes.
 - **Empty & the Trash view.** Trash is the picture grid reused with the restore/purge
   bar. Its empty state uses the existing `EmptyTrash.png` art (§9) with a
   `--text-2xl` Tiny5 headline and a `--text-sm` line of guidance.
+
+### The toolbar overflow (⋯)
+
+When a 36px toolbar runs out of width, controls do not shrink, wrap, or
+vanish — they **fold** into the ⋯ overflow (`TbOverflowMenu`, a
+`bar-btn--icon` trigger wearing `mdi-dots-horizontal`, opening an in-place
+`.tbm` panel at `--z-dropdown`). The rules of the pattern:
+
+- **Fold = CSS both ways.** A foldable control exists twice with one `v-if`:
+  as its bar button and as a `.tbm-action` row in the panel. The bar's
+  container queries flip which of the pair is visible; no JS ever measures
+  the bar. Each bar's ladder is a decision, not an accident — recorded in
+  `toolbar-responsive-decisions.md`.
+- **The trigger earns its place.** The ⋯ stays hidden until the first fold
+  step; an overflow with nothing in it is chrome without a job.
+- **Some controls never fold.** Undo is the recovery control and stays a
+  single visible target at every width. A standing state (the scope pill)
+  compresses to its icon rather than folding — a filter that hides is a
+  filter the user forgets.
+- **State travels with the row.** A folded toggle wears `aria-pressed` and
+  the primary-token pressed colour; the stats toggle's attention dot moves to
+  the ⋯ trigger while folded (same pulse recipe, `prefers-reduced-motion`
+  honoured), so background work never goes invisible.
 
 ---
 

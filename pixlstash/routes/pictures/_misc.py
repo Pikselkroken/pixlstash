@@ -41,6 +41,7 @@ from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
     fetch_scope_allowed_picture_ids,
     fetch_set_candidate_ids,
+    narrow_picture_project_ids,
     normalize_set_mode,
     project_membership_exists_clause,
     project_unassigned_clause,
@@ -782,6 +783,10 @@ def register_routes(router, server):
             )
             response.extend(stack_items)
 
+        # Group rows are built from `metadata_fields()` and returned through a
+        # response model with `extra="allow"`, so the raw `Picture.project_id`
+        # survives to the wire unless it is narrowed here (issue #719, §16.6).
+        narrow_picture_project_ids(server, request, response)
         return response
 
     @router.post(
@@ -881,6 +886,7 @@ def register_routes(router, server):
         file_path_prefix = _predicate_filter.file_path_prefix
         import_source_folder = _predicate_filter.import_source_folder
         face_filter = _predicate_filter.face_filter
+        stack_state = _predicate_filter.stack_state
         confidence_tag = request.query_params.get("confidence_tag") or None
         confidence_above = _predicate_filter.tags_confidence_above_filter or []
         confidence_below = _predicate_filter.tags_confidence_below_filter or []
@@ -933,6 +939,7 @@ def register_routes(router, server):
             tags_filter=tags_filter,
             rejected_tags=rejected_tags,
             face_filter=face_filter,
+            stack_state=stack_state,
             confidence_tag=confidence_tag,
             confidence_above=confidence_above,
             confidence_below=confidence_below,

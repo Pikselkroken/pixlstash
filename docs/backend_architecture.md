@@ -2,7 +2,7 @@
 
 > Synthetic reference of the PixlStash backend. This document is the source of truth for both Copilot and human contributors when reasoning about server-side code.
 >
-> Companion documents: 
+> Companion documents:
 
 * Frontend: [docs/frontend_architecture.md](frontend_architecture.md)
 * Integration: [docs/integration_architecture.md](integration_architecture.md)
@@ -31,6 +31,7 @@
 18. [Snapshots & Restore](#18-snapshots--restore)
 19. [Mermaid Diagrams](#19-mermaid-diagrams)
 20. [Architectural Patterns](#20-architectural-patterns)
+21. [Operation Log](#21-operation-log--undoredo-and-the-audit-trail-dam-12)
 
 ---
 
@@ -90,6 +91,7 @@ pixlstash/
 │   ├── projects.py                   # Projects
 │   ├── picture_sets.py               # Picture sets + membership
 │   ├── stacks.py                     # Stacks
+│   ├── dedup.py                      # Duplicate queue, counts, scan, verdicts + sweep dry run
 │   ├── config.py                     # User/server config + progress
 │   ├── reference_folders.py          # Reference folders
 │   ├── import_folders.py             # Watch folders
@@ -146,6 +148,9 @@ pixlstash/
 │
 ├── services/                         # Business-logic extracted from route handlers
 │   ├── config_service.py             # Hardware monitoring + import folder utilities
+│   ├── dedup_sweep_service.py        # Vault-wide near-duplicate sweep planner (read-only)
+│   ├── dedup_tier_service.py         # Tiered detection, tier policy, cover + evidence (§22)
+│   ├── dedup_verdict_service.py      # Stack / keep-separate verdicts + metadata union (§22)
 │   ├── plugin_service.py             # Image plugin orchestration + progress tracking
 │   ├── share_service.py              # Share-token validation + watermark resolution
 │   └── tag_prediction_service.py     # Confirm / reject / reset tag predictions
@@ -242,6 +247,28 @@ Background processing is **data-driven**: each task type has a *finder* that que
 | NLP | **spacy** ≥ 3.8 |
 | Tensor utils | **einops** ≥ 0.8 |
 
+#### ML import discipline — these libraries are imported *inside functions*
+
+**Never `import torch` (or `torchvision` / `transformers` / `sentence_transformers` / `open_clip` / `insightface` / `onnxruntime`) at module scope in any module reachable from `pixlstash.server`.** Import it in the function that uses it.
+
+The reason is measured, not stylistic. The ML stack costs **~2.8 s** to import; the web stack (FastAPI, SQLModel, PIL, NumPy, cv2) costs **0.29 s**. Because `tests/conftest.py` imports `Server`, *every* test process paid the full ML cost before running a single assertion:
+
+| | before | after |
+|---|---|---|
+| `from pixlstash.server import Server` | 3.84 s | **0.96 s** |
+| `pytest --collect-only` (one file) | 4.29 s | **1.80 s** |
+| `pytest -k <one test>` | 4.17 s | **1.38 s** |
+
+This is explicitly the exception the import policy in `CLAUDE.md` allows ("to reduce startup time for rarely used modules"). Three things make it work:
+
+- **The cost is shared, so partial fixes buy nothing.** These libraries pull a common base — deferring only `sentence_transformers` saved 0.15 s, because `open_clip` still dragged in torch, torchvision *and* transformers. The win only appears when **no** ML library loads.
+- **Watch the indirect pullers.** The last offenders found were not obvious: `clip_service.py` imported `open_clip` merely so another module could read the `CLIP_MODEL_NAME` *string constant*, and `startup_checks.py` hid `import torch` inside a module-scope `try:` block (invisible to a column-0 grep). Scan with an AST walk over module-level statements, descending into `try`/`if`, not with `grep '^import'`.
+- **Annotations.** Signatures referencing ML types need `from __future__ import annotations` plus an `if TYPE_CHECKING:` import. `pixlstash/utils/model_utils.py`, `tagger_plugins/florence2.py` and `tagger_plugins/pixlstash_tagger.py` are the worked examples.
+
+`utils/vram_utils.empty_cuda_cache()` is the shared cache-flush helper and deliberately reads `sys.modules.get("torch")` instead of importing: if torch was never imported, the process cannot hold CUDA allocations, so there is nothing to free and importing torch to learn that would cost seconds on every teardown.
+
+Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugins/joycaption.py`, `image_loading_dataset_prepper.py`) may still import ML at module scope; they are only ever reached through function-local imports. `image_loading_dataset_prepper.py` in particular *must* keep its module-scope `torch`, since it subclasses `torch.utils.data.Dataset`.
+
 ### Image & Video
 
 | Capability | Library |
@@ -321,6 +348,7 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/detect` | Queue object detection (Segment) for a batch; optional `prompt` for open-vocab grounding |
 | GET | `/pictures/{id}/detections` | Stored detection boxes for a picture (registered before the `/{id}/{field}` catch-all) |
 | POST | `/pictures/likeness-search` | Reverse-image likeness search |
+| POST | `/pictures/face-search` | Face-likeness search (see below) |
 | POST | `/pictures/scrapheap/delete-preview` | What a delete-forever would destroy + the `confirm_token` the delete requires |
 | DELETE | `/pictures/scrapheap` | **The one irreversible endpoint.** Requires `confirm_token` |
 
@@ -331,6 +359,16 @@ Key endpoints (see the auto-generated index below for the full set):
 Echoing the preview's `total_count` was considered and rejected as the primary control: a small integer is stable and enumerable, and ordinary concurrent scrapheaping would make it fail spuriously. A required custom header was rejected too — a DELETE with a JSON body already preflights, and `allow_headers=["*"]` lets the preflight pass for every origin the regex admits.
 
 **This is an intent control, not an authorization control.** Authorization for both routes stays with the AuthzGate (`OWNER_ONLY` in `authz/registry.py`, §16.1); no per-handler scope check was added and none should be. The unattended retention sweep calls `purge_scrapheap_pictures` directly and needs no confirmation — the gate is on the HTTP endpoint, which is where the CSRF exposure is.
+
+**`POST /pictures/face-search` — one query, four sources.** The query embeddings come from uploaded files, `source_picture_id`, `source_face_id`, or `source_character_id` (exactly one; more than one is a 400). `source_character_id` resolves through `select_reference_faces_for_character` — **the same selection the character-likeness sort and the picture-id branch of `POST /characters/{id}/faces` use**. Deriving it by any other rule would let the search rank pictures against one set of references while the assignment it feeds picks the winning face against another. It defaults `combine` to `max` (a character's ~10 references are the same person years and angles apart, so their mean is nobody and a good match to one reference must not be averaged away); every other source still defaults to `mean`.
+
+`exclude_character_id` drops pictures that already contain a face assigned to that character. Paired with `source_character_id` it is what makes the result set the *un-assigned* candidates, so a caller can put its length on a button without over-promising — the assignment endpoint would skip those rows anyway and report them as `already_assigned_ids`. It is subtracted from the fetched candidates rather than intersected into `filter_candidate_ids`, because `None` there means "unrestricted" and has no set to subtract from.
+
+**`include_reference_scores` adds `reference_likeness`** to every match: the winning face's similarity to each query embedding, in query order, from which `likeness` is the `combine`. It exists because the combine is lossy in the one direction the UI needs: with `combine=max` a candidate that resembles one reference perfectly outranks one that resembles all of them well, and `likeness` cannot tell those apart. Keeping the un-combined row is what lets a caller ask *how many* references a match satisfies, and it costs no extra work: `_score_best_faces` already has the whole `(F, Q)` similarity matrix and simply carries the winning row out with the score. Off by default (it is Q floats per row over up to 500 rows), rounded to 4 decimals, and consumed by the frontend's reference-agreement slider, which cuts client-side precisely so the knob costs no round trip.
+
+Each match reports the **`face_id` that produced its score**, so a caller assigning the results does not repeat the comparison. Scoring combines across queries **per face** and only then takes the max over a picture's faces: the reverse order lets different faces satisfy different queries, which makes `combine=min` mean something other than its documented "must match all query images", and leaves no single face to name as the winner. For a single query embedding the two orders are identical. The comparison is one matmul over every candidate face rather than a per-picture Python loop, and **faces whose embedding width differs from the query's are skipped with a warning** — a vault that has been through a `FaceModelRefreshTask` holds two widths, and a cosine between them is not a similarity.
+
+Authorization is unchanged: the route is already declared `SCOPED_LIST` in `authz/registry.py` and scope-filters its ids through `fetch_scope_allowed_picture_ids`, which still holds for the character source (`tests/test_likeness_and_face_search.py::test_face_search_by_character_still_scope_filters_for_a_share_token` asserts both directions). Note the route is in `READ_SAFE_POST_PATHS`, so share tokens do reach it.
 
 **`score_agreement` (stats section, `include=picture`).** Cross-tabulates the user's star rating against the smart score for the stats sidebar's agreement heatmap. Shape: `{cells: [{score, bucket, count}] (dense, all 20), rated, pairs, total, pearson, spearman, tau_b}`.
 
@@ -350,6 +388,11 @@ Add/remove user tags; bulk clear; confirm or reject model-predicted tags (`TagPr
 ### `projects.py`, `picture_sets.py`, `stacks.py`
 Standard CRUD; set/stack membership management; stack reordering.
 
+### `dedup.py`
+The vault-wide near-duplicate sweep, **dry run only** (v1.9 Lane E). `GET /dedup/sweep/policy` returns the server's default confidence policy plus the bounds and closed vocabularies a client should build its controls from; `POST /dedup/sweep/dry-run` resolves every near-duplicate group in the vault under a supplied policy and returns the plan behind "N groups auto-collapse, M need review". Both are `owner_only` (a vault-wide aggregate cannot be narrowed to a share token's scope without leaking out-of-scope counts — the same reasoning as `tag_health`), and neither writes anything. All logic lives in [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py); the handlers only translate the request body into a `SweepPolicy` and serialise the `SweepReport`. Execution (applying a plan) and the auto-at-import policy are later work; the dry-run planner already accepts an optional `operation_batch_id` so a future apply step can correlate a plan with the operation-log batch that undoes it.
+
+The same module also serves the **v1.9 tiered Duplicates queue** — `GET /dedup/policy`, `GET /dedup/groups`, `POST /dedup/counts`, `POST /dedup/scan`, `POST /dedup/verdicts/{stack,keep-separate,reopen}` and `POST /dedup/auto-stack`. Every one of them is `owner_only` for the same reasoning plus, for the verdict routes, the fact that they mutate stacks across arbitrary pictures. Detection lives in [services/dedup_tier_service.py](../pixlstash/services/dedup_tier_service.py) and verdicts in [services/dedup_verdict_service.py](../pixlstash/services/dedup_verdict_service.py); the handlers only build a `TierPolicy` / `DedupScope` (a bad one is a 400, never a silent retune) and call a service wrapper. See §22 for the tiers, the hash decision, the bucket design, the cover formula and the verdict memory, and `docs/integration_architecture.md` §19 for the request/response contract.
+
 ### `config.py`
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -367,7 +410,30 @@ Standard CRUD; set/stack membership management; stack reordering.
 CRUD for reference / import folders; filesystem browsing for picker dialogs.
 
 ### `comfyui.py`
-List workflows; execute a workflow against a picture.
+List workflows; execute a workflow against a picture; replay the workflow a picture carries.
+
+**Two chunks, one of them executable.** A ComfyUI-generated PNG embeds *both* a `workflow` chunk (the UI node graph, for reopening in the editor) and a `prompt` chunk (the resolved API-format graph the server actually executed). Only the `prompt` chunk is submittable to `POST /prompt`.
+
+- `find_comfy_workflow` (`utils/comfyui_utilities.py`) reads the **UI** chunk and drives display only (`GET /comfyui/pictures/{id}/workflow`, the overlay's workflow inspector, the `ComfyUIExtractionTask` backfill). As a lowest-priority display fallback it also accepts the `prompt` chunk (issue #628): PixlStash-generated PNGs deliberately embed **nothing** in the `workflow` chunk — `_submit_comfyui_prompt` must not put the API graph there, because the ComfyUI frontend feeds that chunk to `loadGraphData` unguarded on drag-in — so ComfyUI's own `prompt` chunk is the only displayable graph such files carry. A genuine UI `workflow` chunk always wins over the fallback, and `is_comfy_workflow` filters out plain-text `prompt` values from other tools.
+- `find_comfy_api_prompt` reads the **`prompt`** chunk and is the only source for anything that runs. It has **no fallback to the UI graph and performs no UI→API conversion**: converting means re-resolving widget values, links, muted/bypassed nodes and subgraph expansion exactly as the ComfyUI frontend does, and a near-miss yields a graph that runs and silently generates something else. Absent an executable `prompt` chunk the honest answer is "no executable workflow embedded".
+
+**Remix routes (v1.9).** `GET /comfyui/pictures/{picture_id}/recipe` reports whether a picture carries a replayable recipe and pre-flights it against the user's ComfyUI (see `services/comfyui_recipe_service.py`, §10). `POST /comfyui/run_recipe` replays it with fresh or pinned seeds into the source's stack; it **re-extracts the graph from the file server-side on every call and never accepts a client-supplied graph**, so the authz gate's `PICTURE_SCOPED` declaration on the source picture is the complete access control for it. Both refuse honestly rather than silently no-op: a graph with no seed input would re-generate a byte-identical image that the importer dedupes on `pixel_sha` and emits no event for, so the user would see literally nothing happen.
+
+**The replayed graph is untrusted input (review finding R3, CWE-829).** It is authored by whoever made the image file, not by the owner, and PixlStash's premise is importing images from elsewhere: an attractive PNG from a model site can carry any API-format graph, and replaying it executes it on the owner's ComfyUI, bounded only by which node packs are installed. `sanitize_prompt_graph` is a **shape** filter (it drops non-node entries), not a capability filter, and there is deliberately no node-class allowlist — one would break every legitimate custom pack. The owner is therefore the trust anchor, and three controls make that a decision rather than an accident:
+
+1. **Disclosure.** The recipe response carries `node_classes` — the distinct `class_type` list, from `collect_node_classes` — so the confirm dialog can name what will run. It is read from the file, so it is populated **even when the pre-flight could not run**, which is exactly the case where the owner has nothing else to judge by. A node *count* is not an answer to "what will this run".
+2. **Fail closed on an uninspected graph.** `preflight_prompt` degrading to `unchecked_preflight` keeps `ok: True` because the only fact known is that the check did not run — so `run_recipe` refuses `preflight.checked is False` with a 400 unless the request carries `allow_unchecked: true`, the owner's explicit acknowledgement, which is logged with the node classes. **The refusal is enforced here, not only in the dialog**; a UI-only gate is not a gate. This is the one control that is a hard gate, and it is deliberately reserved for the rare case: gating the common ones is what turns an acknowledgement into a reflex.
+3. **Provenance.** `_picture_source_origin` reports `source_is_imported` / `source_label` so the dialog can warn that the embedded workflow came from outside. There is no provenance column; the signal is the three fields only ever written on an *inbound* path (`reference_folder_id`, `import_source_folder`, `original_file_name`), all of which PixlStash's own ComfyUI import leaves NULL. The label names the route in ("Watched folder"), never the filesystem path. It is advisory only and fails toward "not imported" — it informs, it does not gate.
+
+**Graphs saved by the ComfyUI-PixlStash node pack (`PixlStashPictureSaver`) take the other import path.** The node uploads to `POST /pictures/import` itself rather than writing a file for PixlStash to collect, so the collection pipeline has to invert for it, in three places that all key off `SAVE_NODE_CLASSES` / `PIXLSTASH_SAVER_CLASSES` in `services/comfyui_service.py`:
+
+1. **It counts as a save node.** `preflight_prompt`'s `has_save_image` and `_extract_output_node_ids` both include it; without that, `run_recipe` rejected every workflow built on the pack with "produces nothing PixlStash can import".
+2. **Its history images are not imported.** The node reports `type: "temp"` previews of pictures it has *already* imported. Downloading them re-imports a duplicate, which dedupes to an empty `new_ids` and so silently loses the stack placement, the source lineage and the import event. `_extract_comfyui_output_images` skips any node carrying `picture_ids`; a sibling `SaveImage` in the same graph is still collected normally.
+3. **Its reported ids are adopted instead.** `_extract_pixlstash_picture_ids` returns the ids the node created (`None` when no such node ran, `[]` when it ran and every image was a duplicate — the distinction is what keeps an all-duplicates run from being reported as "ComfyUI finished without outputs"). `_process_comfyui_outputs` merges them into `new_ids`, so stacking, `source_picture_id`, set/project inheritance and the single `PICTURE_IMPORTED` event are unchanged.
+
+Stack placement for these graphs therefore does **not** come from `build_stack_filename_prefix`: the filename tag is only parsed by the watch-folder importer, not by the API import endpoint the node calls. The "no SaveImage node to tag" warning is suppressed when the graph has a PixlStash saver (`graph_has_pixlstash_saver`), because there the ids arrive directly.
+
+**Seed ranges differ by route.** `run_t2i` / `run_i2i` validate a fixed seed to 32 bits; `run_recipe` allows the full 64-bit range ComfyUI's core samplers declare, because the shipped `Flux2-Klein-Image-Edit` template's own `noise_seed` is `432262096973502` and a 32-bit check would reject reproducing our own built-in's default.
 
 ### `guest_scores.py`, `share.py`
 Public guest scoring and shared-link endpoints.
@@ -405,13 +471,38 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                           |
 | DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                           |
 | GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                        |
+| GET    | /api/v1/characters/{id}/faces                                                 | characters      | List character faces                                       |
 | GET    | /api/v1/characters/{id}/reference_pictures                                    | characters      | List reference pictures                                    |
 | GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                             |
 | GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                        |
 | GET    | /api/v1/check-session                                                         | auth            | Check Session                                              |
+| POST   | /api/v1/dedup/auto-stack                                                      | dedup           | Bulk auto-stack the exact tier                             |
+| POST   | /api/v1/dedup/counts                                                          | dedup           | Live duplicate counts, global and scoped                   |
+| GET    | /api/v1/dedup/groups                                                          | dedup           | One page of the duplicate queue                            |
+| GET    | /api/v1/dedup/mixed-stacks                                                    | dedup           | Live stacks whose members do not all match                 |
+| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/keep                                    | dedup           | Keep a mixed stack as it is                                |
+| DELETE | /api/v1/dedup/mixed-stacks/{stack_id}/keep                                    | dedup           | Undo a Keep                                                |
+| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/split                                   | dedup           | Split the marked member(s) off a mixed stack               |
+| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/unstack                                 | dedup           | Dissolve a mixed stack                                     |
+| GET    | /api/v1/dedup/policy                                                          | dedup           | Duplicate detection tier defaults                          |
+| POST   | /api/v1/dedup/scan                                                            | dedup           | Queue a duplicate scan                                     |
+| GET    | /api/v1/dedup/stacks/{stack_id}/members                                       | dedup           | One page of an existing stack's members                    |
+| POST   | /api/v1/dedup/sweep/dry-run                                                   | dedup           | Plan a vault-wide near-duplicate sweep                     |
+| GET    | /api/v1/dedup/sweep/policy                                                    | dedup           | Near-duplicate sweep policy defaults                       |
+| POST   | /api/v1/dedup/verdicts/batch                                                  | dedup           | Apply one atomic multi-group duplicate gesture             |
+| POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                      |
+| POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                        |
+| POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                    |
 | GET    | /api/v1/login                                                                 | auth            | Check Registration                                         |
 | POST   | /api/v1/login                                                                 | auth            | Login                                                      |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                     |
+| GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                    |
+| POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                 |
+| POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                |
+| POST   | /api/v1/operations/undo                                                       | operations      | Undo the newest reversible operation                       |
+| GET    | /api/v1/operations/undo-state                                                 | operations      | What undo and redo would do next                           |
+| GET    | /api/v1/operations/{operation_id}                                             | operations      | Get one operation including its before/after state         |
+| POST   | /api/v1/operations/{operation_id}/undo                                        | operations      | Undo one specific operation (and its batch)                |
 | GET    | /api/v1/picture_sets                                                          | picture_sets    | List picture sets                                          |
 | POST   | /api/v1/picture_sets                                                          | picture_sets    | Create picture set                                         |
 | GET    | /api/v1/picture_sets/locked-members                                           | picture_sets    | List locked sets and their frozen pictures                 |
@@ -460,6 +551,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                                  |
 | GET    | /api/v1/pictures/{id}/anomaly_region                                          | pictures        | Locate an anomaly region                                   |
 | GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                     |
+| GET    | /api/v1/pictures/{id}/faces                                                   | pictures        | List picture faces                                         |
 | GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                       |
 | POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                         |
 | GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                          |
@@ -507,6 +599,8 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview | snapshots       | Preview Resource Restore                                   |
 | GET    | /api/v1/sort_mechanisms                                                       | pictures        | List picture sort mechanisms                               |
 | POST   | /api/v1/stacks                                                                | stacks          | Create stack                                               |
+| POST   | /api/v1/stacks/keep-cover-only                                                | stacks          | Collapse stacks to their covers                            |
+| POST   | /api/v1/stacks/keep-cover-only/preview                                        | stacks          | Preview collapsing stacks to their covers                  |
 | GET    | /api/v1/stacks/{stack_id}                                                     | stacks          | Get stack details                                          |
 | POST   | /api/v1/stacks/{stack_id}/members                                             | stacks          | Add stack members                                          |
 | DELETE | /api/v1/stacks/{stack_id}/members                                             | stacks          | Remove stack members                                       |
@@ -528,6 +622,8 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/tagger-runs                                                           | tagger_runs     | Ingest a tagger evaluation run from PixlTagger             |
 | GET    | /api/v1/tagger-runs                                                           | tagger_runs     | List ingested tagger runs (newest first)                   |
 | GET    | /api/v1/tags                                                                  | tags            | List all tags                                              |
+| GET    | /api/v1/telemetry/install-id                                                  | telemetry       | Get the anonymous install ID                               |
+| POST   | /api/v1/telemetry/install-id/recreate                                         | telemetry       | Recreate the anonymous install ID                          |
 | GET    | /version                                                                      | server          | Read Version                                               |
 | WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                     |
 | WS     | /api/v1/ws/comfyui                                                            | comfyui         | ComfyUI workflow progress                                  |
@@ -586,7 +682,49 @@ PictureLikeness: picture_id_a, picture_id_b (a < b), likeness, metric
 PictureSet / PictureSetMember
 PictureStack       (Picture.stack_id links members)
 Project / PictureProjectMember
+CharacterProjectMember     (character ↔ project, many-to-many)
+PictureSetProjectMember    (picture set ↔ project, many-to-many)
 ```
+
+**Multi-project characters and picture sets (issue #125, v1.9).** A character or
+picture set may belong to **several** projects. The join tables above are the read
+model; the scalar `Character.project_id` / `PictureSet.project_id` foreign keys
+stay, holding the entity's **primary** project (lowest member project id, or
+`NULL`). The contract is **write both, read the join**:
+
+- **Write:** only `services/project_membership_service.py::set_character_projects`
+  / `set_picture_set_projects` may change membership. They write the join rows and
+  re-derive the scalar pointer together. Assigning the FK directly is a bug — the
+  entity becomes invisible to every project-scoped read and authorization check.
+  Member pictures follow via `reconcile_entity_projects_change` (the multi-project
+  generalisation of `reconcile_entity_project_change`, which is now a shim).
+- **Write-propagation:** every path that adds a picture to an entity (set member
+  add / bulk add / bulk replace, face assignment, the import task's set and
+  character drop targets) must anchor it in **all** the entity's projects, via
+  `picture_set_project_ids` / `character_project_ids` +
+  `reconcile_entity_projects_change`. Reading the scalar FK there joins the
+  picture to the primary project only, so a secondary project's token is 403'd on
+  a picture its set legitimately shares (finding R2,
+  `docs/reviews/v1.9-authz-signoff.md`).
+- **Read:** use the correlated predicates in
+  [`db_models/entity_project.py`](../pixlstash/db_models/entity_project.py) —
+  `character_in_project` / `character_in_no_project` /
+  `picture_set_in_project` / `picture_set_in_no_project` — never
+  `Character.project_id == pid`, which only matches the primary project.
+- **API:** `project_ids` (a list) is the new field on character / picture-set
+  reads and on `POST`/`PATCH` payloads; the legacy scalar `project_id` is still
+  accepted on write and still returned on read. `project_ids` wins when both are
+  sent. No routes were added.
+- **Serialisation is scope-narrowed.** `project_ids` is membership metadata about
+  *other* projects, not part of the granted object, so every site that serialises
+  it intersects it with `visible_project_ids(server, request)`
+  (`utils/service/filter_helpers.py`) — same ladder as
+  `fetch_scope_allowed_set_ids`: a project token sees only its own id, a
+  character / set / picture token sees `[]`, the owner sees everything (finding
+  R1, `docs/reviews/v1.9-authz-signoff.md`).
+- The FK is retired by a post-1.12 cleanup, not here; migration
+  `0087_add_entity_project_membership` is purely additive and backfills the join
+  from the existing FKs.
 
 ### Users & sharing
 
@@ -596,7 +734,8 @@ User: id, username, password_hash, plus full settings block
        smart_score_penalised_tags, tagger_settings (JSON),
        keep_models_in_memory, max_vram_gb, watermark_image (BLOB), …)
 
-UserToken: id, user_id, token_hash, scope (ALL|READ),
+UserToken: id, public_id (opaque, unique, never reused — §12.2),
+           user_id, token_hash, scope (ALL|READ),
            resource_type, resource_id, expires_at,
            include_attachments, include_description
 
@@ -626,6 +765,19 @@ Review: id, tag, project_id, set_id, character_id, status
 TaggerRun: id, run (unique), model_version, verdict, recommend,
            accepted, anomaly_macro_f1, report (JSON), created_at
            (tagger eval runs pushed from PixlTagger)
+```
+
+### Operation log (append-only)
+
+```text
+Operation: id, batch_id, created_at, actor, op_type, target_type,
+           target_ids (JSON list[int]), target_count,
+           before_state (JSON {picture_id: {facet: value}}),
+           after_state (same shape), source, origin_client_id,
+           undoable, status (applied|undone|superseded), undone_at,
+           summary
+           (one recorded change; undo restores before_state, redo
+            restores after_state — see §21)
 ```
 
 ### Filesystem-linked
@@ -681,6 +833,13 @@ Snapshot: id, kind, created_at, relative_path,
 
 **Re-processing**: setting a work column to `NULL` (e.g. via an Alembic migration) makes the corresponding finder pick the row up on the next pass — this is how data regenerations are triggered.
 
+**Probe cost (#651)**: the planner sweeps every finder on a short interval and resets to `MIN_INTERVAL_S` whenever anything was submitted, so a finder's query runs continuously while any pipeline is active — including on a fully-processed library, where it matches nothing. Two rules follow, and a new finder must obey both:
+
+- **Never select the whole ORM `Picture`.** Narrow to the columns the task actually reads (`load_only`, plus `load_only` on any `selectinload`). `image_embedding`, `text_embedding`, `likeness_parameters` and `Face.features` are `LargeBinary`; dragging them through a probe evicts the pages the API endpoints need, several times a second. Keep it an ORM select though — `BaseTaskFinder._filter_and_claim` claims via `getattr(picture, "id", None)`, so a scalar/tuple select silently claims nothing. The session is closed before the task runs, so anything not loaded raises `DetachedInstanceError`.
+- **Give the predicate an index, and lead it with the nullable column.** PixlStash never runs `ANALYZE`, so there is no `sqlite_stat1` and SQLite scores a partial index by the table's default row estimate rather than by how few rows it covers. A partial index only wins when it can claim *more* equality terms than the index it competes with; `<col> IS NULL` counts as one, so `(work_col, deleted, id) WHERE work_col IS NULL` beats single-term `ix_picture_deleted`, while an `(id)`-only partial index ties and loses on a creation-order tie-break that `create_all` randomises. Measured on 200k rows: 17.9 ms → under 0.01 ms per probe.
+
+Most finders still fetch the full ORM row; only `MissingThumbnailFinder` and `MissingSmartScoreFinder` (the two hottest) have been narrowed so far.
+
 **User-triggered tasks** (e.g. `DETECTION`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column.
 
 ---
@@ -705,8 +864,20 @@ All taggers and captioners are implemented as `TaggerPlugin` subclasses ([pixlst
 |-------------|-------|------|------------|-------|
 | `wd14` | `WD14Plugin` | `tagger_plugins/wd14.py` | Tags | `SmilingWolf/wd-convnext-tagger-v3` ONNX |
 | `pixlstash_tagger` | `PixlStashTaggerPlugin` | `tagger_plugins/pixlstash_tagger.py` | Tags | `PersonalJeebus/pixlvault-anomaly-tagger` (HF, pinned) |
-| `florence2` | `Florence2Plugin` | `tagger_plugins/florence2.py` | Descriptions | Florence-2 captions |
+| `florence2` | `Florence2Plugin` | `tagger_plugins/florence2.py` | Descriptions | Florence-2 captions **and** the Segment action's detector — see the variant note below |
 | `joycaption` | `JoyCaptionPlugin` | `tagger_plugins/joycaption.py` | Tags + Descriptions | LLaVA-style LLM; `bitsandbytes` optional dep |
+
+#### Florence-2 checkpoint selection (issue #512)
+
+`Florence2Service` is shared between captioning and object detection (the Segment action), so **one setting drives both** — `model_variant` in the plugin's `parameter_schema`, a `select` over `FLORENCE_MODEL_VARIANTS` (`base`, default, and `large-ft`). Loading two variants side by side would double the VRAM for no benefit, so this is deliberate rather than a limitation.
+
+Three things have to move together, and the tests in `tests/test_florence_model_variant.py` pin each:
+
+- **The revision follows the variant.** Every entry pins a HuggingFace commit; an unpinned ref is a silent supply-chain change.
+- **The VRAM figure follows the variant** (`Florence2Service.base_vram_mb`, ~900 MB base vs ~2.6 GB large-ft). A constant pinned to base would under-count the gate and spill.
+- **The variant is applied at one chokepoint**, `InferenceEngine.ensure_captioning_ready()`, not only in `Florence2Plugin.init()` — `DescriptionWorkflow` and `detect_objects` reach the service directly and never run the plugin's `init`. Switching variants unloads the resident checkpoint so the next load picks up the new one.
+
+No migration is needed: the value is read from `tagger_settings` with a `base` fallback, so existing installs are unchanged.
 
 ### `TaggerPlugin` ABC
 
@@ -765,8 +936,11 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/plugin_service.py](../pixlstash/services/plugin_service.py) | Plugin listing and async orchestration for `POST /pictures/plugins/{name}`; emits `PLUGIN_PROGRESS` WebSocket events; used by `routes/pictures/_misc.py` |
 | [services/share_service.py](../pixlstash/services/share_service.py) | Validates picture share tokens (`UserToken`), resolves shared pictures, and returns the correct watermark bytes (custom or default) |
 | [services/stack_membership.py](../pixlstash/services/stack_membership.py) | Stack-atomic project & set membership helpers — keeps every member of a stack sharing the same project (`PictureProjectMember` / `Picture.project_id`) and set (`PictureSetMember`) membership |
-| [services/set_lock_service.py](../pixlstash/services/set_lock_service.py) | Single source of truth for picture-set lock enforcement: a `PictureSet` with `locked=True` is a hard whole-set freeze (set-level and member-level protections) |
+| [services/set_lock_service.py](../pixlstash/services/set_lock_service.py) | Single source of truth for picture-set lock enforcement: a `PictureSet` with `locked=True` is a hard whole-set freeze (set-level and member-level protections). Stacks are guarded in **both** directions: `enforce_stack_membership_not_locked` refuses a picture *joining* a stack a locked set touches, `enforce_stack_detach_not_locked` refuses one *leaving* it, and `locked_sets_freezing_stacks` is the read-side prediction computed over the same member rows |
 | [services/scrapheap_service.py](../pixlstash/services/scrapheap_service.py) | **The single permanent-destruction path for scrapheap pictures** plus the retention policy maths. Both the manual `DELETE /pictures/scrapheap` handler and the scheduled `ScrapheapRetentionPurgeTask` call `purge_scrapheap_pictures`; there is deliberately no second destruction path. Also owns `compute_purge_at` / the reduction-grace rule, the `scrapheap_retention_*` server-config read/write, the delete-forever `confirm_token` store (`ScrapheapDeleteConfirmations`, §5), and the permanent-deletion ledger's only `True -> False` correction — bounded to the `path_sha`s the same purge wrote, so it can never retract an earlier purge's genuine deletion at a reused path.<br><br>**Selection, planning and deletion run in ONE DB-queue submission (`plan_and_purge_in_session`), and `purge_rows_in_session` re-checks `deleted` where it deletes.** The purge used to be four separate submissions — fetch the scrapheap rows, fetch the protected folder ids, look up the locks, then `DELETE ... WHERE id IN (...)` with no `deleted` predicate. Writes are serialised on a single DB worker thread, so a `POST /pictures/scrapheap/restore` submitted between those steps ran *between* them: the ids went live again and the final delete-by-id destroyed the rescued rows, removed their files from disk, and wrote `file_removed=True` ledger entries so even a snapshot restore dropped them. (The lock lookup was worse — it ran on the caller's thread via `run_immediate_read_task`, so a set locked afterwards was not seen at all.) The single task closes the window; the `deleted` re-check is the half that holds regardless of how the work is scheduled, and it also covers the automatic sweep. Ids that left the scrapheap get no ledger row, are not deleted, have their file removal dropped, and are logged + reported as `skipped_restored` — never silently discarded |
+| [services/import_dedup_service.py](../pixlstash/services/import_dedup_service.py) | **Content-hash matching for every import path, Scrapheap included.** Import dedup used to ask only "is there a LIVE picture with this `pixel_sha`?", `Picture.find` defaults `include_deleted=False` and the one-shot import called it that way, so **a scrapheaped picture was invisible to import dedup** and its file was re-imported as a brand-new second row while the original was still there. Harmless while the Scrapheap held a handful of pictures; predictable the moment a bulk "Keep cover only" cleanup puts hundreds there, all of them copies of files the user still has on disk.<br><br>`partition_by_pixel_sha_in_session` returns two **disjoint** maps, live matches and scrapheaped matches (a live row outranks a soft-deleted one for the same hash, because the content genuinely IS in the library). Both are skipped by the import; only the second is reported as its own outcome and offered for restore. **The widening is scoped to this query:** `Picture.find`'s `include_deleted` default is unchanged, so no listing, search, count, export or dedup query gains deleted rows. A permanently purged file is correctly NOT a match, delete-forever removes the row, so there is nothing to match and nothing to resurrect; the `deleted_file_log` ledger is deliberately not consulted here, since it exists to stop a *snapshot restore* resurrecting destroyed rows (§18.7), not to refuse the owner's own re-import of a file they still have |
+| [services/comfyui_recipe_service.py](../pixlstash/services/comfyui_recipe_service.py) | Remix recipe replay (§5 `comfyui.py`): fetches ComfyUI's `GET /object_info`, pre-flights an embedded API prompt graph against it (missing node classes / model filenames / input images, and whether anything writes an image), detects patchable seed inputs by ComfyUI's own `control_after_generate` flag rather than a class allowlist, and renders `POST /prompt`'s structured `node_errors` as one sentence. **The governing rule is that a check that could not run reports as *unchecked*, never as passing and never as missing** — a spurious "missing model" blocks a run that would have worked |
+| [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py) | **Vault-wide near-duplicate sweep planner (read-only).** Promotes the client-side, selection-scoped "Stack groups" grid maneuver into a library-wide service. Streams the `PictureLikeness` edge table in keyset-paginated pages and folds each edge into a **union-find forest** (peak memory: two ints per picture, versus the `GET /pictures/likeness-groups` endpoint's full adjacency dict), accumulating each component's min/max likeness on its root so the weakest link of a transitive chain is known in one pass. A `SweepPolicy` parameter object (candidate threshold, the higher auto-resolve threshold, smart-score margin, group-size ceiling, cross-stack disposition, listing cap) splits every group into `auto_collapse` and `needs_review`, and every review group carries machine-readable reason codes.<br><br>**Non-destructive by construction:** every outcome is additive (`create_stack` / `add_to_stack` / `merge_stacks`), the module opens no write task, and a dry run mutates no row. Groups spanning several existing stacks — which the shipped client silently skips — are a first-class `merge_stacks` proposal naming the target stack and the stacks folded into it. Keeper selection reuses the shipped stack order (score → smart score → recency → id); the one deliberate divergence from `routes/stacks.py::_stack_order_key` is that it reads the **stored** `Picture.smart_score` (a vault-wide sweep cannot afford a live batch recompute), and a picture with no stored smart score is reported as an ambiguous keeper rather than ranked at zero |
 | [services/snapshot_service.py](../pixlstash/services/snapshot_service.py) | Snapshot creation (SQLite `VACUUM INTO` + JSON manifest + `Snapshot` row), listing, and GFS-style retention pruning (see §18) |
 | [services/restore_service.py](../pixlstash/services/restore_service.py) | Full-database and per-resource (picture / picture_set / project / character) restore from a snapshot; runs `alembic upgrade head` on the snapshot first (see §18) |
 | [services/tag_prediction_service.py](../pixlstash/services/tag_prediction_service.py) | Confirm, reject, delete, and reset tag predictions; encapsulates the `TagPrediction` → `Tag` promotion logic used by `routes/tag_predictions.py` |
@@ -776,6 +950,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/tag_scan_service.py](../pixlstash/services/tag_scan_service.py) | On-demand near-neighbour tag scan — finds one tag's suspects and appends them; reuses the shared `knn_disagreement_with_neighbors` kernel so CLI and UI can't drift |
 | [services/review_service.py](../pixlstash/services/review_service.py) | Service layer for review sessions (one tag + a frozen scope + one scan's results): create, scan-once, append-only refresh, archive/abort, and per-item decisions |
 | [services/impossible_tag_scan_service.py](../pixlstash/services/impossible_tag_scan_service.py) | On-demand impossible-tag scan — (re)builds the cleanup queue for person-tags that are impossible on a picture with no detectable face; sibling of `tag_scan_service.py` |
+| [services/operation_log_service.py](../pixlstash/services/operation_log_service.py) | The operation log (§21): snapshots the reversible metadata facets of the affected pictures before and after a mutation, records the diff as one append-only `Operation` row (with a batch id when it is part of a bulk action), and applies a recorded state back for undo/redo. `run_recorded_metadata_task` is the wrapper mutation sites call instead of `vault.db.run_task`, so capture, mutation and recording share one queued task |
 | [services/impossible_tag_clear_service.py](../pixlstash/services/impossible_tag_clear_service.py) | Bulk-clear the filter-implied wrong tags for the human-reviewed "Impossible tags" grid selection (recording a human NEG per removed tag), plus the symmetric undo; used by the impossible-tags routes |
 
 ### 10.1 DB access rule for services (enforced in CI)
@@ -859,7 +1034,52 @@ Selected milestones:
 
 | 0084 | Library-wide `smart_score` NULL-reset after rebalancing the positive weights |
 
-Current head: `0084_recompute_smart_score_rebalanced_weights`.
+| 0085 | `smart_score` NULL-reset after restoring the built-in anchors |
+
+| 0086_reissue_api_tokens | Clears every `usertoken` row, then `guest_score` and `guest_session` (child first — both reference a token id, and SQLite reuses the lowest free integer primary key), and NULLs `user.public_url` / `user.comfyui_url` so replacement tokens and generated pictures are not sent to a stale address. Shipped in v1.8.1 alongside the sign-in fix in §16: neither the login rule nor the session-to-token link can reach a token row that already exists, so the rows are reissued instead. Data-only |
+
+| 0086_add_operation_log | Append-only `operation` table — the operation log / undo-redo substrate (§21), carrying `batch_id` from day one |
+
+| 0087 | `characterprojectmember` / `picturesetprojectmember` join tables — many-to-many characters and picture sets across projects (#125). Additive: the scalar `project_id` FKs stay and stay populated as the primary project, and the migration backfills one join row per existing assignment |
+
+| 0088 | `dedupgroup` / `dedupgroupmember` / `dedupverdict` / `dedupscan` — the tiered Duplicates queue cache, verdict memory and scan progress (§22.6). Additive, and deliberately no `NULL` reset: tier 1 reuses the existing `pixel_sha` column and the runtime `MissingPixelShaFinder` backfills rows where it is `NULL` (§22.1) |
+
+| 0089 | `dedupverdict.reopen_batch_id` — the undo-of-clear correlation key (§22.6). Additive and schema-only; NULL on every existing row is correct |
+
+| 0090 | `usertoken.public_id` — a stable, never-reused identity for a token (#666, see §12.2). Additive: add the column, backfill every row with `lower(hex(randomblob(16)))`, then add the unique index. Existing tokens keep their integer ids, hashes, foreign key and all three pre-existing indexes |
+
+| 0095 | `ix_picture_thumbnail_missing` / `ix_picture_smart_score_missing` — partial indexes for the two hottest idle work probes (#651). Schema-only, no `NULL` reset. Column order is load-bearing: see §7's note on probe cost |
+
+| 0096 | `picture.is_video` — persists what used to be a `CASE` over five `file_path ILIKE '%.ext'` tests in the character-thumbnail ordering (#651). Additive, `NOT NULL DEFAULT 0`, with a set-based extension backfill. NOT NULL is a correctness constraint, not tidiness: SQLite sorts `NULL` first, so a nullable column would let an unclassified row outrank a still image in the very ordering the column exists to serve, and would slip past the backfill's `= 0` guard |
+
+Current head: `0096_add_picture_is_video`.
+
+### 12.1 Two revisions numbered 0086, and why the chain was spliced
+
+`0086_reissue_api_tokens` (v1.8.1, from `main`) and `0086_add_operation_log` (1.9 only) were written against `0085` on separate branches, so merging v1.8.1 into the 1.9 line left the chain with **two heads**. It was resolved by re-pointing `0086_add_operation_log.down_revision` at `0086_reissue_api_tokens`, giving the single chain `0085 → 0086_reissue_api_tokens → 0086_add_operation_log → 0087 → 0088 → 0089`.
+
+The splice went that way round because **`0086_reissue_api_tokens` has already run on released v1.8.1 databases**, which are stamped with exactly that identifier. Changing its id or its parent would strand them. `0086_add_operation_log` is unreleased 1.9-only work, so it is the safe side to move. This is the `main`-branch rule in [CLAUDE.md](../CLAUDE.md) applied to a merge: the revision that shipped is immovable.
+
+**Consequence for existing 1.9 development databases.** Alembic only walks *forward* from a database's current revision. A vault that already took the pre-merge path (`0085 → 0086_add_operation_log → … → 0089`) is downstream of the splice, so `alembic upgrade head` is a no-op for it and **it never runs the token clear** — it keeps whatever tokens it had, including any minted through the escalation §16 closes. There is no second reissue migration for this by design (adding one would clear tokens again on every up-to-date install, including v1.8.1 users who have already made replacements). The fix is operational, for dev vaults only:
+
+```
+alembic stamp 0085_recompute_smart_score_restored_builtin_anchors
+alembic upgrade head
+```
+
+Replaying `0086_add_operation_log` through `0090` is safe because all of them are guarded (they inspect existing tables / columns / indexes before creating anything, and 0090's backfill is `WHERE public_id IS NULL`), so the second pass is a no-op. `tests/test_migrations.py::test_a_pre_splice_dev_database_is_recovered_by_stamping_back_to_0085` is the check on that claim, `::test_0090_replay_does_not_reissue_existing_public_ids` is the check for 0090 specifically, and `::test_the_migration_chain_has_exactly_one_head` pins the splice itself.
+
+### 12.2 `usertoken.public_id` — why the token table was *not* rebuilt (0090, #666)
+
+`usertoken.id` is declared `id: int = Field(default=None, primary_key=True)`, which SQLite emits as a plain `INTEGER PRIMARY KEY` — a rowid alias with no `AUTOINCREMENT`. SQLite hands out the lowest free value, so **a deleted token's id is reissued to the next token created**: with tokens 1–5 present, deleting all five and creating one more yields id 1 again. Anything holding that id then names a *different* token than the one it was given, silently. That is fail-open, and it is what 0090 closes.
+
+The fix is an additive column, `public_id`: 128 bits of randomness as lowercase hex (`new_token_public_id` in `db_models/user_token.py`), unique, generated per row and never reissued. A stale reference to it resolves to the same token or to nothing — never to a different one.
+
+**`AUTOINCREMENT` was considered and rejected.** It makes ids monotonic only *within one database file*: its high-water mark lives in `sqlite_sequence`, which is inside the database and is therefore replaced wholesale by a full restore, so a restored older snapshot would go on to reissue ids that in-memory state still remembers — the case §18.5 is actually about. It also cannot be added in place, so it would have meant a create/copy/drop/rename rebuild of `usertoken`, re-declaring the `user_id` foreign key and re-creating `ix_usertoken_user_id`, `ix_usertoken_token_hash` and `ix_usertoken_token_prefix` (a dropped table takes its indexes with it silently; losing the prefix index would deoptimise the token lookup path rather than fail visibly). The additive column avoids all of it, and `tests/test_migrations.py::test_0090_backfills_public_id_without_disturbing_existing_tokens` asserts the foreign key and all three indexes are still there afterwards.
+
+**Why three statements rather than one.** SQLite rejects `ALTER TABLE … ADD COLUMN … UNIQUE` outright ("Cannot add a UNIQUE column"), and it rejects a NOT NULL column whose default is a non-constant expression. So the migration adds the column plain, backfills it in one set-based `UPDATE … SET public_id = lower(hex(randomblob(16))) WHERE public_id IS NULL`, and creates the unique index last. No Python loop, no application logic in the migration. The column stays **nullable** because making it NOT NULL afterwards would again require a rebuild; uniqueness carries the guarantee, and every row the application writes gets a value from the model's default factory. `_do_login` refuses to mint a session for a token with a NULL `public_id` (only reachable on a database that never ran 0090) rather than link the session to a reusable integer.
+
+**Scope.** `public_id` is used by the in-memory session-to-token maps in `AuthService` (§16.5) — the place where a reference outlives the row and the fail-open case lives. `guest_session.token_id` and `guest_score.token_id` deliberately stay on the integer foreign key: their cascade handles the ordinary case, `0086_reissue_api_tokens` and the restore path clear both tables outright, and widening the change to them is extra surface for no additional guarantee today. The REST API also keeps exposing the integer id (`GET`/`DELETE /users/me/token/{id}`); it is a short-lived handle within one request, not a stored reference.
 
 ---
 
@@ -878,13 +1098,56 @@ Current head: `0084_recompute_smart_score_rebalanced_weights`.
 └── reference-folders/         # If configured
 ```
 
-- `pixel_sha` (SHA-256 of decoded pixels) is used for import deduplication.
+- `pixel_sha` (indexed) is used for import deduplication and for §22's tier-1 exact-duplicate detection. It is a **SHA-256 over the file's bytes** (not over decoded pixels, despite the name), and it is **sampled** above 128 KiB: `ImageUtils._calculate_sha256_digest` digests 8 chunks of 8 KiB spread across the file rather than every byte. Anything comparing on it should pair it with `size_bytes` — see §22.1.
 - Watermarks are rendered on demand and cached in memory.
 
 ### Database
 
 - File-based **SQLite** at `{image_root}/vault.db`
 - All writes are serialised through `VaultDatabase`'s task queue (single writer); reads run in parallel.
+
+#### Engine and connection settings
+
+**Every SQLite engine that serves the application is built by `database.create_configured_engine(path, *, wal=True, foreign_keys=True)`**: `VaultDatabase.__init__`, the post-swap rebuild in `services/restore/full_restore.py::_swap_database`, and all nine restore-package snapshot engines (through `schema_upgrade.snapshot_engine`). A bare `create_engine` call at any of those sites is a bug: the configuration comes in two halves (`connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S}` and the `init_database` connect listener), and a call site that writes its own `create_engine` gets neither, so it silently runs on SQLite's defaults (5 s busy timeout, 2 MiB page cache, rollback journal, `foreign_keys=OFF`). That drift has been a real bug twice: the restore path once left the rebuilt engine *better* configured than the startup engine (#651), and nine engines in `services/restore/` ran with no settings at all (#709).
+
+Two in-tree engines are **deliberately not** built by the helper, and neither is a defect:
+
+- **`pixlstash/migrations/env.py`**: Alembic owns its own connection. It builds an engine with `engine_from_config` from `alembic.ini` and runs migrations with foreign keys **off**, and its `render_as_batch=True` table recreation (copy into a new table, drop, rename) would be hazardous with FK enforcement on. Routing it through `create_configured_engine` would be wrong, so it is an allowlisted exception with that reason recorded next to the guardrail.
+- **`frontend/e2e/seed_dedup_fixture.py`**: a standalone e2e seeding script outside the application package. It never runs in the server process and is out of the guardrail's scope.
+
+`tests/test_architecture_guardrails.py::test_no_engine_is_built_outside_create_configured_engine` is the guardrail: **AST-based and recursive over all of `pixlstash/`**, so an aliased import (`create_engine as _ce`), a qualified call (`sa.create_engine(...)`), a `getattr` lookup, an indirect binding, an `engine_from_config`, or a brand-new subpackage cannot slip past it. Every one of those escaped the first, text-grep version. `_ENGINE_FACTORY_ALLOWLIST` carries a reason per entry and `test_engine_factory_allowlist_has_no_dead_entries` fails if an entry stops naming a real engine build, so a stale exception cannot quietly re-open a file.
+
+The engine is built in `VaultDatabase.__init__` and rebuilt by the restore path after a live-DB swap (`services/restore/full_restore.py::_swap_database`); both are plain `create_configured_engine(path)` calls with the defaults, so they cannot drift. That the *rebuilt* one really does match is asserted end to end by `tests/test_restore.py::test_full_restore_rebuilds_the_live_engine_with_the_startup_configuration`, which runs a full restore and reads `journal_mode`, `foreign_keys`, `cache_size` and `busy_timeout` back off a real pooled connection of the swapped-in engine. That test is what pins #651; without it, reverting `_swap_database` to a bare `create_engine` passes the whole suite.
+
+| Setting | Value | Where | Why |
+|---|---|---|---|
+| Pool | `QueuePool size=5, max_overflow=10, pool_timeout=30` | SQLAlchemy default (not overridden) | Up to **15** concurrent connections, shared by the Starlette threadpool (handlers are plain `def`), the WorkPlanner finders, the TaskRunner workers and the writer thread. |
+| `connect_args={"timeout": …}` | `SQLITE_BUSY_TIMEOUT_S = 30` | `create_engine` | sqlite3 turns this into `PRAGMA busy_timeout`. Its 5 s default is shorter than a background task's write transaction, so readers hit "database is locked" instead of waiting. |
+| `journal_mode` | `WAL` | `init_database` | Readers do not block the single writer. |
+| `synchronous` | `NORMAL` | `init_database` | Safe with WAL; avoids an fsync per commit. |
+| `foreign_keys` | `ON` | `init_database` | SQLite defaults FK enforcement off. Relied on by e.g. `review_service`. |
+| `cache_size` | `SQLITE_CACHE_SIZE_KIB = -16384` (16 MiB) | `init_database` | SQLite's 2 MiB default holds almost nothing of a multi-GB vault, so the hot finder queries evict the pages the API endpoints need. **Per connection**: a single index scan fills it, so worst case is ~15 × 16 MiB of resident page cache. |
+
+Deliberately **not** set:
+
+- **`mmap_size`** — SQLite's memory-mapped I/O turns an I/O error into a `SIGBUS` that kills the process rather than a catchable `SQLITE_IOERR`, and is documented as unsafe on filesystems without coherent `mmap`. `image_root` is user-chosen and is frequently a NAS mount. The restore path also `os.replace()`s the live DB file underneath the engine, which is exactly the hazard mapped pages do not tolerate.
+- **`temp_store=MEMORY`** — measured on a 905 MB dev vault it was 24–29 % *slower* for a large temp b-tree (Linux keeps the unlinked temp file in page cache anyway, so `MEMORY` only adds allocator overhead) and made no measurable difference at the sizes PixlStash endpoints actually produce. `cache_size` does **not** bound an in-memory temp database, so it also removes the only ceiling on a runaway sort.
+
+Settings are asserted against real pooled connections in `tests/test_database_engine_config.py`.
+
+##### Snapshot engines: the one sanctioned deviation
+
+Snapshot `.sqlite` files are opened through `services/restore/schema_upgrade.snapshot_engine`, which is `create_configured_engine(path, wal=False)`. It is the single entry point for every restore-path engine (preview ×5, full restore ×2, resource restore ×2) so the busy timeout, page cache and custom SQL functions match the vault engine; it deviates in exactly one way, and the deviation is stated once rather than inherited by omission:
+
+- **`wal=False`**: a snapshot must stay a **self-contained single file**. `journal_mode` is a persistent property of the database header, so an engine that set WAL would rewrite the snapshot's header and start a `-wal` sidecar beside it, while every path that handles a snapshot copies, replaces or compresses the **main file by name** (`_backfill_snapshot`'s `shutil.copy2`, `compress_snapshot`, `materialize_snapshot`) and would drop it. The two `wal_checkpoint(TRUNCATE)` + `journal_mode=DELETE` conversions in the restore package exist precisely to force snapshots *out* of WAL, and could not do so reliably against a live pooled WAL connection (SQLite refuses to leave WAL while another connection has the file open). `synchronous` consequently stays at SQLite's `FULL` default too, because `NORMAL` is only crash-safe under WAL, so the two always travel together.
+- **`foreign_keys` stays ON** (the shared default). Eight of the nine snapshot engines are read-only, where FK enforcement has no effect whatsoever; the ninth (`preview._fill_snapshot_hashes_at`, the only restore path that writes to a snapshot) only updates `picture.metadata_hash`, which is neither a child key nor a parent key, so SQLite runs no FK check for it. Pre-existing violations inside a snapshot (legitimate, since a snapshot is restored as a unit) are never scanned for. Asserted **in both directions** by `tests/test_restore.py::test_snapshot_hash_backfill_survives_foreign_key_violations`: the backfill still writes through a violating snapshot, *and* the same connection rejects a genuinely violating `INSERT`. The positive direction alone passes with FK off too, which would leave the setting pinned by nothing but one PRAGMA read.
+
+**What the deviation costs.** Measured, so it is a decision rather than an assumption:
+
+- **Page cache**: raising a snapshot connection from SQLite's 2 MiB default to `cache_size = -16384` cost about **+9 MB peak RSS per connection** on a 92 MB snapshot. The pool ceiling applies here as it does to the vault engine, so the worst case is roughly 15 concurrent previews × 14 MiB of resident page cache. Acceptable against a preview that would otherwise re-read pages continuously; revisit if snapshot previews ever become a bulk background job rather than a user-initiated one.
+- **Busy timeout**: 5 s → 30 s only bites **cross-process** contention. In-process snapshot access is already serialised by `_snapshot_file_lock`, so the only way to reach the timeout is another process holding the file. When that happens the request now stalls 30 s before erroring rather than 5 s. That is the intended trade (a slow restore beats a spurious "database is locked"), but it is a user-visible latency change, not a free win.
+
+**Known edge, unreachable today.** `wal=False` means "do not *set* WAL", not "force a single file". `journal_mode` is a persistent header property, so against a database file whose header **already** says WAL, a `wal=False` engine reports `wal` and creates a `-wal` sidecar, which is exactly the outcome the flag exists to prevent. No path reaches it: every snapshot is produced by `VACUUM INTO` from the live WAL vault, and `VACUUM INTO` emits a `delete`-mode file. **Do not "fix" this by having the connect listener run `PRAGMA journal_mode=DELETE`.** SQLite refuses to leave WAL while another connection holds the file, so the second pooled connection raises "database is locked", and the pragma is a *write*: it would fail, or mutate the file, on read-only preview opens, which are eight of the nine snapshot engines. If a WAL-header snapshot ever becomes reachable, convert the **file** once at materialisation time (`wal_checkpoint(TRUNCATE)` + `journal_mode=DELETE` on a single exclusive connection, which is what `_upgrade_snapshot_schema` and `preview._fill_snapshot_hashes_at` already do), never per connection.
 
 ### Vector storage
 
@@ -1015,7 +1278,9 @@ In addition, `READ`-scoped tokens are blocked from non-GET methods (except a sma
 1. **Only an owner credential can be exchanged for a session.** `POST /login` with a `token` issues a cookie only for an *unexpired* `ALL`-scope token with **no** `resource_type`. A `READ` token, a resource-restricted token, and an expired token are each refused. The rule has one spelling, the module-level `is_unscoped_owner_token` / `is_token_expired` predicates, shared with the WebSocket handshake (`authenticate_websocket`) and matching what `require_unscoped_owner` derives from `request.state`. A refused exchange returns the same `401 {"detail": "Invalid token"}` as an unrecognised token, so the response does not distinguish the two cases; the reason is logged server-side.
 2. **Removing a token ends the sessions it created.** This is the enforced rule, and it is narrower than "a session never outlives its token" — see the gaps below. `_register_session` records the minting token id in `_sessions_by_token_id` / `_token_id_by_session` (both directions, so lookup and cleanup are O(1)), and every path that removes a token calls `_drop_sessions_for_tokens` with the removed ids before flushing the token cache. That covers `delete_token` and `revoke_tokens_for_resource`. Sessions from a password login and the seeded desktop session carry no token id and are deliberately untouched by token removal; the credential-changing paths (`change_password`, `remove_password_hash`) call `_clear_all_sessions`, which ends everything. `update_token` only toggles `watermark` and does not withdraw access, so it flushes the token cache but keeps sessions. `_session_lock` and `_token_cache_lock` are always taken separately, never nested.
 
-   Matching a token costs a bcrypt call per candidate row plus a database round trip, so a removal can land *between* the read that matched the token and `_register_session`, which is before the sweep has a session to find. `_confirm_session_token_still_exists` re-reads the row immediately after registering and discards the session if it is gone. This settles the ordering rather than narrowing it: the database task queue serialises the re-read against the removal's delete, so either the sweep sees the registration or the re-read sees the deletion, and there is no third ordering.
+   Matching a token costs a bcrypt call per candidate row plus a database round trip, so a removal can land *between* the read that matched the token and `_register_session`, which is before the sweep has a session to find. `_confirm_session_token_still_exists` re-reads the row immediately after registering and discards the session if it is gone. This settles the ordering rather than narrowing it. `_session_lock` totally orders the registration against the sweep, so there are exactly two cases and no third: either the sweep sees the registration and ends the session, or the sweep ran first — and the sweep only runs after `run_task(remove_token)` has returned, so the delete had already committed before the registration, hence before the re-read starts, and the re-read cannot see the row.
+
+   Note which premise that rests on, because it is **not** queue serialisation. It needs only "a read that starts after a commit observes it", which holds on the writer queue and equally for a WAL read on the read path — the same property §16.4 leans on. The re-read currently uses `run_task`, but it would stay correct if moved to `run_immediate_read_task`. What it does depend on is the sweep running *after* the delete has committed, and on registration and sweep sharing `_session_lock`. Neither may be reordered.
 
 3. **A removed token stops authenticating on the next request.** Verified tokens are cached for `_TOKEN_CACHE_TTL` (300s) so bcrypt does not run per request, and the cache fast path re-checks only `expires_at`, never the database. `_flush_token_cache()` is the single invalidation chokepoint: it clears the cache **and** bumps `_token_cache_epoch`, both under `_token_cache_lock`, and all three mutation paths (`delete_token`, `update_token`, `revoke_tokens_for_resource`) call it after their change has committed. The bump is what makes the clear sound. A lookup already in flight has read its row and spent ~200ms in `bcrypt.verify` holding no lock, so a bare clear would let it write that row straight back afterwards. `_token_from_value` therefore samples the epoch **before** its database read and installs its result only if the epoch has not moved; otherwise it returns the token for the request that already matched it and logs that it declined to cache. Sampling after the read would reintroduce the gap.
 
@@ -1037,9 +1302,11 @@ Both are follow-up work. Do not read rule 2 as covering them.
 - **Do NOT put authorization code in the handler.** No inline `enforce_picture_scope`, `require_unscoped_owner`, or `token_scope` ladder — the gate owns object authorization on every return path by construction. Copy a *sibling route's declaration*, not a per-handler check.
 - **An undeclared data route is denied at runtime (403) and fails the build.** The startup assertion (`AuthzGate.enforce_startup`) aborts boot and the CI guardrail (`tests/test_architecture_guardrails.py::test_all_routes_declare_access_policy`) goes red on any undeclared route. There is no "I forgot" state.
 - `PUBLIC` / `LOCAL_OWNER_ONLY` / `LOOPBACK_OWNER_ONLY` declarations require a machine-checked `justification=`. Exemptions are recorded decisions, not blanks.
-- The coverage matrix (`docs/reviews/authz-coverage-matrix.md`) *is* the registry. Both-direction tests (out-of-scope 403 **and** in-scope 200) and independent adversarial sign-off still apply per `CLAUDE.md` / `.github/copilot-instructions.md` (§ *Security & authorization review process*).
+- The coverage matrix (`docs/authz-coverage-matrix.md`) *is* the registry. Both-direction tests (out-of-scope 403 **and** in-scope 200) and independent adversarial sign-off still apply per `CLAUDE.md` / `.github/copilot-instructions.md` (§ *Security & authorization review process*).
 
-**Residual inline exception — 4 name-derived routes.** Four `*_SCOPED` routes resolve their object id from a *name* rather than a numeric path id: `GET /projects/{project_name}/characters/{character_name}`, `GET /projects/{project_name}/picture_sets/{picture_set_name}`, `GET /projects/{id_or_name}`, and `GET /projects/{id_or_name}/picture_sets`. The gate cannot resolve name→id without duplicating each handler's own int-or-name lookup — a gate/handler divergence risk, the exact defect this refactor exists to kill. These carry `resolved_inline=True` in the registry and KEEP their inline `_require_scope_allows_{character,picture_set,project}` check as the live enforcement. This is the only place an inline object check remains; it retires when a shared name→id resolver exists. (Two aggregate-summary handlers, `get_characters_summary` and `get_project_summary`, also retain a small inline `ALL`/`UNASSIGNED` guard that doubles as input validation; the gate independently fails those closed for a scoped token, so the inline guard is defence-in-depth, not the sole enforcement.)
+**Project scope is membership-based since v1.9 (issue #125).** `enforce_character_scope` and `enforce_set_scope` resolve the `project` branch through `CharacterProjectMember` / `PictureSetProjectMember`, not the scalar `project_id`. A project-scoped token therefore reaches an entity that lists its project among several — the intended widening — while an entity in a different project is still refused. Both directions are pinned in `tests/test_multi_project_membership_authz.py` (in-scope 200 **and** out-of-scope 403, across by-id, by-name, list, locked-members, project-set-listing and the picture-level consequence). Reading the FK instead would *under*-grant, which is its own regression: see §6 *Grouping & scoping*.
+
+**Residual inline exception — 4 name-derived routes.** Four `*_SCOPED` routes resolve their object id from a *name* rather than a numeric path id: `GET /projects/{project_name}/characters/{character_name}`, `GET /projects/{project_name}/picture_sets/{picture_set_name}`, `GET /projects/{id_or_name}`, and `GET /projects/{id_or_name}/picture_sets`. The gate cannot resolve name→id without duplicating each handler's own int-or-name lookup — a gate/handler divergence risk, the exact defect this refactor exists to kill. These carry `resolved_inline=True` in the registry and KEEP their inline check as the live enforcement. This is the only place an inline object check remains; it retires when a shared name→id resolver exists. Two of the four (`GET /projects/{id_or_name}` and `GET /projects/{id_or_name}/picture_sets`) had their inline `_require_scope_allows_project` **replaced** by `enforce_project_path_scope`, and the other two gained it *in addition to* their `_require_scope_allows_{character,picture_set}` check: all four also name a **project** in the path, which is a second question the gate cannot see, and answering it after resolving the project made the routes a project-existence oracle (#708 condition 2 — see §16.6 for the reproduction and the uniform-refusal rule). (Two aggregate-summary handlers, `get_characters_summary` and `get_project_summary`, also retain a small inline `ALL`/`UNASSIGNED` guard that doubles as input validation; the gate independently fails those closed for a scoped token, so the inline guard is defence-in-depth, not the sole enforcement.)
 
 ### 16.2 Centralised authorization chokepoint (SHIPPED — the authz gate)
 
@@ -1057,7 +1324,7 @@ Both are follow-up work. Do not read rule 2 as covering them.
 **Migration path (completed, incremental — not a big-bang rewrite).**
 
 1. **✅ done** — Built the route-declaration registry (`authz/registry.py`) and the startup/CI assertion in report-only mode, enumerating every data route.
-2. **✅ done** — Back-filled declarations for all 207 routes to match their current §16.1 state, reconciled against the audit findings in `docs/reviews/bulk-token-scoping.md` / `v1.5.1-security-signoff.md` and recorded in `docs/reviews/authz-coverage-matrix.md`.
+2. **✅ done** — Back-filled declarations for all 207 routes to match their current §16.1 state, reconciled against the audit findings in `docs/reviews/bulk-token-scoping.md` / `v1.5.1-security-signoff.md` and recorded in `docs/authz-coverage-matrix.md`.
 3. **✅ done** — Introduced the central chokepoint (`authz/gate.py`) behind the declarations, calling the relocated helpers (`authz/membership.py`); proved equivalent with both-direction tests (`tests/test_authz_gate_step3.py` / `test_authz_gate_step4.py`), then removed the now-redundant per-handler `enforce_picture_scope` / `require_unscoped_owner` / `require_user_id` / `_require_scope_allows_*` calls (Step 5). The 4 name-derived routes keep their inline check (§16.1 residual exception).
 4. **✅ done** — Closed the `ALL`+`resource_type` footgun (item 4 above) and collapsed the duplicated `token_scope` ladder into the single `authz/membership.py` home.
 5. **✅ done** — Flipped the startup assertion + CI guardrail to **fail-closed** (`AUTHZ_GATE_ENFORCING = True`): an undeclared data route is 403 at runtime and a boot failure + red CI. The constant is the one-line per-release rollback (flip to `False` for report-only).
@@ -1128,6 +1395,220 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 - Therefore a reverse proxy MUST be added to `trusted_proxies` **and** MUST be configured to **strip inbound `X-Forwarded-For`** so a client cannot spoof a local IP. Startup emits a warning for the risky config (`host=0.0.0.0` with `trusted_proxies` empty, and separately whenever `allow_remote_host_ops=true`) — see `startup_checks.py`.
 
 **Loopback-tier same-host-proxy assumption (CSO Condition 2, 2026-07-21).** The `LOOPBACK_OWNER_ONLY` red line assumes there is **no same-host reverse proxy forwarding to the backend over loopback**. A hardened deployment that binds the backend to `127.0.0.1` behind a same-host nginx is the edge case: the proxy's connection to the backend *originates from loopback*, so a proxied remote client would arrive with a loopback peer IP and satisfy even the loopback tier — silently defeating the red line. An operator running that topology **MUST** set `trusted_proxies` (to the proxy's address) so the gate resolves the real client IP from `X-Forwarded-For` instead of the loopback hop; the proxy must still strip inbound `X-Forwarded-For`. The startup warning is intentionally scoped to `host=0.0.0.0` and does **not** fire on this same-host case, because it is indistinguishable at config-load time from the ordinary pure-loopback desktop deployment (backend on `127.0.0.1`, no proxy) — firing there would be a false positive on the most common, safe configuration. This assumption is therefore documented as an operator responsibility rather than enforced by a runtime check.
+
+### 16.4 How authentication reaches the database (issue #651)
+
+**Authentication reads run on the read path, never the serialised writer queue.** `VaultDatabase` has a single writer thread (§13); `run_task` enqueues onto it and `run_immediate_read_task` bypasses it entirely (opening its own `Session` under the `_EngineRWLock` read side). `DBPriority.IMMEDIATE` only wins queue *ordering* — the worker loop still runs the in-flight task's session to completion before it dequeues anything — so every authenticated request used to inherit the full duration of whatever background batch happened to be committing (amplified by the `metadata_hash` after-flush hook, which issues several queries per dirty picture inside the write transaction). The four auth reads therefore use `run_immediate_read_task`:
+
+| Read | `auth.py` |
+|---|---|
+| Owner user lookup | `get_user` |
+| Owner user by id | `get_user_for_request` |
+| Token candidate fetch (prefix-indexed) | `_token_from_value` → `fetch_candidates` |
+| Guest-session cookie → `GuestSession` row | `auth_middleware` → `_lookup_by_token` |
+
+**Writes stay on the writer queue.** Everything that mutates auth state — `ensure_user`, credential claims, `create_token`, `delete_token`, `update_token`, `revoke_tokens_for_resource` — still goes through `run_task` and is still awaited synchronously. The one exception is `last_used_at` (below).
+
+**Revocation is still immediate, and does not depend on the queue.** The property to preserve is *revoke → next request 401*. It rests on two things, neither of which is queue serialisation:
+
+1. **Commit before flush.** Every revocation path runs its `run_task` delete to completion (synchronously) and only then calls `AuthService._flush_token_cache()`. Because SQLite runs in WAL mode, a read that starts after that commit necessarily observes it — so the next lookup's candidate fetch, on the read path, cannot see a revoked row.
+2. **A revocation epoch guards the cache write.** `_token_cache` short-circuits `bcrypt.verify` for 5 minutes, and its write has *always* happened outside the writer queue. So a lookup that read the token row just before the delete committed could install that stale row just after the flush, keeping a revoked token alive for the full TTL. `_flush_token_cache` bumps `_token_cache_epoch` under `_token_cache_lock`; `_token_from_value` samples the epoch before it reads and declines to cache if it moved. The in-flight request itself still succeeds (it began before the revocation — refusing it would be over-blocking), but nothing is cached, so the next request re-reads the database and 401s.
+
+`_flush_token_cache` is the **only** supported way to invalidate the token cache. Do not clear `_token_cache` directly: that skips the epoch bump and silently reopens the window above.
+
+**`last_used_at` is fire-and-forget (accepted risk, bounded).** `_record_token_last_used` submits the refresh with `submit_task(..., priority=DBPriority.LOW)` and logs failures from a done-callback, instead of blocking the request on the writer queue. This is safe **only** because `last_used_at` is display-only: it is surfaced by `list_tokens` and the Settings account panel and is read by no authentication or authorization code path. It carries neither revocation state (that is the row's existence) nor expiry state (that is `expires_at`), both of which are re-read from the database on every cache miss. **If `last_used_at` ever becomes an input to an access decision — idle-timeout expiry, anomaly detection, anything — this must move back onto a synchronous, ordered write first.**
+
+**Restore fence.** `run_immediate_read_task` takes the read side of `_EngineRWLock`, which the restore DB-file swap fences with `exclusive_engine_access` (§18.4). Auth reads are therefore *more* strongly fenced than before, not less: during a swap they block until the new engine is in place rather than racing a disposed engine. The lock is not re-entrant, so an auth read must never be issued from inside another `run_immediate_read_task` callback — a writer waiting between the two acquisitions would deadlock. None of the current call paths nest (the authz gate's membership reads and `AuthService`'s reads are siblings, never enclosing).
+
+### 16.5 In-memory auth state: what it holds, and how it is keyed (#666)
+
+`AuthService` keeps four pieces of process-local state, all derived from the database and none of it persisted:
+
+| State | Purpose |
+|---|---|
+| `_token_cache` (5 min TTL) + `_token_cache_epoch` | Skips `bcrypt.verify` on repeat requests; invalidated only via `_flush_token_cache` (§16.4) |
+| `active_session_ids` | `session_id` cookie → owner user id |
+| `_sessions_by_token_public_id` / `_token_public_id_by_session` | Which token minted which session, both directions, so `_drop_sessions_for_tokens` can end a session in O(1) when its token is revoked |
+| `_guest_sessions` | `session_id` → last-active, for the active-guest counter |
+| `user` / `username` / `password_hash` | Cached copy of the single owner row |
+
+**The session maps are keyed on `UserToken.public_id`, never on the integer primary key.** A session outlives the request that created it, and `usertoken.id` is reissued to the next token created after a deletion (§12.2). Keyed on the integer, a surviving session would come to name a token it was never built from: revoking the correct token would not end the session, and revoking an unrelated one would end the wrong session — fail-open. `delete_token` and `revoke_tokens_for_resource` therefore read each row's `public_id` *before* the delete commits and sweep on that; `_confirm_session_token_still_exists` re-reads by `public_id` for the same reason. `tests/test_token_identity.py::test_revoking_a_token_ends_its_own_sessions_and_no_others` asserts both directions.
+
+**All of it is dropped after a full restore**, via `AuthService.reset_after_restore()` — see §18.5. Keying on a never-reused id and resetting after a restore are independent fixes; neither replaces the other.
+
+**Known follow-up.** `delete_token`/`update_token`/`revoke_tokens_for_resource` still flush the *entire* token cache rather than evicting one entry, because the cache is keyed on a digest of the raw token value and nothing maps a token back to that digest. `public_id` does not supply the digest either, so precise eviction needs a second index maintained at insert time (`public_id → {digest}`) rather than falling out of this change. Left as-is: the flush is correct, just coarse.
+
+### 16.6 Project ids are a second axis the policy registry does not cover (#125 R1b, #708)
+
+**A route can carry the right `AccessPolicy` and still disclose a project id.** The registry answers "may this token reach this *object*"; it says nothing about the *project ids named inside the answer*, and nothing about a `project_id` **filter** the caller supplies. `visible_project_ids` (in [`filter_helpers.py`](../pixlstash/utils/service/filter_helpers.py)) is the single ladder for both: a `project` token may learn its own project id, and a `character` / `picture_set` / `picture` token may learn none at all — `GET /projects/{other_id}` 403s them, so no sibling route may answer it either. There are therefore two rules, enforced in two different places, and a new endpoint has to satisfy both.
+
+**Outbound — narrow every project id you serialise (handler responsibility).** Any payload carrying project membership passes through the shared helpers before it is returned:
+
+- `narrow_project_fields(payload, project_ids, visible)` — sets both `project_ids` and the legacy scalar `project_id`, the scalar always *derived from the narrowed list*, never read off the model (the stored scalar names the entity's primary project, which a token scoped to a secondary project must not learn).
+- `filter_visible_project_ids(project_ids, visible)` — the list on its own.
+- `narrow_project_assignments(assignments, visible)` — for the one payload shape *keyed* by project id, `POST /projects/membership`. Anything derived from such a mapping (its `unassigned_picture_ids`) must be computed from the **narrowed** mapping, or the derivation re-leaks what the narrowing removed.
+
+This is not gate-enforceable today: the gate runs before the handler and never sees the response. Treat a raw `s.project_id` / `char.project_id` in a payload as a defect on sight — that spelling is what #708 F1/F4/F5 were.
+
+**An aggregate is a payload too.** A count, a flag or a bucket derived from a project-membership predicate discloses membership just as a raw id does, and it does not look like an id in review. The rule for those: a predicate that partitions by project must be driven by the token's *narrowed* project set, never by the absence of one. An empty narrowed set means "you may not see this", which is **not** the same fact as "there is nothing here" — collapsing the two turns the narrowing itself into the disclosure. `routes/projects.py::project_membership` states this correctly for its own unassigned bucket, and `routes/characters.py::_inline_character_counts` now does too (issue #718: it used to serve `project_image_count` over the *global* unassigned partition, so `image_count - project_image_count` told a token with no project visibility how many of its pictures sat in projects it could not see). When a token's narrowed set is empty, serialise the project-scoped aggregate as `null` rather than computing it over the global partition. The predicate is `routes/characters.py::_may_learn_a_project_scoped_count`, written as the exact complement of the inbound refusal so the two directions cannot drift apart; suppress per **token**, never per **row**, because a rule that answers for the genuinely unassigned row and stays silent for the hidden one makes the presence of an answer the oracle.
+
+**Inbound — the `project_id` filter is enforced centrally by the gate.** `AuthzGate._enforce_policy` calls `enforce_project_filter_scope` (in [`authz/membership.py`](../pixlstash/authz/membership.py)) for **every declared route, before any policy branch**, because a project filter is a question about the project space rather than about the object the route is named after. A resource-scoped token may name only a project id it can already see; another project's id, a non-existent id and the `UNASSIGNED` sentinel all get the same 403, so the refusal is not itself an oracle. Owner and unscoped tokens are never restricted.
+
+Without it, a filter needs no payload to answer the hidden question: `GET /picture_sets?project_id=7` returning a row told a set-scoped token that project 7 exists and holds its set, and the same channel existed on `/pictures`, `/pictures/count`, `/pictures/stream`, `/pictures/stats`, `/pictures/export`, `/pictures/likeness-groups`, `/pictures/face-search`, `/characters`, `/characters/likeness-search`, `/characters/{id}/summary`, `/picture_sets/{id}` and `/tag_suggestions` — twelve-plus routes, which is exactly why it is one chokepoint and not twelve patches. **Do not re-add a per-handler `project_id` scope check.** The handler-side "force `project_id` to the token's own project" lines that predate this remain as defence in depth; new code does not need them. A new *spelling* of the parameter must be added to `PROJECT_FILTER_QUERY_PARAMS`, or the gate will miss it — and that much is machine-checked: `tests/test_architecture_guardrails.py::test_project_filter_params_are_declared` walks every mounted route's declared query parameters (including ones contributed by nested `Depends(...)`) and fails the build on a project-ish name that is not listed. It carries an anti-vacuity assertion, because a parameter enumeration that silently collapses to empty would report false completeness.
+
+**Read that as "declared parameters with project-ish wire names", not "every way a route can take a project".** Three shapes get past it, enumerated in full in the test's own docstring: (a) a parameter *aliased* to a name that does not say project (`project_id: str = Query(None, alias="proj")`) — the guardrail sees `proj` and so does the gate, which matches `request.query_params` against `PROJECT_FILTER_QUERY_PARAMS`, so **guardrail and gate fail together**; (b) a value read straight off `request.query_params` without being declared, which the enumeration cannot see (the gate still catches it, since it reads the raw query string — but only if the spelling is declared elsewhere; `routes/pictures/_misc.py` and `routes/pictures/_listing.py` already read `project_id` this way, so the pattern is in-tree and copyable); (c) the nested-`Depends` capability advertised above is real but **exercised by no route today**, and the anti-vacuity assertion does not protect it — `project_id` is taken at top level by a dozen routes, so stubbing `flatten_dependant_fields` to a no-op still passes the assertion while every nested parameter vanishes; `test_query_parameter_enumeration_descends_nested_depends` covers the flattening synthetically instead (a no-descent, a one-level-only and a Python-name-instead-of-alias mutant were each verified to fail it).
+
+#### The chokepoint's boundary: query parameters, and nothing else
+
+`enforce_project_filter_scope` reads `request.query_params`. **A new route is covered the day it mounts only if it takes its project in the query string.** Three shapes are outside it, and each is handled — or accepted — somewhere else:
+
+| Shape | Where a project can be named | Covered by |
+|---|---|---|
+| Query parameter | `?project_id=7` | `enforce_project_filter_scope` (the gate, every declared route) |
+| Path segment, numeric | `/projects/{project_id}/summary` | the registry's `PROJECT_SCOPED` declaration; the gate resolves the id before the handler, so a missing project and an invisible one both 403 |
+| Path segment, name or id-or-name | `/projects/{project_name}/picture_sets/{set_name}`, `/projects/{id_or_name}` | `enforce_project_path_scope`, inline in the 4 `resolved_inline` handlers (§16.1) — see below |
+| Body / form field, **declared** | `POST /pictures/import`, `POST /pictures/import/staging`, `POST /reviews`, `POST /tag_suggestions/bulk-accept`, `POST /tag_suggestions/scan` | **nothing.** They are safe only because they are writes: a resource-scoped token can only be minted `READ` (§16.2 item 4) and `auth.py` blocks a non-`GET` for a `READ` token unless the path is in `READ_SAFE_POST_PATHS`, which none of these is. Adding one of them to that frozenset opens the hole. |
+| Body / form field, **opaque (`payload: dict`)** | known: `PATCH /pictures/project`, `POST /characters`, `POST /picture_sets`, `PATCH /picture_sets/{id}`, `POST /comfyui/run_t2i` — **and this list cannot be shown complete** | **nothing, and nothing can enumerate them.** Same write-only argument as the row above, but the *set* is a blind spot: see below. |
+| Value-typed discriminator | `?resource_type=project&resource_id=7` | **nothing, and nothing name-based can.** An argument for keeping that pattern off read-filter routes. |
+
+**The opaque-body blind spot (acknowledged, not closed).** `test_project_references_outside_the_query_chokepoint` finds body-borne project fields by walking each body parameter's declared **annotation**. A route declared `payload: dict = Body(...)` declares no keys, so a `payload["project_id"]` read inside the handler is invisible to it — and because the test asserted exact equality against what that walk found, it was self-consistent and could never notice. On the current tree **31 mounted routes have an opaque (`dict`/`Any`/`list[dict]`) body**; five of them read a project id out of it, found by reading the handlers on 2026-08-04 and listed in the table row above.
+
+That list is hand-made and **no test can verify it in either direction**. A source grep over the opaque-bodied handlers for `project_id` was evaluated as a machine substitute and rejected: it returns 8 routes, of which 3 (`POST /characters/{id}/faces`, `POST` and `PUT /picture_sets/{id}/members`) read no project from the body at all and merely mention the word while reconciling membership they derive themselves. A heuristic with a 38 % false-positive rate that still cannot prove absence restores the *appearance* of completeness, which is the failure mode this section exists to stop repeating.
+
+What **is** arithmetic, and what the test now asserts:
+
+1. **Exact equality on typed bodies** (`_PROJECT_REFS_IN_TYPED_BODY`, the first row of the table). Complete over routes whose body has a declared shape.
+2. **`READ`-reachability, over typed *and* known-opaque project routes.** This carries the actual safety argument: the inventory yields the same `/api/v1/…` strings `READ_SAFE_POST_PATHS` holds and `auth.py` compares `request.url.path` against, so a project-bearing body field becoming `READ`-reachable fails the build.
+3. **Every opaque-bodied route a `READ` token can reach is hand-vetted.** Which routes have an opaque body, and which of those are `READ`-reachable, is enumerable even though their payloads are not — and that intersection is where the blind spot is actually *live* (for a write a `READ` token cannot reach, not knowing the payload costs nothing). Today it is exactly one route: `POST /pictures/thumbnails`, which reads `payload["ids"]` only. A new one fails the build until someone reads the handler and records what it reads.
+
+The walker itself had two further gaps, both reproduced against planted fields and both now fixed: an arbitrary `depth <= 4` cap descended through at most five nested models, so a `project_id` six models down was silently dropped (now unbounded, terminating on models already open on the current path so a self-referential schema is still safe); and `WithProject | Plain` was missed while `Plain | WithProject` was caught, because the union walk returned the first model its stack popped instead of descending into every branch a caller might actually send.
+
+**Path segments — `enforce_project_path_scope` (#708 condition 2).** The four name-derived routes resolved the project from the path *before* any scope check ran, so their ordinary error branches answered from the project space the token may not probe. Reproduced with a `picture_set`-scoped token whose set is in P1 and P2:
+
+```
+GET /projects/P1/picture_sets/SharedSet         -> 200
+GET /projects/P3/picture_sets/SharedSet         -> 404 {"detail":"Picture set not found"}
+GET /projects/DoesNotExist/picture_sets/SharedSet -> 404 {"detail":"Project not found"}
+GET /projects/{existing_id}                     -> 403      GET /projects/999999 -> 404
+```
+
+Three distinguishable answers = which projects exist, and which hold the token's set. `enforce_project_path_scope(server, request, resolved_id_or_None)` now runs on the **resolved** id before the membership query on all four routes, and refuses with one constant 403 body whether the project holds the resource, exists but does not, or does not exist at all. An owner (`visible_project_ids` returns `None`) is not restricted and keeps the informative 404s. Both directions are pinned in the R1d section of `tests/test_multi_project_membership_authz.py`, including the over-blocking direction (a project token still reads its own project and both by-name routes under its own project's name).
+
+**Residual: the refusal is uniform in content, not in time (accepted risk).** Uniform means status, body and headers; it does *not* mean constant-time. Both `id_or_name` routes resolve a numeric segment with `session.get(Project, int(v))` and, when that returns nothing, fall through to a second name-based `SELECT` — so an id naming an existing project costs one query and an id naming none costs two, before both reach the same 403. Reproduced with a `picture_set`-scoped token over 400 interleaved request pairs (status and body identical in every pair): the missing-project median ran **+141 µs (+6.5 %)** and **+210 µs (+9.6 %)** across two runs, and **+416 µs (+19.8 %)** in the second #708 review's 800-sample run. Magnitude is machine- and load-dependent; the direction is structural.
+
+Deliberately **not** equalised — that is a runtime change to a hot read path, and the channel leaks strictly less than the content oracle it replaced: one bit ("is there a project with this id"), needing many samples, against a local single-user server. The membership fact is *not* recoverable, because a project that exists and holds the caller's resource and one that exists and does not cost the same single query — the `P1`/`P3` distinction that motivated the function is unaffected.
+
+- **Owner:** backend (`senior-backend-developer`), tracked on issue #708.
+- **Revisit trigger — any of:** (a) a resource-scoped share token becomes reachable by someone other than the owner (multi-user, or a hosted demo handing out scoped tokens), turning a local channel into a remote one; (b) these routes gain a lookup whose cost varies with *membership* rather than mere existence, which widens the leak from existence to the membership fact; (c) the name lookup becomes materially more expensive than the id lookup (an index change, a growing project table), raising the signal above the noise floor.
+
+**Both directions are pinned** in `tests/test_multi_project_membership_authz.py` (R1/R1c/R1d sections): the invisible project stays invisible on every route, and a project token keeps filtering by, and reading, its own project.
+
+#### PARTIALLY CLOSED (#719): a picture's scalar `project_id` is narrowed on every picture-row *projection*
+
+**Scope of the claim, precisely.** #719 closes the six routes below, which build their payload from `Picture.metadata_fields()` or an explicit `select_fields`. On its own it did **not** close the confidentiality boundary those routes are named after, because the two generic field readers also served the ORM **relationship** namespace, which no projection constrains. That second half is #721, closed below. Do not read the table below as "the id is unreachable" — read it as "these six projections narrow it", and read §*The generic by-name readers serve the column namespace only* for why the sibling name no longer reaches around them.
+
+**Six routes**, all verified by reproduction on 2026-08-04 with a `picture_set`-scoped token whose set is in a project the token cannot see (`GET /projects/{that_id}` 403s it), and all closed by #719:
+
+| Route | Where the id appears | Narrowed in |
+|---|---|---|
+| `GET /pictures/{id}/metadata` | `$.project_id` | `routes/pictures/_crud.py::get_picture_metadata` |
+| `GET /pictures/{id}/{field}` (`field=project_id`) | `$.project_id` | `routes/pictures/_crud.py::get_picture_field` |
+| `GET /picture_sets/{id}` | `$.pictures[N].project_id` | `routes/picture_sets.py::get_picture_set` (all three return paths: default, `sort=SMART_SCORE`, `sort=CHARACTER_LIKENESS`) |
+| `GET /stacks/{stack_id}/pictures?fields=full` | `$[N].project_id` | `routes/stacks.py::get_stack_pictures` |
+| `GET /pictures/search` | `$[N].project_id` | `routes/pictures/_search.py::search_pictures` |
+| `GET /pictures/likeness-groups` | `$[N].project_id` | `routes/pictures/_misc.py::get_likeness_groups` |
+
+`GET /picture_sets/{id}` is the instructive one: the **same handler** narrows the *set's* own `project_id` correctly and then emits the raw id on every embedded picture row. The narrowing is per-payload-shape, so getting one shape right says nothing about the next.
+
+Verified **clean** in the same run, which is what makes the list of six exhaustive rather than illustrative: `GET /picture_sets/{id}?info=true`, `GET /stacks/{stack_id}/pictures` (default fields), `GET /pictures` (default, `fields=full`, `fields=grid`), `GET /pictures/stream`, `GET /pictures/count`, `GET /pictures/stats`, `GET /picture_sets`, `GET /picture_sets/{id}/members`, and `GET /pictures/export` (which returns a task id, not picture rows — the generated archive's contents were not inspected).
+
+The common cause is `Picture.metadata_fields()` = every scalar column minus the large binaries, which includes `project_id`.
+
+**Why the clean routes are clean is not one reason, and the difference matters for the fix.** `Picture.grid_fields()` omits `project_id`, so `fields=grid` never selects it. But `GET /pictures?fields=full` and `GET /pictures/stream` *do* select `metadata_fields()`, `project_id` included — they are clean because they declare `response_model=list[GridPicture]` / `StreamPicturesResponse` (`routes/pictures/_listing.py`), and FastAPI validates every row against that model and drops keys it does not declare (`GridPicture` sets no `extra="allow"`; verified by round-tripping a row carrying `project_id` through the model, which comes back without it). The projection and the response model are two independent filters, and only the second one is enforced on the `fields=full` path. Any change that widens `GridPicture`, or drops the `response_model=` on those routes, re-opens them without touching a single query.
+
+**The fix is `narrow_picture_project_ids(server, request, rows)`** in [`filter_helpers.py`](../pixlstash/utils/service/filter_helpers.py): the picture-row twin of `narrow_project_fields`, minus the `project_ids` list a picture payload does not carry. It re-derives the scalar from the picture's *narrowed* `PictureProjectMember` membership (batched, one query per request via `picture_project_ids_map`) instead of letting the model's own column reach the wire. Owners and unscoped tokens return on the first line, so their payload and their query count are both unchanged; only a scoped token pays for the extra read.
+
+Deriving from the join table rather than intersecting the raw scalar is deliberate and matches R1b: a P2 token reading a picture whose stored primary is P1 gets `project_id: 2`, not `null`. Intersecting the raw scalar would have been safe too, but it makes a picture the token legitimately shares look unassigned, which is the over-blocking half of the regression pair.
+
+`Picture.metadata_fields()` was **not** changed. Dropping `project_id` from it would fail closed for future routes, but it is also the default `select_fields` of `Picture.find` (`db_models/picture.py`) and feeds `scoring/smart_score.py`, `scoring/character_likeness.py` and `utils/service/export_utils.py`, so removing the column changes what internal callers load, not just what six handlers serialise. Tracked as the residual below.
+
+**Both directions are pinned** in the R1e section of `tests/test_multi_project_membership_authz.py`: the scoped token's scalar comes from its own narrowed membership, an entity-scoped token gets `null`, and the owner keeps the stored primary, and over-blocking is asserted as its own failure. Every site/token combination asserted there was confirmed to leak before the fix, so none of the assertions is vacuous. Two probes are **not** pinned by a live row and are recorded as such in the test: `GET /picture_sets/{id}?sort=SMART_SCORE` and `?sort=CHARACTER_LIKENESS` return no rows without a smart-score anchor / an assigned reference face, which that fixture does not build. Their narrowing is one line on each of the handler's other two return paths and is asserted opportunistically if a row ever appears.
+
+**The column set itself is now pinned.** `tests/test_architecture_guardrails.py::test_picture_metadata_fields_membership_is_pinned` holds the exact 42 names `Picture.metadata_fields()` returns, so a new `picture` column fails the build until someone decides whether a scoped token may learn it. That is the part of #719 that generalises: the leak was not that one narrowing was forgotten, it was that "every column minus blobs" makes forgetting the default. Both mutants (a name dropped from the pin, a name added to it) were confirmed to fail the assertion.
+
+- **Residual (open): `metadata_fields()` is still "every column minus blobs", it is only *watched*.** The pin above turns a silent addition into a build failure; it does not make the projection an allowlist, and it cannot narrow anything by itself. Inverting it is the durable fix and was deliberately not attempted here: `metadata_fields()` is also the default `select_fields` of `Picture.find`, so removing a column changes what `scoring/smart_score.py`, `scoring/character_likeness.py` and `utils/service/export_utils.py` load, not only what six handlers serialise.
+- **Residual (open): the response models provide no containment.** `PictureFullMetadataResponse`, `PictureMetadataResponse` and `LikenessGroupResponse` all set `extra="allow"`, so the handler narrowing is the only filter on these six routes. Flipping any of them to `extra="ignore"` would drop ~40 undeclared metadata columns and gut the endpoint, so it is a schema project, not a one-line hardening.
+- **Residual (open): `GET /pictures` and `GET /pictures/stream` stay clean only via `GridPicture`.** They still select `project_id` and are filtered solely by the response model, as described above. Widening `GridPicture` or dropping the `response_model=` re-opens them silently.
+- **Owner:** backend (`senior-backend-developer`), tracked on issue #719.
+
+#### CLOSED (#721): the generic by-name readers serve the column namespace only
+
+`GET /pictures/{id}/{field}` and `GET /characters/{id}/{field}` hand back an attribute by name and end in `safe_model_dict(getattr(obj, field))`, which recurses into SQLModel instances, lists and `CollectionAdapter`s. `select_fields=[field]` therefore did **not** bound the response: a *relationship* name was served as whole related rows, reaching past every projection and every narrowing site in the codebase. Reproduced 2026-08-05 with the gate enforcing (`picture`-scoped token on picture 1, `character`-scoped token on character 1), each alongside the `403` the same token gets on `GET /projects/1`:
+
+```
+GET /pictures/1/project_id    -> {"project_id": null}                       # closed by #719
+GET /pictures/1/projects      -> {"projects":[{"id":1,"name":"P1",...},…]}  # was OPEN
+GET /pictures/1/picture_sets  -> [{"name":"SharedSet","project_id":1,…}]    # was OPEN
+GET /pictures/1/characters    -> [{"name":"SharedChar","project_id":1,…}]   # was OPEN
+GET /characters/1/project     -> {"project":{"id":1,"name":"P1",…}}         # was OPEN
+GET /characters/1/pictures    -> full Picture rows: project_id, file_path,  # was OPEN
+                                 pixel_sha, original_file_name, metadata_hash,
+                                 comfyui_positive_prompt, comfyui_loras, …
+```
+
+The last is the largest single payload in the class: served straight off `Character.pictures`, it bypasses `Picture.metadata_fields()`, every response model and `narrow_picture_project_ids` alike. `GET /pictures/{id}/characters` was not in the original report and was found while reproducing.
+
+**The fix is a deny-by-default allowlist, not another `if field == …` branch**: [`utils/field_allowlist.py`](../pixlstash/utils/field_allowlist.py), called as the **first statement** of both handlers. The servable set is `Model.scalar_fields()` (the model's own column namespace) plus a small pinned exception set, so a future relationship is refused with no code change and a future column needs none either. This mirrors the gate's own posture (§16.2) at the level the gate cannot reach: the gate answers "may this token reach this *object*", runs before the handler and never sees the response, so it cannot bound *which attributes* come back. **This is response-shape validation, not authorization**: it takes no request, no token and no session, and must never grow into a second scope ladder.
+
+The refusal is **`400`**, deliberately, and the three properties are asserted rather than assumed:
+
+- **Not an object-existence oracle.** The check runs before any database read, so `GET /pictures/999999/projects` and `GET /pictures/1/projects` return byte-identical responses. The cross-token case was never this handler's: the gate 403s an out-of-scope object before the handler runs, whatever the field name.
+- **Not a namespace oracle.** A relationship name and a typo get the same status and the same body template, so the response does not enumerate the model's relationships.
+- **Distinguishable for a client, which `404` would not be.** `400` = not a readable field (render nothing, do not raise), `404` = object does not exist, `403` = not in this token's scope, `5xx` = server fault. `404` would have collided with "Picture not found" and forced clients to string-match `detail`; `403` would have been wrong twice over (not an authorization decision, and it collides with the gate's own 403).
+
+**The full contract, both readers.** A client can branch on the status alone; no `detail` string-matching is required. `{field}` is whatever the caller put in the path segment.
+
+| Field category | Status | Body |
+|---|---|---|
+| Column, ordinary (`width`, `name`, `file_path`, `description`, …) | `200` | `{"<field>": <value>}` |
+| Column, large binary (`image_embedding`, `text_embedding`, `likeness_parameters`), value present | `200` | `{"<field>": "<base64>"}` |
+| Column, large binary, value `NULL` | `500` | *(pre-existing bug, see residuals)* |
+| `project_id` (picture and character) | `200` | `{"project_id": <narrowed id or null>}`, narrowed per #719 / R1b |
+| `thumbnail`, character only | `200` | raw PNG bytes, `Content-Type: image/png` |
+| **Relationship** (`projects`, `picture_sets`, `characters`, `quality`, `likeness_a`, `likeness_b`, `reference_folder`, `project`, `pictures`, `reference_picture_set`) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
+| **Unknown name** (typo, removed column) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
+| Object does not exist, servable field | `404` | `{"detail": "Picture not found"}` / `{"detail": "Character not found"}` |
+| Object does not exist, **denied** field | `400` | identical to the denied-field row; the check runs before the lookup |
+| Object outside the token's scope, any field | `403` | the AuthzGate's own body, e.g. `{"detail": "Token is not authorised for this picture"}` |
+
+Relationship names that a *dedicated* GET route shadows never reach this handler and keep their own contract: `GET /pictures/{id}/faces`, `/detections`, `/tags`, `/tag_predictions`, `/{picture_id}/stack`, and `GET /characters/{id}/faces`.
+
+**Exactly one exception remains, and it is not a relationship.** `PICTURE_EXTRA_SERVABLE_FIELDS` is now **empty**; `CHARACTER_EXTRA_SERVABLE_FIELDS` holds only `thumbnail`, which is synthetic (the handler generates a 64x64 face crop and returns image bytes, it is not a `Character` column) and therefore discloses no related rows. It stays because the SPA calls it (`api/characters.js:193`) and the server hands out `/characters/{id}/thumbnail` URLs itself.
+
+`faces` briefly sat in both sets, because the SPA's face-box overlay and `tests/utils.py::wait_for_faces` read it and no other route served it. **That is now the worked example of the right fix**: instead of keeping a relationship exception, `faces` got dedicated projected routes and the exception was emptied back out.
+
+| New route | Policy | Serves | Withholds |
+|---|---|---|---|
+| `GET /pictures/{id}/faces` (`routes/pictures/_faces.py`) | `PICTURE_SCOPED`, `id_param="id"` | `{"faces": [{id, picture_id, character_id, frame_index, face_index, bbox}]}` | `features` (the ArcFace embedding), `model_pack` |
+| `GET /characters/{id}/faces` (`routes/characters.py`) | `CHARACTER_SCOPED`, `id_param="id"` | same shape | same |
+
+Design notes, each of which is a trap someone will otherwise re-open:
+
+- **The wire shape is unchanged** (`{"faces": [...]}`), so no frontend change was needed. The SPA reads only `frame_index`, `bbox` and `character_id`.
+- **`model_pack` is withheld deliberately.** It is not biometric, but it names the embedding model (`buffalo_l` / `auraface`) and so tells a caller how embeddings obtained elsewhere could be compared against these. No consumer reads it (verified across `frontend/src`, `tests/`, `pixlstash/`, `scripts/`: every hit is server-side model loading). Add it back only with a named consumer.
+- **Registration order is load-bearing.** FastAPI matches in registration order, so a dedicated route registered *after* the `/{id}/{field}` catch-all is dead code that silently never runs. `_faces` is registered before `_crud` in `routes/pictures/__init__.py`; on the character side `server.py` includes `characters` **before** `characters_faces`, so the GET had to be declared in `characters.py` itself, above the by-name route, rather than alongside its `POST`/`DELETE` siblings. Pinned by `test_dedicated_faces_routes_are_declared_and_not_shadowed`, which was confirmed to fail when `_faces` is moved after `_crud`.
+- **Sentinel rows are still served.** `Face.find` filters out `face_index == -1`, the relationship did not, and `wait_for_faces` returns as soon as the list is non-empty; using `Face.find` would turn a picture with no detectable face into a full poll timeout in three suites. The routes use a plain `select` ordered by `Face.id`, reproducing the old row set and order.
+- **`bbox` is unchanged on the wire.** It comes off the `bbox_` text column through the `Face.bbox` property, which does the same `json.loads` that `safe_model_dict`'s trailing-underscore branch did.
+- **The projection is filtered twice**, by `Face.to_public_dict()` and again by `response_model=FaceListResponse` (`extra="ignore"`). That redundancy hides bugs from wire-level tests: putting `features` back into `to_public_dict` still yields a clean HTTP response, verified. `test_face_to_public_dict_is_the_first_filter` asserts the projection directly for that reason.
+
+**One dead branch was removed while doing this.** The picture reader had a `field == "thumbnail"` branch returning `pic.thumbnail`. `Picture` has no `thumbnail` attribute (thumbnails are files, served by `GET /pictures/thumbnails/{id}.webp`), so that branch raised `AttributeError` → **500** on every call. It is gone; the name now answers the same `400` as any other non-column. The character reader's `thumbnail` is unaffected and still returns image bytes.
+
+**Both directions are pinned** in `tests/test_generic_field_reader_allowlist.py` (20 tests): every relationship is refused for owner *and* scoped token, the two projected `faces` routes serve their consumers under both an owner and a scoped token while an out-of-scope object still 403s, **and** columns, the large-binary base64 branch, the synthetic character `thumbnail`, and #719's narrowed `project_id` all still answer (over-blocking is its own regression). Two guardrails stop the class reopening: `test_no_new_relationship_becomes_servable` (a relationship added to either model is denied by default; carries anti-vacuity assertions on both enumerations) and `test_declared_servable_exceptions_are_pinned` (the exception set cannot grow silently). Both mutants (a relationship added to the exception set, and the `require_servable_field` call deleted from the handler) were confirmed to fail these tests. The suite subtracts relationship names that a *dedicated* GET route shadows (`detections`, `tags`, `tag_predictions`, `stack`), derived from `route_inventory.api_endpoint_set` rather than a hand-kept list.
+
+- **Residual (open): the column namespace is still wide.** Allowlisting every column still serves `pending_character_id`, `source_picture_id` and `reference_folder_id`, already recorded as known disclosures by `test_picture_metadata_fields_membership_is_pinned`. Narrowing the column set itself is the #719 residual above, not this change.
+- **Residual (open): the large-binary branch 500s on a NULL value.** `GET /pictures/{id}/{image_embedding,text_embedding,likeness_parameters}` runs `base64.b64encode(None)` → `TypeError` → 500 when the column is NULL. Pre-existing, unrelated to the allowlist, and not fixed here.
+- **Closed during #721: `faces` no longer serves the face embedding.** It is a denied relationship name on both by-name readers and is served instead by the two projected routes above, which withhold `features` and `model_pack`.
+- **Owner:** backend (`senior-backend-developer`), tracked on issue #721.
 
 ---
 
@@ -1222,7 +1703,7 @@ Whether such a legacy file needs upgrading is decided by **schema currency, not 
 | `compare_hashes(snapshot_id, picture_ids)` | Returns per-picture hash equality so the UI can show which pictures changed. |
 | `preview_full(snapshot_id)` | Dry-run diff. Classifies every picture across the whole vault via `metadata_hash` (revert / recreate / delete / missing-file / unchanged) and lists **only the changed** resources (capped at 200), so the preview spends its budget on what actually changes rather than the first 200 rows. Scans only id/path/hash columns — the retained embeddings are never loaded for the full set. |
 
-Full restore takes an `OPPORTUNISTIC` safety snapshot first, pauses the `WorkPlanner`, **decompresses** the archive to a scratch file and alembic-upgrades it (`_upgrade_snapshot_schema` → `materialize_snapshot`), disposes the current SQLAlchemy engine, swaps the upgraded snapshot over the live DB path, re-creates the engine, clears API tokens, drops `Picture` rows whose files are missing, and resumes the planner. `RESTORE_STARTED` / `RESTORE_COMPLETED` events are broadcast. Derived columns (`smart_score`, `text_score`, `text_embedding`, `image_embedding`) are **no longer** NULL-reset — snapshots now carry these blobs, so the swapped-in DB is already populated and the WorkPlanner has nothing to regenerate (only genuinely-NULL rows get picked up). The snapshot index itself is re-inserted after the swap so newer snapshots aren't hidden by restoring an older one. A non-blocking `_restore_lock` rejects concurrent restores with `RestoreInProgressError`.
+Full restore takes an `OPPORTUNISTIC` safety snapshot first, pauses the `WorkPlanner`, **decompresses** the archive to a scratch file and alembic-upgrades it (`_upgrade_snapshot_schema` → `materialize_snapshot`), disposes the current SQLAlchemy engine, swaps the upgraded snapshot over the live DB path, re-creates the engine, clears API tokens, resets the in-memory auth state, drops `Picture` rows whose files are missing, and resumes the planner. `RESTORE_STARTED` / `RESTORE_COMPLETED` events are broadcast. Derived columns (`smart_score`, `text_score`, `text_embedding`, `image_embedding`) are **no longer** NULL-reset — snapshots now carry these blobs, so the swapped-in DB is already populated and the WorkPlanner has nothing to regenerate (only genuinely-NULL rows get picked up). The snapshot index itself is re-inserted after the swap so newer snapshots aren't hidden by restoring an older one. A non-blocking `_restore_lock` rejects concurrent restores with `RestoreInProgressError`.
 
 ### 18.5 A restore always leaves the vault with no API tokens
 
@@ -1234,6 +1715,24 @@ Two properties are deliberate:
 - **Where it runs.** It is submitted as an ordinary writer task *after* `run_control_task(_do_swap)` has returned — the swap has therefore finished and released `exclusive_engine_access()`, and the task's session is opened on the re-created engine. No database work is done while the engine lock is held. It is submitted **before** `_post_restore_cleanup` so no later failure in the cleanup can leave a restored token row in place.
 
 Per-resource restore (`resource_restore.py`) needs no equivalent: it never reads or writes `usertoken` / `guest_session` / `guest_score`, and it never replaces the live DB file. `_collect_rows_for_upsert` and `_collect_candidate_parents` are limited to `Picture`, `Face`, `Tag`, `PictureSetMember`, `PictureProjectMember`, `Character`, `PictureSet` and `Project`, so there is no path by which it can reinstate a token.
+
+### 18.5.1 A restore also clears every piece of in-memory auth state (#666)
+
+Clearing `usertoken` in the swapped-in database is only half of it. `AuthService` keeps process-local state derived from the *previous* file (§16.5) that the swap does not touch, so without a reset:
+
+- the **token cache** keeps validating verified tokens for the rest of its 5-minute TTL, including tokens absent from the restored database — and it is consulted *before* the database, so `_clear_api_tokens` does not reach it;
+- `active_session_ids` and the session maps keep authenticating sessions established before the swap, against an owner account the restore may have replaced;
+- the cached `user` / `username` / `password_hash` describe the pre-restore owner row.
+
+`full_restore.py::_reset_auth_state` calls `AuthService.reset_after_restore()`, which flushes the token cache (through `_flush_token_cache`, so the revocation epoch is bumped), clears every session and both session maps, empties `_guest_sessions`, re-reads the owner row, and re-seeds the desktop shell's per-launch session. **Every client signs in again after a full restore.** That is the correct outcome, not a cost: restore is owner-only, and the identities the surviving state named have moved.
+
+- **Where it runs.** After `run_control_task(_do_swap)` has returned — so the swap has released `exclusive_engine_access()` and the engine has been re-created — and after `db.run_task(_clear_api_tokens)`, so the swapped-in database already holds no token rows and a request landing in the gap cannot re-populate the cache from one. The clearing itself is pure in-memory work, but `reset_after_restore` then re-reads the owner row through the ordinary writer queue, which is exactly why it **must not** be called from inside the swap: taking the writer queue while the engine lock is held would hang the request path.
+- **Failures are logged, not raised.** The restore has already succeeded by this point; aborting here would leave the caller believing the swap did not happen.
+- **The vault reaches the auth service via `Vault.auth_service`**, attached by `Server.__init__` (`AuthService` takes `vault.db`, so it cannot exist when the `Vault` is built). A `Vault` constructed without a `Server` — tests, CLI tools — leaves it `None`, and the restore path treats that as "no in-memory state to invalidate".
+
+**`public_id` does not make this redundant.** A restored snapshot brings back its *own* `public_id` values, so an id this process still remembers can be absent from the restored database, or belong to a row whose other columns have since changed. Never-reused ids stop an id from silently naming a *different* token; they cannot make in-memory state that outlived a whole-file swap correct. (This is equally why `AUTOINCREMENT` would not have fixed it — `sqlite_sequence` lives inside the database file and is restored along with it; see §12.2.) Both halves of #666 are needed.
+
+**Per-resource restore needs no reset, for the same reason it needs no token clear:** it never replaces the database file and never touches `usertoken` / `guest_session` / `guest_score` / `user`, so nothing held in memory becomes stale. `tests/test_token_identity.py::test_per_resource_restore_leaves_the_authentication_state_alone` pins that it does not gratuitously sign everyone out.
 
 ### 18.6 API Endpoints (snapshots tag)
 
@@ -1493,6 +1992,7 @@ sequenceDiagram
 3. **CPU / GPU queue separation** — `TaskRunner` keeps GPU work single-threaded to avoid CUDA contention while keeping CPU work parallel.
 4. **VRAM gating** — GPU-heavy tasks are blocked when free VRAM is below a threshold (`User.max_vram_gb`).
 5. **Lazy ML loading** — models are loaded on first use and may be unloaded after idle, controlled by `keep_models_in_memory`.
+5b. **Lazy ML *imports*** — the ML libraries themselves (`torch`, `torchvision`, `transformers`, `sentence_transformers`, `open_clip`, `insightface`, `onnxruntime`) are **never imported at module scope on the server's import path**. They are imported inside the function that first needs them; annotations that reference their types use `from __future__ import annotations` plus a `TYPE_CHECKING` block. See §3 → *ML import discipline*.
 6. **Event bus** — `EventType`-tagged broadcasts let the frontend stay reactive without polling.
 7. **Embeddings in-database** — all vectors live in SQLite as `BLOB`s; similarity search is in-process NumPy.
 8. **Plugin extensibility** — image plugins are discovered through `PluginRegistry`; new transformations drop into `image_plugins/built-in/` (or a user directory) and become available automatically.
@@ -1502,7 +2002,1336 @@ sequenceDiagram
 
 ---
 
-*Last updated: 2026-07-19. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+## 21. Operation Log — undo/redo and the audit trail (DAM 1.2)
+
+The `operation` table ([db_models/operation.py](../pixlstash/db_models/operation.py)) is the **append-only** record of every user-visible change. It is the undo/redo stack today and the audit log / Studio activity feed later — one mechanism, three features (DAM roadmap §1.2 / §4.3), which is why it is built once and additively.
+
+### The design: record state, not inverses
+
+Instead of teaching each mutating endpoint how to invert itself, the log snapshots the **metadata state of the affected pictures before and after** the mutation and keeps only the facets that changed. Undo writes the recorded `before` back; redo writes `after` back. Consequences worth knowing:
+
+- The applier is uniform, so a new mutating endpoint becomes undoable by wrapping its DB task — there is no inverse to write and none to get wrong.
+- The stored payload is exactly the `{before, after}` shape the roadmap specifies for the audit log, so the feed needs no second representation.
+- Restoring is idempotent: applying a state twice is a no-op, so a retried undo cannot corrupt anything.
+
+**Reversible facets** (the DAM 1.2 metadata scope, `FACETS` in [services/operation_log_service.py](../pixlstash/services/operation_log_service.py)): tags, the tag-prediction rows and their human-label ledger (see §21.2), description/caption, score (rating), picture-set membership, project membership (`PictureProjectMember` + the `Picture.project_id` FK), per-face character assignment + `pending_character_id`, stacking (`stack_id` / `stack_position`, with the stack's name so a dissolved stack can be recreated on undo; symmetrically, a `PictureStack` row a restore empties of its last member is deleted after all states are applied — `_delete_emptied_stacks` — never leaving an orphaned empty row, while a stack that still has members, e.g. a picture outside the restored operations, is kept), and the scrapheap soft-delete state (`deleted` + `deleted_at`, see §21.1). A file-mutating operation may be *recorded* with `undoable=False` for audit, but it is not reversible until copy-on-write versions land (v2.1).
+
+**Derived values are re-derived, never snapshotted.** `Picture.anomaly_tag_uncertainty` is a function of the label state and `Picture.smart_score` is a cache of a function of it, so `apply_state_in_session` recomputes the first and drops the second — through the very same `recompute_anomaly_tag_uncertainty` / `invalidate_on_anomaly_change` guards the forward write paths use — instead of restoring a recorded copy. Snapshotting a derived value creates a second source of truth, and the moment its inputs are restored by one path and its cached value by another they drift.
+
+### Recording a change
+
+Metadata mutation sites call `operation_log_service.run_recorded_metadata_task(vault, work_fn, *args, op_type=…, picture_ids=…, **request_context(request))` **instead of** `vault.db.run_task(work_fn, *args)`. That wrapper runs capture → mutation → capture → record inside **one** queued DB task, so the `Operation` row and the change it describes commit against the same serialised writer; a separate before-read on the caller's thread would leave a window for another write to land between the snapshot and the mutation and be silently attributed to this operation. Pass `expand_stacks=True` when the mutation is stack-atomic, or undo would restore the clicked picture and leave its stack siblings behind. Pass `resolve_picture_ids=` — a `(session) -> ids` callable run on the mutation's own session just before the write — when the handler's targets are not knowable from the request alone (a request addressed by *face* id; a replace-all that evicts members it was never told about); without it the operation records a half-change undo could not fully reverse. A mutation that changed nothing records nothing.
+
+### `batch_id` — one bulk action, one Undo
+
+`batch_id` groups several rows into one user-visible action. Undoing any member reverts the whole batch (newest first), so a partially-undone bulk action cannot exist, and `POST /operations/batches/{batch_id}/undo` is the single-call revert behind a bulk report ("Collapsed 2,700 groups — Undo"). The column is present from the first migration deliberately: retrofitting a grouping key onto a log that already holds rows is exactly the pain the additive-only rule exists to prevent.
+
+### Append-only, and what "status" means
+
+Recorded content (`op_type` / `target_ids` / `before_state` / `after_state` / `actor` / `source` / `created_at`) is written once and never rewritten. The only mutable columns are the lifecycle markers `status` (`applied` → `undone` → `superseded`) and `undone_at`, which *append* the fact that an operation was reverted rather than erasing it. Recording a new operation supersedes the redo stack (classic linear undo history) by advancing those markers — no row is deleted. `tests/test_operation_log.py::test_log_is_append_only_across_undo_and_redo` pins this.
+
+### Origin discipline (§15) applies on both sides
+
+`source` / `origin_client_id` are read from the **request**, in the handler, on the request's own task (`operation_log_service.request_context`), then passed explicitly downstream and carried in the WS event `data` dict when undo announces itself. The service never reads `origin_client_id_var` — it runs on the DB worker thread where that contextvar is dead, the same hazard `test_source_origin_read_from_data_only` pins for the broadcaster. Both directions are tested: `tests/test_operation_log.py::test_service_module_never_reads_the_origin_contextvar` (an AST check, so a future edit cannot reintroduce the read) and `tests/test_ws_broadcaster.py::test_operation_log_undo_emits_origin_in_data_not_from_the_contextvar` (the producer side of the envelope contract).
+
+### Locked sets are not bypassed
+
+A locked picture set is a hard freeze on its members' label data. `apply_state_in_session` — the single sink every restore goes through — calls `enforce_pictures_not_locked` over the whole recorded state before dispatching, so undo/redo cannot become the one write path around the freeze; a frozen target yields `423` and the operation stays `applied`.
+
+### Endpoints and authorization
+
+`GET /operations`, `GET /operations/undo-state`, `GET /operations/{operation_id}`, `POST /operations/undo`, `POST /operations/redo`, `POST /operations/{operation_id}/undo`, `POST /operations/batches/{batch_id}/undo` — all declared **`OWNER_ONLY`** in `ROUTE_POLICIES` (§16.1). The log enumerates every change to the whole library and undo writes metadata back onto arbitrary pictures across the vault, so no resource-scoped grant can bound either. The handlers carry **no** authorization code; the gate is the sole enforcement.
+
+### 21.1 The Scrapheap is undoable; a permanent delete is not
+
+A move to the Scrapheap is a *metadata* change — the file is untouched — so it goes through the same state-capture machinery as everything else rather than getting bespoke inverse logic. The soft-delete flag and its retention stamp are one facet, `deleted`, recorded as `{"deleted": bool, "deleted_at": "<naive-UTC ISO>" | null}`. They travel together deliberately: restoring the flag without the stamp would either lose the purge deadline or leave a live picture carrying a stale one. `deleted_at` is written back **verbatim**, never re-stamped to "now", so an undo cannot silently extend (or invent) a retention window.
+
+**Op types** (`OP_SCRAPHEAP_MOVE` / `OP_SCRAPHEAP_RESTORE` — stable, part of the API contract the frontend keys its affordances off):
+
+| `op_type` | Recorded by | Undo | Redo | `summary` |
+|---|---|---|---|---|
+| `pictures.scrapheap.move` | `DELETE /pictures/{id}` (single) and `DELETE /pictures` (bulk, one row + a `batch_id`) | restores the pictures | moves them back, same `deleted_at` | "Moved 5 pictures to the Scrapheap" |
+| `pictures.scrapheap.restore` | `POST /pictures/scrapheap/restore` (one row + a `batch_id`) | returns them to the Scrapheap with the stamp they had | restores them again | "Restored 5 pictures from the Scrapheap" |
+
+The two are symmetric on purpose: without the restore side, undoing a restore would be impossible and the history stack would have a hole in it.
+
+Summaries are built from the **recorded diff**, not from the request — `summary` accepts a `(before_delta, after_delta) -> str | None` builder (`SummarySpec`) evaluated inside `record_operation_in_session` once the real extent of the change is known. A bulk move silently skips pictures frozen by a locked set, and "restore everything" never names an id at all, so counting the request would produce a toast that lies.
+
+Both sites pass `expand_stacks=True, expand_stacks_include_deleted=True`. `normalize_stack_positions` renumbers **every** member of an affected stack, soft-deleted ones included, and the default stack expansion excludes deleted members — without the flag those renumbers would be unsnapshotted changes that undo could not reverse. The restore site additionally uses `resolve_picture_ids=` because an absent `picture_ids` means "the entire Scrapheap": the targets are only knowable on the mutation's own session.
+
+**Permanent deletes are not recorded and are not undoable.** `DELETE /pictures/scrapheap` (purge / Empty Scrapheap) and the `ScrapheapRetentionPurgeTask` destroy the row and the file; there is nothing an undo could put back, so they append no operation row at all. They keep their own irreversibility guard, the `confirm_token` minted by `POST /pictures/scrapheap/delete-preview`.
+
+**Undoing a move whose picture has since been purged is refused (410).** This is the one lifecycle edge the metadata facets do not have, and it follows the locked-set guard's fail-closed contract exactly: `_enforce_scrapheap_targets_exist` runs beside `enforce_pictures_not_locked` at the single `apply_state_in_session` sink, **before** anything is written, and raises `410 Gone` with `detail = {"code": "pictures_purged", "action", "picture_ids", "message"}`. The whole request is refused — a partially-purged batch is refused in full, not partially restored — nothing commits (the DB worker rolls the session back), and the operation stays `applied` with `undone_at` null, so the user can retry after the purged pictures are re-imported rather than being left with a batch they must reconcile by hand. The guard is scoped to pictures whose recorded state carries the `deleted` facet; a purged picture appearing in some *other* operation's state (a tag edit, a stack renumber) keeps the long-standing skip-with-a-warning behaviour, because no lifecycle promise is being broken there.
+
+`change_kind` on the WS envelope follows the lifecycle rather than a blanket `"updated"`: `_emit` announces restored pictures as **`restored`** and re-scrapheaped ones as `removed`, matching what the delete/restore endpoints themselves broadcast — telling the grid that a vanished picture was "updated" leaves a 404-clickable thumbnail behind. The undo/redo responses carry the same split as `scrapheaped_picture_ids` / `restored_picture_ids` alongside `picture_ids`.
+
+**`restored` is a distinct kind from `added`, deliberately.** Both put a card back, but only `added` means *new to the vault*, and the SPA's sidebar acts on that difference: it reads `added` as a fresh import and flashes its NEW marker on every count that grew. A picture coming back out of the Scrapheap has been in the library the whole time, so `added` there is a lie the user sees. The full wire set is:
+
+| `change_kind` | Means | Emitted by |
+|---|---|---|
+| `added` | New to the vault | imports (`_import.py`), ComfyUI results, plugin adds |
+| `updated` | Same card, changed content/position | every metadata mutation |
+| `removed` | The card is gone from active views | move-to-Scrapheap (`DELETE /pictures{,/{id}}`), scrapheap purge, retention purge, and `_emit` for a **redo** of a move |
+| `restored` | The card comes back, but the picture is not new | `POST /pictures/scrapheap/restore`, and `_emit` for an **undo** of a move |
+
+The value is gated by `WsBroadcasterMixin.CHANGE_KINDS` (`pixlstash/ws/broadcaster.py`). That gate **drops** an unrecognised kind rather than raising, so a new value added at an emit site but not to the tuple fails *silently* and the SPA falls back to `"updated"` — the exact 404-ghost-card failure above. The frontend mirror is `resolveChangeKind` in `frontend/src/composables/useGridRealtimeSync.js`; the two allowlists are one contract and must move together.
+
+**A lifecycle move also changes the stacks it touched, and the survivors are invisible to all of the above** (added 2026-08-02). A card renders its stack's LIVE member count as its badge, so moving four members of a five-member stack changes what the fifth should draw. That fifth picture is not moved, has no facet diff, and therefore never reaches `picture_ids` at all: undoing a "Keep cover only" whose metadata union happened to be a no-op restored four copies and announced **nothing** about the cover, which went on rendering "stack of 1". `_restore` resolves them in its own session, after `delete_emptied_stacks` so a dissolved stack contributes no phantom survivor (`_stack_siblings_in_session`), and hands them to `_emit` as `lifecycle["stack_siblings"]`; `_emit` gives them one `updated` announcement carrying `fields: ["stack_count"]`. It is **additive**: the blanket no-`fields` `updated` still goes out for everything in `picture_ids`, so a facet change that may affect any view keeps its conservative treatment. `stack_count` is the field name because it is the derived, listing-only value the SPA re-reads (`_enrich_stack_counts`, `fields=grid`); it is absent from `GET /pictures/{id}/metadata`, so the client's per-card metadata refresh cannot repair a badge. The rule is general to any lifecycle move, not specific to keep-cover-only. Both directions are pinned in `tests/test_ws_broadcaster.py` and `tests/test_keep_cover_only.py`.
+
+No new routes and no migration: the existing undo/redo endpoints carry all of it, and `operation` is generic over `op_type`.
+
+### 21.1.1 Import sees the Scrapheap, and offers a restore rather than a second copy
+
+**The bug.** `routes/pictures/_helpers.py::_create_picture_imports` matched incoming content with `Picture.find(session, pixel_shas=shas, include_unimported=True)`, and `Picture.find` defaults `include_deleted=False`. **A scrapheaped picture was therefore invisible to import dedup**: re-importing a file whose picture sits in the Scrapheap created a brand-new second row while the original was still there. The bulk "Keep cover only" action turns that from a rare annoyance into a predictable one; it moves hundreds of pictures to the Scrapheap in one gesture, and those are by definition copies of files that still exist wherever the user imports from, so the next import silently undoes the cleanup, roughly doubles the bytes on disk, and refills the duplicate queue.
+
+**The fix: match, then offer.** Both import paths now resolve content hashes through [`services/import_dedup_service.py`](../pixlstash/services/import_dedup_service.py) (§10), which sees soft-deleted rows *for that query only*, `Picture.find`'s default is untouched, so nothing else gains deleted rows. A scrapheaped match is **not imported again** (that is the doubling) and **not silently restored** either (the user scrapheapped it on purpose). It is reported as a third outcome and the caller is offered the restore.
+
+**The offer reuses the shipped restore route.** `scrapheaped_picture_ids` on the import status feeds straight into `POST /pictures/scrapheap/restore`, which already clears `deleted_at`, re-folds stack positions (`normalize_stack_positions`) and records an undoable `pictures.scrapheap.restore` operation (§21.1). **There is deliberately no second restore path**, and no new route: nothing to declare in `authz/registry.py`, and the coverage matrix arithmetic is unchanged.
+
+**Disjoint buckets that sum to the total: never a subtraction.** Following `preview_scrapheap_delete`'s discipline (§5), every file lands in exactly one bucket and each is counted where it happens:
+
+| Path | Buckets | Sums to |
+|---|---|---|
+| `POST /pictures/import` (one-shot) | `imported_count` + `duplicate_count` + `scrapheaped_count` | uploaded files |
+| Staging → `PictureImportTask` | `imported_count` + `duplicate_count` + `scrapheaped_count` + `failed_count` + `cancelled_count` | staged files |
+
+Both paths log an `error` if the arithmetic does not close, rather than shipping a summary the user reads as fact. `cancelled_count` and the "staged entry with no `file_path` is a failure" rule exist only because those files previously fell into *no* bucket. The counts are per **file**; `scrapheaped_picture_ids` is per **picture**, so several incoming copies of one scrapheaped picture name its id once and the restore offer cannot overstate how many rows come back.
+
+**Edge cases, settled deliberately** (pinned in `tests/test_import_scrapheap_match.py`):
+
+- **A live row and a scrapheaped row share a hash** (the old bug already made such pairs): live wins, so it reports as an ordinary duplicate. The content genuinely IS in the library.
+- **Permanently purged and ledgered**: delete-forever removes the `picture` row, so there is nothing to match and nothing to resurrect, a deliberate re-import is a genuinely NEW picture. `deleted_file_log` is not consulted; it guards *snapshot restore* (§18.7), not the owner re-importing a file they still have.
+- **Past its retention deadline**: still offered. The offer is not a promise, the sweep may destroy the row before the user clicks, and `restore_scrapheap`'s `restored_count` is what the UI reports ("Restored 1 of 2"), so a swept match is never claimed as restored.
+- **A stack member**: no special path. The shipped restore re-folds it into the stack ordering.
+- **Frozen by a locked set**: detection does not consult locks. A lock governs label edits and destruction, not whether content exists; hiding the match would put the re-imported copy back on disk, which is the exact doubling this closes. Restore keeps the shipped endpoint's behaviour, unchanged.
+- **Sidecar captions**: a `.txt` sidecar accompanying a scrapheaped match is NOT applied. The picture is not being imported and the user has not chosen to restore it, so editing its tags would act behind their back.
+
+**Frontend.** `fetchStagingStatus` surfaces the bucket, and `ImageImporter.vue` pushes one sticky notice ("N files are already in your Scrapheap, so they were not imported again") whose single action calls `restoreScrapheap`. The completion headline is built from the buckets it names, so "All files were duplicates" can no longer be printed over a run whose files were scrapheap matches.
+
+### 21.2 Tag-review decisions: confirm and reject are undoable
+
+`POST /pictures/{id}/tag_predictions/{tag}/confirm` and `.../reject` used to write the human-label ledger and record **nothing**, so removing a tag chip in the lightbox raised no receipt and `Ctrl+Z` could not reach it. They are now wrapped in `run_recorded_metadata_task` like every other metadata mutation.
+
+| `op_type` | Recorded by | What undo reverses | `summary` |
+|---|---|---|---|
+| `pictures.tags.confirm` | `POST /pictures/{id}/tag_predictions/{tag}/confirm` | the created `Tag` row **and** the prediction's status + human POS ledger | "Confirmed tag 'x'" |
+| `pictures.tags.reject` | `POST /pictures/{id}/tag_predictions/{tag}/reject` | the prediction's status + human NEG ledger, including deleting the synthetic `manual` row a reject invents for a hand-added tag | "Removed tag 'x'" |
+
+The reject summary says *Removed*, not *Rejected a prediction*, because removing the tag is what the user did; the NEG ledger entry is the mechanism, not the event. Both use single quotes to match the sibling receipts (`Added tag 'sunset'`) sitting next to them in the history popover.
+
+**The facet is `tag_predictions`, and it had to exist for the whole thing to be honest.** Recording only the `Tag` row would have made undo a *partial inverse*: the tag would come back while the ledger's NEG stood, so the tagger and the training exporter would go on treating it as refused — visibly undone, actually not. The facet is captured per picture as `{tag: {model_version, confidence, status, predicted_at, label_state, label_source, labeled_at, label_model_version, label_confidence}}` and restored by `_apply_tag_predictions` under two rules:
+
+1. **The tagger's live fields are not written back onto a surviving row.** `model_version` / `confidence` belong to the model and no human decision moves them, so restoring them could only revert a *tagger* run that happened after the operation. They are captured solely to rebuild a row the recorded state has and the DB no longer does (a redo re-creating the synthetic row its undo deleted).
+2. **Only a synthetic `manual` row is deleted when the recorded state omits it.** A user decision is the one thing that can *create* a prediction row (`record_human_label` invents a `model_version='manual'` row for a tag the tagger never predicted), so that is the only kind an undo may remove. A real tagger row written since the recording is left in place and logged — deleting it would make undo a data-loss path for model output nobody asked to revert.
+
+The facet is captured for **every** recorded operation, not just these two, which also closes a pre-existing half-inverse: `pictures.tags.add` / `.remove_all` / the impossible-tags clear all call `record_human_label_if_relevant` and previously recorded only the `Tag` rows.
+
+**Coalescing: one gesture, one undo step (`X-Operation-Batch-Id`).** These are single-picture ops, so a compound gesture used to be several history steps: removing a tag chip issues *two* requests (`tags/remove_all`, then `reject`) and took two `Ctrl+Z` presses, the first of which reverted only the ledger and looked like a no-op. A client that fans one gesture out over several requests now stamps them all with the same **`X-Operation-Batch-Id`** header; `OriginClientMiddleware` validates it onto `request.state.operation_batch_id`, `operation_log_service.request_context` returns it as `batch_id`, and the recorder stores it. The rows stay separate — the log remains a faithful record of what happened — but they are one batch, and since `undo_in_session` expands to the whole batch, one `Ctrl+Z` reverses the whole gesture (tag *and* ledger) and the receipt renders it as one entry with its `+N` count. Frontend: `newOperationBatchId()` in `utils/apiClient.js`, used by `OverlayTagsPanel.removeAllTag`, `TbTagPanel.onDropToRejected` and `TbTagPanel.confirmPredictionOnAll`.
+
+The correlation id is a **client-trusted grouping hint, scoped to the caller's own history** — the CSO's accepted risk A2 (a caller can graft unrelated verdicts of its own into one undo unit), kept deliberately: grouping never widens what an operation may touch, and every `/operations*` route is `OWNER_ONLY`, so nobody can list or undo a batch that is not theirs. Two guards make that stance safe rather than merely accepted:
+
+- **Namespaces cannot collide.** `new_batch_id()` mints `srv-<uuid4hex>`; the header validator accepts only `cli-` + 4–76 chars of `[A-Za-z0-9_-]` (≤ 80 total). A client therefore can never name a server-minted batch and attach its requests to it, and the prefix tells a log reader which side created the group. `tests/test_operation_log.py::test_a_client_batch_id_can_never_impersonate_a_server_minted_one` pins both halves.
+- **A header never 500s.** Absent, oversized or malformed values are dropped with a `debug` log and the operation records unbatched — the pre-header behaviour.
+
+A handler that is a bulk action in its own right (the scrapheap move/restore) passes `request_context(request, fallback_batch_id=new_batch_id())`: it stays batched when no header is sent, and honours the caller's gesture id when one is.
+
+**Authorization: recorded regardless of principal.** Both routes are `PICTURE_SCOPED` in `ROUTE_POLICIES`, so a picture-scoped share token can reach them, while every `/operations*` route is `OWNER_ONLY`. The operation is recorded anyway: only the owner can ever list or undo it, so a scoped write lands in history the same way scoped writes elsewhere already do (precedent N2, v1.9 authz sign-off). The alternative — suppressing the record for scoped principals — would put a silent hole in an append-only audit log to save a row nobody unauthorised can read, and would make undoability depend on who called. No `pixlstash/authz/*` change was needed or made.
+
+**Deliberately NOT recorded in this lane** (decided, not overlooked): `POST /pictures/{id}/tag_predictions/delete`, `POST /pictures/{id}/reset_tags` and `POST /pictures/{id}/reset_description`. All three exist to *trigger re-inference* — they drop machine output and queue the tagger/captioner to regenerate it. Their undo semantics are genuinely different (restoring the old rows would immediately be overwritten by the pass they started, and "undo" would have to mean cancelling a queued job), so they need a design of their own rather than a facet.
+
+### 21.3 Post-restore hooks — reopening what an operation also decided
+
+The recorded before/after state covers the reversible **picture** facets. An
+operation can additionally have decided something that is *not* a picture facet,
+and restoring the pictures without reopening that decision leaves the two halves
+disagreeing. The v1.9 duplicate verdict is the first such case, and QA
+caught it half-working: undoing a stack verdict unstacked the pictures but left the
+`DedupVerdict` decided and the `DedupGroup` resolved, so the group never returned
+to the queue, was not counted, and **survived a rescan** (the signature still
+carried a live verdict). The only way back was a `POST /dedup/verdicts/reopen`
+no user could find.
+
+`register_post_restore_hook(op_type, hook)` is the generic seam. `_restore` — the
+one place both undo and redo write state — dispatches the registered hooks after
+every state has been applied and **before the commit**, so the decision and the
+pictures land in one transaction or not at all; a hook that raises aborts the
+whole restore and the operation stays `applied`.
+
+- The hook is called **once per restore** with *every* operation of its own
+  `op_type` in that restore (`(session, operations, direction)`), so a 2 700-row
+  batch undo is one call, not 2 700.
+- `direction` is `RESTORE_UNDO` / `RESTORE_REDO`.
+- **The op-log core imports no feature module.** Registration lives in the
+  feature that owns the `op_type` — `dedup_verdict_service` registers at import
+  time and is imported by `routes/dedup.py`, which `Server` mounts at startup.
+  An `op_type` with no hook simply has none.
+
+Pinned by `tests/test_operation_log.py::test_a_post_restore_hook_runs_once_per_restore_with_its_whole_batch`
+and `::test_a_failing_post_restore_hook_aborts_the_whole_undo`.
+
+### 21.4 `batch_id` is namespaced
+
+`new_batch_id()` mints `srv-<uuid4hex>` (`SERVER_BATCH_ID_PREFIX`). A batch id can
+also come from a client, and the two must be distinguishable: an un-namespaced id
+makes a client-supplied grouping key indistinguishable from a server-minted one,
+so a client could submit an id that reads as a server batch — or graft its rows
+into an existing batch, where one Ctrl+Z then reverses more than the user did.
+There are two client entry points, one contract (`^cli-[A-Za-z0-9_-]{4,76}$`,
+≤80 chars): the `X-Operation-Batch-Id` **header** (§21.2's gesture coalescing,
+validated in `utils/request_origin.py`) and the dedup verdict **body** field
+(validated in `routes/dedup.py`), refused with a **400** when it does not match.
+Note the deliberate asymmetry between the two: an unusable *header* is dropped
+and ignored because a header is ambient; an unusable *body* field is a refusal,
+because the client named it on purpose and silently ignoring it would mis-group
+its undo.
+
+---
+
+## 22. Tiered Duplicate Detection (v1.9 Dedup → Stacks)
+
+The Duplicates queue is filled by three tiers of increasing cost and decreasing
+certainty. Detection lives in `pixlstash/services/dedup_tier_service.py`; what
+happens when the user decides lives in `pixlstash/services/dedup_verdict_service.py`.
+The shipped `dedup_sweep_service.py` dry-run planner is unchanged and remains the
+non-destructive foundation the whole feature is built on.
+
+### 22.1 Tier 1 — exact, and the hash decision
+
+Tier 1 is `GROUP BY pixel_sha, size_bytes HAVING count(*) > 1` on the **existing
+indexed `picture.pixel_sha` column**. No new hash column was added.
+
+Be honest about what `pixel_sha` is. `ImageUtils._calculate_sha256_digest` hashes
+the whole file only up to 128 KiB; above that it samples 8 chunks of 8 KiB spread
+across the file. So it is a *sampled* content digest, not a full-file SHA-256, and
+two files could in principle share one while differing in an unsampled region.
+
+Two consequences, both deliberate:
+
+- **`size_bytes` is a co-key, not decoration.** The sample offsets are derived from
+  the file size, so equal size plus equal sampled digest is a far stronger claim
+  than the digest alone. It costs nothing — the `pixel_sha` index already narrows
+  the group.
+- **Exact matches still go through a consent dialog.** `POST /dedup/auto-stack`
+  defaults to `dry_run=true`; the design deliberately does not stack exact matches
+  at import without the user seeing the count first. The worst case of a false
+  exact match is two different pictures in one *stack*, which is reversible with
+  one keystroke and destroys nothing.
+
+A new full-file hash column was considered and rejected: it would mean re-reading
+every byte of every file in the library on upgrade to buy a guarantee this feature
+does not need. `pixel_sha` is already computed incrementally on every import path;
+`MissingPixelShaFinder` / `PixelShaTask` (`TaskType.PIXEL_SHA`) backfill the rows
+that predate it, selecting on `pixel_sha IS NULL` — which is why migration
+`0088` contains no `NULL` reset.
+
+### 22.2 Tier 2 — bucketed near, and what "bucket" reuses
+
+Perceptual hashes are compared **only within candidate buckets**, never
+library-wide. `build_near_buckets()` emits four bucket kinds from columns the
+library already maintains:
+
+| Bucket kind | Column | Catches |
+|---|---|---|
+| `size_bin` | `picture.size_bin_index` (indexed `(w << 32) + h`) | re-saves, re-encodes, burst frames |
+| `capture_minute` | `created_at` truncated to the minute | bursts, re-exports that changed size |
+| `import_folder` | `picture.import_source_folder` (indexed) | one import run |
+| `folder` | parent directory of `file_path` | a duplicated folder |
+
+A picture belongs to several buckets; that is the point. Buckets over
+`MAX_BUCKET_MEMBERS` (4000) are **split into shards**, never dropped, so no
+candidate is silently skipped.
+
+Inside a bucket the comparison is a numpy XOR plus a SWAR popcount over the 64-bit
+dHash in `picture.perceptual_hash`, with
+`similarity = 1 - hamming / 64`. A 4000-member bucket is ~8M popcounts, which is
+milliseconds.
+
+**`LikenessParameter.PHASH_PREFIX` is deliberately not used as a bucket key.**
+Despite the name it stores the *entire* 64-bit dHash linearly normalised into
+`[0, 1]` (`int(phash[:16], 16) / (2**64 - 1)`), so numeric proximity in that slot
+is dominated by the top bit and says nothing about Hamming proximity.
+`LikenessUtils.PHASH_PREFIX_LEN = 3` is dead code with no reader. The reusable
+precomputed bucket key is `size_bin_index`, and that is what tier 2 uses.
+
+**Memory is bounded separately from CPU.** `MAX_BUCKET_MEMBERS` caps the
+comparison *work*; it does not cap the *result*. A bucket whose members are
+mutually near-identical (a burst of near-black frames, a folder of solid-colour
+placeholders, one image copied 4000 times) yields `k*(k-1)/2` pairs — ~8M tuples,
+roughly 580 MB, for a component the union-find only needs a spanning subset of.
+Two further caps, both logged when they bite (never silent):
+
+| Constant | Value | Bounds |
+|---|---|---|
+| `MAX_PAIRS_PER_BUCKET` | 50 000 (~4 MB) | pairs materialised for one bucket |
+| `MAX_TRACKED_PAIRS` | 400 000 (~32 MB) | pairs a whole streaming scan retains across buckets |
+
+**The per-bucket cap can lose membership, and the log says so.** Pairs are
+emitted in increasing member-offset order, so the cap keeps the nearest-offset
+edges and drops every wider one. In a *uniformly* near-identical bucket that is
+harmless — the offset-1 edges alone span the block — and the only loss is
+confidence *resolution*. In a **dense but non-uniform** block it is not: ~700
+mutually matching members exhaust 50 000 pairs well inside the low offsets, so a
+member whose only match sits at a wider offset gets no edge at all and is split
+into its own group or drops out of the queue entirely. An earlier version of this
+paragraph claimed membership was never lost; that was wrong. The warning now
+names the bucket, the offset it stopped at, and that consequence, and states the
+mitigations (resolve the dense block and rescan, narrow the bucket, or raise
+`MAX_PAIRS_PER_BUCKET` for the memory it costs). Hitting the scan-wide cap stops
+cross-bucket chaining growing, so a chain spanning two buckets can be reported as
+two groups. Both log a warning naming the bucket or scan and what was given up.
+
+### 22.3 Tier 3 — embedding
+
+Opt-in, and recomputes nothing: it folds the existing `PictureLikeness` edge table
+into components through the shipped `dedup_sweep_service.stream_likeness_edges` /
+`_LikenessForest`. Its groups append to the same queue.
+
+### 22.4 Policy: tier gating replaces the auto/review split
+
+`TierPolicy` is the queue's policy surface and supersedes `SweepPolicy`'s
+auto/review split *for the queue* (`SweepPolicy` remains the parameter object for
+the dry-run planner, unchanged).
+
+- Tier 1 is always included and **has no switch**.
+- Each looser tier is a separate opt-in, and `embedding_enabled` **requires**
+  `near_enabled`.
+- `threshold` defaults to `0.90`; `MIN_THRESHOLD = 0.65` is a hard floor. It is
+  never silently clamped: a low threshold produces confident-looking garbage and
+  destroys trust in the sidebar count. **The refusal is a 422, not a 400.** The
+  floor is a pydantic `ge=MIN_THRESHOLD` bound on the query parameter and on
+  `TierPolicyModel.threshold`, so FastAPI rejects a low value before any handler
+  runs, on every route. `TierPolicy.__post_init__` keeps its own `ValueError`
+  check because it is the *service-level* invariant — reachable from a task or a
+  test that never went through a request — and the tier-dependency rule it also
+  enforces (`embedding_enabled` requires `near_enabled`) is not expressible as a
+  field bound, so **that** one is the 400 the handlers translate.
+
+### 22.5 Cover selection and evidence
+
+**Reworked 2026-07-30 (owner requirement: "prioritise smart score, then image
+size, sharpness").** The cover preselection and member order are a
+**lexicographic ranking** (`cover_order_key`), strongest signal first — a lower
+tier can never outvote a higher one, which the old weighted sum
+(`megapixels*4 + tags*3 + score*2 + 8 if RAW`) could not guarantee (a 40 MP
+blurry scan outscored a sharp 12 MP original on pixels alone):
+
+1. **Smart score**, compared in **0.25 buckets** on the [1, 5] scale — the
+   library's one composite quality opinion (it already folds in sharpness,
+   aesthetics, resolution, anomaly penalty). Bucketing keeps scoring noise from
+   outranking a real size difference. **Unknown ranks neutral (3.0), never
+   zero** — NULL (not yet computed) and the `-1.0` failed-metric sentinel both
+   read as unknown, the same refusal-to-rank-at-zero the sweep keeper and the
+   smart-score grid sort already practice.
+2. **Image size** as raw **pixel count** (pixels, not bytes: bytes measure
+   compression, pixels measure what you lose by keeping the smaller copy).
+3. **Sharpness** (`Quality.sharpness`; unknown/failed ranks neutral at 0.25) —
+   the objective discriminator once quality and size tie.
+4. **Stars**, **tag count**, **RAW** camera-original, **file bytes** (the
+   less-compressed file at equal pixels).
+5. Ties break to the **oldest capture time**, then the lowest id.
+
+**Reconciliation with the other best-picture rules.** The canonical stack
+order (`routes/stacks.py::_stack_order_key`, mirrored by the sweep keeper's
+`member_order_key`) is stars DESC → smart score DESC → recency DESC → id. The
+dedup cover deliberately diverges twice, and only twice: smart score outranks
+stars (duplicates of one shot rarely differ on stars, and the post-stack
+metadata union lifts every member to `max(score)` anyway, so stars barely
+discriminate inside a group), and oldest capture beats recency (a duplicate
+group wants its *origin*, not the latest re-export). Do not fork a third
+opinion: new ranking needs go into one of these two.
+
+The choice is always exposed as a *preselection* the user overrides, together
+with:
+
+- **group evidence** — matching pills and evidence-against pills (different
+  resolution / aspect ratio / file format), so a group carrying red pills is
+  visibly the one that needs Compare;
+- **per-candidate evidence** — the ranking's own signals in priority order:
+  "Best smart score (4.3)" / "Lower smart score (3.1 vs 4.3)" (bucket-compared,
+  so effective ties both read as best), "Highest resolution" / "% fewer
+  pixels", "Sharpest copy" (positive-only), then stars/tags/RAW. The row also
+  carries null-safe `smart_score` and `sharpness` fields for display; the
+  numeric `cover_score` is the **deprecated** legacy composite, kept one
+  release for wire-compat.
+
+The server reports reasons. The user concludes.
+
+### 22.5.1 Stack units: what the queue payload says about an existing stack
+
+**A stack verdict moves whole stacks, so `stack_id` on a candidate is not enough
+to render a row** (design decision D2 / backend contract B1 in
+`docs/design/mixed-stacks-and-stack-units.md`). Every group therefore ships a
+`stacks` block: one entry per existing stack the group touches, keyed by stack id
+as a string.
+
+| field | meaning |
+|---|---|
+| `member_count` | the stack's **real live member count**, its depth. NOT the count within the group, and routinely larger: measured on a 17k-picture library, 36 of 116 stack-touching groups name only ONE member of a stack. |
+| `leader_picture_id` | the member at `stack_position` 0, ranked by exactly the window function in `Picture._get_stack_leader_ids`, so the deck's face is the same picture the grid leads that stack with. |
+| `leader_thumbnail_version` | the leader's `?v=` token (`ImageUtils.thumbnail_cache_token`), so the face renders from the queue payload alone. |
+| `matched_picture_ids` | which of the stack's members are in this group. |
+| `stackable` / `blocked_by_sets` | the **unit-level rollup** of the per-candidate values: false when ANY member is frozen, because a stack cannot be partially stacked. |
+
+**No lock rule is re-derived here.** `partition_stackable_members` is already
+correct across a whole stack: `_locked_sets_by_picture` expands its input to
+whole stacks and `locked_sets_for_pictures` rolls each frozen picture's sets back
+onto every input id, so a locked sibling the group never names has already
+marked the members inside it. The rollup is `all(...)` over values the page
+computed once.
+
+**Eager count and leader, lazy members.** Inlining every member of every stack
+would put a 40-member stack's worth of tiles behind one queue row, which is the
+never-render-the-whole-list rule the queue exists to honour. The members are
+served by `GET /dedup/stacks/{stack_id}/members`
+(`stack_members_in_session`) when the user opens an expansion: leader-first, with
+exactly the fields a queue candidate carries plus `position` and `is_leader`,
+paged with a plain `offset` (a stack's membership is not a live list being
+decided out from under the client, so §22.7's keyset cursor buys nothing) and
+capped at `MAX_STACK_MEMBER_PAGE_SIZE`. Its `stackable` rollup is taken over the
+**whole** stack rather than the page, so page 2 cannot report a different answer
+from page 1. A stack with no live member is a **404**, never an empty stack that
+appears to exist.
+
+**Batched with the page, never per group.** `load_stack_facts` resolves every
+stack the page touches in one chunked query, alongside the single
+`build_locked_set_lookup` and the single `load_candidates`, a per-group resolve
+would make the deck an N+1 on the one query the queue page is measured by
+(`test_the_deck_rollup_costs_one_query_for_the_whole_page` pins it).
+
+### 22.6 Persistence: four tables
+
+`pixlstash/db_models/dedup.py`, migration `0088_add_dedup_tier_tables`:
+
+- **`dedupgroup` / `dedupgroupmember`** — the found-groups cache. Detection
+  *upserts on `signature`*, so a rescan refreshes rows instead of duplicating
+  them, and the queue is paged from `(resolved, confidence DESC)` and never
+  materialised whole. This is what makes 10 groups and 10,000 cost the same.
+
+  **The upsert honours tier precedence** (`TIER_STRENGTH`: exact > near >
+  embedding). Two tiers routinely find the *same* group — a byte-identical pair
+  is also perceptually identical, so every near-enabled scan rediscovers every
+  exact pair under the same signature — and the upsert originally wrote
+  `row.tier` unconditionally. An exact pair silently demoted to `near`
+  disappeared from the exact-only default view **and** from
+  `POST /dedup/auto-stack`, which only ever acts on `exact`. Tier, confidence,
+  evidence and cover move together (they describe one finding); membership is
+  refreshed either way, because the signature pins the member *content keys* and
+  a re-import can give the same content new picture ids. Pinned by
+  `test_a_near_scan_does_not_downgrade_an_exact_group` and
+  `test_the_upsert_takes_the_stronger_tier_in_either_arrival_order`.
+- **`dedupverdict`** — verdict memory keyed on the group **signature**: `sha256`
+  of the sorted member content keys, where a content key is
+  **`<pixel_sha>:<size_bytes>`** (or `id:<n>` for a picture not yet hashed).
+  Because the key is content and not ids, a rescan or a re-import never re-asks.
+  `reopened_at` marks a verdict as no longer live; the row is kept so the
+  decision history survives.
+
+  **The size co-key is not optional.** Identity has to match detection: tier 1
+  groups on `(pixel_sha, size_bytes)` precisely because the digest is sampled
+  above 128 KiB. A signature over the digest alone was not injective over groups
+  — two distinct exact groups differing only in size collapsed onto one
+  signature, and all three consequences were silent: the upsert-on-signature
+  dropped one group from the queue, a `keep_separate` on the survivor resolved
+  both file sets, and a stack verdict's write target depended on scan order
+  rather than on what the user saw. Pinned by
+  `test_two_groups_sharing_a_digest_but_not_a_size_stay_distinct`.
+- **`dedupscan`** — one row per scope key, both the scan *request* (status
+  `pending`) and the "scanned N of M" progress readout.
+
+`prune_stale_groups_in_session()` removes groups whose live membership has
+dropped below two, so the sidebar badge cannot be inflated by scrapheaped
+pictures. Prune only runs on a verdict or a scan, so the counts and the open
+queue additionally filter on the spot (`_live_groups_filter`): a group counts
+only while it still POSES a decision — two or more live members spanning two
+or more stack units (`COALESCE(stack_id, -id)`). The stack-unit half exists
+because the grid's own stack actions never touch `dedupgroup`: an exact pair
+the user stacked by hand stayed "unresolved" and was re-offered forever
+(found in the wild as 21 zombie groups, 2026-07-29). A group where a stack
+would still fold something in — two stacks, or a stack plus a loner — keeps
+counting.
+
+**Filtering at read time, rather than pruning on the soft-delete, is deliberate:
+it is what lets a restore put the group straight back.** The `dedupgroup` row
+survives its members going to the Scrapheap, so `POST /pictures/scrapheap/restore`
+(or an undo of the move) returns the group to the queue with no rescan, pinned
+by `test_a_restored_member_brings_its_group_back_without_a_rescan` and its API
+sibling. A periodic sweep that deleted those rows on a timer would break exactly
+that, which is why there isn't one: the surviving rows are invisible to every
+read and the next verdict or scan clears them. The reads that apply the rule are
+the four in `dedup_tier_service` (`count_unresolved_in_session`,
+`count_by_tier_in_session`, `page_queue_in_session`, `bulk_auto_stack_in_session`)
+**and** the grid's `stack_state="unresolved"` filter in
+`utils/query/predicate_filter.py`, which was the one that leaked: it keyed on
+`DedupGroup.resolved` alone, so a scrapheaped partner kept marking its survivor
+as unresolved long after the group had left the queue and the badge.
+
+**Every group is reported over its LIVE members.** `page_queue_in_session` serves
+`member_count` as the number of candidates it actually returns (the stored
+`dedupgroup.member_count` still counts scrapheaped members until the next prune),
+`load_stack_facts` excludes them from a deck's depth and promotes the next live
+leader, and an **open-queue** group whose candidate load comes back with fewer
+than two live members is dropped from the page rather than served thin. The
+**decided** page keeps such a row: the verdict already happened and "clear this
+decision" is the only route back to it.
+
+**Scope ids are normalised and validated at construction** (`DedupScope.__post_init__`),
+not at query time. Project / set / character ids must parse as integers. A
+**folder** `scope_id` is stripped of trailing separators and **refused when that
+leaves it empty**: `/`, `\`, `///` all rstripped to `""`, which became a `LIKE`
+pattern of `%` — a "Find duplicates in this folder" request that silently meant
+the whole vault, plus a persisted `dedupscan` row whose `scope_key` claimed
+otherwise. Normalising at construction also collapses `/photos` and `/photos/`
+onto one scope key instead of two scans.
+
+### 22.7 Paging the queue: a keyset cursor, not an offset
+
+`GET /dedup/groups` pages by an **opaque keyset cursor**. The queue is a live
+list: a verdict removes the row the user just decided from `resolved=False`, and
+a tier-2 scan commits new groups after every bucket. Both shift every later row's
+offset, so `offset=limit` on the next request skips exactly as many groups as the
+page's decisions removed — a deterministic, silent skip reproduced with a single
+verdict between two pages.
+
+- **Order is `(confidence DESC, id ASC)`**, and the cursor encodes that pair for
+  the last delivered row. Wire form: unpadded base64url over
+  `"1|<confidence at %.17g>|<group id>"` (`CURSOR_VERSION` is the leading `1`).
+  17 significant digits make the float round-trip exactly, which the tie-break
+  branch depends on.
+- **The tie-break half is load-bearing.** Every exact group sits at the same
+  confidence, so `confidence < c` alone would drop the rest of the tied run and
+  `confidence <= c` would repeat it forever. The predicate is
+  `confidence < c OR (confidence = c AND id > i)`.
+- `next_cursor` is `null` once the page is not full — end-of-found. A full last
+  page hands back a cursor that yields one empty page, which is cheaper than the
+  extra `COUNT` needed to know for certain.
+- **Opaque by intent.** Clients pass it back verbatim. A cursor this server did
+  not mint is a **400**, never a silent restart from the top — silently paging
+  from offset 0 would hand the client page 1 forever.
+- `offset` still works and is **deprecated**; sending both is a **400** rather
+  than a silent preference, because a client that sends both has two different
+  ideas of where it is.
+- **The decided page has its own ordering and its own cursor family
+  (2026-07-30).** `decided=true` is "review what I decided", so it orders by
+  the live verdict's **`decided_at DESC, id DESC`** — most recent decision
+  first — with the (stale-edge) verdict-less tail last; the queue's confidence
+  ordering was meaningless there (user report). Its cursor encodes
+  `"1|d|<decided_at iso>|<group id>"`; the two cursor kinds reject each other
+  with a 400, so a queue cursor can never resume a decided page at a silently
+  wrong position (or vice versa). The id tie-break keeps a same-instant run (a
+  bulk auto-stack) stable across page seams. Redo re-stamps `decided_at` so a
+  redone decision honestly sorts to the top — see §22.10.
+- **The decided page has its own filter, `verdict` (2026-07-30).** The tier gate
+  is not in force there, so the repeatable `verdict` query param narrows the page
+  to `stacked`, `keep_separate`, or both (omitted, which is also what listing
+  every verdict means — only *absence* keeps the verdict-less tail, which an `IN`
+  clause over the outer-joined verdict necessarily drops). `total` is counted
+  under the **same** filter as the page, so the client's scroll track is never
+  sized for rows it will not be served. Each decided response also carries
+  `by_verdict` — `count_decided_by_verdict_in_session`, taken **without** the
+  filter, so the client's menu can state what turning a verdict back on would add
+  (the same contract `by_tier` has on the open queue) — and `verdicts`, the echo
+  of the filter. `by_verdict` may sum to less than `total` by exactly the
+  verdict-less tail. Sending `verdict` without `decided` is a **400**: an
+  open-queue group carries no verdict, so the filter could only silently empty
+  the queue.
+
+### 22.8 Streaming and the background path
+
+`DedupScanFinder` / `DedupScanTask` (`TaskType.DEDUP_SCAN`) turn a `pending`
+`dedupscan` row into work. Tier 1 runs first and in one shot so the queue is never
+empty; tier 2 then commits **after each bucket**, so a bucket's groups appear in
+the queue the moment that bucket finishes and `scanned_buckets` advances with it;
+tier 3 appends last. Restarting a scan is safe because persistence is an upsert.
+The finder `depends_on` `PIXEL_SHA` and `IMAGE_EMBEDDING` so a scan reports honest
+counts rather than a partially hashed library.
+
+**A commit is not a scheduling boundary; a queued callback is.** The database has
+one writer thread (§13), so the original task's per-bucket commits still held that
+thread for the entire scan: the callback did not return between buckets. A
+12,098-picture scan held it for 104 seconds, starving grid reads queued behind it.
+`DedupScanTask` now submits bounded work as separate `DBPriority.LOW` callbacks:
+indexed tier-1 setup, bucket construction, one capped near bucket at a time,
+keyset-paged embedding edges, bounded embedding-component persistence, and final
+status. Only plain Python ids, cursors, buckets, pairs and policy values survive
+between callbacks; no ORM row or `Session` crosses the boundary. An interactive
+callback already in the queue therefore runs before the next LOW scan slice.
+Shutdown uses the same boundary: `DedupScanTask.on_cancel()` records a stop
+request, lets the callback that currently owns its request-local session return,
+and submits no later scan slice. A short lifecycle callback moves a non-complete
+row back to `pending` (without discarding its counters), so the finder resumes it
+on the next start; cancellation racing with the final committed slice never
+regresses `complete`.
+
+The picture grid's ordinary count/list path is read-only and uses WAL's parallel
+read side. Character membership (including its optional project intersection)
+and the final `Picture.find` count/page therefore use
+`run_immediate_read_task`, each with its own request-local session. This matters
+for a one-picture character more than it first appears: the old handler made two
+sequential writer-queue calls (resolve membership, then load the page), allowing
+the scan to reacquire the writer for another capped bucket between them. A dense
+50,000-pair bucket could make a tiny grid look unavailable even though dedup
+counts, already on the read side, continued to answer.
+
+Task Manager progress is phase-based for this task (exact setup, bucket setup,
+each near bucket, embedding, finalisation), not `scanned_pictures / total_pictures`.
+Picture enumeration can reach the library total before the bucket and embedding
+work is done. While TaskRunner still owns the task, its snapshot retains at least
+one remaining phase; this prevents both the false `N / N` active row and the
+model-unloader's incorrect "All workers idle" decision mid-scan.
+
+**Active requests are idempotent and policy-safe.** `POST /dedup/scan` defines an
+equivalent request by canonical scope, enabled tiers and threshold. If that scan
+is already `pending` or `running`, the route returns its existing progress row
+unchanged: it does not reset timestamps or requeue the work. A different durable
+policy for the same active scope returns `409 dedup_scan_busy`, including the
+active progress/policy, and leaves the row untouched. This server-side guard and
+the client's keyed single-flight guard prevent a remount from perpetually
+restarting the same scan while still making policy disagreement explicit.
+
+**Only the groups a bucket could have changed are re-persisted.** Pairs are
+retained across buckets so a chain spanning two of them folds into one group, but
+each bucket tracks the picture ids its *new* pairs touched and rewrites only the
+groups containing one of them. The earlier version re-derived and re-wrote **every
+group after every bucket** — `O(buckets × groups)` DELETE+INSERT on the single DB
+writer thread, which every import, tag edit, scrapheap move and verdict then
+queues behind.
+
+**Honest scope of the performance claim.** §22.6's "10 groups and 10,000 perform
+identically" is a statement about the **queue page**, which reads exactly `limit`
+rows. It is *not* a statement about the scan: a scan is inherently proportional to
+the library. Each bounded slice uses the single DB writer, then yields it before
+the next slice; scan memory is bounded by the caps in §22.2 rather than being free.
+
+### 22.9 Verdicts and the metadata union
+
+The only two verdicts are **stack** and **keep separate**. Neither deletes
+anything; there is no destructive route on this surface in 1.9.
+
+Stacking applies the metadata union onto every member:
+
+| What | Behaviour |
+|---|---|
+| project + set membership | union, via the existing `reconcile_stack_membership` |
+| tags | union of every non-sentinel tag; `__tag` / `__tag:<engine>` markers are excluded so an already-tagged picture is not re-queued |
+| score | every member lifted to `max(score)`; never lowered |
+| characters | see below |
+
+**Characters are the one honest limitation.** A face carries a bbox and an
+embedding that belong to one specific picture, so a true face-to-character union
+would mean fabricating `Face` rows. Instead, when the group's members between them
+reference exactly **one** character, members that do not already carry it get
+`Picture.pending_character_id` (the shipped deferred-assignment mechanism the face
+extraction task consumes). A group spanning several characters is left alone and
+logged.
+
+The union writes tags and scores, which are curation state, so it calls
+`enforce_pictures_not_locked` first: a locked-set member makes the union a 423
+rather than a half-applied write.
+
+**Guard ordering is load-bearing.** `_stack_members` calls
+`enforce_stack_membership_not_locked` **before** it folds any other stack in, and
+that guard expands through `expand_picture_ids_to_stacks` — which is why a locked
+co-member dragged in by the fold is caught even though
+`apply_metadata_union_in_session` only checks the group's own members. Moving the
+lock check after the fold would open that hole. Pinned by
+`test_a_locked_co_member_of_a_folded_stack_is_refused`.
+
+#### Locked members are partitioned out, not fatal (2026-07-30)
+
+**Two lock gates sit on this path, and they do not agree.**
+`enforce_stack_membership_not_locked` refuses only when a locked set would *gain*
+a member, so on its own it would allow a group already sitting wholly inside one
+locked set. `enforce_pictures_not_locked`, reached through the union, refuses
+**any** frozen member, gain or no gain, because tags and scores are label data.
+The union's rule is the tighter one, so it is the rule the whole dedup stack path
+has to obey: **a frozen picture cannot be in a dedup stack at all.**
+
+`set_lock_service.partition_stackable_members` is that rule, written once. It
+splits a group's candidates into the unfrozen ones (a legal stack, and one that no
+longer touches any locked set, so the membership guard is then satisfied for free)
+and the frozen ones. Both ends of the path use it, which is what stops the queue
+from offering a Stack the verdict would refuse:
+
+- **`GET /dedup/groups`** marks each candidate `stackable` and `blocked_by_sets`,
+  and moves `cover_picture_id` onto a stackable member. The page builds one
+  `LockedSetLookup` for every candidate on the page and passes it into each
+  group's partition, so a page costs three queries rather than three per group.
+  The lookup **carries its own coverage and raises** when asked about an id
+  outside its pool: a bare dict cannot tell "not frozen" from "never looked up",
+  and in a lock helper that difference is a silent admission.
+- **A group with fewer than two stackable members is withheld** (owner call,
+  2026-07-30) by `_live_groups_filter`'s third `HAVING`, so the queue, the badge
+  (`count_unresolved_in_session`) and the tier split (`count_by_tier_in_session`)
+  all apply one identical rule and cannot disagree, and since **D1**
+  (2026-08-01) so does `POST /dedup/auto-stack`, which used to filter on the
+  weaker `stackable_groups_filter` (two unfrozen live members, nothing about
+  stack units) and therefore planned 62 groups behind a badge that said 3. Both
+  filters are built on `locked_picture_id_subquery`, the single SQL definition of
+  "frozen" shared with the write guards.
+  **It has to be SQL.** A post-filter after the `LIMIT` would shrink pages and
+  desynchronise the keyset cursor (§22.7), which is the hazard
+  `locked_picture_id_subquery`'s own docstring was written for. Nothing is
+  deleted: the group row survives and unlocking returns it with no rescan, and
+  its signature stays POSTable by a stale client, which is what the partial
+  success below is for.
+- **`POST /dedup/verdicts/stack`** stacks the survivors, records the frozen ones as
+  `excluded_picture_ids`, and reports them in `skipped`. Fewer than two survivors
+  is a 423 whose detail names `picture_ids` as well as `sets`. Skips log at
+  WARNING, mirroring `drop_locked_set_ids`.
+  **The cover is validated against the stack-expanded set**, the group's
+  members plus the full membership of every stack the verdict folds in, which
+  `_stack_expanded_ids` derives from the same `expand_picture_ids_to_stacks`
+  `_stack_members` folds with (**B2**). A group frequently names only one
+  picture of an existing stack, and the queue renders that stack as one unit
+  whose face is its leader; requiring the cover to be a group member forced the
+  matched member to be promoted instead, silently re-covering a curated stack.
+  It is relaxed no further: an unrelated id: including the leader of a stack
+  this group does not touch: is still a `DedupVerdictError`.
+- **`POST /dedup/auto-stack`** filters its own candidate query with
+  `_live_groups_filter` (**D1**, 2026-08-01), the queue's own filter, so the
+  run plans exactly the population the list shows and the badge counts. It used
+  `stackable_groups_filter`, whose silence about stack units let already
+  collapsed groups through: 62 planned against a badge of 3, of which 59 created
+  nothing and 21 would have had their cover replaced, since the run passes no
+  cover and the group's preselection is forced to `stack_position` 0.
+  Its **dry run counts only the pictures the run will actually move**: not
+  `member_count` (which promised pictures that stay put), and since **B4** the
+  **stack-expanded** set rather than the group's members alone, because a fold
+  reparents the whole stack. The receipt summary counts the same set. The
+  top-level `pictures` figure is read back off `dry_run_summary` rather than
+  recomputed, so the two cannot disagree. A frozen cover preselection is moved
+  in the preview exactly as the run moves it, or the group would silently drop
+  out of the "covers gaining metadata" row (that row stays on the group's own
+  members: the tag/score union runs over those, not over the folded stack).
+
+Partial success is scoped to **dedup** deliberately. The manual `POST /stacks`
+routes still refuse whole-request: they act on exactly the pictures the user
+named, so there is no remainder to fall back on, whereas a triage queue that
+dead-ends on one frozen member costs the user the decision about all the others.
+
+#### Accepted risk A1 — the union widens live share tokens
+
+**This is a change to who can see what, not only to metadata.** Unioning set and
+project membership adds an out-of-scope duplicate to a *shared* set, and every
+live share token for that set immediately reaches it — the picture, its tags, its
+`pixel_sha`, its file. The authz gate is behaving correctly (the picture genuinely
+*is* a set member after the union); the widening is the membership change itself.
+
+- **Not new.** An ordinary `POST /stacks` does exactly the same thing; this is the
+  shipped stack-atomic membership model, not a dedup regression.
+- **What is new is the amplification.** `POST /dedup/auto-stack` with
+  `dry_run=false` applies it to **every exact group in the vault** behind one
+  consent dialog. The dry run reports `groups` / `pictures` and a
+  `dry_run_summary`, but **not** how many shared sets or live tokens would gain
+  members.
+- **Blast radius.** Bounded to the owner's own sharing decisions: only sets and
+  projects that already have an outstanding token, and only pictures the owner has
+  just declared duplicates of something already in that set.
+- **Compensating controls.** `dry_run=true` is the default; the union is additive
+  and reversible through the operation log; tokens are owner-minted and READ-only;
+  a locked set refuses the union outright.
+- **Ruling: accepted** for the single-owner product. **Revisit** at the start of
+  any multi-user work, and immediately if bulk auto-stack is ever wired to run
+  unattended (at import or on a schedule) — unattended bulk membership widening is
+  a different risk and this acceptance does not cover it.
+- **Recommended, not implemented:** a `shared_sets_affected` count in the dry-run
+  summary so the consent dialog can say so out loud.
+
+### 22.10 Operation-log integration (§21)
+
+Every verdict — stack **and** keep-separate — records **exactly one**
+`Operation` row.
+
+- **One verdict, one row.** The verdict path deliberately does *not* call
+  `routes/stacks.py`, whose handlers already wrap themselves in
+  `run_recorded_metadata_task`; going through them would write a second row and
+  "one verdict, one undo" would stop being true. `_stack_members` stacks
+  in-session and `_record_operation` records once around the whole verdict.
+- **Bulk auto-stack shares one `batch_id`** across every group in the run, so
+  `POST /operations/batches/{batch_id}/undo` reverses the lot in one step. The
+  response carries the `batch_id` **even when the run only partially applied**
+  (see below), so work that happened is never left without a way to reverse it.
+- **The snapshot is stack-expanded**, taken over `expand_picture_ids_to_stacks`
+  with `include_deleted=True`: folding a stack reparents co-members the group
+  never named, and `normalize_stack_positions` renumbers soft-deleted members too
+  (§21.1). Both are pinned by non-vacuous tests.
+- **Keep-separate records one operation too (`dedup.keep_separate`) — owner
+  override, 2026-07-30.** The original CSO ruling (recorded around #644 / CSO
+  R5) kept it out of the log: it changes no reversible picture facet, so an
+  operation row looked like a no-op that would still consume a Ctrl+Z, and a
+  keep-separate sharing a client gesture batch id with a stack must never be
+  reversed *silently* by undoing the stack. **The owner explicitly reversed the
+  "not op-logged" half of that ruling on 2026-07-30**: keep-separate is now a
+  first-class undoable operation, symmetric with the stack verdict. The
+  reversible state is the verdict itself, so the row is recorded through
+  `record_operation_in_session`'s `empty_diff_target_ids` escape hatch (empty
+  before/after payloads, the group's member ids as targets) and the whole
+  restore is the post-restore hook's. The *silence* half of R5 still stands, by
+  construction: each hook filters on its own verdict kind, so a shared gesture
+  batch reverses the keep-separate only through its **own** operation, named in
+  the undo response — never as a side effect of the stack's. **Reopen records
+  an operation exactly when it mutates pictures** — see the clear-decision
+  bullet below; a picture-neutral clear still records nothing, keeping the
+  original "no second confusing way to re-decide" rationale exactly where it
+  still holds.
+- **Clearing a stacked decision dissolves its stack (`dedup.reopen`) — owner
+  bug report, 2026-07-30.** `POST /dedup/verdicts/reopen` used to clear only
+  the verdict memory ("unstacking is the Stacks view's own action"), but the
+  open queue's live filter (§22.7's two-stack-units rule) then hid the
+  reopened group forever: it left Decided and never returned to review. A
+  clear of a `stacked` verdict whose stack still stands (its live members all
+  share the **verdict's** stack unit) now restores the **recorded pre-verdict
+  stack state** from the verdict's own operation row — so a pre-existing stack
+  the verdict folded in comes back instead of being flattened — scoped to that
+  one operation's target set, so clearing one group of a bulk auto-stack batch
+  never touches its batch siblings (each group records its own operation;
+  within a batch the verdict's operation is located by membership, smallest
+  target set winning when a fold overlapped snapshots). Emptied stack rows are
+  deleted (`delete_emptied_stacks`, the #643 hygiene, now public). The
+  metadata union is deliberately **not** reverted — clear means "review this
+  again"; the full inverse remains the verdict's own undo. The unstack is
+  recorded as one undoable `dedup.reopen` operation under its own batch id
+  (returned in the response; client `cli-` gesture ids are accepted but may
+  not equal the verdict's own batch id — that graft would make one undo apply
+  a stack and its inverse in one restore, and is a 400). Its post-restore hook
+  (`restore_reopens_in_session`) is **direction-inverted**: undo-of-clear
+  restacks and re-marks the verdict decided (re-stamping `decided_at`, the
+  "last became live" semantics above); redo-of-clear reopens again. The hook
+  correlates by a dedicated `DedupVerdict.reopen_batch_id` column (migration
+  0089, additive) — never by `batch_id`, which keeps pointing at the verdict's
+  own operation so undoing the original stack still finds its verdict. An
+  uncorrelatable stacked verdict (no batch id; ambiguous or missing operation)
+  is **refused with a 400** rather than degraded — no fallback may guess at
+  pre-verdict state; unstacking by hand in the Stacks view makes the group
+  span two units again, after which the clear needs no picture mutation and
+  succeeds (records nothing, `batch_id: null`). A keep-separate clear is
+  likewise picture-neutral and unrecorded. Every clear path emits the standard
+  `pictures_changed` announcement over the affected members.
+- **A verdict is always recorded under a `batch_id`**, minted server-side
+  (`srv-…`, §21.3) when the caller supplies none. The batch id is what ties the
+  `Operation` row back to its `DedupVerdict` row (keep-separate rows store it
+  too, since 2026-07-30), and that correlation is what makes the undo complete
+  — see below.
+- **Undo reopens the verdict, not only the pictures.** `restore_verdicts_in_session`
+  is registered as the §21.2 post-restore hook for both `dedup.stack`
+  (`verdict_kind=stacked`) and `dedup.keep_separate`
+  (`verdict_kind=keep_separate`). On **undo** it stamps `reopened_at` on every
+  matching verdict in the restored batches (the row is kept — the decision
+  history is worth keeping) and sets its group `resolved=False`; on **redo** it
+  clears `reopened_at` **and re-stamps `decided_at`** (2026-07-30): the stamp
+  means "when this decision last became live", not "when it was first made" —
+  a redo is the user re-deciding now. The Decided page uses this stamp for
+  keep-separate rows and as the fallback for stacked rows whose live stack has
+  no timestamp; normal stacked rows use `PictureStack.updated_at` so later
+  stack changes return to the top. The original decision instant survives in
+  the operation row's `created_at`. "Live" is exactly `reopened_at IS NULL`
+  (undo leaves `decided_at` alone). One query covers a 2 700-group batch undo. Without this
+  the undo was half an undo: the pictures came back unstacked while the group
+  stayed decided, invisible in the queue and in the counts, and it **survived a
+  rescan** because `verdict_signatures_in_session` still saw a live verdict.
+  Pinned at the HTTP level by `test_undo_returns_the_stacked_group_to_the_queue`,
+  `test_batch_undo_after_auto_stack_returns_every_group` (QA's exact repro),
+  `test_an_undo_does_not_reopen_a_group_it_never_touched`,
+  `test_undo_returns_a_kept_separate_group_to_the_queue` and
+  `test_an_undo_of_a_shared_gesture_reverses_both_verdict_kinds`.
+- **A pre-existing row without a batch id cannot be correlated**, and the hook
+  says so with a warning naming the operation ids rather than half-restoring in
+  silence: the pictures are back, the group stays decided until the user reopens
+  it explicitly.
+- **Origin discipline.** `actor` / `source` / `origin_client_id` come from
+  `operation_log_service.request_context(request)`, read in the handler on the
+  request's own task and passed down explicitly — never from the contextvar, which
+  is dead on the DB worker thread. All four recording handlers (stack,
+  keep-separate, auto-stack and — since the clear-decision fix — reopen) take
+  a `Request` and read the context there.
+
+**A bulk run is never aborted by one bad group.** The locked-set guards raise
+`HTTPException(423)`, so the loop catches that alongside `DedupVerdictError`,
+rolls back just that iteration, and records the group under an explicit outcome:
+`applied`, `blocked` (a guard refused it) or `failed` (it could not be resolved).
+Catching only `DedupVerdictError` meant a locked group mid-run propagated out
+after earlier groups had already committed — a partially applied mutation whose
+server-minted batch id the caller never saw.
+
+### 22.11 Mixed stacks: cohesion scoring, `Keep`, split and unstack (D5/B5)
+
+`pixlstash/services/mixed_stack_service.py`, `pixlstash/db_models/mixed_stack.py`,
+migration `0091_add_mixed_stack_cohesion_and_dismissal`. The design is
+`docs/design/mixed-stacks-and-stack-units.md` D5 (product) and B5 (backend
+contract); where the two disagree, the design file wins.
+
+A **mixed stack** is a live stack whose members do not form ONE connected
+cluster at the queue's similarity threshold.
+
+- **The measurement is tier 2's, not a second one.** The 64-bit dHash in
+  `picture.perceptual_hash`, the SWAR popcount in
+  `dedup_tier_service._popcount64`, the same
+  `max_hamming = int((1 - threshold) * PHASH_BITS)` cut `near_pairs_in_bucket`
+  uses, and the same shipped union-find (`dedup_sweep_service._LikenessForest`)
+  that `groups_from_pairs` folds near pairs with. A second notion of "similar"
+  on the same surface would be a bug generator.
+- **Connected components, never the worst pair.** A legitimate burst chains
+  A~B~C, so its ends can be far apart while every step is tight; condemning it
+  on the worst pair would flag exactly the stacks a user most deliberately
+  made. The forest only knows nodes an edge named, so members with *no* edge
+  are added back as singleton components: those are precisely the **stranded**
+  members, and dropping them would make "one cluster plus one stranger" look
+  cohesive.
+- **Threshold-driven, never a constant.** The list is bound to the queue's own
+  slider: measured on the owner's library, **26** live stacks are not one
+  cluster at 0.90 and **9** at 0.65. `GET /dedup/mixed-stacks` carries the same
+  `ge=MIN_THRESHOLD` / `le=MAX_THRESHOLD` bound every other dedup route does.
+- **Ranked by how little holds a stack together**: stranded members descending,
+  component count descending, weakest edge ascending. A stack with no edge at
+  all sorts *first* (`-1.0`); that is the extreme of the same scale, not
+  missing information.
+- **`suggested_action` names the outcome.** `split` needs both a stranger and a
+  strict **majority** cluster to keep; otherwise `unstack`, which is D5's "no
+  majority cluster" case.
+- **A member with no usable `perceptual_hash` is reported separately**
+  (`unhashed_picture_ids`). It can carry no edge, so it would otherwise be
+  indistinguishable from a genuine stranger; "not yet comparable" is a
+  different fact from "does not belong".
+- **`member_edges` carries TWO numbers per member, and they must not be
+  collapsed.** `{picture_id, strongest_edge, closest_picture_id, nearest_edge,
+  nearest_picture_id}` per member, parallel to `member_ids`. `strongest_edge` is
+  **thresholded**: the best edge that survives at the row's threshold, so it is
+  `null` for a stranded member *by construction*, and that is what the stranded
+  decision is made on. `nearest_edge` is **unconditional**: how close the member
+  really gets to its closest sibling, whatever the threshold, so it is present
+  for a stranded member too. One decides membership of the list; the other is
+  always the truth. `nearest_edge >= strongest_edge` always, and equal whenever
+  the latter is not `null` (the closest pair is the first to survive any cut).
+  **Bind any visible number to `nearest_edge`.** Serving only the thresholded
+  one was a real bug: on the owner's library, of 65 members flagged as matching
+  nothing at 0.90, 12 had a sibling 85-90% similar and 61 had one at 50% or
+  better; the UI printed an en dash and the row said the picture matched
+  nothing. `nearest_edge` is `null` only when there is genuinely nothing to
+  compare against (this member is in `unhashed_picture_ids`, or no other member
+  is hashed), so a dash now means *not comparable*, never *unlike everything*.
+  Both are folded out of the same edge pass as `components`, in
+  `_fold_components`, so a page of rows costs the same number of statements as a
+  single row
+  (`tests/test_dedup_mixed_stacks.py::test_the_page_costs_the_same_number_of_queries_however_many_rows_it_has`
+  counts them).
+- **`why` reuses the duplicate queue's pill contract exactly.**
+  `build_mixed_stack_evidence` returns the same `[{text, against}]` list
+  `build_group_evidence` does and `WhyPillModel` serialises, so the shipped row
+  component renders it with no second code path; only the content differs. It
+  names the strangers **by how unlike the rest they measure**
+  (`1 picture is only 89% like the rest`, a range when they differ), the
+  component structure (`2 groups (2 + 1)`, the one fact a stranger count cannot
+  convey, since two clusters of three strand nobody), and the weakest surviving
+  edge (`Weakest match 97%`, or `No two pictures match`). **A stranger is never
+  described as matching nothing**: at a 6-bit cut a member 7 bits from its
+  neighbour is outside the cluster, not unlike everything, and the number is
+  what lets the user disagree with the cut instead of with the page.
+  **An unhashed member is subtracted from the stranger count and gets its own
+  non-`against` pill** (`1 picture not comparable yet`): `_fold_components`
+  necessarily lists it as stranded, and describing a picture nothing has
+  compared yet as unlike anything is the one false positive this feature cannot
+  afford. **When fewer than two members can be compared at all** the row's only
+  pill is `Nothing here can be compared yet`: every component is then an
+  artefact of the missing hashes, so reporting structure would dress an absence
+  of data up as a verdict.
+
+**The cache is the threshold-independent half.** `stackcohesion` stores the
+within-stack near-pair edge list: every pair at or below
+`MAX_CACHED_HAMMING = int((1 - MIN_THRESHOLD) * 64) = 22`, which is the widest
+distance that can be an edge at *any* admissible threshold. Folding components
+out of a cached edge list is microseconds, so a threshold change costs nothing.
+
+**That prune covers edges only.** "A pair further apart than 22 bits cannot be
+an edge at any admissible threshold, so dropping it loses nothing" is true of
+the question *is this pair an edge* and false of the question *how close does
+this member get to anything*, which is what the page has to answer about a
+member it is calling a stranger. `stackcohesion.nearest_edges` therefore records
+each member's closest sibling separately, `[[picture_id, closest_picture_id,
+hamming], ...]`, never thresholded and never pruned. It is one row per member
+beside an O(n^2) edge list, so the honest number survives at O(n) storage, and
+it is folded out of the same upper-triangle pass, so it costs no extra query.
+
+**Widening the derived row needs a cold start, in the migration.** Validity is
+presence (below), so a row written before a new field existed would be *trusted*
+and the page would serve a silently empty column, which is worse than a slow
+one. The migration that widens the row therefore clears the table and lets the
+finder refill it: `0093` does exactly that (`DELETE FROM stackcohesion`) for
+`nearest_edges`. The other half is enforced in tests: every row the writer
+produces covers every comparable member
+(`tests/test_dedup_mixed_stacks.py::test_every_cached_row_carries_a_closest_sibling_for_every_member`).
+
+**Two fingerprints, deliberately not one.** `content_fingerprint` records the
+stack's `(member id, perceptual hash)` pairs, every input the edges were derived
+from. `membership_fingerprint` (the `Keep` key) digests the member ids alone,
+because D5 is explicit that *adding a member* is what re-raises a kept stack.
+
+**Cache validity is event-driven.** SQLite triggers delete the derived row in
+the same transaction whenever `stack_id`, `deleted`, or `perceptual_hash`
+changes (and on picture insert/delete). Presence therefore means validity: a
+warm list folds stored edges without touching `picture`, while a changed stack
+is a cache miss and is recomputed from current rows. This is the mechanism that
+makes a threshold change a fold rather than a library rescan.
+
+`MissingStackCohesionFinder` / `StackCohesionTask` (`TaskType.STACK_COHESION`,
+registered with the `WorkPlanner`) are the **only writers** of that table, so a
+GET can never turn into a writer. The finder's former `IMAGE_EMBEDDING`
+dependency was deliberately removed: an unhashed member is cached and reported as not
+comparable, and the trigger drops that row when its hash arrives. The list
+endpoint recomputes missing rows **inline and batched**, so a cold cache costs
+one request's arithmetic, never a wrong answer; the worker then warms later
+requests without being starved behind an import backlog.
+
+**The `Keep` dismissal** (`mixedstackdismissal`) is keyed on stack id **plus**
+the same membership fingerprint, so adding a member later produces a fingerprint
+no row matches and the stack is raised again: the user approved *those*
+pictures, not the stack forever. Rows are unique per `(stack_id, fingerprint)`
+and kept per fingerprint rather than overwritten, so undoing a membership change
+restores a dismissal the user already made instead of asking twice. `DELETE` on
+the same path clears *every* fingerprint: a Keep the user has explicitly
+retracted must not come back on its own. Both tables carry an
+`ON DELETE CASCADE` FK to `picturestack`, so neither outlives the stack it
+describes.
+
+**Split and unstack are each one operation.** They share `_apply_removal`, which
+snapshots `expand_picture_ids_to_stacks(..., include_deleted=True)` before,
+mutates, `normalize_stack_positions`, `delete_emptied_stacks`, snapshots after,
+and records one row (`dedup.split_stack` / `dedup.unstack`) under one batch id,
+so a single `Ctrl+Z` restores every picture's `stack_id` *and* `stack_position`,
+and `_apply_stack`'s recreate branch brings a dissolved `PictureStack` back under
+its original id. No post-restore hook is needed: unlike a verdict, there is no
+decision state living outside the picture rows. **A split that would leave a
+stack of one dissolves it instead**: the same rule
+`DELETE /stacks/{stack_id}/members` already applies, since a one-picture stack is
+a state the grid cannot render honestly, and the response says
+`stack_dissolved` rather than letting the client infer it. Both emit the standard
+`pictures_changed` announcement, and both read `actor`/`source`/
+`origin_client_id` from `request_context` in the handler (§21 origin discipline).
+
+**A locked picture set refuses the whole stack, and that is one rule across
+three routes.** `set_lock_service.enforce_stack_detach_not_locked` is the single
+implementation, called by `_apply_removal` (both mixed-stack actions) and by
+`DELETE /stacks/{stack_id}/members`. It raises the ordinary `423`
+`pictures_locked` detail. Two things make it mandatory rather than tidy:
+
+* **Leaving a stack is the dangerous direction, and it was the unguarded one.**
+  `enforce_stack_membership_not_locked` has always refused a picture *joining* a
+  stack a locked set touches, because stacks reconcile to the union of their
+  members' sets. Nothing refused a picture *leaving*.
+* **It escalates into a lock escape.** Every picture-level guard runs on the
+  stack-expanded id list, so a locked set freezes a stack's siblings *through*
+  the stack. Detach them and the freeze is simply gone: `DELETE /pictures/{id}`
+  answered `423`, `POST .../unstack` returned `200`, and the same delete then
+  returned `200`. Two calls turned a hard freeze into a soft delete.
+
+The refusal covers the **whole stack**, never the frozen member alone, matching
+`docs/design/keep-cover-only.md` ("Locked sets refuse the whole stack") and
+`keep_cover_only_service`, and it counts **soft-deleted members** because all
+three routes detach the stack's scrapheaped rows when the stack dissolves. Rows
+of `GET /dedup/mixed-stacks` carry `stackable` / `blocked_by_sets` (the same pair
+`GET /dedup/stacks/{stack_id}/members` reports, rolled up over the stack) so the
+client can disable the action with a reason instead of issuing it into a `423`.
+That prediction comes from `locked_sets_freezing_stacks`, which shares
+`_stack_member_ids` with the guard on purpose: computing the row from *live*
+members while the guard reads *all* member rows would make a row say
+`stackable: true` about a stack whose only frozen member is scrapheaped, which is
+a promise the server would then break. `GET /dedup/stacks/{stack_id}/members` was
+that broken promise until 2026-08-01: it rolled its unit-level `stackable` up
+from the live member ids it already held, so the scrapheaped case read `true`
+there, `false` on the mixed-stacks row and `423` from the server. It now calls
+`locked_sets_freezing_stacks` like the row does. **Any new read that predicts a
+detach calls that helper**; deriving the answer from a member list the caller
+happens to hold is exactly how the three surfaces drifted.
+
+**The detach rule and the picture-level rule deliberately differ on one state,
+and that is a decision, not drift** (owner call, 2026-08-01). For a stack whose
+only locked-set member is soft-deleted:
+
+* **Picture level: the live siblings are NOT frozen.** `DELETE
+  /pictures/{sibling}` is a `200`, its tags are editable, and the finders still
+  select it. Both `expand_picture_ids_to_stacks` and the stack-derived arm of
+  `locked_picture_id_subquery` drop deleted co-members, so no freeze reaches
+  them. Widening that to match the stack rule would freeze live pictures nothing
+  has frozen, an over-block on every label path in the vault, so it stays.
+* **Stack level: the stack still refuses to be broken up.** The scrapheaped row
+  is itself a member of the locked set, and every detach route dissolves the
+  stack rather than leave a stack of one, taking the scrapheaped rows with it.
+  Detaching it is a *deferred* escape: restore it afterwards and it comes back
+  loose, so the freeze it would have projected over its siblings never returns.
+
+The two answer different questions ("is this picture's label data frozen?"
+versus "may this stack be broken up?"), so the three stack surfaces agree with
+each other and the label surfaces agree with each other. Narrowing the stack
+guard to just the frozen row was considered and rejected: every unstack
+dissolves, so it would change nothing a client can reach except a partial split
+on a stack with three or more live members, while the single per-stack
+`stackable` flag would still have to report `false`, i.e. the read surface would
+start deliberately under-promising to buy an outcome no UI can offer.
+
+Both directions are pinned in `tests/test_picture_set_locking.py` (all three
+routes refused, an unlocked stack still detaches, the two-call escape chain
+proved to break on step one, and the scrapheaped arm asserted alongside the live
+sibling's `200`) and `tests/test_dedup_mixed_stacks.py` (both read surfaces on
+the scrapheaped stack, plus the unlocked twin). Those tests seed
+`PictureSetMember` **directly**: `POST /picture_sets/{id}/members/{picture_id}`
+is stack-atomic, so seeding through it makes every sibling a member and the test
+can no longer tell a whole-stack guard from a per-named-id one.
+
+**`split` splits the members the user marked, bounded by live membership of the
+stack in the path** (widened 2026-08-02). Every id in an explicit `picture_ids`
+must be a live member of that stack; a picture in another stack or in none is a
+`400`, and so is a soft-deleted member, which is refused with a message naming
+the Scrapheap rather than claiming the id is not a member. Omit `picture_ids`
+and the stranded set at `threshold` is used, which is the row's opening marking.
+
+This deliberately **reverses security-review finding F7** (2026-08-01), which
+had required the explicit list to be a subset of the stranded set at
+`threshold`. F7's reasoning was that an arbitrary list "would let it break up a
+cohesive stack this page would never list" — a defence of the endpoint's name
+rather than of the user's data. The Mixed stacks page is being rebuilt so the
+user marks which members are strangers, starting from the engine's marks and
+adjusting them; once the user can mark, their marks are the input and
+"stranded" is only the opening position, so the subset bound would refuse the
+feature. The reviewer rated F7 LOW on the explicit ground that it "is not a
+privilege boundary: the route is `OWNER_ONLY` and
+`DELETE /stacks/{stack_id}/members` gives the same principal an unrestricted
+remove", so nothing here grants a capability the principal lacked. The
+locked-set `423` guard is unchanged and still refuses the whole stack before
+any id is examined, and `tests/test_dedup_mixed_stacks.py` pins the widened
+contract in both directions (a non-stranded live member is accepted **and
+actually leaves**; a foreign id, another stack's member, and a scrapheaped
+member are each refused with nothing written; the locked stack still answers
+`423` for a newly-legal id).
+
+All five routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline check
+(§16.1); the rationale and the both-direction test coverage are in
+`docs/authz-coverage-matrix.md`.
+
+### 22.12 Keep cover only: collapsing a stack to its cover
+
+`pixlstash/services/keep_cover_only_service.py`, routes in
+`pixlstash/routes/stacks.py`. No new table and no migration: the whole feature
+is a soft delete plus the existing metadata union. The design is
+`docs/design/keep-cover-only.md`, and where this doc and that one disagree, the
+design file wins.
+
+The dedup surface is deliberately additive and says so repeatedly (*"No picture
+is ever deleted"*, `Files deleted: 0`), so a user can triage thousands of groups
+and reclaim nothing. This is the one destructive action in the flow: each
+selected stack keeps its **current** cover and every other live member is
+soft-deleted to the Scrapheap.
+
+- **Soft delete only, and the same one the grid's `Delete` uses.**
+  `scrapheap_service` opens by stating there is deliberately **no second
+  permanent-destruction path**; this is not it. Nothing is removed from disk, no
+  reference-folder original is touched, and there is no `confirm_token` and no
+  type-to-confirm: those are reserved for destroying an on-disk original, and
+  spending them here would flatten the "recoverable" / "gone" distinction the
+  whole Scrapheap design rests on.
+- **The metadata union is mandatory and unconditional.**
+  `apply_metadata_union_in_session` is called from exactly one other place, the
+  dedup stack verdict, so stacks made by hand in the grid have **never** been
+  unioned: measured on the owner's library, **110 of 160 stacks** have a copy
+  carrying tags the cover lacks. It runs on every eligible stack **before any
+  soft delete**, and is idempotent where it already ran. Do not optimise it away
+  on the grounds that the queue does it; the queue is not the only way stacks
+  get made.
+- **The stack is not dissolved and no member is detached.** A soft-deleted
+  picture keeps its `stack_id`, which is what makes undo a flag flip and makes
+  `POST /pictures/scrapheap/restore` (which already clears `deleted_at` and
+  calls `normalize_stack_positions`) return a copy to its stack rather than to
+  loose. No "stack of 1" is rendered, because the grid's badge gates on *live*
+  members.
+- **Three whole-stack skips, never a partial collapse.** `set_locked`, any live
+  member frozen by a locked picture set refuses the **whole** stack, because
+  stack membership reconciles to the union of its members' sets, so removing one
+  member is exactly the mutation the lock forbids; a partial collapse would be
+  the worst outcome available. `character_only_on_copy`, the union refuses to
+  guess across several characters, which is right when *stacking* (nothing is
+  lost) but here would **destroy** a link whose only carrier leaves; the single
+  unambiguous character is propagated onto the cover as `pending_character_id`
+  and is therefore not a skip. `single_member`: fewer than two live members.
+  Siblings in the same request still proceed, matching the shipped bulk
+  soft-delete's skip-and-report behaviour. A defence-in-depth
+  `enforce_pictures_not_locked` runs over the eligible members before any write,
+  so a planner/lock-helper disagreement fails the call closed rather than
+  soft-deleting a frozen picture.
+- **One planner, two endpoints.** `plan_in_session` is the single source of
+  truth: `POST /stacks/keep-cover-only/preview` renders it and
+  `POST /stacks/keep-cover-only` acts on it, so the dialog's figures and the
+  button's effect cannot come from different queries. **The stack buckets are
+  disjoint and sum to `stacks_selected`** (eligible + locked +
+  character-on-copy + single-member); each is counted by appending to its own
+  list, **none is derived by subtraction**, and `preview_in_session` raises
+  rather than reporting figures that do not add up. This is the direct lesson of
+  the auto-stack dialog, which reported "62 stacks to create" for work that
+  would create 3 (§22.9). `unknown_stack_ids` sits *outside* the arithmetic
+  because those are not stacks.
+- **Bytes are held, never freed.** The preview reports `bytes_held_by_copies`,
+  deliberately **not** `bytes_freed`, because a soft delete frees nothing:
+  files stay until the Scrapheap is emptied, and `DEFAULT_RETENTION_DAYS` is
+  `None`, so on a default install it never empties on its own. The live
+  `scrapheap_retention_days` is served **alongside** it (`null` == "never") so
+  the client never hardcodes a window, and `originals_deleted_from_disk` is
+  stated out loud as `0`.
+- **One call, one operation, one `Ctrl+Z`.** However many stacks a request
+  names, the whole thing is a single `stack.keep_cover_only` row under one
+  `batch_id` (§21). The undo snapshot is stack-expanded with
+  `include_deleted=True`, because `normalize_stack_positions` renumbers every
+  member including the already-scrapheaped ones. The op type is
+  `stack.keep_cover_only`; `squash` is kept out of identifiers because in git it
+  means *merge without losing content*, which is the opposite of what this does.
+- **Announcements: two about the covers, and the load-bearing one is the stack.**
+  `removed` over the moved copies, and `updated` over the covers, each carrying
+  `origin_client_id` read from `request_context` in the handler (§21 origin
+  discipline). The two `change_kind`s are never merged: telling the grid a
+  scrapheaped picture was merely updated leaves a 404-clickable card behind.
+
+  The covers get **two** `updated` events, deliberately:
+
+  * one **unconditional** (gated only on something having moved) carrying
+    `fields: ["stack_count"]`. What always changes for a cover is its stack: it
+    led a stack of five and now leads nothing live, and a card renders that
+    number as its badge. This announcement was gated on
+    `tags_added or scores_lifted` until 2026-08-02, which tests the wrong
+    property; a collapse whose union found nothing new said nothing at all
+    about the cover, so every view went on drawing a stack of five around a
+    picture that was alone (the owner's report);
+  * one for the metadata union, with **no** `fields`, emitted only when the
+    union did something (plus `CHANGED_TAGS`). Kept separate because narrowing
+    it to `stack_count` would tell a client sorting by score that the change
+    cannot affect its order, which is false.
+
+  `stack_count` is the field name because it is the **derived, listing-only**
+  value the client re-reads: computed per stack over live members by
+  `_enrich_stack_counts` in the `fields=grid` projection and absent from
+  `GET /pictures/{id}/metadata`, so the SPA's per-card metadata refresh cannot
+  repair a badge. The SPA routes it to a targeted stack read of its own.
+
+  **The undo and the redo announce it back**, from `operation_log_service._emit`
+  (see §21.1): the surviving members carry no facet diff, so they are not in the
+  operation's picture list at all and are resolved separately as
+  `lifecycle["stack_siblings"]`.
+
+- **The request is bounded, and the bound is on the request.**
+  `MAX_SELECTION_IDS` (2000) is checked on the **raw** list length before
+  de-duplication, and `enforce_selection_budget` applies it to `stack_ids` plus
+  `picture_ids` **together**. Both halves were wrong when this shipped: the cap
+  sat on the de-duplicated set, so a body of two million repeats of one id passed
+  outright; and each list was capped separately, so one request legitimately
+  carried 4000. A cap that bounds the *outcome* of the work rather than the
+  request is not a cap. (What no check here can un-do is Pydantic having already
+  materialised the list while binding the request model; that is inherent to any
+  modelled body and belongs to the transport, not to this route.)
+- **`batch_id` is validated, never stored verbatim.**
+  `utils/request_origin.require_client_batch_id` is the single implementation of
+  the `cli-<4-76 safe chars>` contract, shared with the `/dedup/*` routes and
+  with the `X-Operation-Batch-Id` header (which *drops* a bad value, because a
+  header is ambient, where a deliberately-named body field is a `400`). This
+  route stored the client's string as given, so a caller could mint what reads as
+  a server `srv-…` batch, or graft its rows into an existing batch so one
+  `Ctrl+Z` reversed more than the user did. Any new route taking a body
+  `batch_id` calls that helper; a second local copy is how this one drifted.
+
+Both routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline scope check
+(§16.1); the rationale and the both-direction test coverage
+(`tests/test_keep_cover_only.py`) are in
+`docs/authz-coverage-matrix.md`.
+
+---
+
+## 23. Opt-in telemetry: the install ID and the consent flags (v1.9 Lane F)
+
+Nothing in this section transmits anything. It is the local half of the
+telemetry mechanism: storage, consent state, and the surface the UI reads.
+Ingestion and the payload builder are separate changes.
+
+### 23.1 Why an install ID exists at all
+
+Aggregate counts cannot distinguish an installation that **paused** from one that
+**churned**. That ambiguity has already cost a full review cycle: during the
+2026-06 window the North Star fell while the maintainer was away, part of the
+audience was away, and the demo was offline, and no available data could separate
+the three. Cohort retention needs a stable per-install identifier, and retention
+data is time-series and cannot be backfilled, which is why this slice ships
+ahead of the rest of the mechanism.
+
+### 23.2 The ID: `pixlstash/telemetry/install_id.py`
+
+A random UUIDv4 in `install-id.json`, stored **beside `server-config.json`**, not
+in the library database. Four properties are load-bearing; weakening any of them
+turns the file from a counter into a fingerprint:
+
+| Property | Why |
+|---|---|
+| Random, never derived | Never seeded from MAC, hostname, machine ID, or any hardware property. A derived ID *is* a fingerprint and will be read as one regardless of intent. |
+| Beside the server config, not in the DB | A snapshot restore, a library switch (Lane E), or a rebuilt vault must not change or duplicate the installation's identity. |
+| Coarse by construction | The record stores a creation **date**, never a timestamp, because a precise creation instant is close to unique on its own, so it is not written in the first place rather than trimmed at send time. |
+| Never transmitted from here | The module opens no socket. Sending is consent-gated and lands later. |
+
+`is_new_install` separates genuinely new installs from the upgrade wave. Every
+existing user who upgrades and opts in would otherwise carry a first-seen date of
+the upgrade, so their "week 1" would really be week 40 and week-1 retention would
+read absurdly high. The flag is decided **once**, when the ID is created, from
+whether the installation already had a server config. That is why
+`ensure_install_identity` is called in `Server.__init__` **before**
+`init_server_config`. Afterwards the config file always exists and the
+distinction is gone.
+
+**Failure behaviour is deliberate.** A corrupt, truncated, wrong-version, or
+non-UUID record is logged and regenerated rather than trusted. An *unwritable*
+store returns `None`, and the endpoint reports `available: false`: a
+non-persisted ID would be regenerated on every boot and would inflate the install
+count rather than measure it, so none is invented.
+
+**Recreate** overwrites the file with a fresh UUID; nothing on disk links the two.
+It always records `is_new_install=false`: the identity is new, the installation
+is not, and reporting otherwise would drop an established user into the
+new-install cohort, which is the exact bias the flag exists to remove.
+
+### 23.3 The consent flags
+
+Five booleans on `user`, added by migration `0094_add_telemetry_consent`, riding
+the existing `/users/me/config` GET/PATCH pair like every other user setting:
+
+| Column | Category |
+|---|---|
+| `telemetry_send_install_id` | Send the anonymous install ID with update checks |
+| `telemetry_send_feature_usage` | Send feature usage and outcomes |
+| `telemetry_send_error_reports` | Send error and crash reports |
+| `telemetry_send_hardware_profile` | Send hardware and environment profile |
+| `telemetry_consent_prompted` | The question has been asked |
+
+Every category is **off by default on every install and every deployment type**.
+The columns are added nullable, so rows that predate the migration read NULL and
+fall back to the model default of `False`. An upgrade therefore stays fully off,
+and `telemetry_consent_prompted` reads false, so the question is put to existing
+users exactly once.
+
+Two details that are easy to get wrong:
+
+- The patch ladder coerces `"false"`, `"0"`, `""`, and `"null"` to `False`. A
+  bare `bool()` would treat the *string* `"false"` as truthy and silently enable
+  a category for a client that sent form-encoded values.
+- `telemetry_consent_prompted` is what enforces "asked once, never nagged".
+  Declining is a recorded decision, not an unanswered prompt, so a user who
+  says no is never re-prompted.
+
+### 23.4 Routes
+
+Two routes in `pixlstash/routes/telemetry.py`, both `OWNER_ONLY` in
+`ROUTE_POLICIES` (§16.2):
+
+| Route | Policy | Why not `any_token` |
+|---|---|---|
+| `GET /api/v1/telemetry/install-id` | `owner_only` | The ID is a stable installation identifier; a share-link holder able to read it could correlate visits across links. |
+| `POST /api/v1/telemetry/install-id/recreate` | `owner_only` | Rotation is an owner action; POST is not in `READ_SAFE_POST_PATHS`, so READ tokens are blocked at the middleware too. |
+
+Both are covered in both directions by
+`tests/test_telemetry_install_id_authz.py` (out-of-scope 403 **and** in-scope
+200), per the §16 discipline.
+
+---
+
+*Last updated: 2026-08-02. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes
-

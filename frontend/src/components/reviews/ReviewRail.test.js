@@ -13,6 +13,8 @@ import { mount } from "@vue/test-utils";
 import { nextTick, h } from "vue";
 
 vi.mock("../../utils/apiClient", () => ({
+  onSessionReset: () => () => {},
+  sessionContext: { value: null },
   apiClient: {
     get: vi.fn().mockResolvedValue({ data: [] }),
     post: vi.fn().mockResolvedValue({ data: {} }),

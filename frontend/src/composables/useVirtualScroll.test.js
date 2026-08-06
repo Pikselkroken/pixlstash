@@ -1,6 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ref, reactive, computed, nextTick } from "vue";
+import { setActivePinia, createPinia } from "pinia";
+import { useGridStore } from "../stores/useGridStore.js";
 import { useVirtualScroll } from "./useVirtualScroll.js";
+
+// The composable reads the grid geometry (columns, size level, thumbnail mode
+// and size, compact mode) from the grid store.
+beforeEach(() => {
+  setActivePinia(createPinia());
+});
 
 // Justified mode packs its rows from the aspect ratios of the images that have
 // actually arrived, so `justifiedLayout` is null before the first batch and
@@ -23,13 +31,14 @@ function makeHarness() {
     clientWidth: CONTAINER_W,
     getBoundingClientRect: () => ({ width: CONTAINER_W }),
   });
-  const props = reactive({
-    columns: 6,
-    thumbnailSize: 256,
-    compactMode: false,
-    thumbnailMode: "justified",
-    sizeLevel: 3,
-  });
+  // Grid geometry lives in the store. Size level 3 is the 6-column step, which
+  // is the geometry these layout cases are written against.
+  const gridStore = useGridStore();
+  gridStore.sizeLevel = 3;
+  gridStore.thumbnailSize = 256;
+  gridStore.compactMode = false;
+  gridStore.thumbnailMode = "justified";
+  const props = reactive({});
   // The image list starts empty, exactly as it is when ImageGrid mounts.
   const aspectRatios = ref([]);
   const allGridImagesLength = computed(() => aspectRatios.value.length);
@@ -100,5 +109,72 @@ describe("useVirtualScroll justified layout", () => {
       vs.visibleEnd.value,
     );
     expect(autoEnd).not.toBe(squareEnd);
+  });
+});
+
+// The grid geometry now comes from the store rather than from props, and the
+// arithmetic that turns it into a render window is silent when it goes wrong:
+// an undefined column count makes every bound NaN, `renderEnd` collapses, and
+// the grid paints nothing at all. That is not a hypothetical - it is what the
+// Phase 3 store-direct migration did to ImageGrid, with the whole unit suite
+// still green, because nothing here asserted that a non-empty list produces a
+// non-empty window.
+describe("useVirtualScroll render window (square mode)", () => {
+  function squareHarness(itemCount) {
+    const gridStore = useGridStore();
+    gridStore.sizeLevel = 3; // the 6-column step
+    gridStore.thumbnailMode = "square";
+    gridStore.thumbnailSize = 256;
+    gridStore.compactMode = false;
+
+    const scrollWrapper = ref({
+      scrollTop: 0,
+      clientHeight: VIEWPORT_H,
+      clientWidth: CONTAINER_W,
+    });
+    const gridContainer = ref({
+      clientWidth: CONTAINER_W,
+      getBoundingClientRect: () => ({ width: CONTAINER_W }),
+    });
+    const length = computed(() => itemCount);
+    return useVirtualScroll(
+      scrollWrapper,
+      gridContainer,
+      reactive({}),
+      length,
+      {
+        onVisibleRangeChange: vi.fn(),
+        afterRowHeightUpdate: vi.fn(),
+        getAspectRatios: () => [],
+      },
+    );
+  }
+
+  it("renders a non-empty window for a non-empty grid", () => {
+    const vs = squareHarness(120);
+    vs.visibleStart.value = 0;
+    vs.visibleEnd.value = 24;
+
+    expect(Number.isFinite(vs.renderStart.value)).toBe(true);
+    expect(Number.isFinite(vs.renderEnd.value)).toBe(true);
+    expect(vs.renderEnd.value).toBeGreaterThan(0);
+    expect(vs.renderEnd.value).toBeGreaterThan(vs.renderStart.value);
+  });
+
+  it("keeps the spacers finite, so the scroll height is never NaN", () => {
+    const vs = squareHarness(120);
+    vs.visibleStart.value = 24;
+    vs.visibleEnd.value = 48;
+
+    expect(Number.isFinite(vs.topSpacerHeight.value)).toBe(true);
+    expect(Number.isFinite(vs.bottomSpacerHeight.value)).toBe(true);
+  });
+
+  it("still yields an empty window for an empty grid", () => {
+    const vs = squareHarness(0);
+    vs.visibleStart.value = 0;
+    vs.visibleEnd.value = 0;
+
+    expect(vs.renderEnd.value).toBe(0);
   });
 });

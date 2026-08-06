@@ -556,6 +556,15 @@ def find_comfy_workflow(metadata: dict) -> dict | None:
     - ``metadata["comfyui_workflow"]``
     - ``metadata["comfyui"]["workflow"]``
     - ``metadata["comfyui"]["workflow_json"]``
+    - ``metadata["png"]["prompt"]`` / ``metadata["prompt"]`` /
+      ``metadata["comfyui"]["prompt"]`` (display fallback)
+
+    The ``prompt``-chunk candidates come last so a genuine UI ``workflow``
+    chunk always wins. They exist because PixlStash-generated PNGs no longer
+    embed anything in the ``workflow`` chunk (issue #628); ComfyUI's own
+    ``prompt`` chunk (the executed API graph) is then the only thing left to
+    display. A plain-text ``prompt`` value from other tools is filtered out by
+    :func:`is_comfy_workflow`.
 
     Returns:
         The first valid workflow dict, or ``None`` if none is found.
@@ -576,6 +585,11 @@ def find_comfy_workflow(metadata: dict) -> dict | None:
         metadata.get("comfyui_workflow"),
         comfyui_block.get("workflow"),
         comfyui_block.get("workflow_json"),
+        # Lowest priority: the API-format ``prompt`` chunk, for files with no
+        # UI workflow chunk at all (e.g. PixlStash-generated PNGs, issue #628).
+        png.get("prompt"),
+        metadata.get("prompt"),
+        comfyui_block.get("prompt"),
     ]
 
     for raw in candidates:
@@ -584,6 +598,121 @@ def find_comfy_workflow(metadata: dict) -> dict | None:
             return candidate
 
     return None
+
+
+def is_api_format(workflow: dict) -> bool:
+    """Return True if *workflow* is the API/headless format, not the UI graph.
+
+    The UI graph carries ``nodes`` / ``links`` arrays (or the ``last_node_id`` /
+    ``last_link_id`` hints); the API format is a flat ``{node_id: {class_type,
+    inputs}}`` dict. Only the latter is submittable to ``POST /prompt``.
+    """
+    if not isinstance(workflow, dict):
+        return False
+    return not (
+        isinstance(workflow.get("nodes"), list)
+        or isinstance(workflow.get("links"), list)
+        or isinstance(workflow.get("last_node_id"), int)
+        or isinstance(workflow.get("last_link_id"), int)
+    )
+
+
+def find_comfy_api_prompt(metadata: dict) -> dict | None:
+    """Return the embedded ComfyUI **API-format** ``prompt`` graph, or ``None``.
+
+    This is deliberately NOT :func:`find_comfy_workflow`. ComfyUI embeds two
+    different things in a generated PNG:
+
+    - the ``workflow`` chunk — the *UI* node graph, for reopening in the editor.
+      It is **not submittable** to ``POST /prompt``.
+    - the ``prompt`` chunk — the *resolved API graph the server actually
+      executed*. This is the only executable one.
+
+    Only the ``prompt`` chunk is considered here, and it must additionally pass
+    :func:`is_api_format`. There is deliberately **no fallback to the UI graph
+    and no UI→API conversion**: converting requires re-resolving widget values,
+    links, muted/bypassed nodes and subgraphs exactly as the ComfyUI frontend
+    does, and a near-miss produces a graph that runs and silently generates
+    something else. Absent an executable ``prompt`` chunk the honest answer is
+    "no executable workflow embedded".
+
+    Args:
+        metadata: Raw embedded metadata as returned by
+            ``ImageUtils.extract_embedded_metadata`` — PNG text chunks live
+            under ``metadata["png"]``.
+
+    Returns:
+        The API-format graph dict, or ``None`` when the file carries no
+        executable prompt (UI-graph-only, A1111, or stripped metadata).
+    """
+    if not metadata:
+        return None
+
+    png = metadata.get("png") or {}
+    if not isinstance(png, dict):
+        png = _workflow_candidate(png) or {}
+
+    comfyui_block = metadata.get("comfyui") or {}
+    if not isinstance(comfyui_block, dict):
+        comfyui_block = _workflow_candidate(comfyui_block) or {}
+
+    candidates = [
+        png.get("prompt"),
+        metadata.get("prompt"),
+        comfyui_block.get("prompt"),
+    ]
+
+    for raw in candidates:
+        candidate = _workflow_candidate(raw)
+        if not candidate or not is_comfy_workflow(candidate):
+            continue
+        if not is_api_format(candidate):
+            # A UI graph stored under the "prompt" key. Not submittable.
+            logger.debug(
+                "Ignoring embedded 'prompt' chunk: it holds a UI graph, not an "
+                "API-format prompt."
+            )
+            continue
+        return candidate
+
+    return None
+
+
+def collect_seed_inputs(workflow: dict) -> list[dict]:
+    """List the patchable seed inputs in an API-format *workflow*.
+
+    Used to tell the user, before they submit, whether "new seed" will actually
+    change anything for this graph.
+
+    Returns:
+        A list of ``{"node_id", "class_type", "field", "value"}`` dicts, one per
+        known seed input carrying a numeric value.
+    """
+    found: list[dict] = []
+    if not isinstance(workflow, dict):
+        return found
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        if class_type not in _SEED_CLASSES:
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        for field in _SEED_FIELDS:
+            value = inputs.get(field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            found.append(
+                {
+                    "node_id": str(node_id),
+                    "class_type": class_type,
+                    "field": field,
+                    "value": int(value),
+                }
+            )
+    return found
 
 
 def summarize_comfy_workflow(workflow: dict) -> dict:
@@ -655,15 +784,10 @@ def extract_comfy_workflow_info(metadata: dict) -> dict | None:
     if not workflow:
         return None
 
-    is_api_format = not (
-        isinstance(workflow.get("nodes"), list)
-        or isinstance(workflow.get("links"), list)
-        or isinstance(workflow.get("last_node_id"), int)
-        or isinstance(workflow.get("last_link_id"), int)
-    )
+    api_format = is_api_format(workflow)
 
     stats = summarize_comfy_workflow(workflow)
-    fmt = "API Workflow" if is_api_format else "Workflow"
+    fmt = "API Workflow" if api_format else "Workflow"
     summary_parts = [f"{fmt} · {stats['node_count']} nodes"]
     if stats["link_count"] is not None:
         summary_parts.append(f"{stats['link_count']} links")
@@ -673,7 +797,7 @@ def extract_comfy_workflow_info(metadata: dict) -> dict | None:
 
     return {
         "workflow": workflow,
-        "is_api_format": is_api_format,
+        "is_api_format": api_format,
         "summary": summary,
         "models": gen_info["models"],
         "loras": gen_info["loras"],

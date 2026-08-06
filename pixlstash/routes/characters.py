@@ -19,16 +19,19 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import FileResponse
 from PIL import Image
-from pydantic import BaseModel, ConfigDict
-from sqlalchemy import case as sa_case, exists, func
+from pydantic import BaseModel, ConfigDict, Field as PydanticField
+from sqlalchemy import exists, func
 from sqlmodel import Session, select
 
-from pixlstash.authz.membership import enforce_character_scope
+from pixlstash.authz.membership import (
+    enforce_character_scope,
+    enforce_project_path_scope,
+)
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
+    CharacterProjectMember,
     Face,
     Picture,
     PictureProjectMember,
@@ -36,14 +39,24 @@ from pixlstash.db_models import (
     PictureSet,
     PictureSetMember,
     Tag,
+    character_in_no_project,
+    character_in_project,
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.project_membership_service import (
-    reconcile_entity_project_change,
+    character_project_ids,
+    reconcile_entity_projects_change,
+    set_character_projects,
 )
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.routes.pictures import FaceListResponse
+from pixlstash.utils.field_allowlist import (
+    CHARACTER_EXTRA_SERVABLE_FIELDS,
+    require_servable_field,
+)
+from pixlstash.utils.http_cache import conditional_file_response
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.picture_scoring import (
@@ -54,7 +67,10 @@ from pixlstash.utils.service.filter_helpers import (
     combine_likeness_scores,
     fetch_scope_allowed_character_ids,
     fetch_scope_allowed_picture_ids,
+    filter_visible_project_ids,
+    narrow_project_fields,
     VALID_COMBINE_MODES,
+    visible_project_ids,
 )
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.serialization_utils import safe_model_dict
@@ -68,6 +84,72 @@ _LIKENESS_SEARCH_MAX_TOP_N = 500
 _LIKENESS_SEARCH_MAX_POOL_M = 2000
 # Maximum reference faces loaded per character for query-time likeness scoring.
 _MAX_REFS_PER_CHARACTER = 10
+
+
+def _may_learn_a_project_scoped_count(visible_projects: set[int] | None) -> bool:
+    """Whether a project-scoped aggregate may be serialised to this caller.
+
+    This is the exact complement of the refusal that guards a caller-supplied
+    ``project_id`` filter: a token may name a project scope (an id, or the
+    ``UNASSIGNED`` sentinel) precisely when it has some project visibility, and
+    :func:`visible_project_ids` returns ``None`` for the owner and a non-empty
+    set for a project-scoped token. Writing the outbound rule as the complement
+    of the inbound one is what makes the list endpoint and
+    ``GET /characters/{id}/summary`` agree BY CONSTRUCTION: no number is
+    serialised here that the caller could not have asked that endpoint for
+    directly, so neither can drift into being the more generous of the two.
+
+    The suppression has to key off the *token*, not off whether a particular row
+    turned out to have hidden memberships. A per-row rule would answer for the
+    genuinely unassigned character and stay silent for the one filed under an
+    invisible project, and the presence of an answer would then be the oracle
+    the suppression exists to remove (issue #718).
+
+    Args:
+        visible_projects: The result of :func:`visible_project_ids`: ``None``
+            for an owner / unscoped token, otherwise the project ids the token
+            may learn about.
+
+    Returns:
+        ``True`` for an owner or a project-scoped token; ``False`` for a
+        character-, picture_set- or picture-scoped token, which has no project
+        visibility at all.
+    """
+    return visible_projects is None or bool(visible_projects)
+
+
+def characters_with_reference_faces_query():
+    """Select every character id that has at least one embedded face.
+
+    Deliberately NOT narrowed to the characters being listed, with the
+    intersection done in Python instead. Narrowing makes the predicate
+    ``character_id = ?``, which BOTH ``ix_face_character_id`` and the partial
+    ``ix_face_character_features`` can serve. Nothing here runs ``ANALYZE``, so
+    with no ``sqlite_stat1`` the two tie and SQLite breaks the tie on index
+    creation order, which ``create_all`` iterates from a *set*: roughly half of
+    all databases got the plain index, which cannot answer ``features IS NOT
+    NULL`` from the index and so read every candidate face row, embedding BLOB
+    and all. Measured on 200k faces, per sidebar refresh: 4.0 ms on the partial
+    index against 180.7 ms on the plain one.
+
+    As a one-pass rollup the partial index is strictly the smaller object and is
+    chosen unconditionally. It is also index-only, and the result is bounded by
+    the number of characters rather than the number of faces.
+
+    Extracted so the query-plan test asserts on the statement this endpoint
+    actually issues. An earlier revision asserted a hand-written query that no
+    production code ran, which let the index look useful while the real endpoint
+    quietly used the other one.
+
+    Returns:
+        A SQLModel ``select`` yielding one ``character_id`` per character that
+        has an embedded face. Characters with no faces are simply absent.
+    """
+    return (
+        select(Face.character_id)
+        .where(Face.features.is_not(None))
+        .group_by(Face.character_id)
+    )
 
 
 def _fetch_character_candidate_embeddings(
@@ -157,8 +239,22 @@ class CharacterResponse(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     extra_metadata: Optional[str] = None
+    project_id: Optional[int] = PydanticField(
+        default=None,
+        description=(
+            "The character's primary project — the lowest id in ``project_ids``, "
+            "or null when it belongs to no project. Kept for backwards "
+            "compatibility; prefer ``project_ids``, which lists every project."
+        ),
+    )
+    project_ids: list[int] = PydanticField(
+        default_factory=list,
+        description=(
+            "Every project this character belongs to, lowest id first. A character "
+            "may be shared across several projects."
+        ),
+    )
     reference_picture_set_id: Optional[int] = None
-    project_id: Optional[int] = None
 
 
 class CharacterListItemResponse(BaseModel):
@@ -170,9 +266,52 @@ class CharacterListItemResponse(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     extra_metadata: Optional[str] = None
+    project_id: Optional[int] = PydanticField(
+        default=None,
+        description=(
+            "The character's primary project — the lowest id in ``project_ids``, "
+            "or null when it belongs to no project. Kept for backwards "
+            "compatibility; prefer ``project_ids``, which lists every project."
+        ),
+    )
+    project_ids: list[int] = PydanticField(
+        default_factory=list,
+        description=(
+            "Every project this character belongs to, lowest id first. A character "
+            "may be shared across several projects."
+        ),
+    )
     reference_picture_set_id: Optional[int] = None
-    project_id: Optional[int] = None
     has_reference_faces: bool = False
+    image_count: Optional[int] = PydanticField(
+        default=None,
+        description=(
+            "Number of non-deleted pictures with at least one face assigned to "
+            "this character, across the whole vault. Populated only when the "
+            "request passes ``include_counts=true``; ``null`` otherwise. Same "
+            "number as ``GET /characters/{id}/summary`` returns with no "
+            "``project_id``, so the sidebar can render its counts from this one "
+            "list response instead of one request per character (issue #651). "
+            "Hidden tags are NOT applied: this count has no ``apply_tag_filter`` "
+            "equivalent, so it matches that endpoint called without one. Use the "
+            "per-id summary if you need a hidden-tag-filtered number."
+        ),
+    )
+    project_image_count: Optional[int] = PydanticField(
+        default=None,
+        description=(
+            "The same count as ``image_count``, narrowed to the project named by "
+            "this row's ``project_id`` — or, when ``project_id`` is ``null``, to "
+            "pictures that belong to no project at all. Populated only when the "
+            "request passes ``include_counts=true``; ``null`` otherwise. Same "
+            "number as ``GET /characters/{id}/summary?project_id=<project_id>`` "
+            "(or ``project_id=UNASSIGNED``) returns, again without any "
+            "hidden-tag filtering. Also ``null`` for a credential with no "
+            "project visibility at all (a character-, set- or picture-scoped "
+            "token), which may name no project scope on that endpoint either; "
+            "such a caller reads ``image_count`` and renders no project view."
+        ),
+    )
 
 
 class CharacterSummaryResponse(BaseModel):
@@ -233,17 +372,28 @@ def create_router(server) -> APIRouter:
     router = APIRouter()
 
     def _ensure_unique_character_name(
-        session, name: str, project_id, exclude_char_id=None
+        session, name: str, project_ids, exclude_char_id=None
     ):
         """Raises 409 if a character with the same name (case-insensitive)
-        already exists in the given project.  Unscoped characters
-        (project_id None) are exempt.
+        already exists in **any** of the given projects.  Unscoped characters
+        (no projects) are exempt.
+
+        Since issue #125 a character can be in several projects at once, so the
+        clash check spans every project it is joining, not just its primary one.
         """
-        if project_id is None:
+        wanted = sorted({int(pid) for pid in (project_ids or []) if pid is not None})
+        if not wanted:
             return
-        stmt = select(Character).where(
-            Character.project_id == project_id,
-            func.lower(Character.name) == name.lower(),
+        stmt = (
+            select(Character.id)
+            .join(
+                CharacterProjectMember,
+                CharacterProjectMember.character_id == Character.id,
+            )
+            .where(
+                CharacterProjectMember.project_id.in_(wanted),
+                func.lower(Character.name) == name.lower(),
+            )
         )
         if exclude_char_id is not None:
             stmt = stmt.where(Character.id != exclude_char_id)
@@ -252,6 +402,51 @@ def create_router(server) -> APIRouter:
                 status_code=409,
                 detail=f"A character named '{name}' already exists in this project.",
             )
+
+    def _resolve_target_project_ids(data: dict, current: list[int] | None):
+        """Resolve the requested project membership set from a request payload.
+
+        Accepts the multi-project ``project_ids`` list (issue #125) and the legacy
+        single ``project_id`` scalar, in that precedence order.
+
+        Args:
+            data: The parsed request body.
+            current: The entity's existing project ids, returned unchanged when
+                the payload mentions neither key. ``None`` for a create.
+
+        Returns:
+            ``(target_project_ids, provided)`` — the full target membership set,
+            and whether the payload asked for a project change at all.
+
+        Raises:
+            HTTPException: ``400`` when either key is not an integer / list of
+                integers.
+        """
+        if "project_ids" in data:
+            raw_ids = data.get("project_ids")
+            if raw_ids is None:
+                return [], True
+            if not isinstance(raw_ids, (list, tuple, set)):
+                raise HTTPException(
+                    status_code=400, detail="project_ids must be a list"
+                )
+            try:
+                return sorted({int(v) for v in raw_ids if v is not None}), True
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400, detail="Invalid project_id"
+                ) from exc
+        if "project_id" in data:
+            raw = data.get("project_id")
+            if raw is None:
+                return [], True
+            try:
+                return [int(raw)], True
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400, detail="Invalid project_id"
+                ) from exc
+        return (list(current) if current is not None else []), False
 
     def _project_membership_exists(project_id_value: int):
         return exists(
@@ -267,6 +462,165 @@ def create_router(server) -> APIRouter:
                 PictureProjectMember.picture_id == Picture.id
             )
         )
+
+    def _character_picture_counts(
+        session: Session,
+        char_ids: list[int],
+        extra_conditions=None,
+        join_character: bool = False,
+    ) -> dict[int, int]:
+        """Count each character's visible pictures in ONE grouped query.
+
+        The per-row shape is exactly the assigned-character branch of
+        ``GET /characters/{id}/summary``: ``count(distinct Face.picture_id)``
+        over ``Face`` joined to a non-deleted ``Picture``. The only difference
+        is that the character id is an ``IN`` list plus a ``GROUP BY`` instead
+        of an equality, so N characters cost one query rather than N.
+
+        One deliberate exception to that parity: the hidden-tag filter. The
+        per-id endpoint applies it when the caller passes ``apply_tag_filter``,
+        and this path has no equivalent parameter, so the numbers here always
+        match that endpoint called WITHOUT one. That is what the only caller
+        needs (the sidebar has never passed it), but it does mean these counts
+        and a tag-filtered summary can legitimately disagree.
+
+        Args:
+            session: Open read session.
+            char_ids: The character ids to count for. Always the ids the list
+                endpoint's own scope filtering already returned, never a
+                widened set.
+            extra_conditions: Extra WHERE clauses, e.g. a project-membership
+                predicate.
+            join_character: Join ``Character`` so a condition may correlate on
+                ``Character.project_id``.
+
+        Returns:
+            ``{character_id: count}``. A character with no matching picture is
+            absent, so callers default it to 0.
+        """
+        if not char_ids:
+            return {}
+        query = (
+            select(Face.character_id, func.count(func.distinct(Face.picture_id)))
+            .select_from(Face)
+            .join(Picture, Face.picture_id == Picture.id)
+        )
+        if join_character:
+            query = query.join(Character, Character.id == Face.character_id)
+        query = query.where(
+            Face.character_id.in_(char_ids),
+            Picture.deleted.is_(False),
+            *(extra_conditions or []),
+        ).group_by(Face.character_id)
+        return {
+            int(char_id): int(count)
+            for char_id, count in session.exec(query).all()
+            if char_id is not None
+        }
+
+    def _inline_character_counts(
+        session: Session,
+        characters,
+        narrowed_by_char: dict[int, list[int]],
+        visible_projects: set[int] | None,
+    ) -> tuple[dict[int, int], dict[int, int] | None]:
+        """Global and primary-project picture counts for every listed character.
+
+        Serves the sidebar's counts from the list response so it no longer
+        fires one ``GET /characters/{id}/summary`` per character on every
+        refresh (issue #651). The sidebar asks each character for the scope of
+        its OWN primary project, so both numbers are independent of the
+        selected project and one cached list response serves both view modes.
+
+        ``project_image_count`` is computed against the project this response
+        actually reports in ``project_id`` — the *narrowed* primary project,
+        not the raw ``Character.project_id`` column, since
+        :func:`narrow_project_fields` hides project ids a scoped token may not
+        learn (issue #125 / R1b). That keeps the two fields self-consistent for
+        every caller and never scopes a count to a project the caller cannot
+        see.
+
+        A caller with no project visibility at all gets no project-scoped
+        number: see :func:`_may_learn_a_project_scoped_count`. Narrowing alone
+        was not enough there, because an empty narrowed list dropped the row
+        into the "in no project whatsoever" bucket, whose ``NOT EXISTS``
+        predicate answers a question about projects the caller cannot see
+        (issue #718).
+
+        Cost is a constant 1-3 queries regardless of how many characters are
+        listed: one global, plus at most one per distinct *narrowed* primary
+        project. The owner case correlates on ``Character.project_id`` inside
+        SQL, so its many distinct primary projects still cost a single query;
+        a scoped token's narrowed ids are a subset of
+        :func:`visible_project_ids`, which holds at most one project.
+
+        Args:
+            session: Open read session.
+            characters: The ``Character`` rows the endpoint is returning.
+            narrowed_by_char: Each character's scope-narrowed project ids.
+            visible_projects: The result of :func:`visible_project_ids` for this
+                request.
+
+        Returns:
+            ``(global_counts, project_counts)``. ``global_counts`` is always
+            ``{character_id: count}``. ``project_counts`` is the same shape, or
+            ``None`` when the caller may learn no project-scoped number at all,
+            which the serialiser renders as ``project_image_count: null``.
+        """
+        char_ids = [int(c.id) for c in characters if c.id is not None]
+        if not char_ids:
+            return {}, {}
+
+        global_counts = _character_picture_counts(session, char_ids)
+        if not _may_learn_a_project_scoped_count(visible_projects):
+            # No project visibility: skip the bucketing entirely, so there is no
+            # project-derived aggregate to serialise and one fewer query to run.
+            return global_counts, None
+
+        # Bucket by the project each row reports, so every bucket is one query.
+        correlated_ids: list[int] = []  # narrowed primary == Character.project_id
+        unassigned_ids: list[int] = []  # no visible project at all
+        by_project_ids: dict[int, list[int]] = {}  # narrowed primary != the column
+        for character in characters:
+            if character.id is None:
+                continue
+            char_id = int(character.id)
+            narrowed = narrowed_by_char.get(char_id) or []
+            effective_project_id = narrowed[0] if narrowed else None
+            if effective_project_id is None:
+                unassigned_ids.append(char_id)
+            elif effective_project_id == character.project_id:
+                correlated_ids.append(char_id)
+            else:
+                by_project_ids.setdefault(int(effective_project_id), []).append(char_id)
+
+        project_counts: dict[int, int] = {}
+        if correlated_ids:
+            project_counts.update(
+                _character_picture_counts(
+                    session,
+                    correlated_ids,
+                    [_project_membership_exists(Character.project_id)],
+                    join_character=True,
+                )
+            )
+        if unassigned_ids:
+            project_counts.update(
+                _character_picture_counts(
+                    session,
+                    unassigned_ids,
+                    [_project_unassigned_membership()],
+                )
+            )
+        for project_id_value, ids in by_project_ids.items():
+            project_counts.update(
+                _character_picture_counts(
+                    session,
+                    ids,
+                    [_project_membership_exists(project_id_value)],
+                )
+            )
+        return global_counts, project_counts
 
     def _require_scope_allows_character(request: Request, character_id: int):
         """Raise 403 if the token scope does not cover the requested character.
@@ -498,7 +852,20 @@ def create_router(server) -> APIRouter:
     @router.patch(
         "/characters/{id}",
         summary="Update character",
-        description="Updates character fields and clears dependent picture text embeddings when identity data changes.",
+        description=(
+            "Updates character fields and clears dependent picture text embeddings "
+            "when identity data changes.\n\n"
+            "**Project membership.** Send ``project_ids`` (a list) to set the full "
+            "set of projects the character belongs to — a character may be in "
+            "several at once. The legacy single ``project_id`` is still accepted "
+            "and means the same as a one-element ``project_ids``; ``null`` on "
+            "either key removes the character from every project. ``project_ids`` "
+            "wins when both are present. Member pictures follow: they join every "
+            "project the character joins, and leave a project it leaves unless "
+            "another character or picture set still anchors them there. Returns "
+            "409 on a name clash inside any target project and 404 for an unknown "
+            "project id."
+        ),
         response_model=CharacterMutationResponse,
     )
     async def patch_character(id: int, request: Request):
@@ -506,44 +873,29 @@ def create_router(server) -> APIRouter:
         data = await request.json()
         name = data.get("name")
         description = data.get("description")
-        raw_project_id = data.get("project_id", _UNSET)
-        project_id = raw_project_id
-        if raw_project_id is not _UNSET:
-            if raw_project_id is None:
-                project_id = None
-            else:
-                try:
-                    project_id = int(raw_project_id)
-                except (TypeError, ValueError) as exc:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Invalid project_id",
-                    ) from exc
         char = None
         project_membership_updated = False
         try:
 
-            def alter_char(
-                session: Session, id: int, name: str, description: str, project_id
-            ):
+            def alter_char(session: Session, id: int, name: str, description: str):
                 character = session.get(Character, id)
                 if character is None:
                     raise KeyError("Character not found")
-                # Capture the project the character is leaving before we mutate
-                # it, so we can disassociate its pictures from that old project.
-                old_project_id = character.project_id
+                # Capture the projects the character is in before we mutate it, so
+                # we can disassociate its pictures from the ones it leaves.
+                old_project_ids = character_project_ids(session, id)
+                target_project_ids, project_provided = _resolve_target_project_ids(
+                    data, old_project_ids
+                )
                 # Check uniqueness before mutating anything.
                 final_name = name if name is not None else character.name
-                final_project_id = (
-                    project_id if project_id is not _UNSET else character.project_id
-                )
                 name_changing = name is not None and name != character.name
-                project_changing = (
-                    project_id is not _UNSET and project_id != character.project_id
-                )
+                project_changing = project_provided and sorted(
+                    target_project_ids
+                ) != sorted(old_project_ids)
                 if name_changing or project_changing:
                     _ensure_unique_character_name(
-                        session, final_name, final_project_id, exclude_char_id=id
+                        session, final_name, target_project_ids, exclude_char_id=id
                     )
                 updated = False
                 if name is not None and name != character.name:
@@ -552,24 +904,19 @@ def create_router(server) -> APIRouter:
                 if description is not None and description != character.description:
                     character.description = description
                     updated = True
-                project_id_changed = (
-                    project_id is not _UNSET and project_id != character.project_id
-                )
-                if project_id_changed:
-                    if project_id is not None:
-                        project = session.get(Project, project_id)
-                        if project is None:
-                            raise HTTPException(
-                                status_code=404,
-                                detail="Project not found",
-                            )
-                    character.project_id = project_id
-                    updated = True
+                # Single write path for both the join rows and the primary-project
+                # FK; raises 404 for an unknown project id.
+                project_change = None
+                if project_changing:
+                    project_change = set_character_projects(
+                        session, character, target_project_ids
+                    )
+                    updated = updated or project_change.changed
                 local_project_membership_updated = False
                 if updated:
                     session.add(character)
 
-                    if project_id_changed:
+                    if project_change is not None and project_change.changed:
                         picture_ids = list(
                             {
                                 face.picture_id
@@ -582,13 +929,13 @@ def create_router(server) -> APIRouter:
                         # Project membership is stack-atomic: a character on one
                         # member of a stack moves the whole stack's membership.
                         picture_ids = expand_picture_ids_to_stacks(session, picture_ids)
-                        # Reference-aware add/remove/repoint across the old and
-                        # new project — shared with picture set updates.
-                        reconcile_entity_project_change(
+                        # Reference-aware add/remove/repoint across every project
+                        # joined and left — shared with picture set updates.
+                        reconcile_entity_projects_change(
                             session,
                             picture_ids=picture_ids,
-                            old_project_id=old_project_id,
-                            new_project_id=project_id,
+                            ensure_project_ids=project_change.target_project_ids,
+                            remove_project_ids=project_change.removed,
                             exclude_character_id=id,
                         )
                         local_project_membership_updated = bool(picture_ids)
@@ -618,17 +965,15 @@ def create_router(server) -> APIRouter:
                     session.refresh(character)
                 # Serialize while the session is open; the row may be detached
                 # (and its attributes expired) by the time the handler returns.
-                return (
-                    character.model_dump(exclude_unset=False),
-                    local_project_membership_updated,
-                )
+                payload = character.model_dump(exclude_unset=False)
+                payload["project_ids"] = character_project_ids(session, id)
+                return (payload, local_project_membership_updated)
 
             char, project_membership_updated = server.vault.db.run_task(
                 alter_char,
                 id,
                 name,
                 description,
-                project_id,
                 priority=DBPriority.IMMEDIATE,
             )
             server.vault.notify(
@@ -757,10 +1102,21 @@ def create_router(server) -> APIRouter:
     )
     def get_character_by_id(request: Request, id: int):
         try:
-            char = server.vault.db.run_immediate_read_task(
-                lambda session: Character.find(session, id=id)
-            )
-            return char[0] if char else None
+            # A scoped token may read the character but must not learn which
+            # *other* projects it belongs to (issue #125 / R1).
+            visible_projects = visible_project_ids(server, request)
+
+            def fetch(session):
+                found = Character.find(session, id=id)
+                if not found:
+                    return None
+                payload = safe_model_dict(found[0])
+                narrow_project_fields(
+                    payload, character_project_ids(session, id), visible_projects
+                )
+                return payload
+
+            return server.vault.db.run_immediate_read_task(fetch)
         except KeyError:
             raise HTTPException(status_code=404, detail="Character not found")
 
@@ -773,21 +1129,38 @@ def create_router(server) -> APIRouter:
     def get_character_by_project_and_name(
         request: Request, project_name: str, character_name: str
     ):
+        visible_projects = visible_project_ids(server, request)
+
         def fetch(session):
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
             ).first()
+            # Scope guard on the PROJECT half of the path — the picture-set twin
+            # in picture_sets.py::get_picture_set_by_name has the same guard for
+            # the same reason (#708 condition 2): the 404 branches below answer
+            # from the project space, which a character-scoped token may not
+            # probe. One uniform 403 for a project it may not see; an owner is
+            # unaffected and still gets the 404s.
+            enforce_project_path_scope(
+                server, request, int(project.id) if project is not None else None
+            )
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
             character = session.exec(
                 select(Character).where(
-                    Character.project_id == project.id,
+                    character_in_project(project.id),
                     func.lower(Character.name) == character_name.lower(),
                 )
             ).first()
             if character is None:
                 raise HTTPException(status_code=404, detail="Character not found")
-            return safe_model_dict(character)
+            payload = safe_model_dict(character)
+            narrow_project_fields(
+                payload,
+                character_project_ids(session, int(character.id)),
+                visible_projects,
+            )
+            return payload
 
         result = server.vault.db.run_immediate_read_task(fetch)
         # Scope guard (BOLA): a resource-scoped token may only read its own
@@ -796,9 +1169,52 @@ def create_router(server) -> APIRouter:
         return result
 
     @router.get(
+        "/characters/{id}/faces",
+        summary="List character faces",
+        description=(
+            "Returns the face rows assigned to a character: `id`, `picture_id`, "
+            "`character_id`, `frame_index`, `face_index` and the pixel `xyxy` "
+            "`bbox`.\n\n"
+            "The face **embedding** (`features`) and the embedding's model pack "
+            "are not served."
+        ),
+        response_model=FaceListResponse,
+    )
+    def list_character_faces(request: Request, id: int):
+        # Dedicated, projected replacement for `GET /characters/{id}/{field}`
+        # with field="faces", which served the ORM relationship and therefore
+        # the embedding too (issue #721).
+        #
+        # DECLARED HERE, NOT IN characters_faces.py, AND ORDERING IS
+        # LOAD-BEARING. `server.py` includes this router BEFORE
+        # `characters_faces`, so a GET declared over there would be swallowed by
+        # the `/characters/{id}/{field}` catch-all below. Within this router the
+        # order is definition order, so this must stay ABOVE that route. Its
+        # POST/DELETE siblings live in `characters_faces.py` and are unaffected:
+        # they differ by method, and Starlette falls through a path-only match.
+        def fetch_faces(session: Session):
+            # Ordered by id to reproduce the row set and order that the
+            # `Character.faces` relationship produced on the old path.
+            rows = session.exec(
+                select(Face).where(Face.character_id == id).order_by(Face.id)
+            ).all()
+            return [face.to_public_dict() for face in rows]
+
+        return {"faces": server.vault.db.run_immediate_read_task(fetch_faces)}
+
+    @router.get(
         "/characters/{id}/{field}",
         summary="Get character field",
-        description="Returns one character field value, including generated thumbnail handling for field=thumbnail.",
+        description=(
+            "Returns one character field value, including generated thumbnail "
+            "handling for `field=thumbnail`.\n\n"
+            "Only the character's own **columns** are readable here, plus the "
+            "synthesised `thumbnail`. ORM relationship names (`project`, "
+            "`pictures`, `reference_picture_set`) are **not** readable and "
+            "answer `400`; use their dedicated endpoints instead. A `400` means "
+            "'not a readable field' and is distinct from `404` "
+            "('character does not exist') and `403` ('not in this token's scope')."
+        ),
         responses={
             200: {
                 "content": {
@@ -807,10 +1223,25 @@ def create_router(server) -> APIRouter:
                     },
                     "image/png": {},
                 }
-            }
+            },
+            400: {
+                "description": (
+                    "`field` is not a readable field on this endpoint (a "
+                    "relationship name, or a name the model does not have)."
+                )
+            },
+            404: {"description": "The character does not exist."},
         },
     )
     def get_character_field_by_id(request: Request, id: int, field: str):
+        # Deny-by-default: only the character's own column namespace (plus the
+        # declared exceptions, which include the synthesised ``thumbnail``) is
+        # servable. This runs BEFORE any lookup so the refusal cannot depend on
+        # whether the character exists. Object authorization is not this check's
+        # job and must not be added here -- the AuthzGate has already run
+        # (issue #721, §16.6).
+        require_servable_field(Character, field, CHARACTER_EXTRA_SERVABLE_FIELDS)
+
         if field == "thumbnail":
             thumbnail_cache_version = 6
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
@@ -819,11 +1250,6 @@ def create_router(server) -> APIRouter:
             meta_path = resolve_path_within(cache_dir, f"character_{id}.json")
 
             def fetch_best_picture_id(session: Session, character_id: int):
-                _video_exts = (".mp4", ".mov", ".webm", ".avi", ".mkv")
-                is_video_expr = sa_case(
-                    *[(Picture.file_path.ilike(f"%{ext}"), 1) for ext in _video_exts],
-                    else_=0,
-                )
                 row = session.exec(
                     select(Picture.id, Picture.score)
                     .join(Face, Face.picture_id == Picture.id)
@@ -832,7 +1258,7 @@ def create_router(server) -> APIRouter:
                         Picture.deleted.is_(False),
                     )
                     .order_by(
-                        is_video_expr,  # prefer still images over videos
+                        Picture.is_video,  # prefer still images (False/0) over videos
                         Picture.score.is_(None),
                         Picture.score.desc(),
                         Picture.id.desc(),
@@ -862,7 +1288,7 @@ def create_router(server) -> APIRouter:
                         meta.get("picture_id") == best_picture.get("picture_id")
                         and meta.get("version") == thumbnail_cache_version
                     ):
-                        return FileResponse(cache_path, media_type="image/png")
+                        return conditional_file_response(request, cache_path)
                 except Exception as exc:
                     logger.debug("Failed to read character thumbnail cache: %s", exc)
             char = server.vault.db.run_immediate_read_task(
@@ -1010,7 +1436,7 @@ def create_router(server) -> APIRouter:
                     logger.debug(
                         "Failed to write character thumbnail metadata: %s", exc
                     )
-                return FileResponse(cache_path, media_type="image/png")
+                return conditional_file_response(request, cache_path)
             except Exception:
                 from io import BytesIO
 
@@ -1018,6 +1444,26 @@ def create_router(server) -> APIRouter:
                 crop.save(buf, format="PNG")
                 return Response(content=buf.getvalue(), media_type="image/png")
         try:
+            if field == "project_id":
+                # The stored scalar names the character's *primary* project,
+                # which a token scoped to the character (or to a secondary
+                # project) has no grant to learn. Derive it from the narrowed
+                # membership list like every other serialisation site does
+                # (issue #125 / R1b, #708 F5).
+                visible_projects = visible_project_ids(server, request)
+
+                def fetch_project_ids(session: Session):
+                    if session.get(Character, id) is None:
+                        raise KeyError("Character not found")
+                    return character_project_ids(session, id)
+
+                payload: dict = {}
+                narrow_project_fields(
+                    payload,
+                    server.vault.db.run_immediate_read_task(fetch_project_ids),
+                    visible_projects,
+                )
+                return {"project_id": payload["project_id"]}
             char = server.vault.db.run_immediate_read_task(
                 Character.find, select_fields=[field], id=id
             )
@@ -1027,6 +1473,11 @@ def create_router(server) -> APIRouter:
             logger.debug(
                 "Data type for Character field {}: {}".format(field, type(char))
             )
+            # Backstop only. `require_servable_field` above has already refused
+            # anything outside the column namespace with a 400, and a column
+            # name always resolves to an attribute, so this branch is not
+            # reachable today. Kept because it fails closed if the allowlist and
+            # the model ever disagree; it is NOT the load-bearing check.
             if not hasattr(char, field):
                 raise HTTPException(
                     status_code=404, detail=f"Field {field} not found in Character"
@@ -1044,15 +1495,40 @@ def create_router(server) -> APIRouter:
         summary="List characters",
         description="Lists characters, optionally filtered by exact name or project. "
         "Pass ``project_id`` as a numeric ID to restrict to one project, "
-        "or ``UNASSIGNED`` for characters with no project.",
+        "or ``UNASSIGNED`` for characters with no project.\n\n"
+        "Pass ``include_counts=true`` to get each character's picture counts "
+        "(``image_count`` and ``project_image_count``) inline, so a sidebar does "
+        "not need one ``GET /characters/{id}/summary`` request per character.",
         response_model=list[CharacterListItemResponse],
     )
     def get_characters(
         request: Request,
-        name: str = Query(None),
-        project_id: str | None = Query(default=None),
+        name: str = Query(
+            None, description="Return only the character with this exact name."
+        ),
+        project_id: str | None = Query(
+            default=None,
+            description=(
+                "Restrict the listing to one project: a numeric project id, or "
+                "``UNASSIGNED`` for characters that belong to no project. Omit "
+                "for every character the caller may see. Note this filters "
+                "WHICH characters are listed; it does not change the scope of "
+                "``project_image_count``, which always follows each row's own "
+                "``project_id``."
+            ),
+        ),
+        include_counts: bool = Query(
+            default=False,
+            description=(
+                "When true, every row carries ``image_count`` (whole-vault) and "
+                "``project_image_count`` (this row's own project). Both cost a "
+                "constant number of extra queries for the whole listing. "
+                "Defaults to false, so existing callers pay nothing."
+            ),
+        ),
     ):
         token_scope = getattr(request.state, "token_scope", None)
+        visible_projects = visible_project_ids(server, request)
         try:
             logger.debug(
                 f"Fetching characters with name: {name}, project_id: {project_id}"
@@ -1076,10 +1552,10 @@ def create_router(server) -> APIRouter:
                     query = query.where(Character.name == name)
                 if project_id is not None:
                     if project_id == "UNASSIGNED":
-                        query = query.where(Character.project_id.is_(None))
+                        query = query.where(character_in_no_project())
                     else:
                         try:
-                            query = query.where(Character.project_id == int(project_id))
+                            query = query.where(character_in_project(int(project_id)))
                         except (TypeError, ValueError):
                             raise HTTPException(
                                 status_code=400, detail="Invalid project_id"
@@ -1090,25 +1566,79 @@ def create_router(server) -> APIRouter:
                 # embedding so the UI can filter the similarity-sort dropdown.
                 char_ids = [c.id for c in characters]
                 if char_ids:
-                    has_faces_query = (
-                        select(Face.character_id)
-                        .where(
-                            Face.character_id.in_(char_ids),
-                            Face.features.is_not(None),
-                        )
-                        .distinct()
-                    )
-                    chars_with_faces = set(session.exec(has_faces_query).all())
+                    listed = set(char_ids)
+                    chars_with_faces = {
+                        cid
+                        for cid in session.exec(
+                            characters_with_reference_faces_query()
+                        ).all()
+                        if cid in listed
+                    }
                 else:
                     chars_with_faces = set()
 
-                return [
-                    {
+                # One query for every listed character's project membership, so
+                # the multi-project set is exposed without an N+1 (issue #125).
+                project_ids_by_char: dict[int, list[int]] = {}
+                if char_ids:
+                    for cid, pid in session.exec(
+                        select(
+                            CharacterProjectMember.character_id,
+                            CharacterProjectMember.project_id,
+                        ).where(CharacterProjectMember.character_id.in_(char_ids))
+                    ).all():
+                        project_ids_by_char.setdefault(int(cid), []).append(int(pid))
+
+                # Narrow once: the counts below must be scoped to the project
+                # each row REPORTS, and narrow_project_fields derives that same
+                # scalar from this list. Re-narrowing an already-narrowed list
+                # is idempotent, so the payload still goes through the one
+                # helper that owns both project fields.
+                narrowed_by_char = {
+                    int(c.id): filter_visible_project_ids(
+                        project_ids_by_char.get(int(c.id), []), visible_projects
+                    )
+                    for c in characters
+                    if c.id is not None
+                }
+
+                # Sidebar counts, inline and for the WHOLE listing in a constant
+                # number of queries (issue #651). Computed only for the rows the
+                # scope filtering above already returned, so a scoped token
+                # learns nothing it could not read from the per-id summary
+                # endpoint it is already granted.
+                global_counts: dict[int, int] = {}
+                project_counts: dict[int, int] | None = {}
+                if include_counts:
+                    global_counts, project_counts = _inline_character_counts(
+                        session, characters, narrowed_by_char, visible_projects
+                    )
+
+                rows = []
+                for c in characters:
+                    payload = {
                         **c.model_dump(exclude_unset=False),
                         "has_reference_faces": c.id in chars_with_faces,
                     }
-                    for c in characters
-                ]
+                    if include_counts:
+                        char_id = int(c.id)
+                        payload["image_count"] = global_counts.get(char_id, 0)
+                        # ``None`` means "you may learn no project-scoped number",
+                        # which is NOT the same answer as 0 and must not collapse
+                        # into one via ``.get(char_id, 0)``.
+                        payload["project_image_count"] = (
+                            None
+                            if project_counts is None
+                            else project_counts.get(char_id, 0)
+                        )
+                    rows.append(
+                        narrow_project_fields(
+                            payload,
+                            narrowed_by_char.get(int(c.id), []),
+                            visible_projects,
+                        )
+                    )
+                return rows
 
             return server.vault.db.run_immediate_read_task(fetch)
         except HTTPException:
@@ -1123,7 +1653,11 @@ def create_router(server) -> APIRouter:
     @router.post(
         "/characters",
         summary="Create character",
-        description="Creates a character and its linked reference picture set.",
+        description=(
+            "Creates a character and its linked reference picture set. Accepts "
+            "``project_ids`` (a list of projects the character joins) or the "
+            "legacy single ``project_id``."
+        ),
         response_model=CharacterMutationResponse,
     )
     def create_character(request: Request, payload: dict = Body(...)):
@@ -1132,13 +1666,29 @@ def create_router(server) -> APIRouter:
 
             def create_character_and_reference_set(session, payload):
                 char_name = payload.get("name")
-                char_project_id = payload.get("project_id")
+                target_project_ids, _provided = _resolve_target_project_ids(
+                    payload, None
+                )
                 if char_name:
-                    _ensure_unique_character_name(session, char_name, char_project_id)
-                character = Character(**payload)
+                    _ensure_unique_character_name(
+                        session, char_name, target_project_ids
+                    )
+                # ``project_id`` / ``project_ids`` are owned by
+                # ``set_character_projects`` below (write both, read the join), so
+                # they must not reach the Character constructor.
+                fields = {
+                    key: value
+                    for key, value in payload.items()
+                    if key not in ("project_id", "project_ids")
+                }
+                character = Character(**fields)
                 session.add(character)
                 session.commit()
                 session.refresh(character)
+                if target_project_ids:
+                    set_character_projects(session, character, target_project_ids)
+                    session.commit()
+                    session.refresh(character)
                 logger.debug("Created character with ID: {}".format(character.id))
                 reference_set = PictureSet(
                     name="reference_pictures", description=str(character.name)
@@ -1150,7 +1700,11 @@ def create_router(server) -> APIRouter:
                 session.add(character)
                 session.commit()
                 session.refresh(character)
-                return character.model_dump(exclude_unset=False)
+                created = character.model_dump(exclude_unset=False)
+                created["project_ids"] = character_project_ids(
+                    session, int(character.id)
+                )
+                return created
 
             char_dict = server.vault.db.run_task(
                 create_character_and_reference_set,
@@ -1163,6 +1717,11 @@ def create_router(server) -> APIRouter:
                 {"origin_client_id": origin_client_id},
             )
             return {"status": "success", "character": char_dict}
+        except HTTPException:
+            # Deliberate, already-typed failures (409 duplicate name, 404 unknown
+            # project, 400 malformed project_ids) must keep their status; the
+            # blanket handler below would otherwise flatten them all to 400.
+            raise
         except Exception as e:
             logger.error(f"Error creating character: {e}")
             raise HTTPException(status_code=400, detail="Invalid character data")

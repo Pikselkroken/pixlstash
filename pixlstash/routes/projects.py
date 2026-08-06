@@ -11,27 +11,43 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field as PydanticField
 from sqlalchemy import delete, exists, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from pixlstash.authz.membership import enforce_project_scope
+from pixlstash.authz.membership import (
+    enforce_project_path_scope,
+    enforce_project_scope,
+)
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
+    CharacterProjectMember,
     Face,
     Picture,
     PictureProjectMember,
     PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
     Tag,
+    character_in_project,
+    picture_set_in_project,
 )
 from pixlstash.db_models.project import Project, ProjectAttachment
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.project_membership_service import (
+    character_project_ids,
+    picture_set_project_ids,
+)
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.path_utils import resolve_path_within
-from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
+from pixlstash.utils.service.filter_helpers import (
+    fetch_scope_allowed_picture_ids,
+    narrow_project_assignments,
+    narrow_project_fields,
+    visible_project_ids,
+)
 
 logger = get_logger(__name__)
 
@@ -62,6 +78,17 @@ class ProjectResponse(BaseModel):
     cover_image_path: Optional[str] = None
     extra_metadata: Optional[str] = None
     created_at: Optional[datetime] = None
+    image_count: Optional[int] = PydanticField(
+        default=None,
+        description=(
+            "Number of non-deleted pictures assigned to this project. Populated "
+            "by ``GET /projects?include_counts=true`` only; ``null`` otherwise "
+            "and on every single-project response. Same number as "
+            "``GET /projects/{project_id}/summary`` returns, so a sidebar can "
+            "render its counts from this one list response instead of one "
+            "request per project (issue #651)."
+        ),
+    )
 
 
 class ProjectDeleteResponse(BaseModel):
@@ -179,9 +206,26 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/projects",
         summary="List all projects",
+        description=(
+            "Lists every project the caller may see, oldest first.\n\n"
+            "Pass ``include_counts=true`` to get each project's picture count "
+            "inline as ``image_count``, so a sidebar does not need one "
+            "``GET /projects/{project_id}/summary`` request per project."
+        ),
         response_model=list[ProjectResponse],
     )
-    def list_projects(request: Request):
+    def list_projects(
+        request: Request,
+        include_counts: bool = Query(
+            default=False,
+            description=(
+                "When true, every row carries ``image_count``: the number of "
+                "non-deleted pictures in that project. Costs one extra query "
+                "for the whole listing, whatever the number of projects. "
+                "Defaults to false, so existing callers pay nothing."
+            ),
+        ),
+    ):
         server.auth.require_user_id(request)
         token_scope = getattr(request.state, "token_scope", None)
         if (
@@ -202,20 +246,50 @@ def create_router(server) -> APIRouter:
             query = select(Project).order_by(Project.created_at)
             if scope_project_id is not None:
                 query = query.where(Project.id == scope_project_id)
-            return session.exec(query).all()
+            projects = session.exec(query).all()
 
-        projects = server.vault.db.run_task(fetch, priority=DBPriority.IMMEDIATE)
-        return [
-            {
-                "id": p.id,
-                "name": p.name,
-                "description": p.description,
-                "cover_image_path": p.cover_image_path,
-                "extra_metadata": p.extra_metadata,
-                "created_at": p.created_at,
-            }
-            for p in projects
-        ]
+            # One grouped count for the WHOLE listing, not one summary request
+            # per project (issue #651). Only for the projects the scope filter
+            # above already returned, so a scoped token learns nothing beyond
+            # the per-id summary it is already granted. Semantics match
+            # GET /projects/{project_id}/summary exactly: non-deleted pictures
+            # with a membership row. (picture_id, project_id) is the join
+            # table's composite primary key, so plain count() already counts
+            # each picture once.
+            counts_by_project: dict[int, int] = {}
+            listed_ids = [int(p.id) for p in projects if p.id is not None]
+            if include_counts and listed_ids:
+                for project_id_value, picture_count in session.exec(
+                    select(PictureProjectMember.project_id, func.count())
+                    .select_from(PictureProjectMember)
+                    .join(Picture, Picture.id == PictureProjectMember.picture_id)
+                    .where(
+                        PictureProjectMember.project_id.in_(listed_ids),
+                        Picture.deleted.is_(False),
+                    )
+                    .group_by(PictureProjectMember.project_id)
+                ).all():
+                    counts_by_project[int(project_id_value)] = int(picture_count)
+
+            return [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "description": p.description,
+                    "cover_image_path": p.cover_image_path,
+                    "extra_metadata": p.extra_metadata,
+                    "created_at": p.created_at,
+                    "image_count": (
+                        counts_by_project.get(int(p.id), 0) if include_counts else None
+                    ),
+                }
+                for p in projects
+            ]
+
+        # A read belongs on the read path, not on the single writer queue: a
+        # DBPriority.IMMEDIATE run_task queues this listing behind whatever the
+        # writer is doing, which is the sidebar stall issue #651 is about.
+        return server.vault.db.run_immediate_read_task(fetch)
 
     @router.post(
         "/projects/membership",
@@ -243,6 +317,13 @@ def create_router(server) -> APIRouter:
             if not picture_ids:
                 return {"project_assignments": {}, "unassigned_picture_ids": []}
 
+        # Filtering the picture ids is only half the guard: every *key* of this
+        # payload is a project id, which is membership metadata about projects
+        # the token may not be allowed to learn about at all (issue #125 / R1b,
+        # #708 F1). Narrow the keys on the same ladder every other serialisation
+        # of a project id uses.
+        visible_projects = visible_project_ids(server, request)
+
         def fetch(session, ids: list[int]):
             rows = session.exec(
                 select(
@@ -252,11 +333,16 @@ def create_router(server) -> APIRouter:
                 )
             ).all()
             assignments: dict[int, list[int]] = {}
-            assigned_ids: set[int] = set()
             for project_id, pid in rows:
-                assigned_ids.add(int(pid))
                 if project_id is not None:
                     assignments.setdefault(int(project_id), []).append(int(pid))
+            assignments = narrow_project_assignments(assignments, visible_projects)
+            # "Unassigned" is derived from the *narrowed* mapping, so it means
+            # "in no project you can see". Deriving it from the raw membership
+            # would re-leak what the narrowing just removed: a picture missing
+            # from both lists would tell the token some invisible project holds
+            # it.
+            assigned_ids = {pid for pids in assignments.values() for pid in pids}
             unassigned = sorted(set(ids) - assigned_ids)
             return {
                 "project_assignments": assignments,
@@ -310,6 +396,11 @@ def create_router(server) -> APIRouter:
     )
     def list_project_picture_sets(request: Request, id_or_name: str):
         server.auth.require_user_id(request)
+        # A set listed under this project may *also* belong to others, and its
+        # stored scalar ``project_id`` names its primary project — which is not
+        # necessarily this one. Serialising it raw hands a project-scoped token
+        # another project's id (issue #125 / R1b, #708 F4).
+        visible_projects = visible_project_ids(server, request)
 
         def fetch(session: Session, pid_or_name: str):
             # Resolve by numeric ID first, then fall back to case-insensitive name.
@@ -328,21 +419,42 @@ def create_router(server) -> APIRouter:
                         func.lower(Project.name) == pid_or_name.lower()
                     )
                 ).first()
+            # Resolve first, then refuse identically (#708 condition 2). The old
+            # order raised 404 "Project not found" for a project that does not
+            # exist and 403 for one the token may not see, which made this route
+            # an existence oracle by numeric id and by name alike.
+            enforce_project_path_scope(
+                server, request, int(project.id) if project is not None else None
+            )
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
-            _require_scope_allows_project(request, project.id)
             sets = session.exec(
                 select(PictureSet)
-                .where(PictureSet.project_id == project.id)
+                .where(picture_set_in_project(project.id))
                 .order_by(PictureSet.name)
             ).all()
+            # One query for every listed set's membership, so the narrowing
+            # costs no N+1 (issue #125).
+            listed_ids = [int(s.id) for s in sets if s.id is not None]
+            project_ids_by_set: dict[int, list[int]] = {}
+            if listed_ids:
+                for sid, pid in session.exec(
+                    select(
+                        PictureSetProjectMember.set_id,
+                        PictureSetProjectMember.project_id,
+                    ).where(PictureSetProjectMember.set_id.in_(listed_ids))
+                ).all():
+                    project_ids_by_set.setdefault(int(sid), []).append(int(pid))
             return [
-                {
-                    "id": s.id,
-                    "name": s.name,
-                    "description": s.description,
-                    "project_id": s.project_id,
-                }
+                narrow_project_fields(
+                    {
+                        "id": s.id,
+                        "name": s.name,
+                        "description": s.description,
+                    },
+                    project_ids_by_set.get(int(s.id), []),
+                    visible_projects,
+                )
                 for s in sets
             ]
 
@@ -370,9 +482,13 @@ def create_router(server) -> APIRouter:
                 project = session.exec(
                     select(Project).where(func.lower(Project.name) == value.lower())
                 ).first()
+            # Same reordering as list_project_picture_sets (#708 condition 2):
+            # 403-for-existing / 404-for-missing was a project existence oracle.
+            enforce_project_path_scope(
+                server, request, int(project.id) if project is not None else None
+            )
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
-            _require_scope_allows_project(request, project.id)
             return project
 
         return server.vault.db.run_task(
@@ -450,30 +566,58 @@ def create_router(server) -> APIRouter:
             # Collect attachment paths before cascade-delete removes the rows.
             attachment_paths = [a.stored_path for a in project.attachments]
 
-            # Null out project_id on characters and picture sets.
-            for character in session.exec(
-                select(Character).where(Character.project_id == pid)
-            ).all():
-                character.project_id = None
+            # Drop the project from every character / picture set that belongs to
+            # it, then re-derive each entity's primary-project pointer from the
+            # memberships that survive (issue #125: an entity may be in several
+            # projects, so losing one does not necessarily unassign it).
+            affected_characters = session.exec(
+                select(Character).where(character_in_project(pid))
+            ).all()
+            affected_sets = session.exec(
+                select(PictureSet).where(picture_set_in_project(pid))
+            ).all()
+
+            session.exec(
+                delete(CharacterProjectMember).where(
+                    CharacterProjectMember.project_id == pid
+                )
+            )
+            session.exec(
+                delete(PictureSetProjectMember).where(
+                    PictureSetProjectMember.project_id == pid
+                )
+            )
+            session.flush()
+
+            for character in affected_characters:
+                remaining = character_project_ids(session, int(character.id))
+                character.project_id = remaining[0] if remaining else None
                 session.add(character)
 
-            for picture_set in session.exec(
-                select(PictureSet).where(PictureSet.project_id == pid)
-            ).all():
-                picture_set.project_id = None
+            for picture_set in affected_sets:
+                remaining = picture_set_project_ids(session, int(picture_set.id))
+                picture_set.project_id = remaining[0] if remaining else None
                 session.add(picture_set)
-
-            for picture in session.exec(
-                select(Picture).where(Picture.project_id == pid)
-            ).all():
-                picture.project_id = None
-                session.add(picture)
 
             session.exec(
                 delete(PictureProjectMember).where(
                     PictureProjectMember.project_id == pid
                 )
             )
+            session.flush()
+
+            for picture in session.exec(
+                select(Picture).where(Picture.project_id == pid)
+            ).all():
+                # The picture's own memberships are gone for this project; fall
+                # back to any project it still belongs to, mirroring the
+                # reconciliation service's repoint rule.
+                picture.project_id = session.exec(
+                    select(PictureProjectMember.project_id)
+                    .where(PictureProjectMember.picture_id == picture.id)
+                    .order_by(PictureProjectMember.project_id.asc())
+                ).first()
+                session.add(picture)
 
             session.delete(project)  # cascade-deletes ProjectAttachment rows
             session.commit()
@@ -583,11 +727,8 @@ def create_router(server) -> APIRouter:
                 if session.get(Project, pid_value) is None:
                     raise HTTPException(status_code=404, detail="Project not found")
 
-            server.vault.db.run_task(
-                ensure_project_exists,
-                pid,
-                priority=DBPriority.IMMEDIATE,
-            )
+            # Pure existence read — keep it off the writer queue (issue #651).
+            server.vault.db.run_immediate_read_task(ensure_project_exists, pid)
             conditions = [
                 Picture.deleted.is_(False),
                 exists(
@@ -675,13 +816,13 @@ def create_router(server) -> APIRouter:
             characters_data = [
                 {"id": c.id, "name": c.name, "description": c.description}
                 for c in session.exec(
-                    select(Character).where(Character.project_id == pid)
+                    select(Character).where(character_in_project(pid))
                 ).all()
             ]
             picture_sets_data = [
                 {"id": s.id, "name": s.name, "description": s.description}
                 for s in session.exec(
-                    select(PictureSet).where(PictureSet.project_id == pid)
+                    select(PictureSet).where(picture_set_in_project(pid))
                 ).all()
             ]
             attachments_data = [

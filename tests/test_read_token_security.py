@@ -15,14 +15,14 @@ Coverage
    intact (scores, filenames).
 
 The server is created fresh per test function with a real temporary database and
-the pictures from ``pictures/good/`` to give each scenario a realistic dataset.
+a small library of generated pictures, so each scenario gets an isolated,
+realistically-populated vault (see ``_good_picture_files``).
 """
 
 import io
 import json
 import tempfile
 import time
-from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -40,7 +40,6 @@ from tests.utils import upload_pictures_and_wait
 # ---------------------------------------------------------------------------
 
 API = "/api/v1"
-PICTURES_DIR = Path(__file__).resolve().parent.parent / "pictures" / "good"
 
 
 # A tiny valid PNG produced in-memory so tests that need a fresh image don't
@@ -52,15 +51,46 @@ def _make_png_bytes(width: int = 32, height: int = 32) -> bytes:
     return buf.getvalue()
 
 
+# How many pictures the shared fixture library holds. Every assertion in this
+# module is count-agnostic (`picture_ids[0]`, `picture_ids[:2]`, or "iterate
+# them all"), and the manual scores below cycle 1-5, so five is the smallest
+# library that still exercises the full score range AND leaves a
+# single-picture share token narrowing a library strictly larger than its
+# scope — which is the property the isolation tests actually assert.
+_FIXTURE_PICTURE_COUNT = 5
+
+
 def _good_picture_files() -> list[tuple[str, bytes, str]]:
-    """Return (filename, bytes, content_type) tuples for every file in pictures/good/."""
-    results = []
-    for path in sorted(PICTURES_DIR.iterdir()):
-        if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
-            content_type = (
-                "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
-            )
-            results.append((path.name, path.read_bytes(), content_type))
+    """Return (filename, bytes, content_type) tuples for the fixture library.
+
+    These are generated in-memory rather than read from ``pictures/good/``.
+    That directory is 19 MB of real photographs across 12 files, and
+    ``_setup_server_with_pictures`` runs per test function — so the old version
+    pushed 19 MB through the full import pipeline (embedding, face detection,
+    tagging) 33 times per run of this module, to assert things like "a READ
+    token gets 403 on POST /pictures/apply-scores".
+
+    Nothing here reads image *content*: the two tests that touch a face- or
+    likeness-bearing path stub the ML helpers outright (see
+    ``test_picture_scoped_token_cannot_widen_via_character_likeness_sort`` and
+    ``test_character_membership_does_not_leak_faces``), and every other
+    assertion is about status codes, scoping and scores. The sibling helper
+    ``_setup_two_picture_sets`` in this same module already uses generated
+    PNGs for exactly this reason.
+
+    Each image differs in size and colour so the importer's duplicate/hash
+    detection keeps them as distinct pictures rather than collapsing them.
+    """
+    results: list[tuple[str, bytes, str]] = []
+    for index in range(_FIXTURE_PICTURE_COUNT):
+        width = 32 + index * 8
+        height = 32 + index * 4
+        img = Image.new(
+            "RGB", (width, height), color=(20 + index * 40, 60, 200 - index * 30)
+        )
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        results.append((f"fixture_{index:02d}.png", buf.getvalue(), "image/png"))
     return results
 
 

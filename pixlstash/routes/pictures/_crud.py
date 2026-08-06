@@ -7,7 +7,6 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
-    Response,
 )
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -29,7 +28,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services import scrapheap_service
+from pixlstash.services import operation_log_service, scrapheap_service
 from pixlstash.services.set_lock_service import (
     enforce_pictures_not_locked,
     locked_by_sets_for_picture,
@@ -37,6 +36,10 @@ from pixlstash.services.set_lock_service import (
 )
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.stacking import normalize_stack_positions
+from pixlstash.utils.field_allowlist import (
+    PICTURE_EXTRA_SERVABLE_FIELDS,
+    require_servable_field,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import (
     serialize_tag_objects,
@@ -45,6 +48,7 @@ from pixlstash.utils.service.caption_utils import (
 from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_picture_ids,
     fetch_scope_allowed_set_ids,
+    narrow_picture_project_ids,
 )
 from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.utils.serialization_utils import safe_model_dict
@@ -446,16 +450,27 @@ def register_routes(router, server):
                 if changed:
                     updated_ids.append(int(pic.id))
             if updated_ids:
-                session.commit()
+                session.flush()
             missing_ids = [pid for pid in ids if pid not in found_ids]
             return updated_ids, missing_ids
 
-        updated_ids, missing_ids = server.vault.db.run_task(
-            update_picture_projects,
-            picture_ids,
-            project_id_value,
-            mode,
-            priority=DBPriority.IMMEDIATE,
+        # Project membership is stack-atomic, so the snapshot expands to whole
+        # stacks — otherwise undo would restore the clicked picture and leave its
+        # stack siblings on the new project.
+        (updated_ids, missing_ids), _operation = (
+            operation_log_service.run_recorded_metadata_task(
+                server.vault,
+                update_picture_projects,
+                picture_ids,
+                project_id_value,
+                mode,
+                op_type="pictures.project",
+                picture_ids=picture_ids,
+                expand_stacks=True,
+                summary=f"Changed project membership ({mode}) "
+                f"for {len(picture_ids)} picture(s)",
+                **operation_log_service.request_context(request),
+            )
         )
 
         if updated_ids:
@@ -613,7 +628,7 @@ def register_routes(router, server):
                 )
 
             if updated_ids or reset_triggered:
-                session.commit()
+                session.flush()
 
             return (
                 sorted(updated_ids),
@@ -622,14 +637,21 @@ def register_routes(router, server):
                 reset_triggered,
             )
 
-        updated_ids, skipped_ids, missing_ids, reset_triggered = (
-            server.vault.db.run_task(
-                _apply_scores_batch,
-                ordered_picture_ids,
-                parsed_scores,
-                only_unscored,
-                priority=DBPriority.IMMEDIATE,
-            )
+        # Recorded as ONE operation so Ctrl+Z reverts the whole batch of ratings
+        # rather than one picture at a time.
+        (
+            (updated_ids, skipped_ids, missing_ids, reset_triggered),
+            _operation,
+        ) = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            _apply_scores_batch,
+            ordered_picture_ids,
+            parsed_scores,
+            only_unscored,
+            op_type="pictures.score",
+            picture_ids=ordered_picture_ids,
+            summary=f"Rated {len(ordered_picture_ids)} picture(s)",
+            **operation_log_service.request_context(request),
         )
 
         if updated_ids or reset_triggered:
@@ -778,6 +800,10 @@ def register_routes(router, server):
             fetch_image_only_tags, pic.id
         )
         pic_dict = safe_model_dict(pic)
+        # `metadata_fields()` is every scalar column minus the blobs, so the raw
+        # `Picture.project_id` rides along; re-derive it from the narrowed
+        # membership before it is serialised (issue #719, §16.6).
+        narrow_picture_project_ids(server, request, [pic_dict])
         pic_dict["tags"] = serialize_tag_objects(pic_tags)
         # Locked sets freezing this picture, so the overlay can show the reason
         # without a second request.
@@ -884,6 +910,13 @@ def register_routes(router, server):
         },
     )
     def get_picture_field(request: Request, id: str, field: str):
+        # Deny-by-default: only the picture's own column namespace (plus the
+        # declared exceptions) is servable. This runs BEFORE the lookup so the
+        # refusal cannot depend on whether the picture exists. Object
+        # authorization is not this check's job and must not be added here --
+        # the AuthzGate has already run (issue #721, §16.6).
+        require_servable_field(Picture, field, PICTURE_EXTRA_SERVABLE_FIELDS)
+
         pics = server.vault.db.run_task(
             lambda session: Picture.find(
                 session,
@@ -897,10 +930,21 @@ def register_routes(router, server):
             raise HTTPException(status_code=404, detail="Picture not found")
         pic = pics[0]
 
-        if field == "thumbnail":
-            return Response(content=pic.thumbnail, media_type="image/png")
+        # NOTE: there is deliberately no `field == "thumbnail"` branch here.
+        # `Picture` has no `thumbnail` attribute (thumbnails are files, served by
+        # `GET /pictures/thumbnails/{id}.webp`), so the branch that used to sit
+        # here raised `AttributeError` -> 500 on every call. The allowlist now
+        # answers that name with the same 400 as any other non-column.
         if field in Picture.large_binary_fields():
             return {field: base64.b64encode(getattr(pic, field)).decode("utf-8")}
+        if field == "project_id":
+            # This route hands back any column by name, so it reaches the raw
+            # scalar without going through the metadata payload. Same narrowing,
+            # same reason (issue #719, §16.6), and the same shape the character
+            # twin `GET /characters/{id}/{field}` already uses.
+            payload = {"id": int(pic.id), "project_id": pic.project_id}
+            narrow_picture_project_ids(server, request, [payload])
+            return {"project_id": payload["project_id"]}
         return {field: safe_model_dict(getattr(pic, field))}
 
     @router.patch(
@@ -982,13 +1026,17 @@ def register_routes(router, server):
                         )
                         session.exec(delete(Tag).where(Tag.picture_id == pid))
                         session.add_all([Tag(picture_id=pid, tag=t) for t in new_tags])
-                        session.commit()
+                        session.flush()
 
-                    server.vault.db.run_task(
+                    operation_log_service.run_recorded_metadata_task(
+                        server.vault,
                         _replace_tags,
                         pic_id,
                         tag_values,
-                        priority=DBPriority.IMMEDIATE,
+                        op_type="pictures.tags.replace",
+                        picture_ids=[pic_id],
+                        summary="Replaced the picture's tags",
+                        **operation_log_service.request_context(request),
                     )
                     updated = True
                 continue
@@ -1019,16 +1067,22 @@ def register_routes(router, server):
                 for field_name, field_value in fields.items():
                     setattr(pic_db, field_name, field_value)
                 session.add(pic_db)
-                session.commit()
+                session.flush()
                 session.refresh(pic_db)
                 return pic_db
 
             try:
-                pic = server.vault.db.run_task(
+                pic, _operation = operation_log_service.run_recorded_metadata_task(
+                    server.vault,
                     apply_picture_updates,
                     picture_id,
                     updated_fields,
-                    priority=DBPriority.IMMEDIATE,
+                    op_type="pictures.fields",
+                    picture_ids=[picture_id],
+                    summary="Edited "
+                    + ", ".join(sorted(updated_fields))
+                    + " on the picture",
+                    **operation_log_service.request_context(request),
                 )
             except KeyError:
                 raise HTTPException(status_code=404, detail="Picture not found")
@@ -1063,7 +1117,16 @@ def register_routes(router, server):
     @router.post(
         "/pictures/scrapheap/restore",
         summary="Restore deleted pictures",
-        description="Restores deleted pictures from scrapheap, either all deleted pictures or a provided picture id subset.",
+        description=(
+            "Restores deleted pictures from scrapheap, either all deleted "
+            "pictures or a provided picture id subset.\n\n"
+            "Recorded in the operation log as a single "
+            "`pictures.scrapheap.restore` operation with a `batch_id`, and it is "
+            "the symmetric partner of `pictures.scrapheap.move`: undoing a "
+            "restore puts the pictures back in the Scrapheap with the retention "
+            "stamp they had, so the history stack stays coherent in both "
+            "directions."
+        ),
         response_model=ScrapheapRestoreResponse,
     )
     def restore_scrapheap(request: Request, payload: dict | None = Body(None)):
@@ -1103,23 +1166,52 @@ def register_routes(router, server):
             # member is not left behind a (now lower-ranked) deleted leader.
             for stack_id in affected_stack_ids:
                 normalize_stack_positions(session, stack_id)
-            session.commit()
+            session.flush()
             return restored_count
 
-        restored_count = server.vault.db.run_task(
+        def _scrapheaped_targets(session: Session):
+            # The endpoint's targets are not knowable from the request: an absent
+            # picture_ids means "restore the entire scrapheap", and even a named
+            # subset may include already-live ids that will not change. Resolve
+            # the real set on the mutation's own session so the snapshot covers
+            # exactly what the write is about to touch.
+            query = select(Picture.id).where(Picture.deleted.is_(True))
+            if picture_ids is not None:
+                query = query.where(Picture.id.in_(picture_ids))
+            return list(session.exec(query).all())
+
+        restored_count, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
             restore_pictures,
             picture_ids,
-            priority=DBPriority.IMMEDIATE,
+            op_type=operation_log_service.OP_SCRAPHEAP_RESTORE,
+            picture_ids=[],
+            resolve_picture_ids=_scrapheaped_targets,
+            # Same stack caveat as the soft-delete: normalize_stack_positions
+            # renumbers every member of an affected stack, deleted ones included.
+            expand_stacks=True,
+            expand_stacks_include_deleted=True,
+            summary=operation_log_service.scrapheap_restore_summary,
+            # Always batched: the caller's gesture id when it sent one, a
+            # server-minted ``srv-…`` otherwise.
+            **operation_log_service.request_context(
+                request, fallback_batch_id=operation_log_service.new_batch_id()
+            ),
         )
         # A restored picture re-enters active views. ``picture_ids`` is the
         # caller-supplied subset (None == "restore all"); pass it through when
         # known so the originating tab can target the affected cards.
+        #
+        # ``restored``, not ``added``: the card comes back, but the picture is
+        # not new to the vault. The SPA's sidebar treats ``added`` as a fresh
+        # import and flashes its NEW marker on the counts that grew, which is
+        # wrong for something that was in the library the whole time.
         server.vault.notify(
             EventType.CHANGED_PICTURES,
             {
                 "picture_ids": list(picture_ids) if picture_ids else [],
                 "origin_client_id": origin_client_id,
-                "change_kind": "added",
+                "change_kind": "restored",
             },
         )
         return {"status": "success", "restored_count": restored_count}
@@ -1309,7 +1401,13 @@ def register_routes(router, server):
     @router.delete(
         "/pictures/{id}",
         summary="Move picture to scrapheap",
-        description="Soft-deletes a picture by marking it deleted, making it appear in scrapheap views.",
+        description=(
+            "Soft-deletes a picture by marking it deleted, making it appear in "
+            "scrapheap views. Recorded in the operation log as "
+            "`pictures.scrapheap.move` and **undoable**: undo restores the "
+            "picture, redo moves it back. (A *permanent* delete — "
+            "`DELETE /pictures/scrapheap` — is not recorded and cannot be undone.)"
+        ),
         response_model=PictureDeleteResponse,
     )
     def delete_picture(request: Request, id: str):
@@ -1339,10 +1437,26 @@ def register_routes(router, server):
             # must not keep stack_position 0, or the whole stack disappears from
             # the grid (no-op when the picture is not stacked).
             normalize_stack_positions(session, pic.stack_id)
-            session.commit()
+            session.flush()
             return True
 
-        success = server.vault.db.run_task(delete_pic, id)
+        # The soft-delete is a recorded, reversible operation: the `deleted`
+        # facet carries the flag and the retention stamp, so undo puts the
+        # picture back with the purge deadline it had. The snapshot expands to
+        # the whole stack INCLUDING its scrapheaped members, because
+        # normalize_stack_positions renumbers every member and an unsnapshotted
+        # renumber is a change undo could not reverse.
+        success, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            delete_pic,
+            id,
+            op_type=operation_log_service.OP_SCRAPHEAP_MOVE,
+            picture_ids=[id],
+            expand_stacks=True,
+            expand_stacks_include_deleted=True,
+            summary=operation_log_service.scrapheap_move_summary,
+            **operation_log_service.request_context(request),
+        )
         if not success:
             raise HTTPException(status_code=404, detail="Picture not found")
         # Soft-delete removes the card from active grid views. Broadcast a
@@ -1375,7 +1489,13 @@ def register_routes(router, server):
             "Soft-deletes multiple pictures in one request by marking them deleted "
             '(they appear in scrapheap views). Body: {"picture_ids": [int, ...]}. '
             "Single-round-trip replacement for issuing one DELETE /pictures/{id} per "
-            "id, which floods the client connection pool on large selections."
+            "id, which floods the client connection pool on large selections.\n\n"
+            "Recorded in the operation log as a single `pictures.scrapheap.move` "
+            "operation carrying a `batch_id`, so the whole bulk move is **one** "
+            "undo: `POST /operations/undo` or "
+            "`POST /operations/batches/{batch_id}/undo` restores every picture it "
+            "moved. Pictures skipped for a locked set are not in the recorded "
+            "change and are unaffected by the undo."
         ),
         response_model=BulkPictureDeleteResponse,
     )
@@ -1431,10 +1551,29 @@ def register_routes(router, server):
                 newly_deleted.append(pid)
             for stack_id in affected_stacks:
                 normalize_stack_positions(session, stack_id)
-            session.commit()
+            session.flush()
             return newly_deleted, sorted(locked)
 
-        deleted_ids, skipped_locked = server.vault.db.run_task(delete_pics, pic_ids)
+        # One bulk action, one operation row, one batch id — so the client can
+        # offer a single "Undo" for the whole move, by batch id or by simply
+        # popping the newest operation.
+        (deleted_ids, skipped_locked), _operation = (
+            operation_log_service.run_recorded_metadata_task(
+                server.vault,
+                delete_pics,
+                pic_ids,
+                op_type=operation_log_service.OP_SCRAPHEAP_MOVE,
+                picture_ids=pic_ids,
+                expand_stacks=True,
+                expand_stacks_include_deleted=True,
+                summary=operation_log_service.scrapheap_move_summary,
+                # Always batched: the caller's gesture id when it sent one, a
+                # server-minted ``srv-…`` otherwise.
+                **operation_log_service.request_context(
+                    request, fallback_batch_id=operation_log_service.new_batch_id()
+                ),
+            )
+        )
         # Soft-delete removes the cards from active grid views. Broadcast a single
         # ``removed`` event so other tabs drop the stale cards in one update.
         if deleted_ids:

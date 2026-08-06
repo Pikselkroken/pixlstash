@@ -55,9 +55,17 @@ class GridPicture(BaseModel):
     Fields are the projection used when ``fields=grid``; all are optional
     because the exact set returned depends on the requested ``fields`` and on
     server-side enrichment (stack counts, guest-score overlay, thumbnail/face
-    data added by ``POST /pictures/thumbnails``). Documented for the OpenAPI
-    schema only — responses are not filtered against this model, so additional
-    fields may be present.
+    data added by ``POST /pictures/thumbnails``).
+
+    **This model is enforced, not just documented.** It is the declared
+    ``response_model`` of the grid listing routes, so FastAPI validates every row
+    against it and — since the config does not set ``extra="allow"`` — **drops any
+    key not declared here**. That is load-bearing beyond tidiness: ``fields=full``
+    selects ``Picture.metadata_fields()``, which includes ``project_id``, and the
+    only reason those rows do not leak a project id to a token that cannot see it
+    is that this model has no ``project_id`` field to serialise it into (§16.6).
+    Adding a field here widens what the route returns; removing one silently
+    stops returning it.
     """
 
     model_config = ConfigDict(
@@ -195,8 +203,9 @@ class StreamPicturesResponse(BaseModel):
 class PictureCountResponse(BaseModel):
     """Total number of pictures matching the listing filters.
 
-    ``count`` is ``null`` for sorts where a total cannot be computed cheaply
-    (e.g. CHARACTER_LIKENESS)."""
+    ``count`` is an integer for every sort (including CHARACTER_LIKENESS,
+    which counts via its candidate/character filter); ``null`` is reserved
+    for a future sort whose total genuinely cannot be computed cheaply."""
 
     model_config = ConfigDict(json_schema_extra={"example": {"count": 28259}})
 
@@ -260,6 +269,15 @@ class PictureListFilters:
         ),
         face_filter: str | None = Query(
             None, description="with_face | without_face", examples=["with_face"]
+        ),
+        stack_state: str | None = Query(
+            None,
+            description=(
+                "stacked | unstacked | unresolved. Omit for every picture. "
+                "'unresolved' means the picture is in a duplicate group that "
+                "carries no verdict yet."
+            ),
+            examples=["stacked"],
         ),
         shared_only: bool = Query(
             False, description="Only pictures shared with the current user."
@@ -414,6 +432,15 @@ def select_pictures_for_listing(
             face_filter_param = request.query_params.get("face_filter")
             if face_filter_param in ("with_face", "without_face"):
                 query_params["face_filter"] = face_filter_param
+            stack_state_param = request.query_params.get("stack_state")
+            if stack_state_param in ("stacked", "unstacked", "unresolved"):
+                query_params["stack_state"] = stack_state_param
+            else:
+                # An unrecognised value must not survive into ``query_params``: it
+                # would be splatted into ``Picture.find(**query_params)``, where the
+                # ``hasattr`` fallthrough drops any key that is not a column and the
+                # filter silently does nothing.
+                query_params.pop("stack_state", None)
             impossible_sources_param = request.query_params.getlist(
                 "impossible_tag_source"
             )
@@ -478,6 +505,7 @@ def select_pictures_for_listing(
     project_id_raw = query_params.pop("project_id", None)
     file_path_prefix = query_params.pop("file_path_prefix", None) or None
     face_filter = query_params.pop("face_filter", None)
+    stack_state = query_params.pop("stack_state", None)
     impossible_sources = query_params.pop("impossible_sources", None)
     shared_only = bool(query_params.pop("shared_only", False))
     query_params.pop(
@@ -637,6 +665,7 @@ def select_pictures_for_listing(
         comfyui_models_filter_value: list[str] | None = None,
         comfyui_loras_filter_value: list[str] | None = None,
         face_filter_value: str | None = None,
+        stack_state_value: str | None = None,
         impossible_sources_value: list[str] | None = None,
     ):
         if deleted_only:
@@ -681,6 +710,7 @@ def select_pictures_for_listing(
                 and not comfyui_models_filter_value
                 and not comfyui_loras_filter_value
                 and not face_filter_value
+                and not stack_state_value
                 and not impossible_sources_value
             ):
                 return None
@@ -729,6 +759,7 @@ def select_pictures_for_listing(
             comfyui_models_filter=comfyui_models_filter_value,
             comfyui_loras_filter=comfyui_loras_filter_value,
             face_filter=face_filter_value,
+            stack_state=stack_state_value,
             impossible_sources=impossible_sources_value,
             apply_deleted_filter=False,
         ).apply(query)
@@ -738,7 +769,10 @@ def select_pictures_for_listing(
     logger.info("Getting pictures with project id = %s", project_id_raw)
 
     if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
-        if not reference_character_id:
+        # Counting does not need the likeness reference (it only counts the
+        # candidate/character filter), so the reference is required for the
+        # listing path only.
+        if not reference_character_id and not count_only:
             raise HTTPException(
                 status_code=400,
                 detail="reference_character_id is required for CHARACTER_LIKENESS sort",
@@ -765,6 +799,7 @@ def select_pictures_for_listing(
             comfyui_models_filter_value=query_params.get("comfyui_models_filter"),
             comfyui_loras_filter_value=query_params.get("comfyui_loras_filter"),
             face_filter_value=face_filter,
+            stack_state_value=stack_state,
             impossible_sources_value=impossible_sources,
         )
         if set_filter_ids:
@@ -869,6 +904,7 @@ def select_pictures_for_listing(
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
+                stack_state=stack_state,
                 impossible_sources=impossible_sources,
                 tags_filter=query_params.get("tags_filter") or None,
                 tags_rejected_filter=query_params.get("tags_rejected_filter") or None,
@@ -913,6 +949,7 @@ def select_pictures_for_listing(
             or None,
             hidden_tags_filter=hidden_tags,
             face_filter=face_filter,
+            stack_state=stack_state,
             impossible_sources=impossible_sources,
             picture_ids=(
                 [int(i) for i in query_params["id"] if str(i).isdigit()]
@@ -937,6 +974,7 @@ def select_pictures_for_listing(
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
+                stack_state=stack_state,
                 impossible_sources=impossible_sources,
                 hidden_tags_filter=hidden_tags,
                 guest_session_id=guest_session_id,
@@ -958,6 +996,7 @@ def select_pictures_for_listing(
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             face_filter=face_filter,
+            stack_state=stack_state,
             impossible_sources=impossible_sources,
             hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
@@ -1001,7 +1040,7 @@ def select_pictures_for_listing(
                 ).all()
                 return list({face.picture_id for face in faces})
 
-            picture_ids = server.vault.db.run_task(
+            picture_ids = server.vault.db.run_immediate_read_task(
                 get_picture_ids_for_character, character_id
             )
             if not picture_ids:
@@ -1022,7 +1061,7 @@ def select_pictures_for_listing(
                         ).all()
                         return list(rows)
 
-                    picture_ids = server.vault.db.run_task(
+                    picture_ids = server.vault.db.run_immediate_read_task(
                         _get_project_unassigned_ids, picture_ids
                     )
                 else:
@@ -1041,7 +1080,7 @@ def select_pictures_for_listing(
                             ).all()
                             return list(rows)
 
-                        picture_ids = server.vault.db.run_task(
+                        picture_ids = server.vault.db.run_immediate_read_task(
                             _get_project_member_ids, picture_ids, proj_id_int
                         )
 
@@ -1100,7 +1139,7 @@ def select_pictures_for_listing(
                     union |= members_by_char.get(cid, set())
                 return list(union)
 
-            picture_ids = server.vault.db.run_task(
+            picture_ids = server.vault.db.run_immediate_read_task(
                 get_picture_ids_for_characters, character_id_list, character_mode
             )
             if not picture_ids:
@@ -1118,7 +1157,7 @@ def select_pictures_for_listing(
                         ).all()
                         return list(rows)
 
-                    picture_ids = server.vault.db.run_task(
+                    picture_ids = server.vault.db.run_immediate_read_task(
                         _get_project_unassigned_ids_multi, picture_ids
                     )
                 else:
@@ -1137,7 +1176,7 @@ def select_pictures_for_listing(
                             ).all()
                             return list(rows)
 
-                        picture_ids = server.vault.db.run_task(
+                        picture_ids = server.vault.db.run_immediate_read_task(
                             _get_project_member_ids_multi, picture_ids, proj_id_int
                         )
 
@@ -1204,7 +1243,7 @@ def select_pictures_for_listing(
                     )
 
         if count_only:
-            return server.vault.db.run_task(
+            return server.vault.db.run_immediate_read_task(
                 Picture.find,
                 count_only=True,
                 stack_leaders_only=stack_leaders_only,
@@ -1216,11 +1255,12 @@ def select_pictures_for_listing(
                 resolution_bucket=resolution_bucket,
                 file_path_prefix=file_path_prefix,
                 face_filter=face_filter,
+                stack_state=stack_state,
                 impossible_sources=impossible_sources,
                 hidden_tags_filter=hidden_tags,
                 **query_params,
             )
-        pics = server.vault.db.run_task(
+        pics = server.vault.db.run_immediate_read_task(
             Picture.find,
             sort_mech=sort_mech,
             offset=offset,
@@ -1235,6 +1275,7 @@ def select_pictures_for_listing(
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,
             face_filter=face_filter,
+            stack_state=stack_state,
             impossible_sources=impossible_sources,
             hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
@@ -1505,8 +1546,9 @@ def register_routes(router, server):
         request: Request,
         sort: str = Query(
             None,
-            description="Sort mechanism; only affects whether a count is "
-            "computable (CHARACTER_LIKENESS returns null).",
+            description="Sort mechanism; accepted for parity with /pictures. "
+            "CHARACTER_LIKENESS counts via its candidate/character filter "
+            "(no reference required).",
             examples=["DATE"],
         ),
         descending: bool = Query(
@@ -1550,11 +1592,6 @@ def register_routes(router, server):
         )
         # Use count_only=True to run a fast SELECT COUNT(*) rather than fetching all rows.
         # The count may be a small over-estimate for deployments with hidden-tag post-filtering,
-        sort_mech = (
-            SortMechanism.from_string(sort, descending=descending) if sort else None
-        )
-        if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
-            return {"count": None}
         count = select_pictures_for_listing(
             server=server,
             request=request,

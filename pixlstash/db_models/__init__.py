@@ -1,7 +1,30 @@
 from .character import Character  # noqa: F401
+from .dedup import (  # noqa: F401
+    DedupGroup,
+    DedupGroupMember,
+    DedupScan,
+    DedupVerdict,
+)
 from .deleted_file_log import DeletedFileLog  # noqa: F401
+from .entity_project import (  # noqa: F401
+    CharacterProjectMember,
+    PictureSetProjectMember,
+    character_in_no_project,
+    character_in_project,
+    picture_set_in_no_project,
+    picture_set_in_project,
+)
 from .detection import Detection  # noqa: F401
 from .face import Face  # noqa: F401
+from .mixed_stack import MixedStackDismissal, StackCohesion  # noqa: F401
+from .operation import (  # noqa: F401
+    Operation,
+    STATUS_APPLIED,
+    STATUS_SUPERSEDED,
+    STATUS_UNDONE,
+    TARGET_PICTURE,
+    VALID_STATUSES,
+)
 from .picture import Picture, SortMechanism  # noqa: F401
 from .picture_project import PictureProjectMember  # noqa: F401
 from .picture_set import PictureSet, PictureSetMember  # noqa: F401

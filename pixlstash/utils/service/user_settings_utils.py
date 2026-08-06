@@ -67,6 +67,11 @@ def serialize_user_config(user) -> dict:
         "keep_models_in_memory",
         "max_vram_gb",
         "check_for_updates",
+        "telemetry_send_install_id",
+        "telemetry_send_feature_usage",
+        "telemetry_send_error_reports",
+        "telemetry_send_hardware_profile",
+        "telemetry_consent_prompted",
         "show_keyboard_hint",
         "embed_watermark",
     }
@@ -183,9 +188,25 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "keep_models_in_memory",
         "max_vram_gb",
         "check_for_updates",
+        "telemetry_send_install_id",
+        "telemetry_send_feature_usage",
+        "telemetry_send_error_reports",
+        "telemetry_send_hardware_profile",
+        "telemetry_consent_prompted",
         "show_keyboard_hint",
         "embed_watermark",
         "tagger_settings",
+    }
+
+    # Every telemetry category is off unless explicitly turned on, so a blank or
+    # missing value coerces to False rather than being left unset. Listed once
+    # here so a category added later cannot be forgotten in the patch ladder.
+    telemetry_fields = {
+        "telemetry_send_install_id",
+        "telemetry_send_feature_usage",
+        "telemetry_send_error_reports",
+        "telemetry_send_hardware_profile",
+        "telemetry_consent_prompted",
     }
 
     allowed_date_formats = {
@@ -302,6 +323,17 @@ def apply_user_config_patch(user, patch_data) -> bool:
                     )
             if user.max_vram_gb != new_value:
                 user.max_vram_gb = new_value
+                updated = True
+            continue
+        if key in telemetry_fields:
+            # Coerce like the other boolean toggles, so a client PATCHing the
+            # string "false" cannot silently enable a telemetry category.
+            if value in ("", None, "null", "false", "False", "0", 0):
+                new_value = False
+            else:
+                new_value = bool(value)
+            if getattr(user, key, None) != new_value:
+                setattr(user, key, new_value)
                 updated = True
             continue
         if key == "check_for_updates":

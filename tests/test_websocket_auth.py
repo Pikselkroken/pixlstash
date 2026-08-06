@@ -13,8 +13,10 @@ themselves. These tests guard against:
 import asyncio
 import json
 import tempfile
+import threading
 
 import pytest
+from anyio import ClosedResourceError
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
@@ -358,6 +360,78 @@ def test_comfyui_proxy_rejects_anonymous(server):
     with pytest.raises(WebSocketDisconnect):
         with anon.websocket_connect(WS_COMFYUI):
             pass
+
+
+def test_restore_barrier_terminates_every_authenticated_websocket(
+    server, owner_client, monkeypatch
+):
+    """Updates and the bidirectional ComfyUI proxy drain before cutover."""
+    import pixlstash.routes.comfyui as comfyui_routes
+
+    upstream_closed = threading.Event()
+
+    class _BlockingUpstream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            upstream_closed.set()
+            return False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await asyncio.Future()
+
+        async def send(self, message):
+            return None
+
+    monkeypatch.setattr(
+        comfyui_routes.websockets,
+        "connect",
+        lambda *args, **kwargs: _BlockingUpstream(),
+    )
+
+    outcome = {}
+
+    def _close_and_drain():
+        try:
+            server.auth.close_auth_for_restore()
+        except BaseException as exc:
+            outcome["error"] = exc
+
+    updates_context = owner_client.websocket_connect(WS_UPDATES)
+    comfyui_context = owner_client.websocket_connect(WS_COMFYUI)
+    updates_ws = updates_context.__enter__()
+    comfyui_ws = comfyui_context.__enter__()
+    try:
+        thread = threading.Thread(target=_close_and_drain, daemon=True)
+        thread.start()
+
+        with pytest.raises((WebSocketDisconnect, ClosedResourceError)) as updates_close:
+            updates_ws.receive_text()
+        with pytest.raises((WebSocketDisconnect, ClosedResourceError)) as comfyui_close:
+            comfyui_ws.receive_text()
+
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "WebSocket admission leases did not drain"
+        assert "error" not in outcome, outcome.get("error")
+        assert upstream_closed.is_set(), "ComfyUI upstream survived the drain"
+        for closed in (updates_close.value, comfyui_close.value):
+            if isinstance(closed, WebSocketDisconnect):
+                assert closed.code == 1012
+        assert not server.auth._active_restore_websockets
+    finally:
+        # The barrier deliberately cancels each server handler after sending
+        # 1012. Starlette TestClient reflects that server-task cancellation from
+        # ``__exit__`` even though the client already observed the clean close.
+        for context in (comfyui_context, updates_context):
+            try:
+                context.__exit__(None, None, None)
+            except BaseException:
+                pass
+        server.auth.reopen_auth_after_restore()
 
 
 # ---------------------------------------------------------------------------

@@ -6,22 +6,22 @@
     :initialExpandedStackIds="overlayInitialExpandedStackIds"
     :allImages="allGridImages"
     :backendUrl="props.backendUrl"
-    :tagUpdate="props.wsTagUpdate"
-    :descriptionUpdate="props.wsDescriptionUpdate"
-    :smartScoreUpdate="props.wsSmartScoreUpdate"
-    :detectionUpdate="props.wsDetectionUpdate"
-    :hiddenTags="props.hiddenTags"
-    :applyTagFilter="props.applyTagFilter"
-    :dateFormat="props.dateFormat"
-    :showStacks="props.showStacks"
-    :showProblemIcon="props.showProblemIcon"
+    :tagUpdate="wsStore.wsTagUpdate"
+    :descriptionUpdate="wsStore.wsDescriptionUpdate"
+    :smartScoreUpdate="wsStore.wsSmartScoreUpdate"
+    :detectionUpdate="wsStore.wsDetectionUpdate"
+    :hiddenTags="userPrefsStore.hiddenTags"
+    :applyTagFilter="userPrefsStore.applyTagFilter"
+    :dateFormat="userPrefsStore.dateFormat"
+    :showStacks="gridStore.showStacks"
+    :showProblemIcon="gridStore.showProblemIcon"
     :availablePlugins="availablePlugins"
     :comfyuiProgress="comfyuiProgress"
     :comfyuiProgressPercent="comfyuiProgressPercent"
     :pluginProgress="pluginProgress"
     :pluginProgressPercent="pluginProgressPercent"
     :comfyuiClientId="comfyuiClientId"
-    :comfyuiConfigured="props.comfyuiConfigured"
+    :comfyuiConfigured="filterStore.comfyuiConfigured"
     :guestScore="overlayGuestScore"
     @close="closeOverlay"
     @apply-score="applyScore"
@@ -35,13 +35,14 @@
     @comfyui-run="handleComfyuiRun"
     @run-plugin="handlePluginRunRequest"
     @request-context-menu="handleOverlayContextMenuRequest"
+    @character-created="emit('refresh-sidebar')"
   />
   <ImageImporter
     ref="imageImporterRef"
     :backendUrl="props.backendUrl"
-    :selectedCharacterId="props.selectedCharacter"
-    :allPicturesId="props.allPicturesId"
-    :unassignedPicturesId="props.unassignedPicturesId"
+    :selectedCharacterId="selectionStore.selectedCharacter"
+    :allPicturesId="ALL_PICTURES_ID"
+    :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
     @import-started="handleImportStarted"
     @import-finished="handleImagesUploaded"
     @import-cancelled="handleImportCancelled"
@@ -50,15 +51,16 @@
   <div :style="wrapperStyle" class="grid-content-area">
     <Toolbar
       :selectedCount="selectedImageIds.length"
-      :selectedCharacter="String(props.selectedCharacter)"
-      :selectedSort="props.selectedSort"
-      :allPicturesId="String(props.allPicturesId)"
-      :unassignedPicturesId="String(props.unassignedPicturesId)"
+      :selectedCharacter="String(selectionStore.selectedCharacter)"
+      :selectedSort="sortStore.selectedSort"
+      :allPicturesId="String(ALL_PICTURES_ID)"
+      :unassignedPicturesId="String(UNASSIGNED_PICTURES_ID)"
       :backend-url="props.backendUrl"
-      :comfyui-configured="props.comfyuiConfigured"
+      :comfyui-configured="filterStore.comfyuiConfigured"
       @comfyui-run-grid="runComfyuiOnGridImages"
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
+      @open-duplicates="emit('open-duplicates')"
       @open-settings="emit('open-settings')"
       @open-import="emit('open-import')"
       @local-import="emit('local-import', $event)"
@@ -105,17 +107,19 @@
       :y="contextMenuY"
       :selected-image-ids="selectedImageIds"
       :selected-media-support="selectedMediaSupport"
-      :selected-character="String(props.selectedCharacter)"
-      :selected-set="String(props.selectedSet)"
+      :selected-character="String(selectionStore.selectedCharacter)"
+      :selected-set="String(selectionStore.selectedSet)"
       :selected-group-name="selectedGroupName"
-      :selected-sort="props.selectedSort"
-      :all-pictures-id="String(props.allPicturesId)"
-      :unassigned-pictures-id="String(props.unassignedPicturesId)"
-      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
+      :selected-sort="sortStore.selectedSort"
+      :all-pictures-id="String(ALL_PICTURES_ID)"
+      :unassigned-pictures-id="String(UNASSIGNED_PICTURES_ID)"
+      :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
       :backend-url="props.backendUrl"
-      :comfyui-configured="props.comfyuiConfigured"
+      :comfyui-configured="filterStore.comfyuiConfigured"
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
+      :keep-cover-only-stack-count="keepCoverOnlyStackCount"
+      :keep-cover-only-lock-reason="keepCoverOnlyLockReason"
       :grouping-lock-reason="partialStackGroupingReason"
       :lock-reason="selectionLockReason"
       :locked-set-ids="lockedSetsStore.lockedSetIds"
@@ -131,16 +135,19 @@
       @added-to-set="handleOverlayAddedToSet"
       @add-to-character="handleAddToCharacter"
       @remove-from-character="handleRemoveFromCharacter"
+      @create-character="handleCreateCharacterFromMenu"
       @set-project="handleSetProjectForSelected"
       @remove-from-stack="removeSelectedFromStack"
       @dissolve-stacks="dissolveSelectedStacks"
       @create-stack="createStackFromSelection"
       @create-stacks-from-groups="createStacksFromSelectedGroups"
       @remove-from-group="removeFromGroup"
+      @keep-cover-only="openKeepCoverOnly"
       @delete-selected="deleteSelected"
       @open-tag-panel="handleContextMenuOpenTagPanel"
       @open-plugin-panel="handleContextMenuOpenPluginPanel"
       @open-comfyui-panel="handleContextMenuOpenComfyuiPanel"
+      @open-remix-dialog="openRemixDialog"
       @segment="openSegmentDialog"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
@@ -161,10 +168,10 @@
       :x="overlayCtxX"
       :y="overlayCtxY"
       :selected-image-ids="overlayCtxSelectedIds"
-      :selected-character="String(props.selectedCharacter)"
-      :all-pictures-id="String(props.allPicturesId)"
-      :unassigned-pictures-id="String(props.unassignedPicturesId)"
-      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
+      :selected-character="String(selectionStore.selectedCharacter)"
+      :all-pictures-id="String(ALL_PICTURES_ID)"
+      :unassigned-pictures-id="String(UNASSIGNED_PICTURES_ID)"
+      :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
       :backend-url="props.backendUrl"
       :lock-reason="overlayCtxLockReason"
       :context-image="overlayCtxImage"
@@ -178,6 +185,19 @@
       @segment="openOverlaySegmentDialog"
       @delete-selected="handleOverlayDelete"
       @remove-from-group="handleOverlayScrapheapRestore"
+    />
+
+    <!-- ── New person from the context menu (#645) ─────────────
+         Grid-local instance of the person editor so the create-and-assign
+         flow's state (the captured selection) stays owned by the grid.
+         SideBar keeps its own instance for its own entry points. -->
+    <CharacterEditor
+      :open="createPersonOpen"
+      :character="createPersonCharacter"
+      :backend-url="props.backendUrl"
+      :projects="createPersonProjects"
+      @close="handleCreatePersonClose"
+      @saved="handleCreatePersonSaved"
     />
 
     <!-- ── Revoke picture shares confirm dialog ───────────────── -->
@@ -252,10 +272,10 @@
       resource-type="picture"
       :resource-id="contextMenuImage?.id"
       :resource-format="contextMenuImage?.format"
-      :embed-watermark="props.embedWatermark"
+      :embed-watermark="userPrefsStore.embedWatermark"
       :backend-url="props.backendUrl"
-      :public-url="props.publicUrl"
-      @update:embed-watermark="emit('update:embed-watermark', $event)"
+      :public-url="userPrefsStore.publicUrl"
+      @update:embed-watermark="userPrefsStore.embedWatermark = $event"
       @created="onSharePicCreated"
     />
     <EmptyScrapHeap
@@ -287,6 +307,19 @@
       @confirm="confirmDeleteForever"
       @cancel="cancelDeleteForever"
     />
+    <!-- The one consent for collapsing stacks to their covers. Deliberately NOT
+         a sibling of DeleteForeverDialog's ceremony: no confirm token and no
+         type-to-confirm, because this is the same recoverable soft delete the
+         grid's Delete performs. -->
+    <KeepCoverOnlyDialog
+      :open="keepCoverOnlyOpen"
+      :preview="keepCoverOnlyPreview"
+      :loading="keepCoverOnlyLoading"
+      :preview-failed="keepCoverOnlyPreviewFailed"
+      :busy="keepCoverOnlyBusy"
+      @close="closeKeepCoverOnly"
+      @confirm="runKeepCoverOnly"
+    />
     <div
       v-if="isMultiCharacterView || isSetOverlapView"
       class="multi-select-toolbar"
@@ -294,13 +327,15 @@
       <select
         class="multi-select-toolbar__mode"
         :value="
-          isMultiCharacterView ? props.characterMultiMode : props.setMultiMode
+          isMultiCharacterView
+            ? selectionStore.characterMultiMode
+            : selectionStore.setMultiMode
         "
         @change="
           (e) =>
             isMultiCharacterView
-              ? emit('update:character-multi-mode', e.target.value)
-              : emit('update:set-multi-mode', e.target.value)
+              ? selectionStore.setCharacterMultiMode(e.target.value)
+              : selectionStore.setSetMultiMode(e.target.value)
         "
       >
         <option value="union">Union</option>
@@ -309,15 +344,19 @@
         <option value="xor">Unique (XOR)</option>
       </select>
       <template
-        v-if="!isMultiCharacterView && props.setMultiMode === 'difference'"
+        v-if="
+          !isMultiCharacterView && selectionStore.setMultiMode === 'difference'
+        "
       >
         <span class="multi-select-toolbar__separator">|</span>
         <label class="multi-select-toolbar__base-label">Base:</label>
         <select
           class="multi-select-toolbar__base"
-          :value="props.setDifferenceBaseId ?? normalizedSelectedSetIds[0]"
+          :value="
+            selectionStore.setDifferenceBaseId ?? normalizedSelectedSetIds[0]
+          "
           @change="
-            (e) => emit('update:set-difference-base-id', Number(e.target.value))
+            (e) => selectionStore.setSetDifferenceBaseId(Number(e.target.value))
           "
         >
           <option
@@ -325,7 +364,7 @@
             :key="sid"
             :value="sid"
           >
-            {{ props.selectedSetNames[sid] || `Set ${sid}` }}
+            {{ selectionStore.selectedSetNames[sid] || `Set ${sid}` }}
           </option>
         </select>
       </template>
@@ -361,10 +400,21 @@
       anchor="top"
       @abort="abortExportZip"
     />
+    <RemixDialog
+      :open="remixDialogOpen"
+      :image="remixImage"
+      :selected-image-ids="selectedImageIds"
+      :client-id="comfyuiClientId || ''"
+      :backend-url="props.backendUrl"
+      :stack-outputs="genStackPrefs.stackI2IOutputs"
+      @close="remixDialogOpen = false"
+      @run="handleComfyuiRun"
+      @use-batch="handleContextMenuOpenComfyuiPanel"
+    />
     <ComfyUiRunner
       ref="comfyuiRunner"
       :backendUrl="props.backendUrl"
-      :wsPluginProgress="props.wsPluginProgress"
+      :wsPluginProgress="wsStore.wsPluginProgress"
       :overlayOpen="overlayOpen"
       :overlayImageId="overlayImageId"
       :allGridImages="allGridImages"
@@ -411,26 +461,26 @@
     >
       <div
         v-if="
-          props.pendingExternalImportCount > 0 ||
-          props.sortChangedExternalCount > 0
+          wsStore.pendingExternalImportCount > 0 ||
+          wsStore.sortChangedExternalCount > 0
         "
         class="pending-imports-pill-anchor"
       >
         <button
-          v-if="props.pendingExternalImportCount > 0"
+          v-if="wsStore.pendingExternalImportCount > 0"
           class="pending-imports-pill"
           data-testid="pending-imports-pill"
           @click="emit('load-pending-imports')"
         >
-          ↑ {{ props.pendingExternalImportCount }}
+          ↑ {{ wsStore.pendingExternalImportCount }}
           {{
-            props.pendingExternalImportCount === 1
+            wsStore.pendingExternalImportCount === 1
               ? "new picture"
               : "new pictures"
           }}, click to load
         </button>
         <button
-          v-if="props.sortChangedExternalCount > 0"
+          v-if="wsStore.sortChangedExternalCount > 0"
           class="pending-imports-pill"
           data-testid="sort-changed-pill"
           @click="emit('load-sort-changed')"
@@ -486,7 +536,7 @@
         :class="[
           'image-grid',
           {
-            'compact-mode': props.compactMode,
+            'compact-mode': gridStore.compactMode,
             'touch-select-mode': touchSelectMode,
             'image-grid--justified': isJustifiedMode,
           },
@@ -527,8 +577,10 @@
                 hoveredStackId !== null &&
                 getPictureStackId(img) === hoveredStackId,
               'image-card-cursor': img.idx === cursorIdx,
+              'image-card--ghost': isImageGhosted(img),
             },
           ]"
+          :inert="isImageGhosted(img) || null"
           @click="handleImageCardClick(img, img.idx, $event)"
           @mouseenter="handleImageMouseEnter(img)"
           @mouseleave="handleImageMouseLeave(img)"
@@ -567,7 +619,7 @@
                 v-if="
                   isThumbnailReady(img.id) &&
                   img.thumbnail &&
-                  ((props.showProblemIcon && hasPenalisedTags(img)) ||
+                  ((gridStore.showProblemIcon && hasPenalisedTags(img)) ||
                     img.reference_folder_id ||
                     lockedSetsStore.isLocked(img.id) ||
                     (!isReadOnly && sharedPictureIds.has(img.id)))
@@ -575,18 +627,20 @@
                 class="thumbnail-top-left-badges"
               >
                 <div
-                  v-if="props.showProblemIcon && hasPenalisedTags(img)"
+                  v-if="gridStore.showProblemIcon && hasPenalisedTags(img)"
                   class="penalised-tag-indicator thumbnail-badge"
                   :title="penalisedTagsTitle(img)"
                 >
                   <v-icon
                     :size="badgeIconSizes.penalised"
-                    :color="penalisedTagColor(img, props.penalisedTagWeights)"
+                    :color="
+                      penalisedTagColor(img, userPrefsStore.penalisedTagWeights)
+                    "
                     >{{
                       penalisedTagIcon(
                         img,
-                        props.penalisedTagWeights,
-                        props.themeMode !== "light",
+                        userPrefsStore.penalisedTagWeights,
+                        userPrefsStore.themeMode !== "light",
                       )
                     }}</v-icon
                   >
@@ -820,13 +874,52 @@
                 class="stack-band-overlay"
                 :style="getStackBandStyle(img)"
               ></div>
-              <!-- Top-right hover badges: stars + stack indicator -->
+              <!-- The stack count and the deck edges are permanent, not
+                   hover-only: how many pictures a tile stands for is a fact
+                   about the tile, and hiding it until hover is what made stacks
+                   invisible while browsing. -->
+              <StackEdgeTicks
+                v-if="shouldShowStackBadge(img) && stackDeckEdgesFit"
+                :count="getStackBadgeCount(img)"
+              />
+              <!-- Once a stack is expanded its members look like any other
+                   picture, so the one that the collapsed tile stands for has to
+                   say so. Without this, expanding a stack loses the answer to
+                   "which of these is the keeper". -->
+              <span
+                v-if="isExpandedStackCover(img)"
+                class="stack-cover-flag"
+                title="This picture is the stack's cover"
+                >Cover</span
+              >
+              <!-- Top-right badge column — the shared home for corner
+                   indicators (stack count in the corner, hover-only stars
+                   below it, right-aligned, 2px gap). The stack count is
+                   PERMANENT — how many pictures a tile stands for is a fact
+                   about the tile, and hiding it until hover is what made
+                   stacks invisible while browsing. The hover behaviour
+                   therefore lives on the container's other children, not the
+                   container.
+
+                   The permanent badge leads the column deliberately: below the
+                   stars its rest position was set by a strip that is
+                   `opacity: 0` but still in flow, so it hung a row off the
+                   corner and moved whenever the star size or `showStars`
+                   changed. Leading, it never moves; only what appears beneath
+                   it does. -->
               <div
                 v-if="isThumbnailReady(img.id) && img.thumbnail"
                 class="thumbnail-top-right-badges"
               >
+                <StackBadge
+                  v-if="shouldShowStackBadge(img)"
+                  :count="getStackBadgeCount(img)"
+                  :tint="getStackBadgeTint(img)"
+                  @activate="toggleStackExpand(img)"
+                  @mouseenter.stop="prefetchStackMembers(img)"
+                />
                 <StarRatingOverlay
-                  v-if="props.showStars"
+                  v-if="gridStore.showStars"
                   :score="
                     isReadOnly
                       ? (guestScoreMap.get(img.id) ?? img.score ?? 0)
@@ -836,25 +929,12 @@
                   :compact="true"
                   @set-score="setScore(img, $event)"
                 />
-                <div
-                  v-if="shouldShowStackBadge(img)"
-                  class="stack-indicator"
-                  :title="stackBadgeTitle(img)"
-                  @click.stop="toggleStackExpand(img)"
-                  @mouseenter.stop="prefetchStackMembers(img)"
-                >
-                  <v-icon
-                    :size="badgeIconSizes.stack"
-                    :style="getStackBadgeIconStyle(img)"
-                    >mdi-layers-outline</v-icon
-                  >
-                </div>
               </div>
             </div>
           </div>
           <div v-if="isImageSelected(img.id)" class="selection-overlay"></div>
           <!-- Info row absolutely positioned below thumbnail -->
-          <div v-if="!props.compactMode" class="thumbnail-info-row">
+          <div v-if="!gridStore.compactMode" class="thumbnail-info-row">
             <div
               v-for="info in getThumbnailInfoItems(img)"
               :key="`${info.key}-${img.id}`"
@@ -880,34 +960,6 @@
         ></div>
       </div>
     </div>
-
-    <!-- Search Result Bar -->
-    <SearchResultBar
-      v-if="
-        (props.searchQuery && props.searchQuery.length > 0) ||
-        reverseImageSearchPictureIds.length ||
-        faceLikenessSearchFaceId
-      "
-      :images-loading="imagesLoading"
-      :count="allGridImages.length"
-      :category-label="props.activeCategoryLabel"
-      :is-all-pictures-active="
-        reverseImageSearchPictureIds.length || faceLikenessSearchFaceId
-          ? true
-          : props.isAllPicturesActive
-      "
-      :status-text="
-        faceLikenessSearchFaceId
-          ? `Similar faces: ${allGridImages.length} results`
-          : reverseImageSearchPictureIds.length > 1
-            ? `Multi-image search: ${allGridImages.length} results`
-            : reverseImageSearchPictureIds.length
-              ? `Reverse image search: ${allGridImages.length} results`
-              : null
-      "
-      @search-all="emit('search-all')"
-      @clear="clearSearchQuery"
-    />
 
     <!-- Guest scoring consent banner -->
     <v-snackbar
@@ -970,50 +1022,111 @@
       </template>
     </v-snackbar>
 
-    <SelectionBar
-      ref="selectionBarRef"
-      :selected-count="selectedImageIds.length"
-      :selected-expanded-count="selectedExpandedCount"
-      :selected-face-count="selectedFaceIds.length"
-      :selected-group-name="selectedGroupName"
-      :selected-sort="props.selectedSort"
-      :visible="showSelectionBar"
-      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
-      :backend-url="props.backendUrl"
-      :selected-image-ids="selectedImageIds"
-      :selected-media-support="selectedMediaSupport"
-      :comfyui-client-id="comfyuiClientId"
-      :comfyui-configured="props.comfyuiConfigured"
-      :show-remove-from-stack="showRemoveFromStack"
-      :selected-multiple-stack-ids="selectedMultipleStackIds"
-      :grouping-lock-reason="partialStackGroupingReason"
-      :available-plugins="availablePlugins"
-      :tagger-plugins="taggerPlugins"
-      :captioner-plugins="captionerPlugins"
-      :all-grid-images="allGridImages"
-      :selected-character="String(props.selectedCharacter)"
-      :selected-set="String(props.selectedSet)"
-      :impossible-sources="props.impossibleSources"
-      :clearing-impossible="clearingImpossibleTags"
-      @clear-impossible-tags="handleClearImpossibleTags"
-      @clear-selection="clearSelection"
-      @added-to-set="handleOverlayAddedToSet"
-      @remove-from-group="removeFromGroup"
-      @delete-selected="deleteSelected"
-      @set-project="handleSetProjectForSelected"
-      @add-to-character="handleAddToCharacter"
-      @remove-from-character="handleRemoveFromCharacter"
-      @create-stack="createStackFromSelection"
-      @remove-from-stack="removeSelectedFromStack"
-      @dissolve-stacks="dissolveSelectedStacks"
-      @create-stacks-from-groups="createStacksFromSelectedGroups"
-      @run-plugin="handlePluginRunRequest"
-      @comfyui-run="handleComfyuiRun"
-      @tags-applied="debouncedFetchAllGridImages({ force: true })"
-      @auto-tag="handleAutoTag"
-      @generate-description="handleGenerateDescription"
-      @reverse-image-search="handleReverseImageSearch"
-      @selection-menu-open="toolbarSelectionMenuOpen = $event"
+    <!-- The grid's ONE bottom-edge surface (merged-grid-action-pill.md). Before
+         the merge the search bar and the selection pill were independent mounts
+         that could both be up at once, and only the pill registered a bottom
+         anchor — so notice cards landed on top of the search bar. -->
+    <GridActionPill
+      :search-active="searchResultsActive"
+      :selection-active="showSelectionBar"
+      @focus-escaped="restoreGridFocus"
+    >
+      <template #search>
+        <SearchResultBar
+          :images-loading="imagesLoading"
+          :status-count="searchStatus.count"
+          :status-label="searchStatus.label"
+          :is-all-pictures-active="
+            reverseImageSearchPictureIds.length ||
+            faceLikenessSearchFaceId ||
+            faceSearchCharacter
+              ? true
+              : selectionStore.isAllPicturesActive
+          "
+          :threshold="faceSearchCharacter ? faceSearchThreshold : null"
+          :threshold-min="FACE_SEARCH_FETCH_FLOOR"
+          :threshold-max="FACE_SEARCH_MAX_THRESHOLD"
+          :min-refs="faceSearchMinRefs"
+          :reference-count="faceSearchRefCount"
+          :assign-target="faceSearchCharacter?.name ?? null"
+          :assign-count="faceSearchAssignIds.length"
+          :assign-from-selection="faceSearchAssignFromSelection"
+          :assign-busy="faceSearchAssignBusy"
+          :owns-escape="!showSelectionBar"
+          @update:min-refs="handleFaceSearchMinRefs"
+          @update:threshold="handleFaceSearchThreshold"
+          @assign="handleAssignFaceSearchResults"
+          @search-all="emit('search-all')"
+          @clear="clearSearchQuery"
+        />
+      </template>
+
+      <template #selection>
+        <SelectionBar
+          ref="selectionBarRef"
+          :selected-count="selectedImageIds.length"
+          :selected-expanded-count="selectedExpandedCount"
+          :selected-face-count="selectedFaceIds.length"
+          :selected-group-name="selectedGroupName"
+          :selected-sort="sortStore.selectedSort"
+          :owns-escape="true"
+          :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
+          :backend-url="props.backendUrl"
+          :selected-image-ids="selectedImageIds"
+          :selected-media-support="selectedMediaSupport"
+          :comfyui-client-id="comfyuiClientId"
+          :comfyui-configured="filterStore.comfyuiConfigured"
+          :show-remove-from-stack="showRemoveFromStack"
+          :selected-multiple-stack-ids="selectedMultipleStackIds"
+          :keep-cover-only-stack-count="keepCoverOnlyStackCount"
+          :keep-cover-only-lock-reason="keepCoverOnlyLockReason"
+          :grouping-lock-reason="partialStackGroupingReason"
+          :available-plugins="availablePlugins"
+          :tagger-plugins="taggerPlugins"
+          :captioner-plugins="captionerPlugins"
+          :all-grid-images="allGridImages"
+          :selected-character="String(selectionStore.selectedCharacter)"
+          :selected-set="String(selectionStore.selectedSet)"
+          :impossible-sources="filterStore.impossibleSources"
+          :clearing-impossible="clearingImpossibleTags"
+          @clear-impossible-tags="handleClearImpossibleTags"
+          @clear-selection="clearSelection"
+          @added-to-set="handleOverlayAddedToSet"
+          @remove-from-group="removeFromGroup"
+          @keep-cover-only="openKeepCoverOnly"
+          @delete-selected="deleteSelected"
+          @set-project="handleSetProjectForSelected"
+          @add-to-character="handleAddToCharacter"
+          @remove-from-character="handleRemoveFromCharacter"
+          @create-stack="createStackFromSelection"
+          @remove-from-stack="removeSelectedFromStack"
+          @dissolve-stacks="dissolveSelectedStacks"
+          @create-stacks-from-groups="createStacksFromSelectedGroups"
+          @run-plugin="handlePluginRunRequest"
+          @comfyui-run="handleComfyuiRun"
+          @tags-applied="debouncedFetchAllGridImages({ force: true })"
+          @auto-tag="handleAutoTag"
+          @generate-description="handleGenerateDescription"
+          @reverse-image-search="handleReverseImageSearch"
+          @segment="openSegmentDialog"
+          @selection-menu-open="toolbarSelectionMenuOpen = $event"
+        />
+      </template>
+    </GridActionPill>
+    <!-- The action receipt shares the selection pill's slot and lifts clear of
+         it when both are up. Owner-only, like the toolbar control.
+
+         `pill-hidden` while the lightbox is open, NOT `v-if`: the lightbox has
+         its own narration of the same single receipt, so two pills would render
+         it at two positions and the grid one would show through the backdrop.
+         The component stays mounted because it carries the one app-wide
+         `role="status"` region, which the lightbox deliberately does not
+         duplicate (the lightbox does not `inert` the grid, so that region still
+         speaks and a second one would double-speak). -->
+    <ActionReceipt
+      v-if="!isReadOnly"
+      :lift-px="actionReceiptLift"
+      :pill-hidden="overlayOpen"
     />
   </div>
 </template>
@@ -1029,17 +1142,33 @@ import {
   onUnmounted,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useFilterStore } from "../../stores/useFilterStore";
+import { useGridStore } from "../../stores/useGridStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
+import {
+  GHOST_PENDING,
+  useOperationStore,
+} from "../../stores/useOperationStore";
 import { useNoticeStore, DEFAULT_TIMEOUTS } from "../../stores/useNoticeStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
-import { useBottomAnchor } from "../../composables/useBottomAnchor";
+import {
+  useAnchorHeight,
+  useBottomAnchor,
+} from "../../composables/useBottomAnchor";
+import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
 import { useScopedNotice } from "../../composables/useScopedNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
 import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
+import {
+  cutFaceSuggestions,
+  referenceFaceCount,
+} from "../../utils/faceSuggestionCut.js";
 import {
   squareCropParams,
   squareCropImgStyle,
@@ -1058,17 +1187,22 @@ import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
 import Toolbar from "../panels/Toolbar.vue";
 import SelectionBar from "../panels/SelectionBar.vue";
+import GridActionPill from "../panels/GridActionPill.vue";
+import ActionReceipt from "../widgets/ActionReceipt.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import StackBadge from "../widgets/StackBadge.vue";
+import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import ComfyUiRunner from "../io/ComfyUiRunner.vue";
+import RemixDialog from "../io/RemixDialog.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
 import DeleteForeverDialog from "../widgets/DeleteForeverDialog.vue";
+import KeepCoverOnlyDialog from "../widgets/KeepCoverOnlyDialog.vue";
 import { appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
-  listPicturesByIds,
   getPictureMetadata,
   getThumbnails,
   deletePictures,
@@ -1084,21 +1218,38 @@ import {
   resetPictureDescription,
   clearImpossibleTags,
   restoreImpossibleTags,
-  applyScores,
-  getGuestScores,
-  submitGuestScores,
   startExport,
   getExportStatus,
   downloadExport,
+  listPicturesByIds,
 } from "../../api/pictures";
 import { addPictureTag, removePictureTag } from "../../api/tags";
-import { getStack, removeStackMembers } from "../../api/stacks";
+import {
+  getStack,
+  keepCoverOnly,
+  previewKeepCoverOnly,
+  removeStackMembers,
+} from "../../api/stacks";
+import {
+  keepCoverOnlyLockReason as buildKeepCoverOnlyLockReason,
+  keepCoverOnlySkipNote,
+  selectedKeepCoverOnlyStacks,
+} from "../../utils/keepCoverOnly";
 import {
   getCharacter,
+  listCharacters,
   addCharacterFaces,
+  addCharacterFaceAssignments,
+  addCharacterFacesByFaceId,
   removeCharacterFaces,
   removeCharacterFacesByFaceId,
 } from "../../api/characters";
+import { listProjects } from "../../api/projects";
+import {
+  chooseCharacterAssignment,
+  nextFreeCharacterName,
+} from "../../utils/characterCreateFlow.js";
+import CharacterEditor from "../editors/CharacterEditor.vue";
 import {
   getPictureSet,
   addPictureToSet,
@@ -1115,8 +1266,12 @@ import {
   normalizePluginProgressMessage,
   rangeCovers,
   sleep,
-  toggleScore,
 } from "../../utils/utils.js";
+import {
+  isLockedRefusal,
+  lockedSets,
+  lockedSetsSentence,
+} from "../../utils/dedup.js";
 import {
   dedupeTagList,
   getTagId,
@@ -1133,7 +1288,6 @@ import {
   getStackPositionValue,
   selectNewestStackMember,
   shouldShowStackBadge,
-  stackBadgeTitle,
 } from "../../utils/stack.js";
 import { useVirtualScroll } from "../../composables/useVirtualScroll.js";
 import {
@@ -1144,7 +1298,31 @@ import { useMultiSelect } from "../../composables/useMultiSelect.js";
 import { useGridDragDrop } from "../../composables/useGridDragDrop.js";
 import { useStackOrdering } from "../../composables/useStackOrdering.js";
 import { useGridFetch } from "../../composables/useGridFetch.js";
+import { useGridScoring } from "../../composables/useGridScoring.js";
 import { useGridKeyboardNav } from "../../composables/useGridKeyboardNav.js";
+import { debounce } from "lodash-es";
+import { useSelectionStore } from "../../stores/useSelectionStore";
+import { useSortStore } from "../../stores/useSortStore";
+import { useProjectStore } from "../../stores/useProjectStore";
+import { useWsStore } from "../../stores/useWsStore";
+import { useSearchStore } from "../../stores/useSearchStore";
+import {
+  ALL_PICTURES_ID,
+  SCRAPHEAP_PICTURES_ID,
+  UNASSIGNED_PICTURES_ID,
+} from "../../stores/useViewStore";
+
+// Store-direct (Phase 3): the picture-query filter facets and the grid's own
+// display preferences are read from the stores, not mirrored in through props.
+const filterStore = useFilterStore();
+const selectionStore = useSelectionStore();
+const sortStore = useSortStore();
+const projectStore = useProjectStore();
+const wsStore = useWsStore();
+const searchStore = useSearchStore();
+const gridStore = useGridStore();
+const sidebarStore = useSidebarStore();
+const userPrefsStore = useUserPrefsStore();
 
 const emit = defineEmits([
   "open-overlay",
@@ -1158,16 +1336,13 @@ const emit = defineEmits([
   "import-started",
   "import-ended",
   "clear-multi-selection",
-  "update:character-multi-mode",
-  "update:set-multi-mode",
-  "update:set-difference-base-id",
-  "update:embed-watermark",
   "update:visible-range-label",
   "update:match-count",
   "load-pending-imports",
   "load-sort-changed",
   "flag-sort-changed",
   "open-settings",
+  "open-duplicates",
   "open-import",
   "local-import",
   "confirm-export-zip",
@@ -1175,95 +1350,8 @@ const emit = defineEmits([
 
 // Props
 const props = defineProps({
-  thumbnailSize: Number,
-  sidebarVisible: Boolean,
   backendUrl: String,
-  selectedCharacter: { type: [String, Number, null], default: null },
-  selectedSet: { type: [Number, String, null], default: null },
-  selectedSetIds: { type: Array, default: () => [] },
-  searchQuery: String,
   activeCategoryLabel: { type: String, default: "Category" },
-  isAllPicturesActive: { type: Boolean, default: false },
-  selectedSort: String,
-  selectedDescending: Boolean,
-  similarityCharacter: { type: [String, Number, null], default: null },
-  stackThreshold: { type: [String, Number, null], default: null },
-  showStars: Boolean,
-  showFaceBboxes: Boolean,
-  showDetections: Boolean,
-  showProblemIcon: Boolean,
-  penalisedTagWeights: { type: Object, default: () => ({}) },
-  showStacks: { type: Boolean, default: true },
-  compactMode: { type: Boolean, default: false },
-  // 'square' (uniform grid) or 'justified' (Google-Photos-style rows of
-  // variable-width thumbnails sharing a common row height).
-  thumbnailMode: { type: String, default: "square" },
-  // Shared thumbnail-size level (0..6). Drives square column count (via
-  // gridStore.columns) and, in justified mode, the target row height.
-  sizeLevel: { type: Number, default: 3 },
-  themeMode: { type: String, default: "light" },
-  dateFormat: { type: String, default: "locale" },
-  allPicturesId: String,
-  unassignedPicturesId: String,
-  scrapheapPicturesId: String,
-  gridVersion: { type: Number, default: 0 },
-  wsUpdateKey: { type: Number, default: 0 },
-  wsTagUpdate: {
-    type: Object,
-    default: () => ({ key: 0, pictureIds: [] }),
-  },
-  wsDescriptionUpdate: {
-    type: Object,
-    default: () => ({ key: 0, pictureIds: [] }),
-  },
-  wsSmartScoreUpdate: {
-    type: Object,
-    default: () => ({ key: 0, pictureIds: [] }),
-  },
-  wsDetectionUpdate: {
-    type: Object,
-    default: () => ({ key: 0, pictureIds: [] }),
-  },
-  wsPluginProgress: {
-    type: Object,
-    default: () => ({ key: 0, payload: null }),
-  },
-  mediaTypeFilter: { type: String, default: "all" },
-  comfyuiModelFilter: { type: Array, default: () => [] },
-  comfyuiLoraFilter: { type: Array, default: () => [] },
-  comfyuiConfigured: { type: Boolean, default: false },
-  minScoreFilter: { type: Number, default: null },
-  maxScoreFilter: { type: Number, default: null },
-  smartScoreBucketFilter: { type: String, default: null },
-  resolutionBucketFilter: { type: String, default: null },
-  tagFilter: { type: Array, default: () => [] },
-  tagRejectedFilter: { type: Array, default: () => [] },
-  tagConfidenceAboveFilter: { type: Array, default: () => [] },
-  tagConfidenceBelowFilter: { type: Array, default: () => [] },
-  faceBboxFilter: { type: String, default: null },
-  impossibleSources: { type: Array, default: () => [] },
-  sharedOnlyFilter: { type: Boolean, default: false },
-  unassignedOnlyFilter: { type: Boolean, default: false },
-  columns: { type: Number, required: true },
-  hiddenTags: { type: Array, default: () => [] },
-  applyTagFilter: { type: Boolean, default: false },
-  projectViewMode: { type: String, default: "global" },
-  selectedProjectId: { type: Number, default: null },
-  characterProjectIds: { type: Object, default: () => ({}) },
-  setProjectIds: { type: Object, default: () => ({}) },
-  referenceFolderIdFilter: { type: Number, default: null },
-  filePathPrefixFilter: { type: String, default: null },
-  importSourceFolderFilter: { type: String, default: null },
-  folderScanning: { type: Boolean, default: false },
-  selectedCharacterIds: { type: Array, default: () => [] },
-  characterMultiMode: { type: String, default: "union" },
-  setMultiMode: { type: String, default: "intersection" },
-  setDifferenceBaseId: { type: Number, default: null },
-  selectedSetNames: { type: Object, default: () => ({}) },
-  publicUrl: { type: String, default: null },
-  embedWatermark: { type: Boolean, default: false },
-  pendingExternalImportCount: { type: Number, default: 0 },
-  sortChangedExternalCount: { type: Number, default: 0 },
 });
 
 // ============================================================
@@ -1276,8 +1364,8 @@ const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
 
 const normalizedSelectedSetIds = computed(() => {
-  const idsFromProp = Array.isArray(props.selectedSetIds)
-    ? props.selectedSetIds
+  const idsFromProp = Array.isArray(selectionStore.selectedSetIds)
+    ? selectionStore.selectedSetIds
     : [];
   const normalized = idsFromProp
     .map((id) => Number(id))
@@ -1285,7 +1373,7 @@ const normalizedSelectedSetIds = computed(() => {
   if (normalized.length > 0) {
     return Array.from(new Set(normalized));
   }
-  const single = Number(props.selectedSet);
+  const single = Number(selectionStore.selectedSet);
   if (Number.isFinite(single) && single > 0) {
     return [single];
   }
@@ -1305,8 +1393,8 @@ const primarySelectedSetId = computed(() =>
 );
 
 const normalizedSelectedCharacterIds = computed(() => {
-  const ids = Array.isArray(props.selectedCharacterIds)
-    ? props.selectedCharacterIds
+  const ids = Array.isArray(selectionStore.selectedCharacterIds)
+    ? selectionStore.selectedCharacterIds
     : [];
   return ids
     .map((id) => Number(id))
@@ -1323,7 +1411,9 @@ const isMultiCharacterView = computed(
 // mode; in the global mode nothing about the query depends on project
 // membership. Used to decide whether a project assignment can change what the
 // grid shows and therefore warrants a refetch.
-const isProjectScopedView = computed(() => props.projectViewMode === "project");
+const isProjectScopedView = computed(
+  () => projectStore.projectViewMode === "project",
+);
 
 // ============================================================
 // THUMBNAIL SYSTEM STATE
@@ -1386,6 +1476,32 @@ const overlayCtxLockReason = computed(() =>
 );
 const reverseImageSearchPictureIds = ref([]);
 const faceLikenessSearchFaceId = ref(null);
+// ── "Suggest more pictures of <person>" (#636) ────────────────────────────────
+// The person whose reference faces are the active query, or null. Distinct from
+// `selectionStore.selectedCharacter`: this search deliberately runs across the whole
+// library, so it must not be mistaken for a character-scoped view.
+const faceSearchCharacter = ref(null); // { id, name }
+// The cut applied to the ranked list. Starts at the same value the backend's
+// SourceFaceLikenessTask already treats as "same person, safe to inherit a
+// character automatically" — a second, UI-local number would drift from it.
+const FACE_SEARCH_DEFAULT_THRESHOLD = 0.7;
+// The fetch floor. Pictures below it are never fetched, so the slider cannot be
+// dragged under it without a refetch; that is why it is also the slider's min.
+const FACE_SEARCH_FETCH_FLOOR = 0.5;
+const FACE_SEARCH_MAX_THRESHOLD = 0.95;
+const faceSearchThreshold = ref(FACE_SEARCH_DEFAULT_THRESHOLD);
+// How many of the person's reference faces must clear that cut. Defaults to 1,
+// which is the behaviour the backend's `combine=max` gives on its own, so the
+// knob starts where the search has always been and only ever tightens.
+const faceSearchMinRefs = ref(1);
+// { characterId, matches: [{picture_id, likeness, face_id, reference_likeness}],
+// rowsById }: the whole ranked list plus its picture rows, so re-cutting it on
+// either knob is free.
+const faceSearchRanked = ref(null);
+// The view the search was armed from. A view change drops the search (below),
+// and this is what keeps the arming click itself from counting as one.
+const faceSearchArmedView = ref(null);
+const faceSearchAssignBusy = ref(false);
 const sharedPictureIds = ref(new Set());
 const revokeSharesDialogOpen = ref(false);
 const revokeSharesPending = ref(null); // { pictureId }
@@ -1405,7 +1521,7 @@ const segmentTargetIds = ref(null);
 
 // Badge size interpolated continuously across column count (1 = lg, 12+ = sm).
 const badgeSizeT = computed(() =>
-  Math.min(1, Math.max(0, ((props.columns || 1) - 1) / 11)),
+  Math.min(1, Math.max(0, ((gridStore.columns || 1) - 1) / 11)),
 );
 
 const badgeCssVars = computed(() => {
@@ -1418,6 +1534,19 @@ const badgeCssVars = computed(() => {
     "--badge-padding": `${paddingV}px ${paddingH}px`,
   };
 });
+
+/**
+ * Whether this tile is the cover of a stack the user has expanded.
+ *
+ * Only meaningful while the stack is expanded: collapsed, the cover IS the
+ * tile, so flagging it would be noise.
+ *
+ * @param {Object} img
+ * @returns {boolean}
+ */
+function isExpandedStackCover(img) {
+  return isStackExpandedForImage(img) && getStackPositionValue(img) === 0;
+}
 
 const badgeIconSizes = computed(() => {
   const t = badgeSizeT.value;
@@ -1441,8 +1570,8 @@ async function handleClearImpossibleTags() {
   const pictureIds = selectedImageIds.value
     .map((id) => Number(id))
     .filter((id) => Number.isFinite(id) && id > 0);
-  const filters = Array.isArray(props.impossibleSources)
-    ? props.impossibleSources
+  const filters = Array.isArray(filterStore.impossibleSources)
+    ? filterStore.impossibleSources
     : [];
   if (!pictureIds.length || !filters.length || clearingImpossibleTags.value) {
     return;
@@ -1784,6 +1913,23 @@ function handleComfyuiRun(payload) {
   comfyuiRunner.value?.handleComfyuiRun(payload);
 }
 
+// ── Remix ("Generate variants…") ─────────────────────────────────────────
+// Acts on the RIGHT-CLICKED picture, not the selection — the dialog discloses
+// that and offers a route to the batch panel when a wider selection is live.
+const remixDialogOpen = ref(false);
+const remixImage = ref(null);
+
+function openRemixDialog(pictureId) {
+  const id = pictureId ?? contextMenuImage.value?.id;
+  if (id == null) return;
+  const image =
+    allGridImages.value.find((img) => String(img?.id) === String(id)) ||
+    contextMenuImage.value;
+  if (!image) return;
+  remixImage.value = image;
+  remixDialogOpen.value = true;
+}
+
 async function runComfyuiOnGridImages({
   workflowName,
   caption = "",
@@ -1796,12 +1942,14 @@ async function runComfyuiOnGridImages({
     // set / project / character automatically.
     const contextSetId = primarySelectedSetId.value ?? undefined;
     const contextProjectId =
-      props.selectedProjectId != null ? props.selectedProjectId : undefined;
-    const rawChar = props.selectedCharacter;
+      projectStore.selectedProjectId != null
+        ? projectStore.selectedProjectId
+        : undefined;
+    const rawChar = selectionStore.selectedCharacter;
     const specialIds = [
-      props.allPicturesId,
-      props.unassignedPicturesId,
-      props.scrapheapPicturesId,
+      ALL_PICTURES_ID,
+      UNASSIGNED_PICTURES_ID,
+      SCRAPHEAP_PICTURES_ID,
     ].map((v) => String(v ?? "").toUpperCase());
     const charNum =
       rawChar != null && !specialIds.includes(String(rawChar).toUpperCase())
@@ -1919,7 +2067,7 @@ function startSmartScoreProgress(loadId, sortKey) {
   }
 
   smartScoreProgress.message =
-    props.searchQuery && props.searchQuery.trim()
+    searchStore.searchQuery && searchStore.searchQuery.trim()
       ? "Searching"
       : `Sorting by ${getSortProgressLabel(smartScoreProgressSortKey.value)}`;
   smartScoreProgressTimer = setInterval(() => {
@@ -1957,7 +2105,7 @@ function completeSmartScoreProgress(loadId, measuredDurationMs, wasSuccessful) {
     }
     setSmartScoreProgressPercent(100);
     smartScoreProgress.message =
-      props.searchQuery && props.searchQuery.trim()
+      searchStore.searchQuery && searchStore.searchQuery.trim()
         ? "Search complete"
         : `Sorted by ${getSortProgressLabel(smartScoreProgressSortKey.value)}`;
     setTimeout(() => {
@@ -2172,7 +2320,7 @@ onUnmounted(() => {
 });
 
 watch(
-  () => props.wsUpdateKey,
+  () => gridStore.wsUpdateKey,
   (nextKey) => {
     if (!nextKey || nextKey === lastWsUpdateKey.value) return;
     lastWsUpdateKey.value = nextKey;
@@ -2193,7 +2341,7 @@ watch(
 );
 
 watch(
-  () => props.wsTagUpdate,
+  () => wsStore.wsTagUpdate,
   (payload) => {
     if (!payload || typeof payload !== "object") return;
     const nextKey = payload.key || 0;
@@ -2206,12 +2354,18 @@ watch(
     // tagging doesn't change anything visible in the grid (thumbnails and sort
     // order are unaffected), so refreshing just hammers the DB for no benefit.
     if (
-      !(props.tagFilter && props.tagFilter.length) &&
-      !(props.tagRejectedFilter && props.tagRejectedFilter.length) &&
+      !(filterStore.tagFilter && filterStore.tagFilter.length) &&
       !(
-        props.tagConfidenceAboveFilter && props.tagConfidenceAboveFilter.length
+        filterStore.tagRejectedFilter && filterStore.tagRejectedFilter.length
       ) &&
-      !(props.tagConfidenceBelowFilter && props.tagConfidenceBelowFilter.length)
+      !(
+        filterStore.tagConfidenceAboveFilter &&
+        filterStore.tagConfidenceAboveFilter.length
+      ) &&
+      !(
+        filterStore.tagConfidenceBelowFilter &&
+        filterStore.tagConfidenceBelowFilter.length
+      )
     )
       return;
     if (pauseGridAutoUpdates.value) {
@@ -2241,7 +2395,7 @@ watch(
 );
 
 watch(
-  () => props.wsDescriptionUpdate,
+  () => wsStore.wsDescriptionUpdate,
   (payload) => {
     if (!payload || typeof payload !== "object") return;
     const nextKey = payload.key || 0;
@@ -2258,7 +2412,7 @@ watch(
 );
 
 watch(
-  () => props.wsPluginProgress,
+  () => wsStore.wsPluginProgress,
   (wrapped) => {
     if (!wrapped || typeof wrapped !== "object") return;
     const payload = wrapped.payload;
@@ -2492,7 +2646,7 @@ function getFaceBboxOverlays(img) {
   void selectedFaceIds.value;
   void thumbnailReadyMap[img.id];
   if (
-    !props.showFaceBboxes ||
+    !gridStore.showFaceBboxes ||
     !img.faces ||
     !img.faces.length ||
     !(img.thumbnail_width || img.width) ||
@@ -2526,7 +2680,7 @@ function getDetectionBboxOverlays(img) {
   void faceOverlayRedrawKey.value; // depend on redraw key
   void thumbnailReadyMap[img.id];
   if (
-    !props.showDetections ||
+    !gridStore.showDetections ||
     !img.detections ||
     !img.detections.length ||
     !(img.thumbnail_width || img.width) ||
@@ -2565,6 +2719,10 @@ const hoveredImageIdx = ref(null);
 const hoveredStackId = ref(null);
 
 function handleImageMouseEnter(img) {
+  // `inert` already blocks the event in supporting browsers; this is the
+  // testable half of the same rule. `hoveredImageIdx` is what the digit-scoring
+  // shortcut acts on when nothing is selected, so a ghost must never be hovered.
+  if (isImageGhosted(img)) return;
   hoveredImageIdx.value = img.idx;
   hoveredStackId.value = getPictureStackId(img) ?? null;
 }
@@ -2581,7 +2739,7 @@ function getThumbnailInfoItems(img) {
   if (!img) return [];
   const items = [];
   const selectedSort =
-    typeof props.selectedSort === "string" ? props.selectedSort : "";
+    typeof sortStore.selectedSort === "string" ? sortStore.selectedSort : "";
 
   if (
     selectedSort.includes("CHARACTER_LIKENESS") &&
@@ -2609,7 +2767,7 @@ function getThumbnailInfoItems(img) {
   }
 
   if (
-    typeof props.searchQuery === "string" &&
+    typeof searchStore.searchQuery === "string" &&
     img.likeness_score !== undefined
   ) {
     items.push({
@@ -2619,18 +2777,18 @@ function getThumbnailInfoItems(img) {
   } else if (selectedSort === "IMPORTED_AT" && img.imported_at) {
     items.push({
       key: "imported_at",
-      text: formatUserDate(img.imported_at, props.dateFormat),
+      text: formatUserDate(img.imported_at, userPrefsStore.dateFormat),
     });
   } else if (selectedSort.includes("DATE") && img.created_at) {
     items.push({
       key: "created_at",
-      text: formatUserDate(img.created_at, props.dateFormat),
+      text: formatUserDate(img.created_at, userPrefsStore.dateFormat),
     });
   } else if (
     selectedSort === LIKENESS_GROUPS_SORT_KEY &&
     (typeof img.stackIndex === "number" || typeof img.stack_index === "number")
   ) {
-    if (!props.showStacks) {
+    if (!gridStore.showStacks) {
       return items;
     }
     const stackIndex =
@@ -2650,7 +2808,9 @@ function formatCompactDate(dateStr) {
   const now = new Date();
   const sameYear = d.getFullYear() === now.getFullYear();
   const fmt =
-    typeof props.dateFormat === "string" ? props.dateFormat : "locale";
+    typeof userPrefsStore.dateFormat === "string"
+      ? userPrefsStore.dateFormat
+      : "locale";
   const y = d.getFullYear();
   const day = d.getDate();
   const MONTHS = [
@@ -2700,7 +2860,9 @@ function formatCompactDatetime(dateStr) {
   const now = new Date();
   const sameYear = d.getFullYear() === now.getFullYear();
   const fmt =
-    typeof props.dateFormat === "string" ? props.dateFormat : "locale";
+    typeof userPrefsStore.dateFormat === "string"
+      ? userPrefsStore.dateFormat
+      : "locale";
   const y = d.getFullYear();
   const day = d.getDate();
   const MONTHS = [
@@ -2772,8 +2934,11 @@ function formatCompactDatetime(dateStr) {
 // ── Visible range label (emitted to SelectionBar) ──────────────
 function getImageSortLabel(img) {
   if (!img) return null;
-  const isSearchMode = !!(props.searchQuery && props.searchQuery.trim());
-  const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
+  const isSearchMode = !!(
+    searchStore.searchQuery && searchStore.searchQuery.trim()
+  );
+  const sort =
+    typeof sortStore.selectedSort === "string" ? sortStore.selectedSort : "";
   if (isSearchMode && typeof img.likeness_score === "number")
     return `≈ ${img.likeness_score.toFixed(2)}`;
   if (sort === "IMPORTED_AT" && img.imported_at)
@@ -2815,11 +2980,12 @@ const visibleRangeLabel = computed(() => {
   return `${first} – ${last}`;
 });
 
-const userPrefsStore = useUserPrefsStore();
 const tasksStore = useTasksStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const lockedSetsStore = useLockedSetsStore();
+const genStackPrefs = useGenStackPrefsStore();
 const scrapheapRetentionStore = useScrapheapRetentionStore();
+const operationStore = useOperationStore();
 // Every failure path in this component reports through the notice surface. A
 // native alert() is unstyled, blocking and focus-stealing; a bare `catch` that
 // only logs is worse, because the user is never told at all.
@@ -2853,6 +3019,18 @@ const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 // which is what `narrowOnly` encodes.
 const breadcrumbEl = ref(null);
 useBottomAnchor("grid-breadcrumb", breadcrumbEl, { narrowOnly: true });
+
+// The action receipt shares the selection pill's slot, so when the pill is up
+// the receipt sits above it. The lift is the pill's MEASURED height plus the
+// standard gap, never a constant, because the pill wraps and grows on coarse
+// pointers (the 56px in floatingBottom.js is a first-frame fallback, not a
+// design token).
+const { height: selectionBarHeight } = useAnchorHeight("selection-bar");
+const actionReceiptLift = computed(() =>
+  selectionBarHeight.value > 0
+    ? selectionBarHeight.value + FLOATING_BOTTOM_GAP_PX
+    : 0,
+);
 
 watch(
   visibleRangeLabel,
@@ -3005,23 +3183,27 @@ async function removeFromGroup() {
   }
   // Remove from character
   if (
-    props.selectedCharacter &&
-    props.selectedCharacter !== props.allPicturesId &&
-    props.selectedCharacter !== props.unassignedPicturesId
+    selectionStore.selectedCharacter &&
+    selectionStore.selectedCharacter !== ALL_PICTURES_ID &&
+    selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID
   ) {
     const requests = [];
     if (pictureIds.length) {
       requests.push(
-        removeCharacterFaces(props.selectedCharacter, pictureIds, {
+        removeCharacterFaces(selectionStore.selectedCharacter, pictureIds, {
           baseUrl: backendUrl,
         }),
       );
     }
     if (faceIds.length) {
       requests.push(
-        removeCharacterFacesByFaceId(props.selectedCharacter, faceIds, {
-          baseUrl: backendUrl,
-        }),
+        removeCharacterFacesByFaceId(
+          selectionStore.selectedCharacter,
+          faceIds,
+          {
+            baseUrl: backendUrl,
+          },
+        ),
       );
     }
     if (!requests.length) return;
@@ -3054,9 +3236,9 @@ async function removeFromGroup() {
   }
   // Remove from set
   if (
-    props.selectedSet &&
-    props.selectedSet !== props.allPicturesId &&
-    props.selectedSet !== props.unassignedPicturesId
+    selectionStore.selectedSet &&
+    selectionStore.selectedSet !== ALL_PICTURES_ID &&
+    selectionStore.selectedSet !== UNASSIGNED_PICTURES_ID
   ) {
     if (!pictureIds.length) {
       clearFaceSelection();
@@ -3132,13 +3314,13 @@ async function removeFromGroup() {
       // Remove from picture set (all affected IDs in parallel).
       await Promise.all(
         [...idsToRemoveFromSet].map((id) =>
-          removePictureFromSet(props.selectedSet, id, {
+          removePictureFromSet(selectionStore.selectedSet, id, {
             baseUrl: backendUrl,
           }).catch((err) => {
             // Expected when the picture was not in the set (the selection can
             // span sets); log rather than drop it so a real failure is visible.
             console.debug(
-              `Could not remove picture ${id} from set ${props.selectedSet}`,
+              `Could not remove picture ${id} from set ${selectionStore.selectedSet}`,
               err,
             );
           }),
@@ -3151,7 +3333,21 @@ async function removeFromGroup() {
         await Promise.all(
           [...stackRemovalsForExpanded.entries()].map(([stackId, ids]) =>
             removeStackMembers(stackId, ids, { baseUrl: backendUrl }).catch(
-              (err) => console.error("Failed to remove from stack:", err),
+              (err) => {
+                console.error("Failed to remove from stack:", err);
+                // The set removal below still runs, so the user sees the
+                // pictures leave the set while the stack detach silently did
+                // not happen. A locked set is the one refusal nobody can
+                // diagnose without being told which set froze it.
+                if (isLockedRefusal(err)) {
+                  const sets = lockedSetsSentence(lockedSets(err));
+                  noticeStore.error(
+                    sets
+                      ? `They left the set, but could not leave their stack: ${sets}`
+                      : "They left the set, but could not leave their stack: a locked set freezes it.",
+                  );
+                }
+              },
             ),
           ),
         );
@@ -3225,7 +3421,7 @@ function handleOverlayAddedToSet(payload) {
   }
 
   if (
-    props.selectedCharacter === props.unassignedPicturesId &&
+    selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID &&
     !hasSetSelection.value
   ) {
     if (overlayOpen.value) {
@@ -3243,7 +3439,7 @@ function handleAddToCharacter(payload) {
     : [];
   if (!pictureIds.length) return;
   if (
-    props.selectedCharacter === props.unassignedPicturesId &&
+    selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID &&
     !hasSetSelection.value
   ) {
     removeImagesById(pictureIds);
@@ -3255,20 +3451,145 @@ function handleAddToCharacter(payload) {
   emit("refresh-sidebar");
 }
 
+// ── Create a person from the context menu (#645) ─────────────────────────────
+// The Person flyout's "New person…" / Create "query" rows land here (via the
+// menu's delegate pattern). The selection is captured at flow start
+// (pendingCreatePersonAssign) so it survives the dialog; on save the captured
+// selection is assigned to the new person, on cancel nothing is created or
+// assigned and the grid selection is untouched.
+const createPersonOpen = ref(false);
+const createPersonCharacter = ref(null);
+const createPersonProjects = ref([]);
+let pendingCreatePersonAssign = null;
+
+async function handleCreateCharacterFromMenu(query) {
+  pendingCreatePersonAssign = chooseCharacterAssignment({
+    pictureIds: selectedImageIds.value.slice(),
+    faceEntries: selectedFaceIds.value.slice(),
+  });
+  const typed = typeof query === "string" ? query.trim() : "";
+  const apiOpts = { baseUrl: props.backendUrl };
+  // Projects feed the dialog's project select; the character list is only
+  // needed to derive the next free default name when nothing was typed.
+  const [projects, characters] = await Promise.all([
+    listProjects(apiOpts).catch((e) => {
+      console.warn("Couldn't list projects for the person editor", e);
+      return [];
+    }),
+    typed
+      ? Promise.resolve([])
+      : listCharacters(apiOpts).catch((e) => {
+          console.warn(
+            "Couldn't list characters to derive a default person name",
+            e,
+          );
+          return [];
+        }),
+  ]);
+  createPersonProjects.value = Array.isArray(projects) ? projects : [];
+  createPersonCharacter.value = {
+    id: null,
+    name: typed || nextFreeCharacterName(characters),
+    description: "",
+    extra_metadata: "",
+    // Same pre-fill as SideBar.createCharacter: the active project when the
+    // sidebar is in project view, otherwise none.
+    project_id:
+      projectStore.projectViewMode === "project"
+        ? projectStore.selectedProjectId
+        : null,
+  };
+  createPersonOpen.value = true;
+}
+
+function handleCreatePersonClose() {
+  createPersonOpen.value = false;
+  createPersonCharacter.value = null;
+  pendingCreatePersonAssign = null;
+}
+
+async function handleCreatePersonSaved(savedCharacter) {
+  createPersonOpen.value = false;
+  createPersonCharacter.value = null;
+  const pending = pendingCreatePersonAssign;
+  pendingCreatePersonAssign = null;
+  const characterId = savedCharacter?.id;
+  const name = savedCharacter?.name || "person";
+  if (characterId == null) {
+    // The editor reported success without a usable record; the person may
+    // exist server-side, but there is nothing to assign to. Surface it rather
+    // than failing silently, and refresh so the sidebar shows the truth.
+    // Defensive only: CharacterEditor unwraps `CharacterMutationResponse` and
+    // does not emit `saved` at all unless the record has an id, so this must
+    // never fire in normal operation. If it does, the payload shape is wrong.
+    console.error(
+      "create-person: `saved` payload carried no character id, so the " +
+        "selection was not assigned. Expected the unwrapped record " +
+        "{id, name, ...}; if this looks like {status, character} the " +
+        "CharacterMutationResponse unwrap in CharacterEditor has regressed.",
+      {
+        payloadKeys:
+          savedCharacter && typeof savedCharacter === "object"
+            ? Object.keys(savedCharacter)
+            : typeof savedCharacter,
+        savedCharacter,
+      },
+    );
+    noticeStore.error(
+      `Created ${name}, but the selection couldn't be assigned. Assign it from the Person menu.`,
+      { key: "create-person-assign" },
+    );
+    emit("refresh-sidebar");
+    return;
+  }
+  if (!pending || pending.mode === "none") {
+    noticeStore.success(`Created ${name}.`, { key: "create-person-assign" });
+    emit("refresh-sidebar");
+    return;
+  }
+  try {
+    if (pending.mode === "faces") {
+      await addCharacterFacesByFaceId(characterId, pending.ids, {
+        baseUrl: props.backendUrl,
+      });
+    } else {
+      await addCharacterFaces(characterId, pending.ids, {
+        baseUrl: props.backendUrl,
+      });
+    }
+    const n = pending.ids.length;
+    const unit = pending.mode === "faces" ? "face" : "picture";
+    noticeStore.success(
+      `Created ${name}, assigned ${n} ${unit}${n === 1 ? "" : "s"}.`,
+      { key: "create-person-assign" },
+    );
+    // Standard post-assign bookkeeping: prunes the Unassigned view when
+    // relevant and emits refresh-sidebar (characters, sets, sort options).
+    handleAddToCharacter({ characterId, pictureIds: pending.pictureIds });
+  } catch (e) {
+    console.error("Failed to assign the selection to the new person", e);
+    noticeStore.error(
+      `Created ${name}, but couldn't assign the selection. ${errorDetail(e)}`,
+      { key: "create-person-assign" },
+    );
+    emit("refresh-sidebar");
+  }
+}
+
 function handleRemoveFromCharacter(payload) {
   const pictureIds = Array.isArray(payload?.pictureIds)
     ? payload.pictureIds
     : [];
   if (!pictureIds.length) return;
   const removedCharId = payload?.characterId;
-  const currentChar = props.selectedCharacter;
+  const currentChar = selectionStore.selectedCharacter;
   const isInRemovedCharView =
     removedCharId != null &&
     currentChar != null &&
     String(currentChar) === String(removedCharId) &&
-    currentChar !== props.allPicturesId &&
-    currentChar !== props.unassignedPicturesId &&
-    currentChar !== props.scrapheapPicturesId;
+    currentChar !== ALL_PICTURES_ID &&
+    currentChar !== UNASSIGNED_PICTURES_ID &&
+    currentChar !== SCRAPHEAP_PICTURES_ID;
   if (isInRemovedCharView) {
     removeImagesById(pictureIds);
     selectedImageIds.value = [];
@@ -3457,7 +3778,15 @@ async function deleteSelected(idsOverride = null) {
     const removedIds = idsToRemove.filter(
       (id) => !skippedLocked.has(String(id)),
     );
-    removeImagesById(removedIds);
+    // Keep the tiles mounted and greyed while the undo is still one click away,
+    // and let the receipt's own clock decide when the grid closes the gap.
+    // `markGhosted` declines when there is no undo window to hold them open for
+    // (a read-only session), in which case they go immediately, as they always
+    // did. The own-origin `removed` echo of this same delete is suppressed by
+    // the realtime decision table, so nothing else races to drop them.
+    if (!operationStore.markGhosted(removedIds)) {
+      removeImagesById(removedIds);
+    }
     // Overlay path: don't touch the grid selection. removeImagesById already
     // drops any deleted id from it (a no-op when the overlay picture wasn't
     // grid-selected), so the user's grid selection is left exactly as it was.
@@ -3492,6 +3821,131 @@ async function deleteSelected(idsOverride = null) {
     noticeStore.error(`Couldn't delete those pictures. ${errorDetail(err)}`, {
       key: "pictures-delete",
     });
+  }
+}
+
+// ── Keep cover only ─────────────────────────────────────────────────────────
+// One preview over one selection, then one call. The dialog is the only consent
+// (no type-to-confirm: this is a recoverable soft delete, not the destruction of
+// an on-disk original). See docs/design/keep-cover-only.md.
+
+/** The dotted op type the backend records, so the receipt note can match it. */
+const KEEP_COVER_ONLY_OP_TYPE = "stack.keep_cover_only";
+
+const keepCoverOnlyOpen = ref(false);
+const keepCoverOnlyPreview = ref(null);
+const keepCoverOnlyLoading = ref(false);
+const keepCoverOnlyPreviewFailed = ref(false);
+const keepCoverOnlyBusy = ref(false);
+/**
+ * The stacks the open dialog is describing, frozen when it opened.
+ *
+ * The confirm must act on exactly what the preview reported. Reading the live
+ * selection again at confirm time would let a background refetch, or a stray
+ * click behind the scrim, move the target out from under the figures the user
+ * agreed to.
+ */
+const keepCoverOnlyTargetStackIds = ref([]);
+// Guards a preview that lands after its dialog was closed or reopened.
+let keepCoverOnlyRunToken = 0;
+
+async function openKeepCoverOnly() {
+  if (isReadOnly.value || keepCoverOnlyBusy.value) return;
+  const stackIds = keepCoverOnlyStacks.value
+    .map((stack) => Number(stack.id))
+    .filter((id) => Number.isFinite(id));
+  if (!stackIds.length) return;
+  keepCoverOnlyTargetStackIds.value = stackIds;
+  keepCoverOnlyPreview.value = null;
+  keepCoverOnlyPreviewFailed.value = false;
+  keepCoverOnlyLoading.value = true;
+  keepCoverOnlyOpen.value = true;
+  const token = ++keepCoverOnlyRunToken;
+  try {
+    const report = await previewKeepCoverOnly({
+      stackIds,
+      baseUrl: props.backendUrl,
+    });
+    if (token !== keepCoverOnlyRunToken) return;
+    keepCoverOnlyPreview.value = report;
+  } catch (err) {
+    if (token !== keepCoverOnlyRunToken) return;
+    // A failed preview is its own state in the dialog, never a screen of
+    // zeroes: "nobody could ask" and "there is nothing to collapse" must not
+    // look the same.
+    console.error(
+      `Keep cover only: the preview for stacks [${stackIds.join(", ")}] could not be read`,
+      err,
+    );
+    keepCoverOnlyPreviewFailed.value = true;
+  } finally {
+    if (token === keepCoverOnlyRunToken) keepCoverOnlyLoading.value = false;
+  }
+}
+
+function closeKeepCoverOnly() {
+  // Bumping the token orphans any preview still in flight, so it cannot write
+  // figures into a dialog the user has already dismissed.
+  keepCoverOnlyRunToken += 1;
+  keepCoverOnlyOpen.value = false;
+  keepCoverOnlyPreview.value = null;
+  keepCoverOnlyLoading.value = false;
+  keepCoverOnlyPreviewFailed.value = false;
+  keepCoverOnlyTargetStackIds.value = [];
+}
+
+async function runKeepCoverOnly() {
+  const stackIds = keepCoverOnlyTargetStackIds.value;
+  if (!stackIds.length || keepCoverOnlyBusy.value) return;
+  keepCoverOnlyBusy.value = true;
+  try {
+    const result = await keepCoverOnly({
+      stackIds,
+      baseUrl: props.backendUrl,
+    });
+    const movedIds = Array.isArray(result?.picture_ids_moved)
+      ? result.picture_ids_moved
+      : [];
+    // Same treatment as the grid's own delete: the tiles stay ghosted in place
+    // while undo is one click away, and the receipt's clock decides when the
+    // grid closes the gap. `markGhosted` declines in a read-only session, where
+    // there is no undo window at all.
+    if (movedIds.length && !operationStore.markGhosted(movedIds)) {
+      removeImagesById(movedIds);
+    }
+    selectedImageIds.value = [];
+    lastSelectedImageId.value = null;
+    // What the run deliberately left alone rides the SAME pill as what it did,
+    // as a second sentence, rather than a notice competing with it.
+    operationStore.noteNextReceipt(
+      KEEP_COVER_ONLY_OP_TYPE,
+      keepCoverOnlySkipNote(result),
+    );
+    // Raises "Kept the cover of N stacks · M pictures to the Scrapheap · Undo".
+    operationStore.refresh();
+    emit("refresh-sidebar");
+    // NO grid refetch here, deliberately. The surviving covers are no longer
+    // stacks and their badges have to go, but `debouncedFetchAllGridImages()`
+    // would rebuild the grid without the scrapheaped copies and take the
+    // ghosted tiles off the screen, and with them the one-click undo they
+    // advertise. The badge is reconciled instead by the server's own
+    // `fields: ["stack_count"]` announcement over the covers, which reaches
+    // THIS tab as well as any other and routes to `refreshStackFacets`
+    // (useGridRealtimeSync's stack-facet branch). One mechanism, so the undo
+    // and a second tab converge through exactly the same path.
+    keepCoverOnlyOpen.value = false;
+    keepCoverOnlyPreview.value = null;
+    keepCoverOnlyTargetStackIds.value = [];
+  } catch (err) {
+    console.error(
+      `Keep cover only failed for stacks [${stackIds.join(", ")}]`,
+      err,
+    );
+    noticeStore.error(`Couldn't collapse those stacks. ${errorDetail(err)}`, {
+      key: "keep-cover-only",
+    });
+  } finally {
+    keepCoverOnlyBusy.value = false;
   }
 }
 
@@ -3647,9 +4101,9 @@ async function resolveProjectSelectionPictureIds(
 // ============================================================
 const isScrapheapView = computed(() => {
   const scrapheapId = String(
-    props.scrapheapPicturesId || "SCRAPHEAP",
+    SCRAPHEAP_PICTURES_ID || "SCRAPHEAP",
   ).toUpperCase();
-  const selected = String(props.selectedCharacter || "").toUpperCase();
+  const selected = String(selectionStore.selectedCharacter || "").toUpperCase();
   return selected === scrapheapId;
 });
 
@@ -3705,7 +4159,9 @@ const scrapheapPurgeBadges = computed(() => {
   }
   const now = purgeNowMs.value;
   const dateFormat =
-    typeof props.dateFormat === "string" ? props.dateFormat : "locale";
+    typeof userPrefsStore.dateFormat === "string"
+      ? userPrefsStore.dateFormat
+      : "locale";
   const formatDate = (iso) => formatUserDate(iso, dateFormat);
   for (const img of gridImagesToRender.value || []) {
     if (!img || img.id == null) continue;
@@ -3761,6 +4217,73 @@ const scrapheapEmptying = ref(false);
 const showSelectionBar = computed(() => {
   return selectedImageIds.value.length > 0 || selectedFaceIds.value.length > 0;
 });
+
+// ── The grid action pill's search half ──────────────────────────────────────
+const searchResultsActive = computed(
+  () =>
+    Boolean(searchStore.searchQuery && searchStore.searchQuery.length > 0) ||
+    reverseImageSearchPictureIds.value.length > 0 ||
+    Boolean(faceLikenessSearchFaceId.value) ||
+    Boolean(faceSearchCharacter.value),
+);
+
+/**
+ * The status sentence, split into the numeral and the rest so the pill can give
+ * the count its own weight without regex-splitting a string that may contain
+ * the user's query.
+ *
+ * The scope is folded into the sentence rather than standing beside it as a
+ * separate "Searched X only" note, and the QUERY is named: nothing else on
+ * screen says what was searched once the toolbar popover closes, which made
+ * recall the only way back to it.
+ */
+const searchStatus = computed(() => {
+  const total = allGridImages.value.length;
+
+  if (faceSearchCharacter.value) {
+    // Just "N matches". The person is named twice over already, on the Assign
+    // button and by the sidebar row the search was armed from, and this label
+    // sat in front of the two sliders and a bulk-write button in a pill that
+    // has to fit them all without wrapping.
+    const n = faceSearchMatches.value.length;
+    return { count: n, label: n === 1 ? "match" : "matches" };
+  }
+  if (faceLikenessSearchFaceId.value) {
+    return { count: total, label: "similar faces" };
+  }
+  if (reverseImageSearchPictureIds.value.length > 1) {
+    return {
+      count: total,
+      label: `matches for ${reverseImageSearchPictureIds.value.length} pictures`,
+    };
+  }
+  if (reverseImageSearchPictureIds.value.length) {
+    return { count: total, label: "matches for this picture" };
+  }
+
+  const query = (searchStore.searchQuery || "").trim();
+  const scope = selectionStore.isAllPicturesActive
+    ? ""
+    : ` in ${props.activeCategoryLabel}`;
+  const forQuery = query ? ` for "${query}"` : "";
+  if (total === 0) {
+    return { count: null, label: `No matches${forQuery}${scope}` };
+  }
+  return { count: total, label: `matches${forQuery}${scope}` };
+});
+
+/**
+ * Focus rescue. GridActionPill raises this when the half holding focus is about
+ * to unmount and there is no sibling half to take it: without somewhere to go,
+ * focus falls to <body> and a keyboard user drops out of the tab order (WCAG
+ * 2.4.3). The scroll wrapper is the grid's own focus home.
+ */
+function restoreGridFocus() {
+  const el = scrollWrapper.value;
+  if (!el) return;
+  if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+  el.focus({ preventScroll: true });
+}
 // Grouping (project/set/character) membership is stack-atomic: it can only be
 // changed for a WHOLE stack at once — a collapsed stack tile (which represents
 // the whole stack) or every member of an expanded stack selected. Changing a
@@ -3834,6 +4357,34 @@ const selectionLockReason = computed(() => {
   );
 });
 
+// ── Keep cover only ─────────────────────────────────────────────────────────
+// The action's unit is the STACK: a selection names stacks, each collapses to
+// its own cover, and loose pictures in a mixed selection are ignored. That is
+// only honest because the menu label counts stacks, which is what these two
+// computeds feed. See docs/design/keep-cover-only.md.
+
+// Both computations are pure and live in `utils/keepCoverOnly.js`, where they
+// are unit-tested without a mounted grid; the whole-stack locked refusal in
+// particular is a rule that has to hold, not a rule that has to render.
+const keepCoverOnlyStacks = computed(() =>
+  selectedKeepCoverOnlyStacks({
+    selectedIds: selectedImageIds.value,
+    images: allGridImages.value,
+  }),
+);
+
+const keepCoverOnlyStackCount = computed(
+  () => keepCoverOnlyStacks.value.length,
+);
+
+const keepCoverOnlyLockReason = computed(() =>
+  buildKeepCoverOnlyLockReason({
+    stacks: keepCoverOnlyStacks.value,
+    isLocked: (id) => lockedSetsStore.isLocked(id),
+    lockedSetNames: (id) => lockedSetsStore.lockedSetNames(id),
+  }),
+);
+
 const selectedExpandedCount = computed(() => {
   const selectedSet = new Set(
     selectedImageIds.value
@@ -3851,27 +4402,27 @@ const selectedExpandedCount = computed(() => {
     [...visibleIds].every((id) => selectedSet.has(id));
 
   const isTopCategorySelection = [
-    String(props.allPicturesId),
-    String(props.unassignedPicturesId),
-  ].includes(String(props.selectedCharacter ?? ""));
+    String(ALL_PICTURES_ID),
+    String(UNASSIGNED_PICTURES_ID),
+  ].includes(String(selectionStore.selectedCharacter ?? ""));
 
   const isSetCategorySelection =
-    props.selectedSet !== null &&
-    props.selectedSet !== undefined &&
-    String(props.selectedSet) !== "";
+    selectionStore.selectedSet !== null &&
+    selectionStore.selectedSet !== undefined &&
+    String(selectionStore.selectedSet) !== "";
 
   const supportsAuthoritativeCategoryCount =
     isTopCategorySelection || isSetCategorySelection;
 
   const hasNoAdditionalFilters =
-    !(props.searchQuery || "").trim() &&
-    props.mediaTypeFilter === "all" &&
-    (props.comfyuiModelFilter || []).length === 0 &&
-    (props.comfyuiLoraFilter || []).length === 0 &&
-    props.minScoreFilter == null &&
-    props.maxScoreFilter == null &&
-    props.smartScoreBucketFilter == null &&
-    props.resolutionBucketFilter == null;
+    !(searchStore.searchQuery || "").trim() &&
+    filterStore.mediaTypeFilter === "all" &&
+    (filterStore.comfyuiModelFilter || []).length === 0 &&
+    (filterStore.comfyuiLoraFilter || []).length === 0 &&
+    filterStore.minScoreFilter == null &&
+    filterStore.maxScoreFilter == null &&
+    filterStore.smartScoreBucketFilter == null &&
+    filterStore.resolutionBucketFilter == null;
 
   // Keep the info count aligned with sidebar summary for full category selections.
   if (
@@ -4250,13 +4801,13 @@ async function handleImagesUploaded(payload) {
   );
   if (pictureIds.length) {
     try {
-      const selectedSetId = props.selectedSet;
-      const selectedCharacterId = props.selectedCharacter;
+      const selectedSetId = selectionStore.selectedSet;
+      const selectedCharacterId = selectionStore.selectedCharacter;
       const selectedCharacterKey = String(selectedCharacterId ?? "");
       const skipCharacter = [
-        String(props.allPicturesId),
-        String(props.unassignedPicturesId),
-        String(props.scrapheapPicturesId),
+        String(ALL_PICTURES_ID),
+        String(UNASSIGNED_PICTURES_ID),
+        String(SCRAPHEAP_PICTURES_ID),
       ].includes(selectedCharacterKey);
       if (selectedSetId != null && selectedSetId !== "") {
         await Promise.all(
@@ -4354,7 +4905,7 @@ function scheduleWsTagFullRefresh() {
 }
 
 watch(
-  () => props.gridVersion,
+  () => gridStore.gridVersion,
   () => {
     if (pauseGridAutoUpdates.value) {
       pendingGridRefreshAfterImport.value = true;
@@ -4444,9 +4995,9 @@ const lockedDeleteNotice = useScopedNotice(
       // reorder is not worth it. A reorder is a user action anyway, so treating
       // it as a context change is the right answer, not a false positive.
       selectedImageIds.value.join(","),
-      String(props.selectedCharacter ?? ""),
-      String(props.selectedSet ?? ""),
-      String(props.selectedProjectId ?? ""),
+      String(selectionStore.selectedCharacter ?? ""),
+      String(selectionStore.selectedSet ?? ""),
+      String(projectStore.selectedProjectId ?? ""),
       // Locked sets are few, so a per-set membership fingerprint is cheap and
       // catches an unlock, a re-lock and a membership edit alike.
       lockedSetsStore.sets
@@ -4514,7 +5065,18 @@ const {
 // flex-wrap lines break exactly where useJustifiedLayout computed the rows —
 // the invariant the spacer/fetch arithmetic depends on.
 const justifiedInfoRowExtra = computed(() =>
-  props.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT,
+  gridStore.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT,
+);
+
+// A collapsed stack's deck edges (StackEdgeTicks) peek OUTSIDE the cover, up and
+// to the right in `--space-1` steps, so they need room around the tile. Only the
+// square grid has it: 4px of `.thumbnail-card` padding plus the 4px grid gap.
+// Justified packs the cover to its exact box behind a 2px seam, and compact
+// removes both the padding and the gap. In either, the peek lands on the
+// NEIGHBOURING photo instead of on the canvas. The permanent stack count badge
+// rides the same guard as the ticks, so those modes still declare the stack.
+const stackDeckEdgesFit = computed(
+  () => !isJustifiedMode.value && !gridStore.compactMode,
 );
 
 function _justifiedItemGeometry(img, localIdx) {
@@ -4563,7 +5125,7 @@ const gridContainerStyle = computed(() => {
   }
   return {
     ...base,
-    gridTemplateColumns: `repeat(${props.columns}, minmax(0, 1fr))`,
+    gridTemplateColumns: `repeat(${gridStore.columns}, minmax(0, 1fr))`,
   };
 });
 
@@ -4828,6 +5390,7 @@ const {
     dragPreviewRefs,
     prefetchFullImage,
     reviewOverlayOpen,
+    isImageGhosted,
   },
   props,
 );
@@ -4883,6 +5446,10 @@ const {
     exportProgress,
     reverseImageSearchPictureIds,
     faceLikenessSearchFaceId,
+    faceSearchCharacter,
+    faceSearchThreshold,
+    faceSearchMinRefs,
+    faceSearchRanked,
   },
   props,
   {
@@ -4905,6 +5472,84 @@ const {
   },
 );
 
+// ── Character membership undo/redo must reconcile a character grid ───
+// The history endpoint changes the face metadata and the operation store updates
+// its history/receipt, but the resulting pictures_changed event carries this
+// tab's own origin and is deliberately suppressed by the realtime grid sync.
+// That leaves a character view showing pictures whose assignment was just
+// undone or redone until an unrelated full refresh. Subscribe to the completed
+// shared history action, as DuplicateQueue does for its domain state, and
+// re-read only when character membership can affect the active grid.
+const CHARACTER_MEMBERSHIP_HISTORY_ACTIONS = new Set([
+  "undo",
+  "undoTo",
+  "undoBatchById",
+  "redo",
+]);
+const CHARACTER_MEMBERSHIP_OP_TYPES = new Set([
+  "characters.assign",
+  "characters.unassign",
+]);
+
+const isCharacterScopedView = computed(() => {
+  if (normalizedSelectedCharacterIds.value.length > 0) return true;
+  const selected = selectionStore.selectedCharacter;
+  if (selected == null) return false;
+  const key = String(selected).toUpperCase();
+  return ![
+    String(ALL_PICTURES_ID).toUpperCase(),
+    String(UNASSIGNED_PICTURES_ID).toUpperCase(),
+    String(SCRAPHEAP_PICTURES_ID).toUpperCase(),
+  ].includes(key);
+});
+
+/** Operations a history action is about to touch, before its stack moves. */
+function characterMembershipHistoryTargets(name, args) {
+  if (name === "undo") {
+    return operationStore.nextUndo ? [operationStore.nextUndo] : [];
+  }
+  if (name === "undoTo") {
+    const past = operationStore.past ?? [];
+    const index = past.findIndex((op) => op?.id === args?.[0]);
+    return index < 0 ? [] : past.slice(0, index + 1);
+  }
+  if (name === "undoBatchById") {
+    return (operationStore.operations ?? []).filter(
+      (op) => op?.batch_id === args?.[0],
+    );
+  }
+  if (name === "redo") {
+    return operationStore.nextRedo ? [operationStore.nextRedo] : [];
+  }
+  return [];
+}
+
+operationStore.$onAction(({ name, args, after }) => {
+  if (!CHARACTER_MEMBERSHIP_HISTORY_ACTIONS.has(name)) return;
+  const targets = characterMembershipHistoryTargets(name, args);
+  if (
+    !targets.some((op) =>
+      CHARACTER_MEMBERSHIP_OP_TYPES.has(String(op?.op_type || "")),
+    )
+  ) {
+    return;
+  }
+
+  after(async (result) => {
+    // History actions return null on failure; `undoTo` returns the number of
+    // operations actually reverted, including a partial successful walk. A
+    // failed undo or redo must leave the current grid untouched.
+    const succeeded = name === "undoTo" ? Number(result) > 0 : result != null;
+    if (!succeeded || !isCharacterScopedView.value) return;
+    if (overlayOpen.value) {
+      pendingOverlayGridRefresh.value = true;
+      return;
+    }
+    preserveScrollOnNextFetch.value = true;
+    await fetchAllGridImages({ force: true });
+  });
+});
+
 // ============================================================
 // STACK ORDERING + EXPAND / COLLAPSE + REORDER DRAG
 // (moved to useStackOrdering composable)
@@ -4917,8 +5562,8 @@ const {
   showRemoveFromStack,
   mapGridImages,
   getStackCardStyle,
-  getStackBadgeIconStyle,
   getStackBandStyle,
+  getStackBadgeTint,
   isStackExpandedForImage,
   rebuildGridImagesFromLastFetch,
   refreshExpandedStacksAfterFetch,
@@ -4959,7 +5604,10 @@ const {
   props,
   emit,
   {
-    invalidateVisibleThumbnailRanges,
+    // useGridScoring is created below this call (it needs the stack helpers
+    // this one returns), so the reference is deferred rather than passed by
+    // value. Same shape either way from the callee's side.
+    invalidateVisibleThumbnailRanges: () => invalidateVisibleThumbnailRanges(),
     updateVisibleThumbnails,
     debouncedFetchAllGridImages,
     fetchThumbnailsForRangeNow,
@@ -4986,13 +5634,13 @@ const selectedGroupName = ref("");
 async function updateSelectedGroupName() {
   let name = "";
   if (
-    props.selectedCharacter &&
-    props.selectedCharacter !== `${props.allPicturesId}` &&
-    props.selectedCharacter !== `${props.unassignedPicturesId}` &&
-    props.selectedCharacter !== `${props.scrapheapPicturesId}`
+    selectionStore.selectedCharacter &&
+    selectionStore.selectedCharacter !== `${ALL_PICTURES_ID}` &&
+    selectionStore.selectedCharacter !== `${UNASSIGNED_PICTURES_ID}` &&
+    selectionStore.selectedCharacter !== `${SCRAPHEAP_PICTURES_ID}`
   ) {
     try {
-      const char = await getCharacter(props.selectedCharacter, {
+      const char = await getCharacter(selectionStore.selectedCharacter, {
         baseUrl: props.backendUrl,
       });
       name = char.name || "";
@@ -5018,15 +5666,59 @@ async function updateSelectedGroupName() {
 
 watch(
   [
-    () => props.selectedCharacter,
-    () => props.selectedSet,
-    () => props.selectedSetIds,
+    () => selectionStore.selectedCharacter,
+    () => selectionStore.selectedSet,
+    () => selectionStore.selectedSetIds,
   ],
   () => {
     updateSelectedGroupName();
   },
   { immediate: true },
 );
+
+const {
+  setScore,
+  setGuestScore,
+  handleGuestConsentAccepted,
+  handleGuestConsentRejected,
+  initGuestSession,
+  isSmartScoreSortActive,
+  getGridSmartScoreValue,
+  invalidateVisibleThumbnailRanges,
+  repositionImageByScore,
+  repositionImageBySmartScore,
+  insertGridImagesById,
+  refreshSmartScoreForImage,
+  applyScore,
+  applyScoresForSelection,
+} = useGridScoring({
+  backendUrl: props.backendUrl,
+  allGridImages,
+  lastFetchedGridImages,
+  loadedRanges,
+  visibleStart,
+  visibleEnd,
+  renderBuffer,
+  imagesLoading,
+  overlayOpen,
+  pendingOverlayGridRefresh,
+  preserveScrollOnNextFetch,
+  skipNextWsRefresh,
+  gridContainer,
+  guestSessionId,
+  guestConsentState,
+  guestScoreMap,
+  guestConsentBannerVisible,
+  pendingGuestScoreIntent,
+  emit,
+  debouncedFetchAllGridImages,
+  fetchImageInfo,
+  rebuildGridImagesFromLastFetch,
+  triggerNewImageHighlight,
+  updateVisibleThumbnails,
+  maybeRefreshOverlayForComfyui,
+  errorDetail,
+});
 
 // ============================================================
 // KEYBOARD NAVIGATION
@@ -5041,6 +5733,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     overlayOpen,
     reviewOverlayOpen,
     showSelectionBar,
+    searchResultsActive,
     selectedImageIds,
     lastSelectedImageId,
     cursorIdx,
@@ -5050,6 +5743,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     toolbarSelectionMenuOpen,
     isJustifiedMode,
     justifiedLayout,
+    isGhosted: isGridIndexGhosted,
   },
   props,
   emit,
@@ -5108,7 +5802,7 @@ async function refreshGridImage(imageId, options = {}) {
     };
     allGridImages.value = nextImages;
   }
-  if (props.selectedSort === LIKENESS_GROUPS_SORT_KEY) {
+  if (sortStore.selectedSort === LIKENESS_GROUPS_SORT_KEY) {
     const stackIndex = getStackIndexFromItem(allGridImages.value[idx]);
     if (typeof stackIndex === "number") {
       reorderStackByScore(stackIndex);
@@ -5116,6 +5810,95 @@ async function refreshGridImage(imageId, options = {}) {
   }
   invalidateThumbnailIndex(idx);
   fetchThumbnailsBatch(idx, idx + 1);
+}
+
+// ── Stack badges after a lifecycle change ───────────────────────────────────
+// How many ids one stack-facet read carries. The URL is a repeated `id=` list,
+// so a 2000-stack "Keep cover only" would otherwise build one unsendable query.
+const STACK_FACET_CHUNK = 200;
+
+/**
+ * Re-read the LIVE member count of every stack these pictures belong to and put
+ * it back on the mounted cards.
+ *
+ * This exists because `stack_count` is derived and listing-only: the server
+ * computes it per stack over live members (`_enrich_stack_counts`) and
+ * `GET /pictures/{id}/metadata` does not carry it at all, so `refreshGridImage`
+ * cannot repair a stack badge. That is why a "Keep cover only" left its cover
+ * rendering "5" with four of its members already in the Scrapheap.
+ *
+ * The read is per STACK, not per picture: a `fields=grid` listing represents
+ * each stack by the lowest-positioned member inside the id filter and reports
+ * that stack's count, so one row repairs every mounted member of it. That is
+ * what lets one call serve both directions: the covers after a collapse, and,
+ * from the restored copies' own ids, the same covers again after an undo.
+ *
+ * FIELDS ONLY: nothing is inserted, removed or reordered. That is the property
+ * that makes it safe inside a live ghost window, where
+ * `debouncedFetchAllGridImages()` is not: a refetch rebuilds the grid without
+ * the scrapheaped copies and takes the ghosted tiles off the screen, and with
+ * them the one-click undo they advertise.
+ *
+ * @param {Array<number|string>} pictureIds - any members of the stacks to fix.
+ * @returns {Promise<void>}
+ */
+async function refreshStackFacets(pictureIds) {
+  const wanted = [
+    ...new Set(
+      (Array.isArray(pictureIds) ? pictureIds : [])
+        .map((id) => getPictureId(id))
+        .filter((id) => id !== null),
+    ),
+  ];
+  if (!wanted.length) return;
+
+  const countByStackId = new Map();
+  for (let i = 0; i < wanted.length; i += STACK_FACET_CHUNK) {
+    const chunk = wanted.slice(i, i + STACK_FACET_CHUNK);
+    let rows;
+    try {
+      rows = await listPicturesByIds(chunk, {
+        fields: "grid",
+        baseUrl: props.backendUrl,
+      });
+    } catch (e) {
+      console.error(
+        `refreshStackFacets: could not re-read the stacks of pictures [${chunk.join(", ")}]; ` +
+          "their stack badges keep the count they were last told",
+        e,
+      );
+      continue;
+    }
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const stackId = getPictureStackId(row);
+      if (!stackId) continue;
+      const count = Number(row?.stack_count ?? row?.stackCount);
+      if (!Number.isFinite(count) || count <= 0) continue;
+      countByStackId.set(stackId, count);
+    }
+  }
+  if (!countByStackId.size) return;
+
+  let changed = false;
+  const source = Array.isArray(lastFetchedGridImages.value)
+    ? lastFetchedGridImages.value
+    : [];
+  const next = source.map((img) => {
+    const stackId = getPictureStackId(img);
+    if (!stackId || !countByStackId.has(stackId)) return img;
+    const count = countByStackId.get(stackId);
+    if (getStackBadgeCount(img) === count) return img;
+    changed = true;
+    // Both spellings. The fetched row carries `stack_count`; `collapseStackImages`
+    // writes the card's `stackCount`, which would otherwise win over the fresh
+    // value on the next rebuild.
+    return { ...img, stack_count: count, stackCount: count };
+  });
+  // No rebuild when nothing moved: the rebuild reassigns `allGridImages`, which
+  // several watchers read as "the grid changed under you".
+  if (!changed) return;
+  lastFetchedGridImages.value = next;
+  rebuildGridImagesFromLastFetch();
 }
 
 function getStackIndexFromItem(item) {
@@ -5269,639 +6052,6 @@ function closeOverlay() {
 }
 
 // ============================================================
-// SCORING
-// ============================================================
-async function setScore(img, n) {
-  if (isReadOnly.value) {
-    setGuestScore(img, n);
-    return;
-  }
-  const newScore = toggleScore(img.score, n);
-  applyScore(img, newScore);
-}
-
-// ---- Guest scoring helpers ----
-
-function _generateGuestSessionId() {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  // Fallback for older browsers — use cryptographically secure random bytes
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
-  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant bits
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0"));
-  return [
-    hex.slice(0, 4).join(""),
-    hex.slice(4, 6).join(""),
-    hex.slice(6, 8).join(""),
-    hex.slice(8, 10).join(""),
-    hex.slice(10, 16).join(""),
-  ].join("-");
-}
-
-function _getOrCreateGuestSessionId() {
-  if (guestSessionId.value) return guestSessionId.value;
-  const id = _generateGuestSessionId();
-  guestSessionId.value = id;
-  return id;
-}
-
-async function _submitGuestScores(scores, setCookie) {
-  const sid = _getOrCreateGuestSessionId();
-  const payload = { session_id: sid, set_cookie: setCookie, scores };
-  await submitGuestScores(payload, { baseUrl: props.backendUrl });
-}
-
-function setGuestScore(img, n) {
-  const currentScore = guestScoreMap.value.get(img.id) ?? null;
-  const newScore = toggleScore(currentScore, n);
-
-  if (guestConsentState.value === null) {
-    // Show consent banner; queue the intent
-    pendingGuestScoreIntent.value = { img, newScore };
-    guestConsentBannerVisible.value = true;
-    return;
-  }
-
-  // Optimistic local update
-  const updated = new Map(guestScoreMap.value);
-  updated.set(img.id, newScore);
-  guestScoreMap.value = updated;
-
-  const setCookie = guestConsentState.value === "accepted";
-  _submitGuestScores({ [String(img.id)]: newScore }, setCookie)
-    .then(() => {
-      if (isScoreSortActive()) {
-        debouncedFetchAllGridImages({ force: true });
-      }
-    })
-    .catch((err) => {
-      console.error("Failed to submit guest score:", err);
-    });
-}
-
-async function handleGuestConsentAccepted() {
-  guestConsentState.value = "accepted";
-  guestConsentBannerVisible.value = false;
-  // Do not persist the guest session identifier in localStorage.
-  // The server-managed HttpOnly cookie handles durable session continuity;
-  // keeping the session_id only in memory is sufficient for the current visit.
-  const intent = pendingGuestScoreIntent.value;
-  pendingGuestScoreIntent.value = null;
-  if (intent) {
-    const updated = new Map(guestScoreMap.value);
-    updated.set(intent.img.id, intent.newScore);
-    guestScoreMap.value = updated;
-    await _submitGuestScores({ [String(intent.img.id)]: intent.newScore }, true)
-      .then(() => {
-        if (isScoreSortActive()) debouncedFetchAllGridImages({ force: true });
-      })
-      .catch((err) => console.error("Failed to submit guest score:", err));
-  }
-}
-
-function handleGuestConsentRejected() {
-  guestConsentState.value = "rejected";
-  guestConsentBannerVisible.value = false;
-  // Do NOT persist the session ID anywhere — if the user reloads they get a
-  // brand-new session with no connection to these scores.
-  const intent = pendingGuestScoreIntent.value;
-  pendingGuestScoreIntent.value = null;
-  if (intent) {
-    const updated = new Map(guestScoreMap.value);
-    updated.set(intent.img.id, intent.newScore);
-    guestScoreMap.value = updated;
-    _submitGuestScores({ [String(intent.img.id)]: intent.newScore }, false)
-      .then(() => {
-        if (isScoreSortActive()) debouncedFetchAllGridImages({ force: true });
-      })
-      .catch((err) => console.error("Failed to submit guest score:", err));
-  }
-}
-
-async function fetchGuestScores() {
-  // Kept only as a fallback / explicit refresh. The main listing
-  // (GET /pictures) now overlays guest scores onto img.score server-side.
-  try {
-    const resp = await getGuestScores({ baseUrl: props.backendUrl });
-    const scores = resp?.scores ?? {};
-    const map = new Map();
-    for (const [k, v] of Object.entries(scores)) {
-      map.set(Number(k), v);
-    }
-    guestScoreMap.value = map;
-  } catch (err) {
-    console.error("[guest-scores] Failed to fetch guest scores:", err);
-  }
-}
-
-function initGuestSession() {
-  const readOnly = isReadOnly.value;
-  const cookies = document.cookie;
-  const ls = localStorage.getItem("guest_session_id");
-  if (!readOnly) return;
-  // A non-HttpOnly sentinel cookie is set alongside the HttpOnly guest_session
-  // cookie when the user accepted persistent storage.
-  const hasCookieConsent = cookies
-    .split(";")
-    .some((c) => c.trim().startsWith("guest_session_active=1"));
-  if (hasCookieConsent) {
-    guestConsentState.value = "accepted";
-    // Restore the session ID from localStorage so POST bodies stay in sync
-    // with the HttpOnly cookie the server already knows about.
-    if (ls) {
-      guestSessionId.value = ls;
-    }
-    // Scores are now overlaid by the backend in GET /pictures, so
-    // fetchAllGridImages() will include them in img.score directly.
-    // fetchGuestScores() is only needed to pre-populate guestScoreMap
-    // for optimistic-update display before the grid loads.
-    fetchGuestScores();
-    return;
-  }
-  // No cookie consent — fresh start.  The banner will appear on first score.
-  // (Rejected users are intentionally not remembered across page loads.)
-}
-
-function isScoreSortActive() {
-  return typeof props.selectedSort === "string"
-    ? props.selectedSort.toUpperCase() === "SCORE"
-    : false;
-}
-
-function isCharacterLikenessSortActive() {
-  return typeof props.selectedSort === "string"
-    ? props.selectedSort.toUpperCase() === "CHARACTER_LIKENESS"
-    : false;
-}
-
-function isSmartScoreSortActive() {
-  return typeof props.selectedSort === "string"
-    ? props.selectedSort.toUpperCase().includes("SMART_SCORE")
-    : false;
-}
-
-// Single source of truth for grid sort direction. ALL client-side ordering —
-// score/smart-score repositions, the apply-scores re-sort, and incremental
-// inserts — must use the SAME rule, or a card lands in a different spot than the
-// array it is spliced into. Nullish selectedDescending → ascending (the store
-// defaults it to a real `true`). Keep this as one computed: a lone inlined
-// `!== false` previously drifted here and mispositioned inserted cards.
-const gridSortDescending = computed(() => props.selectedDescending === true);
-
-function getGridSmartScoreValue(img) {
-  if (!img) return null;
-  const raw =
-    typeof img.smartScore === "number"
-      ? img.smartScore
-      : typeof img.smart_score === "number"
-        ? img.smart_score
-        : null;
-  return Number.isFinite(raw) ? raw : null;
-}
-
-// The ONE null-ordering rule shared by every client-side smart-score sort path
-// (fresh insert AND reposition). SQLite ranks NULL below every real value, and
-// the backend sorts the smart_score column with a plain .asc()/.desc() and no
-// NULLS clause (pixlstash/db_models/picture.py), so NULLs sort FIRST on ascending
-// and LAST on descending. Map a null/absent score to -Infinity so the shared
-// comparator (which flips on `descending`) lands a null-scored card exactly where
-// the server put it, in BOTH directions. A 0 sentinel is wrong: it collides with
-// a genuine zero and, now that smart scores can be negative and null (tag edits
-// invalidate them), it mis-orders nulls relative to real scores. Route EVERY path
-// through this helper — never an inline ternary or `?? 0` — so the insert and
-// reposition paths cannot drift (the failure the gridSortDescending comment warns
-// of). This is only an ordering key; it must never be written back as a card's
-// displayed smart score, or a null-scored card would render a fake 0.
-function smartScoreSortKey(smartScore) {
-  return Number.isFinite(smartScore) ? smartScore : -Infinity;
-}
-
-function invalidateVisibleThumbnailRanges() {
-  const start = Math.max(0, visibleStart.value - renderBuffer.value);
-  const end = Math.min(
-    allGridImages.value.length,
-    visibleEnd.value + renderBuffer.value,
-  );
-  loadedRanges.value = loadedRanges.value.filter(
-    ([rangeStart, rangeEnd]) => rangeEnd <= start || rangeStart >= end,
-  );
-  updateVisibleThumbnails();
-}
-
-function _spliceAndReinsert(
-  items,
-  currentIndex,
-  target,
-  targetScore,
-  getScore,
-  descending,
-) {
-  items.splice(currentIndex, 1);
-  let insertIndex = items.findIndex((item) => {
-    const score = getScore(item);
-    return descending ? score < targetScore : score > targetScore;
-  });
-  if (insertIndex === -1) insertIndex = items.length;
-  if (insertIndex === currentIndex) {
-    const updated = allGridImages.value.slice();
-    updated[currentIndex] = { ...target, idx: currentIndex };
-    allGridImages.value = updated;
-    // Still invalidate: we are only here because the card's score changed, and the
-    // batch-sourced fields that change with it (penalised_tags — the problem
-    // indicator — plus faces/detections) are refreshed ONLY by a thumbnail batch.
-    // Without this, loadedRanges still covers the window, updateVisibleThumbnails
-    // no-ops, and a card whose position happens not to move keeps its stale
-    // indicator. Adding a penalised tag to an already low-scoring card lands
-    // exactly here, since it is already at the bottom of a descending sort.
-    invalidateVisibleThumbnailRanges();
-    return null;
-  }
-  items.splice(insertIndex, 0, target);
-  for (let i = 0; i < items.length; i += 1) {
-    items[i].idx = i;
-  }
-  allGridImages.value = items;
-  invalidateVisibleThumbnailRanges();
-  return insertIndex;
-}
-
-function repositionImageByScore(imageId, newScore) {
-  const items = allGridImages.value.slice();
-  const dId = getPictureId(imageId);
-  const currentIndex = items.findIndex(
-    (item) => getPictureId(item?.id) === dId,
-  );
-  if (currentIndex === -1) return;
-
-  const target = items[currentIndex];
-  target.score = newScore;
-  const targetScore = newScore ?? 0;
-  const descending = gridSortDescending.value;
-  const insertIndex = _spliceAndReinsert(
-    items,
-    currentIndex,
-    target,
-    targetScore,
-    (item) => item.score ?? 0,
-    descending,
-  );
-  if (insertIndex !== null) {
-    nextTick(() => {
-      const grid = gridContainer.value;
-      if (!grid) return;
-      const card = grid.querySelectorAll(".image-card")[insertIndex];
-      if (card && card.scrollIntoView) {
-        card.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-    });
-  }
-}
-
-let smartScoreRepositioning = false;
-
-function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
-  if (smartScoreRepositioning) return;
-  smartScoreRepositioning = true;
-  try {
-    const items = allGridImages.value.slice();
-    const currentIndex = items.findIndex((item) => item.id === imageId);
-    if (currentIndex === -1) return;
-
-    // Keep the ordering key separate from the displayed value. The card must
-    // store the TRUE smart score (a real number or null → "no score"); only the
-    // sort key collapses null to the SQLite sentinel via smartScoreSortKey.
-    // Writing the sentinel onto `smartScore` would make a null-scored card render
-    // a fake 0.
-    const normalisedScore = Number.isFinite(smartScore) ? smartScore : null;
-    const targetKey = smartScoreSortKey(normalisedScore);
-    // Write the TRUE score to BOTH the camelCase and snake_case keys.
-    // getGridSmartScoreValue reads `smartScore` then falls back to `smart_score`
-    // (grid cards / metadata responses carry both), so setting only one key would
-    // let a stale value leak through the fallback and render a wrong (or fake 0)
-    // score. Both must hold the normalised value — null for "no score".
-    const target = {
-      ...items[currentIndex],
-      ...(latestInfo && typeof latestInfo === "object" ? latestInfo : {}),
-      smartScore: normalisedScore,
-      smart_score: normalisedScore,
-      thumbnail:
-        items[currentIndex]?.thumbnail ?? latestInfo?.thumbnail ?? null,
-    };
-    const descending = gridSortDescending.value;
-    _spliceAndReinsert(
-      items,
-      currentIndex,
-      target,
-      targetKey,
-      (item) => smartScoreSortKey(getGridSmartScoreValue(item)),
-      descending,
-    );
-  } finally {
-    smartScoreRepositioning = false;
-  }
-}
-
-// Numeric sort key for a freshly-fetched grid item under the active sort,
-// mirroring the fields the grid already displays/sorts on (see
-// getCompactGroupLabel / sort-overlay logic). Returns a finite number used to
-// find the insert index; `id` is the implicit tiebreaker.
-function gridImageSortKey(img) {
-  const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
-  if (sort === "IMPORTED_AT" && img?.imported_at) {
-    return Date.parse(img.imported_at) || 0;
-  }
-  if (sort.includes("DATE") && img?.created_at) {
-    return Date.parse(img.created_at) || 0;
-  }
-  if (sort.includes("SMART_SCORE")) {
-    // Match the server's ORDER BY exactly via the shared null rule (see
-    // smartScoreSortKey). The reposition path uses the same helper, so the two
-    // ordering paths cannot drift.
-    return smartScoreSortKey(getGridSmartScoreValue(img));
-  }
-  if (
-    sort.includes("CHARACTER_LIKENESS") &&
-    typeof img?.character_likeness === "number"
-  ) {
-    return img.character_likeness;
-  }
-  if (sort === "TEXT_CONTENT" && typeof img?.text_score === "number") {
-    return img.text_score;
-  }
-  if (typeof img?.score === "number") return img.score;
-  // Unknown / id-ordered sort → fall back to the picture id.
-  return Number(getPictureId(img?.id)) || 0;
-}
-
-// Insert newly-added pictures into the grid at their sorted position without a
-// full reload. Always mutates lastFetchedGridImages then rebuilds, because the
-// v-for key embeds img.idx — splicing allGridImages directly would corrupt the
-// virtual-scroll window. Deferred to the pill while a streaming fetch is in
-// flight (that fetch writes allGridImages wholesale from a sized placeholder).
-async function insertGridImagesById(ids) {
-  const wanted = (Array.isArray(ids) ? ids : [])
-    .map((id) => getPictureId(id))
-    .filter((id) => id !== null);
-  if (!wanted.length) return;
-
-  // Character-likeness sort can't be positioned incrementally. The likeness
-  // value is computed by a backend SQL function relative to the currently
-  // selected similarity character (find_pictures_by_character_likeness_sql),
-  // not stored on the picture, so it is NOT in the `fields=grid` projection
-  // (the backend has no character context to compute it there). gridImageSortKey
-  // therefore falls through to `score` and would splice the card at the wrong
-  // position. Fall back to a full refetch, which DOES recompute likeness — or,
-  // under an open overlay, defer it (the overlay-open deferral contract, §9.1)
-  // so we never restructure the filmstrip mid-view.
-  if (isCharacterLikenessSortActive()) {
-    if (overlayOpen.value) {
-      pendingOverlayGridRefresh.value = true;
-      return;
-    }
-    preserveScrollOnNextFetch.value = true;
-    debouncedFetchAllGridImages();
-    return;
-  }
-
-  if (imagesLoading.value) {
-    // A streaming fetch owns allGridImages wholesale; inserting now would be
-    // clobbered. The caller (useGridRealtimeSync) routes these to the pill
-    // instead while loading, so just bail.
-    console.warn(
-      "insertGridImagesById: skipped during in-flight grid fetch",
-      wanted,
-    );
-    return;
-  }
-
-  const existing = new Set(
-    (Array.isArray(lastFetchedGridImages.value)
-      ? lastFetchedGridImages.value
-      : []
-    ).map((img) => getPictureId(img?.id)),
-  );
-  const toFetch = wanted.filter((id) => !existing.has(id));
-  if (!toFetch.length) return;
-
-  let fetched;
-  try {
-    const rows = await listPicturesByIds(toFetch, {
-      fields: "grid",
-      baseUrl: props.backendUrl,
-    });
-    fetched = Array.isArray(rows) ? rows : [];
-  } catch (e) {
-    console.error("insertGridImagesById: grid metadata fetch failed", {
-      ids: toFetch,
-      error: e,
-    });
-    return;
-  }
-  if (!fetched.length) return;
-
-  const descending = gridSortDescending.value;
-  const base = Array.isArray(lastFetchedGridImages.value)
-    ? lastFetchedGridImages.value.slice()
-    : [];
-  const inserted = [];
-  for (const pic of fetched) {
-    const picId = getPictureId(pic?.id);
-    if (picId === null || base.some((img) => getPictureId(img?.id) === picId)) {
-      continue;
-    }
-    const key = gridImageSortKey(pic);
-    let insertIndex = base.findIndex((img) => {
-      const otherKey = gridImageSortKey(img);
-      return descending ? otherKey < key : otherKey > key;
-    });
-    if (insertIndex === -1) insertIndex = base.length;
-    base.splice(insertIndex, 0, pic);
-    inserted.push(picId);
-  }
-  if (!inserted.length) return;
-
-  lastFetchedGridImages.value = base;
-  rebuildGridImagesFromLastFetch();
-  triggerNewImageHighlight(inserted);
-
-  // An in-app ComfyUI result lands here (origin-aware WS picture_imported insert).
-  // If the overlay is open with a pending comfyui refresh, reconcile it now that
-  // the new stacked output is present in lastFetchedGridImages — this is the i2i/
-  // upscale lightbox case that previously relied on the full-grid refetch.
-  void maybeRefreshOverlayForComfyui();
-}
-
-async function refreshSmartScoreForImage(imageId) {
-  if (!imageId || !isSmartScoreSortActive()) return;
-  const latestInfo = await fetchImageInfo(imageId, { smartScore: true });
-  if (!latestInfo || Array.isArray(latestInfo)) return;
-
-  const idx = allGridImages.value.findIndex((img) => img?.id === imageId);
-  if (idx !== -1) {
-    const current = allGridImages.value[idx] || {};
-    const smartScore =
-      typeof latestInfo.smartScore === "number" ? latestInfo.smartScore : null;
-    if (current.smartScore === smartScore) {
-      return;
-    }
-    await nextTick();
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    // Pass the TRUE smart score (number or null). repositionImageBySmartScore
-    // derives its ordering key from the null rule and preserves null as the
-    // card's displayed value — collapsing to 0 here would both mis-order the
-    // card and show a fake 0.
-    repositionImageBySmartScore(imageId, smartScore, latestInfo);
-  }
-}
-
-async function applyScoresByEntries(entries, options = {}) {
-  const { updateSort = true, emitRefreshSidebar = true } = options;
-  if (!Array.isArray(entries) || !entries.length) return;
-
-  // Score updates are applied locally below (including score-sort reordering),
-  // so the immediate WS gridVersion refresh would be redundant and can clear
-  // current multi-selection in some paths. Skip that next WS refresh.
-  skipNextWsRefresh.value = true;
-
-  const scoresPayload = {};
-  for (const [id, score] of entries) {
-    scoresPayload[String(id)] = Number(score);
-  }
-
-  await applyScores(scoresPayload, { baseUrl: props.backendUrl });
-
-  const scoreMap = new Map(
-    entries.map(([id, score]) => [String(id), Number(score)]),
-  );
-
-  let updatedImages = allGridImages.value.map((img) => {
-    if (!img || img.id == null) return img;
-    const key = String(img.id);
-    if (!scoreMap.has(key)) return img;
-    return { ...img, score: scoreMap.get(key) };
-  });
-
-  if (updateSort && isScoreSortActive()) {
-    const descending = gridSortDescending.value;
-    updatedImages = updatedImages
-      .slice()
-      .sort((a, b) => {
-        const aScore = a?.score ?? 0;
-        const bScore = b?.score ?? 0;
-        if (aScore === bScore) {
-          const aIdx = a?.idx ?? 0;
-          const bIdx = b?.idx ?? 0;
-          return aIdx - bIdx;
-        }
-        return descending ? bScore - aScore : aScore - bScore;
-      })
-      .map((img, idx) => (img ? { ...img, idx } : img));
-    allGridImages.value = updatedImages;
-    invalidateVisibleThumbnailRanges();
-  } else {
-    allGridImages.value = updatedImages;
-  }
-
-  if (updateSort && isCharacterLikenessSortActive()) {
-    preserveScrollOnNextFetch.value = true;
-    debouncedFetchAllGridImages();
-  }
-
-  if (updateSort && isSmartScoreSortActive()) {
-    preserveScrollOnNextFetch.value = true;
-    debouncedFetchAllGridImages();
-  }
-
-  if (emitRefreshSidebar) {
-    emit("refresh-sidebar");
-  }
-}
-
-async function applyScore(img, newScore) {
-  const imageId = img?.id;
-  if (!imageId) {
-    noticeStore.error("Couldn't set that score — the picture id is missing.", {
-      key: "score-missing-id",
-    });
-    return;
-  }
-  try {
-    // Suppress the WS-driven gridVersion reload that the score apply triggers;
-    // the score update is already applied locally by applyScoresByEntries.
-    skipNextWsRefresh.value = true;
-    await applyScoresByEntries([[String(imageId), newScore]], {
-      updateSort: false,
-      emitRefreshSidebar: false,
-    });
-
-    if (isScoreSortActive()) {
-      if (overlayOpen.value) {
-        // Reordering the grid while the overlay is open would break the
-        // filmstrip. Defer the reposition until the overlay closes.
-        pendingOverlayGridRefresh.value = true;
-      } else {
-        repositionImageByScore(imageId, newScore);
-      }
-    }
-    if (isCharacterLikenessSortActive()) {
-      if (overlayOpen.value) {
-        pendingOverlayGridRefresh.value = true;
-        return;
-      }
-      preserveScrollOnNextFetch.value = true;
-      debouncedFetchAllGridImages();
-      return;
-    }
-    if (isSmartScoreSortActive()) {
-      if (overlayOpen.value) {
-        pendingOverlayGridRefresh.value = true;
-        return;
-      }
-      preserveScrollOnNextFetch.value = true;
-      debouncedFetchAllGridImages();
-      return;
-    }
-  } catch (e) {
-    console.error("Failed to set score", e);
-    noticeStore.error(`Couldn't set that score. ${errorDetail(e)}`, {
-      key: "score-set",
-    });
-  }
-}
-
-async function applyScoresForSelection(imageIds, targetScore) {
-  const ids = Array.isArray(imageIds) ? imageIds.filter(Boolean) : [];
-  if (!ids.length) return;
-  if (!Number.isFinite(targetScore)) return;
-
-  const gridById = new Map(
-    allGridImages.value
-      .filter((img) => img && img.id != null)
-      .map((img) => [String(img.id), img]),
-  );
-
-  const entries = [];
-  for (const id of ids) {
-    const key = String(id);
-    const img = gridById.get(key);
-    if (!img) continue;
-    const current = Number(img.score || 0);
-    const nextScore = toggleScore(current, targetScore);
-    entries.push([key, nextScore]);
-  }
-
-  if (!entries.length) return;
-
-  await applyScoresByEntries(entries, {
-    updateSort: true,
-    emitRefreshSidebar: true,
-  });
-}
-
-// ============================================================
 // GRID FETCH FUNCTIONS
 // ============================================================
 function maybeRefreshThumbnailsForRange(start, end) {
@@ -5936,21 +6086,32 @@ function _resetGridState() {
 
 watch(
   [
-    () => props.selectedCharacter,
-    () => props.selectedSet,
-    () => props.selectedSetIds,
-    () => props.characterMultiMode,
-    () => props.setMultiMode,
-    () => props.setDifferenceBaseId,
-    () => props.projectViewMode,
-    () => props.selectedProjectId,
-    () => props.searchQuery,
-    () => props.selectedSort,
-    () => props.selectedDescending,
-    () => props.similarityCharacter,
-    () => props.stackThreshold,
+    () => selectionStore.selectedCharacter,
+    () => selectionStore.selectedSet,
+    () => selectionStore.selectedSetIds,
+    () => selectionStore.characterMultiMode,
+    () => selectionStore.setMultiMode,
+    () => selectionStore.setDifferenceBaseId,
+    () => projectStore.projectViewMode,
+    () => projectStore.selectedProjectId,
+    () => searchStore.searchQuery,
+    () => sortStore.selectedSort,
+    () => sortStore.selectedDescending,
+    () => sortStore.selectedSimilarityCharacter,
+    () => sortStore.stackThreshold,
   ],
-  () => {
+  (next, prev) => {
+    // Dropping the armed searches has to happen HERE, before the refetch below,
+    // and not in a watcher of its own: `fetchAllGridImages` picks its fetchMode
+    // synchronously, so a later watcher would clear the search only after this
+    // fetch had already re-run it. See `dropSearchesForViewChange`.
+    //
+    // Only on an actual view change. This watcher also fires for sort, search
+    // text and filter changes, none of which are a reason to throw a search
+    // away; indices 0 and 1 are selectedCharacter and selectedSet.
+    if (next[0] !== prev?.[0] || next[1] !== prev?.[1]) {
+      dropSearchesForViewChange(next[0], next[1]);
+    }
     if (scrollWrapper.value) scrollWrapper.value.scrollTop = 0;
     _resetGridState();
     updateSelectedGroupName();
@@ -5962,21 +6123,22 @@ watch(
 
 watch(
   [
-    () => props.mediaTypeFilter,
-    () => props.comfyuiModelFilter,
-    () => props.comfyuiLoraFilter,
-    () => props.minScoreFilter,
-    () => props.maxScoreFilter,
-    () => props.smartScoreBucketFilter,
-    () => props.resolutionBucketFilter,
-    () => props.tagFilter,
-    () => props.tagRejectedFilter,
-    () => props.tagConfidenceAboveFilter,
-    () => props.tagConfidenceBelowFilter,
-    () => props.faceBboxFilter,
-    () => props.impossibleSources,
-    () => props.sharedOnlyFilter,
-    () => props.unassignedOnlyFilter,
+    () => filterStore.mediaTypeFilter,
+    () => filterStore.comfyuiModelFilter,
+    () => filterStore.comfyuiLoraFilter,
+    () => filterStore.minScoreFilter,
+    () => filterStore.maxScoreFilter,
+    () => filterStore.smartScoreBucketFilter,
+    () => filterStore.resolutionBucketFilter,
+    () => filterStore.tagFilter,
+    () => filterStore.tagRejectedFilter,
+    () => filterStore.tagConfidenceAboveFilter,
+    () => filterStore.tagConfidenceBelowFilter,
+    () => filterStore.faceBboxFilter,
+    () => filterStore.impossibleSources,
+    () => filterStore.stackStateFilter,
+    () => filterStore.sharedOnlyFilter,
+    () => filterStore.unassignedOnlyFilter,
   ],
   () => {
     _resetGridState();
@@ -5989,7 +6151,7 @@ watch(
 );
 
 watch(
-  () => props.showStacks,
+  () => gridStore.showStacks,
   async (expandAllStacksEnabled) => {
     if (expandAllStacksEnabled) {
       syncExpandAllStacksFromFetchedImages();
@@ -6002,7 +6164,7 @@ watch(
 );
 
 watch(
-  () => props.columns,
+  () => gridStore.columns,
   async () => {
     updateRowHeightFromGrid();
     recalculateVisibleRange();
@@ -6015,7 +6177,7 @@ watch(
 );
 
 watch(
-  () => props.compactMode,
+  () => gridStore.compactMode,
   () => {
     updateRowHeightFromGrid();
     updateVisibleThumbnails();
@@ -6028,7 +6190,7 @@ watch(
 // the maintainer hit). Mirror the columns watch: re-measure row height, re-pack,
 // recompute the visible range, and refetch the now-visible thumbnails.
 watch(
-  () => props.thumbnailMode,
+  () => gridStore.thumbnailMode,
   async () => {
     updateRowHeightFromGrid();
     recalculateVisibleRange();
@@ -6113,7 +6275,7 @@ watch(
 );
 
 watch(
-  [() => props.showFaceBboxes, () => allGridImages.value.length],
+  [() => gridStore.showFaceBboxes, () => allGridImages.value.length],
   ([faceEnabled, length], [prevFace, prevLength]) => {
     if (!faceEnabled) return;
     if (length <= 0) return;
@@ -6125,7 +6287,7 @@ watch(
 );
 
 watch(
-  [() => props.showDetections, () => allGridImages.value.length],
+  [() => gridStore.showDetections, () => allGridImages.value.length],
   ([detEnabled, length], [prevDet, prevLength]) => {
     if (!detEnabled) return;
     if (length <= 0) return;
@@ -6143,7 +6305,7 @@ watch(
 // ============================================================
 function filterImagesByMediaType(images) {
   let filtered = images;
-  if (props.mediaTypeFilter === "images") {
+  if (filterStore.mediaTypeFilter === "images") {
     filtered = filtered.filter((img) => {
       if (!img) return false;
       const candidates = [img.name, img.id, img.format]
@@ -6151,7 +6313,7 @@ function filterImagesByMediaType(images) {
         .map((v) => (typeof v === "string" ? v : ""));
       return candidates.some((val) => isSupportedImageFile(val));
     });
-  } else if (props.mediaTypeFilter === "videos") {
+  } else if (filterStore.mediaTypeFilter === "videos") {
     filtered = filtered.filter((img) => {
       if (!img) return false;
       const candidates = [img.name, img.id, img.format]
@@ -6173,7 +6335,7 @@ const emptyStateDelayPassed = ref(false);
 let emptyStateDelayTimer = null;
 
 const showEmptyState = computed(() => {
-  if (props.folderScanning) return false;
+  if (sidebarStore.folderScanning) return false;
   return (
     gridReady.value &&
     !imagesLoading.value &&
@@ -6184,7 +6346,9 @@ const showEmptyState = computed(() => {
 
 const showFolderScanningState = computed(() => {
   return (
-    props.folderScanning && gridReady.value && filteredGridCount.value === 0
+    sidebarStore.folderScanning &&
+    gridReady.value &&
+    filteredGridCount.value === 0
   );
 });
 
@@ -6225,7 +6389,7 @@ const emptyStateAlt = computed(() => {
 });
 
 const isDarkThemeActive = computed(() => {
-  const mode = String(props.themeMode || "light").toLowerCase();
+  const mode = String(userPrefsStore.themeMode || "light").toLowerCase();
   if (mode === "dark") return true;
   if (mode === "light") return false;
   if (mode === "system") {
@@ -6251,7 +6415,7 @@ watch([imagesLoading, filteredGridCount], ([loading, count]) => {
     emptyStateDelayTimer = null;
   }
 
-  if (loading || count > 0 || props.folderScanning) {
+  if (loading || count > 0 || sidebarStore.folderScanning) {
     emptyStateDelayPassed.value = false;
     return;
   }
@@ -6261,7 +6425,7 @@ watch([imagesLoading, filteredGridCount], ([loading, count]) => {
     if (
       !imagesLoading.value &&
       filteredGridCount.value === 0 &&
-      !props.folderScanning
+      !sidebarStore.folderScanning
     ) {
       emptyStateDelayPassed.value = true;
     }
@@ -6271,7 +6435,7 @@ watch([imagesLoading, filteredGridCount], ([loading, count]) => {
 // When scanning ends the grid will reload; reset the delay so the
 // empty state only shows after images have had a chance to arrive.
 watch(
-  () => props.folderScanning,
+  () => sidebarStore.folderScanning,
   (scanning) => {
     if (!scanning) {
       if (emptyStateDelayTimer) {
@@ -6452,14 +6616,14 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         }
         gridImg.faces =
           thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
-        if (props.showFaceBboxes && gridImg.faces.length) {
+        if (gridStore.showFaceBboxes && gridImg.faces.length) {
           overlayNeedsRedraw = true;
         }
         gridImg.detections =
           thumbObj && Array.isArray(thumbObj.detections)
             ? thumbObj.detections
             : [];
-        if (props.showDetections && gridImg.detections.length) {
+        if (gridStore.showDetections && gridImg.detections.length) {
           overlayNeedsRedraw = true;
         }
         gridImg.penalised_tags =
@@ -6573,6 +6737,11 @@ function updateVisibleThumbnails() {
 // ============================================================
 function handleImageCardClick(img, idx, event) {
   if (!img.id) return;
+  // A ghosted tile is a placeholder for an undo decision, not content. It is
+  // already in the Scrapheap, so selecting it would arm the selection bar
+  // against a picture no bulk action can act on. Silent: the ghost's own
+  // marking already says "not available", and a notice per click is noise.
+  if (isImageGhosted(img)) return;
   // Suppress the synthesized click that fires right after a long-press touchend
   if (suppressTouchClickId.value === img.id) {
     suppressTouchClickId.value = null;
@@ -6606,7 +6775,11 @@ function handleImageCardClick(img, idx, event) {
     newSelection = allGrid
       .slice(start, end + 1)
       .map((i) => i.id)
-      .filter(Boolean);
+      .filter(Boolean)
+      // Ghosts inside the span are skipped silently: they read visually as
+      // excluded cells already, so a selection count that included them would
+      // be the surprising half.
+      .filter((id) => !isImageGhosted(id));
     // Do NOT merge with previous selection; replace it
   } else if (isShift && anchorIndex < 0) {
     newSelection = [img.id];
@@ -6621,6 +6794,14 @@ function handleImageCardClick(img, idx, event) {
 
 function handleThumbnailClick(img, idx, event) {
   if (!img.id) return;
+  // Never open the lightbox on a ghost. The overlay is the full editing surface
+  // and it FREEZES the sequence it opens on for its whole lifetime (§9.1), so
+  // opening it on a picture that is seconds from leaving the grid offers a pile
+  // of actions against a doomed object and pins a stale filmstrip while it does.
+  if (isImageGhosted(img)) {
+    event.stopPropagation();
+    return;
+  }
   // In touch-select mode, the toggle was already handled in handleTouchEnd.
   // Just suppress any synthesized click that slipped through.
   if (touchSelectMode.value) {
@@ -6671,6 +6852,12 @@ function handleGridBackgroundClick(e) {
 
 function handleImageContextMenu(img, event) {
   if (!img?.id) return;
+  // No menu on a ghost — before the select-on-right-click side effect below,
+  // which would otherwise put it in the selection. Every entry acts on the
+  // selection, so the menu would be entirely disabled; and the one entry that
+  // would make sense, Restore, is a second Undo affordance competing with the
+  // receipt already counting down a few seconds away.
+  if (isImageGhosted(img)) return;
   if (!selectedImageIds.value.includes(img.id)) {
     selectedImageIds.value = [img.id];
     lastSelectedImageId.value = img.id;
@@ -6920,7 +7107,7 @@ async function confirmRevokePictureShares() {
 // updateColumns removed; columns is now controlled by prop
 
 async function _afterTagMutation(imageId) {
-  if (props.applyTagFilter) {
+  if (userPrefsStore.applyTagFilter) {
     if (overlayOpen.value) {
       // The overlay is showing live tag state already. Defer the full
       // tag-filtered refetch until the overlay is closed to prevent the
@@ -7018,7 +7205,7 @@ function updateDescriptionForImage(imageId, description) {
 // ============================================================
 
 watch(
-  () => props.thumbnailSize,
+  () => gridStore.thumbnailSize,
   () => {
     // Recalculate visibleStart and visibleEnd after rowHeight update
     nextTick(() => {
@@ -7033,7 +7220,7 @@ watch(
       if (!el) return;
       let cardHeight = rowHeight.value;
       const scrollTop = el.scrollTop;
-      const cols = props.columns;
+      const cols = gridStore.columns;
       // First visible row (may be partially visible)
       const firstVisibleRow = scrollTop / cardHeight;
       // Last visible row (may be partially visible)
@@ -7059,6 +7246,10 @@ defineExpose({
   removeImagesById,
   insertGridImagesById,
   refreshGridImage,
+  // The stack badge's own reconcile. Separate from refreshGridImage because
+  // `stack_count` is derived per stack and is absent from a card's /metadata
+  // read, so the per-card refresh cannot repair it.
+  refreshStackFacets,
   repositionImageByScore,
   repositionImageBySmartScore,
   refreshSmartScoreForImage,
@@ -7074,6 +7265,10 @@ defineExpose({
   // It arrives mid-fetch by construction, which is why the confirm gates on a
   // purge already running rather than on the grid's load state.
   confirmEmptyScrapheap,
+  // Lets the sidebar's person context menu arm the character-scoped face search
+  // ("Suggest more pictures of <person>", #636). Same Tier-3 route as
+  // confirmEmptyScrapheap above: sidebar → App.vue → this grid.
+  suggestPicturesForCharacter: handleSuggestPicturesForCharacter,
 });
 
 // Queue a deferred in-place grid reconcile to run when the overlay closes.
@@ -7084,6 +7279,165 @@ defineExpose({
 function markOverlayDeferredRefresh() {
   if (!overlayOpen.value) return;
   pendingOverlayGridRefresh.value = true;
+}
+
+// ============================================================
+// SCRAPHEAP GHOST TILES
+// ============================================================
+// A move to the Scrapheap does not take its thumbnails away. The tiles stay
+// exactly where they are, ghosted, for as long as the undo is one click away
+// (the receipt's destructive dwell, hover-freeze and hidden-tab pause included);
+// only when that window closes does the grid close the gap. Undo inside the
+// window un-ghosts them in place, with no refetch and no flash.
+//
+// The state machine and its clock live in `useOperationStore` — deliberately,
+// because the clock IS the receipt's. Everything here is the grid's half:
+// which tiles carry the flag, and the imperative collapse when the store hands
+// the ids back.
+//
+// The virtualisation rule is untouched: ghosting FLAGS items, it never
+// restructures `allGridImages` or `lastFetchedGridImages`. The only array
+// mutation is the collapse, which goes through `removeImagesById` exactly as a
+// plain delete always did.
+
+const ghostedIdSet = computed(() => {
+  // Not in the Scrapheap view. There these pictures are not on their way out,
+  // they have arrived — a ghosted tile would mean the opposite of what it means
+  // in the grid, and the view already renders the real auto-purge countdown.
+  if (isScrapheapView.value) return null;
+  const ids = operationStore.ghostPictureIds;
+  if (!ids || !ids.length) return null;
+  return new Set(ids.map((id) => String(getPictureId(id))));
+});
+
+function isImageGhosted(img) {
+  const set = ghostedIdSet.value;
+  if (!set) return false;
+  const pictureId = getPictureId(img?.id ?? img);
+  return pictureId !== null && set.has(String(pictureId));
+}
+
+/** Index-based form, for the keyboard cursor's skip scan. */
+function isGridIndexGhosted(index) {
+  const set = ghostedIdSet.value;
+  if (!set) return false;
+  const img = allGridImages.value?.[index];
+  const pictureId = getPictureId(img?.id);
+  return pictureId !== null && set.has(String(pictureId));
+}
+
+// A ghost is never in the selection and never under the cursor: every bulk
+// action reads the selection, and arming one against pictures that are already
+// in the Scrapheap is the trap this whole state exists to avoid.
+watch(ghostedIdSet, (set) => {
+  if (!set || !set.size) return;
+  const isGhostId = (id) => set.has(String(getPictureId(id)));
+  if (selectedImageIds.value.some(isGhostId)) {
+    selectedImageIds.value = selectedImageIds.value.filter(
+      (id) => !isGhostId(id),
+    );
+  }
+  if (
+    lastSelectedImageId.value != null &&
+    isGhostId(lastSelectedImageId.value)
+  ) {
+    lastSelectedImageId.value = null;
+  }
+  if (cursorIdx.value !== null && isGridIndexGhosted(cursorIdx.value)) {
+    cursorIdx.value = null;
+  }
+});
+
+// Any full refetch rebuilds the grid without the scrapheaped pictures, so there
+// is nothing left to grey out. Forget the set SILENTLY — no collapse, and the
+// receipt is untouched, because undo is still on offer, it just has no tiles to
+// put back in this view any more.
+watch(allGridImages, () => {
+  if (operationStore.ghostState !== GHOST_PENDING) return;
+  const present = new Set(
+    (allGridImages.value || []).map((img) => String(getPictureId(img?.id))),
+  );
+  const anyGone = operationStore.ghostPictureIds.some(
+    (id) => !present.has(String(getPictureId(id))),
+  );
+  if (anyGone) operationStore.dropGhosts();
+});
+
+// The store hands back the ids whose window has closed.
+watch(
+  () => operationStore.collapsingPictureIds,
+  (ids) => {
+    if (!ids || !ids.length) return;
+    const doomed = operationStore.takeCollapsingGhosts();
+    if (doomed.length) void collapseGhostedImages(doomed);
+  },
+);
+
+/** Pixel top of a grid item, in whichever layout mode is active. */
+function gridItemTopOffset(index) {
+  if (index == null || index < 0) return null;
+  if (isJustifiedMode.value) {
+    const layout = justifiedLayout.value;
+    if (!layout || !layout.rowOffsets?.length) return null;
+    const row = rowOfIndex(layout.rowStarts, index);
+    if (row == null || row < 0) return null;
+    const top = layout.rowOffsets[row];
+    return typeof top === "number" ? top : null;
+  }
+  const cols = Math.max(1, gridStore.columns || 1);
+  return Math.floor(index / cols) * rowHeight.value;
+}
+
+/**
+ * Drop the ghosted tiles and close the gap, without yanking the viewport.
+ *
+ * The collapse is on a timer, which is the one thing the grid's own rules never
+ * do (the pills exist so nothing reshuffles under the user unprompted). What
+ * makes it acceptable is that content the user is actually looking at does not
+ * move: anchor on the topmost item still on screen, remove, then put that item
+ * back under the same pixel. Ghosts below the fold move nothing; ghosts on
+ * screen close their gap in plain sight, which is the expected consequence of
+ * the sentence the receipt just read out; ghosts scrolled off the top would
+ * otherwise drag the whole view up under someone who has moved on.
+ */
+async function collapseGhostedImages(ids) {
+  const wrapper = scrollWrapper.value;
+  const scrollTop = wrapper ? wrapper.scrollTop : 0;
+  let anchorId = null;
+  let anchorOffset = 0;
+  if (wrapper && scrollTop > 0) {
+    const doomed = new Set(
+      ids.map((id) => String(getPictureId(id))).filter((id) => id !== "null"),
+    );
+    const list = allGridImages.value || [];
+    for (let i = 0; i < list.length; i += 1) {
+      const pictureId = getPictureId(list[i]?.id);
+      if (pictureId === null || doomed.has(String(pictureId))) continue;
+      const top = gridItemTopOffset(i);
+      if (top === null) break;
+      if (top >= scrollTop) {
+        anchorId = pictureId;
+        anchorOffset = top - scrollTop;
+        break;
+      }
+    }
+  }
+
+  removeImagesById(ids);
+
+  if (anchorId === null || !wrapper) return;
+  await nextTick();
+  const newIndex = (allGridImages.value || []).findIndex(
+    (img) => getPictureId(img?.id) === anchorId,
+  );
+  if (newIndex < 0) return;
+  const newTop = gridItemTopOffset(newIndex);
+  if (newTop === null) return;
+  const target = Math.max(0, newTop - anchorOffset);
+  // Sub-pixel churn is not worth a scroll write (and would fight momentum).
+  if (Math.abs(target - wrapper.scrollTop) > 1) {
+    wrapper.scrollTop = target;
+  }
 }
 
 // Remove images by ID (for event-driven removal)
@@ -7269,9 +7623,24 @@ function abortExportZip() {
 // ============================================================
 // SEARCH
 // ============================================================
-function clearSearchQuery() {
+/** Drop every non-text search mode. Called before arming a new one. */
+function resetFaceAndImageSearches() {
   reverseImageSearchPictureIds.value = [];
   faceLikenessSearchFaceId.value = null;
+  clearCharacterFaceSearch();
+}
+
+/** Forget the character search, its cached ranked list and both its knobs. */
+function clearCharacterFaceSearch() {
+  faceSearchCharacter.value = null;
+  faceSearchRanked.value = null;
+  faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
+  faceSearchMinRefs.value = 1;
+  faceSearchArmedView.value = null;
+}
+
+function clearSearchQuery() {
+  resetFaceAndImageSearches();
   emit("clear-search", "");
 }
 
@@ -7286,6 +7655,7 @@ function handleReverseImageSearch() {
     ids.push(imgId);
   }
   faceLikenessSearchFaceId.value = null;
+  clearCharacterFaceSearch();
   reverseImageSearchPictureIds.value = ids;
   // Clear any active text search so the two modes don't overlap.
   emit("clear-search", "");
@@ -7294,1062 +7664,271 @@ function handleReverseImageSearch() {
 function handleFindSimilarFaces(faceId) {
   if (!faceId) return;
   reverseImageSearchPictureIds.value = [];
+  clearCharacterFaceSearch();
   faceLikenessSearchFaceId.value = faceId;
   emit("clear-search", "");
 }
 
+/**
+ * Move the suggestion threshold.
+ *
+ * The ref is set synchronously so the count in the bar tracks the drag, while
+ * the grid rebuild is debounced: it costs no network call (the ranked list and
+ * its rows are cached) but it does re-render the virtual grid, and doing that on
+ * every pointer sample would stutter. 200ms is under the ~250ms at which a
+ * response stops reading as immediate.
+ *
+ * @param {number} value - the new cut, 0-1.
+ */
+function handleFaceSearchThreshold(value) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return;
+  faceSearchThreshold.value = next;
+  debouncedFaceSearchRecut();
+}
+
+/**
+ * Move the reference-agreement floor: how many of the person's reference faces
+ * must clear the strength cut.
+ *
+ * Same shape as the threshold above, and for the same reason: it re-cuts the
+ * cached ranked list, so it costs no network call and must not stutter the grid.
+ * Clamped against the reference count because that count only arrives with the
+ * ranked list, so a stale higher value would otherwise empty the results.
+ *
+ * @param {number} value - references that must agree, 1..N.
+ */
+function handleFaceSearchMinRefs(value) {
+  const next = Math.round(Number(value));
+  if (!Number.isFinite(next)) return;
+  const ceiling = Math.max(1, faceSearchRefCount.value || 1);
+  faceSearchMinRefs.value = Math.min(ceiling, Math.max(1, next));
+  debouncedFaceSearchRecut();
+}
+
+const debouncedFaceSearchRecut = debounce(() => {
+  if (!faceSearchCharacter.value) return;
+  fetchAllGridImages({ force: false }).then(() => updateVisibleThumbnails());
+}, 200);
+
+/**
+ * Arm "Suggest more pictures of <person>" from the sidebar's person menu (#636).
+ *
+ * @param {{id: number|string, name: string}} character
+ */
+function handleSuggestPicturesForCharacter(character) {
+  const id = character?.id;
+  if (id == null) return;
+  reverseImageSearchPictureIds.value = [];
+  faceLikenessSearchFaceId.value = null;
+  faceSearchRanked.value = null;
+  faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
+  faceSearchMinRefs.value = 1;
+  faceSearchCharacter.value = { id, name: character.name ?? "this person" };
+  // Snapshot the view this was armed from. Opening the person's context menu can
+  // itself select that person, so "the view changed" has to mean "changed from
+  // where the search started", not "a selection watcher fired". Otherwise the
+  // clear below cancels the search the click just asked for.
+  faceSearchArmedView.value = {
+    character: selectionStore.selectedCharacter,
+    set: selectionStore.selectedSet,
+  };
+  emit("clear-search", "");
+  // The clear-search emit bumps gridVersion, but that watcher throttles itself
+  // to one refresh per 1200ms — and this search is the direct result of a click,
+  // so it must not be the one that gets dropped. Fetching here as well is safe:
+  // the two calls share a fetch key and the second de-dups against the first.
+  nextTick(() => {
+    void (async () => {
+      const outcome = await fetchAllGridImages({ force: true });
+      if (
+        faceSearchCharacter.value?.id === id &&
+        outcome?.error?.gridFetchPhase === "character-face-search-request"
+      ) {
+        const failure = outcome.error;
+        clearCharacterFaceSearch();
+        await fetchAllGridImages({ force: true });
+        noticeStore.error(
+          `Couldn't load suggestions for ${character.name ?? "this person"}. ${errorDetail(failure)}`,
+          { key: "character-face-search-load" },
+        );
+        return;
+      }
+      updateVisibleThumbnails();
+    })();
+  });
+}
+
+// Every match surviving both knobs. Computed from the cached ranked list rather
+// than from `allGridImages`, so the count in the bar tracks the sliders
+// immediately while the grid rebuild debounces behind it. Shares its cut with
+// the rebuild (`utils/faceSuggestionCut.js`) so the two cannot drift.
+const faceSearchMatches = computed(() => {
+  const cached = faceSearchRanked.value;
+  if (!cached || !faceSearchCharacter.value) return [];
+  if (cached.characterId !== faceSearchCharacter.value.id) return [];
+  return cutFaceSuggestions(
+    cached.matches,
+    faceSearchThreshold.value ?? 0,
+    faceSearchMinRefs.value,
+  );
+});
+
+// How many reference faces the query carried. 0 when the ranked list is not in
+// yet or the server did not send the per-reference rows. The agreement slider
+// then has nothing to offer and the panel drops it rather than show a control
+// whose only position is its minimum.
+const faceSearchRefCount = computed(() => {
+  const cached = faceSearchRanked.value;
+  if (!cached || !faceSearchCharacter.value) return 0;
+  if (cached.characterId !== faceSearchCharacter.value.id) return 0;
+  return referenceFaceCount(cached.matches);
+});
+
+// Selection wins over the threshold: a button that ignored an explicit
+// selection of twelve to write forty-one would be the error, not the shortcut.
+const faceSearchAssignFromSelection = computed(
+  () => selectedImageIds.value.length > 0,
+);
+
+const faceSearchAssignIds = computed(() =>
+  faceSearchAssignFromSelection.value
+    ? selectedImageIds.value.slice()
+    : faceSearchMatches.value.map((m) => m.picture_id),
+);
+
+/**
+ * Assign the suggested (or selected) pictures to the searched person.
+ *
+ * Sends the exact picture/face pairs the search returned. A suggestion is an
+ * explicit reviewed winner; rescoring it during assignment can attach a
+ * different face if detections or references changed in between.
+ */
+async function handleAssignFaceSearchResults() {
+  const character = faceSearchCharacter.value;
+  const ids = faceSearchAssignIds.value;
+  if (!character || !ids.length || faceSearchAssignBusy.value) return;
+  const wanted = new Set(ids.map(String));
+  const byPicture = new Map();
+  for (const match of faceSearchMatches.value) {
+    if (!wanted.has(String(match?.picture_id))) continue;
+    if (match?.picture_id == null || match?.face_id == null) continue;
+    byPicture.set(String(match.picture_id), {
+      picture_id: match.picture_id,
+      face_id: match.face_id,
+    });
+  }
+  const assignments = [...byPicture.values()];
+  if (assignments.length !== wanted.size) {
+    noticeStore.warning(
+      "Some selected suggestions no longer have a reviewed face match. Refresh suggestions before assigning.",
+      { key: "character-face-search-stale-selection" },
+    );
+    return;
+  }
+  faceSearchAssignBusy.value = true;
+  try {
+    await addCharacterFaceAssignments(character.id, assignments, {
+      baseUrl: props.backendUrl,
+    });
+    selectedImageIds.value = [];
+    clearFaceSelection();
+    lastSelectedImageId.value = null;
+    // Re-run the search against the server rather than pruning the cached list
+    // locally. Two reasons, both correctness: the assignment is stack-atomic, so
+    // it can have assigned MORE pictures than were named here (a suggestion's
+    // stack siblings would otherwise stay on screen as un-assigned), and the
+    // fetch key has not changed, so a non-forced call would be dropped by the
+    // de-dup window and leave the grid showing what was just assigned.
+    faceSearchRanked.value = null;
+    await fetchAllGridImages({ force: true });
+    // Once the refreshed cut has no suggestions left, the temporary search
+    // has served its purpose. Drop it and reload the still-selected view that
+    // was underneath it instead of leaving the user in an empty suggestion
+    // grid. If any matches remain, keep the mode open for another assignment.
+    if (faceSearchMatches.value.length === 0) {
+      clearCharacterFaceSearch();
+      await fetchAllGridImages({ force: true });
+    }
+    updateVisibleThumbnails();
+    // Raises the "Assigned N pictures…· Undo" receipt for this client.
+    operationStore.refresh();
+    emit("refresh-sidebar");
+  } catch (e) {
+    const status = Number(e?.response?.status);
+    if (status >= 500 || status === 422) {
+      faceSearchRanked.value = null;
+      await fetchAllGridImages({ force: true });
+    }
+    if (status >= 500) {
+      noticeStore.error(
+        `The assignment outcome is uncertain. Suggestions were reloaded from the server before you retry.`,
+        { key: "character-face-search-assign-uncertain" },
+      );
+      return;
+    }
+    noticeStore.error(
+      `Couldn't assign those pictures to ${character.name}. ${errorDetail(e)}`,
+      { scope: "character-face-search-assign" },
+    );
+  } finally {
+    faceSearchAssignBusy.value = false;
+  }
+}
+
 // Clear reverse image search / face search when the user starts a text search or navigates.
 watch(
-  () => props.searchQuery,
+  () => searchStore.searchQuery,
   (newVal) => {
     if (newVal && newVal.trim()) {
-      reverseImageSearchPictureIds.value = [];
-      faceLikenessSearchFaceId.value = null;
+      resetFaceAndImageSearches();
     }
   },
 );
-watch([() => props.selectedCharacter, () => props.selectedSet], () => {
+/**
+ * Drop every non-text search mode because the user navigated somewhere else.
+ *
+ * **Called from the view-change watcher BEFORE it refetches, never from a
+ * watcher of its own.** `fetchAllGridImages` reads the search-mode refs
+ * synchronously (there is no `await` before it picks its `fetchMode`), and Vue
+ * runs pre-flush watchers in creation order, so a separate clearing watcher
+ * declared after the fetching one always loses: the fetch captures the search
+ * that is still armed and repopulates the grid with it, then the clear runs and
+ * unmounts the pill. The result is a grid that keeps showing the old search
+ * with no bar to explain or dismiss it, and a view that never changes.
+ *
+ * @param {string|number|null} character - the newly selected character.
+ * @param {string|number|null} set - the newly selected set.
+ */
+function dropSearchesForViewChange(character, set) {
   if (reverseImageSearchPictureIds.value?.length) {
     reverseImageSearchPictureIds.value = [];
   }
   if (faceLikenessSearchFaceId.value !== null) {
     faceLikenessSearchFaceId.value = null;
   }
-});
+  // The character search goes too. It is library-wide, so a view change cannot
+  // invalidate its *results*, but leaving it up meant navigating somewhere else
+  // and still being shown a grid of suggestions for a person, with a bulk
+  // Assign button armed, which reads as the new view's contents. Navigation is
+  // the ordinary way out of a mode; making it the exit here as well costs one
+  // re-arm and removes a standing bulk write from every view the user visits.
+  //
+  // Compared against the armed-from view rather than fired on any change:
+  // opening the sidebar's person menu can itself select that person, and that
+  // selection lands around the same click that arms the search.
+  if (!faceSearchCharacter.value) return;
+  const armed = faceSearchArmedView.value;
+  if (armed && armed.character === character && armed.set === set) return;
+  clearCharacterFaceSearch();
+}
 
 function handleEmptyStateReset() {
   gridReady.value = false;
   emptyStateDelayPassed.value = false;
-  reverseImageSearchPictureIds.value = [];
-  faceLikenessSearchFaceId.value = null;
+  resetFaceAndImageSearches();
   emit("reset-to-all");
 }
 </script>
-
-<style scoped>
-.drag-overlay {
-  position: sticky;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(var(--v-theme-accent), 0.2);
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  border: 8px solid rgb(var(--v-theme-accent));
-  border-radius: 16px;
-  box-sizing: border-box;
-  transition:
-    border-color 0.2s,
-    background 0.2s;
-  color: rgb(var(--v-theme-on-accent));
-  font-size: 3em;
-  font-weight: bold;
-}
-
-.drag-overlay-message {
-  padding: 6px 14px;
-  background: rgba(var(--v-theme-shadow), 0.35);
-  border-radius: 12px;
-}
-
-.thumbnail-badge {
-  background: rgba(var(--v-theme-surface), 0.92);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.22);
-  border-radius: 8px;
-  color: rgb(var(--v-theme-on-surface));
-  box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
-  font-size: var(--badge-font-size, 0.8em);
-  padding: var(--badge-padding, 2px 4px);
-  z-index: 30;
-  max-width: 90%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thumbnail-badge--top-left,
-.thumbnail-badge--top-right,
-.thumbnail-badge--bottom-left,
-.thumbnail-badge--bottom-right {
-  position: absolute;
-}
-
-.thumbnail-badge--top-left {
-  top: 2px;
-  left: 2px;
-}
-
-.thumbnail-badge--top-right {
-  top: 2px;
-  right: 2px;
-}
-
-.thumbnail-badge--bottom-left {
-  left: 2px;
-  bottom: 2px;
-}
-
-.thumbnail-bottom-left-badges {
-  position: absolute;
-  bottom: 2px;
-  left: 2px;
-  display: flex;
-  gap: 3px;
-  align-items: center;
-  max-width: 90%;
-}
-
-.thumbnail-bottom-left-badges > .thumbnail-badge {
-  max-width: 100%;
-}
-
-/* Raised so the permanent scrapheap purge badge keeps the bottom-left corner. */
-.thumbnail-bottom-left-badges--raised {
-  bottom: var(--space-6);
-}
-
-/* ── Scrapheap auto-purge badge ─────────────────────────────────────────────
-   Permanent status chip over an arbitrary photo, so it sits on `--scrim-photo`
-   with an `on-dark-surface` glyph (visual-language §7 "scrims"). Meaning is
-   carried by icon + text; the error tint on the last day is reinforcement, not
-   the signal. */
-.thumbnail-purge-badge {
-  position: absolute;
-  left: var(--space-1);
-  bottom: var(--space-1);
-  z-index: 30;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  max-width: calc(100% - var(--space-3));
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  background: var(--scrim-photo);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
-  line-height: var(--leading-snug);
-  pointer-events: none;
-}
-
-.thumbnail-purge-badge__icon {
-  flex-shrink: 0;
-}
-
-.thumbnail-purge-badge__text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thumbnail-purge-badge--protected .thumbnail-purge-badge__icon {
-  color: rgb(var(--v-theme-primary));
-}
-
-/* `--locked` deliberately has no tint: its icon inherits `on-dark-surface`, the
-   same as the shipped `.thumbnail-lock-badge`, so the two lock affordances read
-   as the same thing. The distinct icon (mdi-lock-outline) and label ("Locked
-   set") carry the difference from `--protected` — no colour needed. */
-
-/* Last-day emphasis. The tint is on the ICON only: status-coloured text at 11px
-   on a translucent scrim over an unknown photo cannot be proven to clear the
-   4.5:1 body floor, while an icon only needs 3:1. The label still says "Purges
-   today" / "1 day left", so nothing depends on seeing the colour.
-   `dark-surface-error`, not `error`: the badge sits on `--scrim-photo`, which is
-   the `scrim` token and therefore dark in BOTH themes, so it needs the hue tuned
-   for a dark surface (4.12:1) rather than the light theme's deepened one
-   (3.12:1). See notice-surface.md §3.3. */
-.thumbnail-purge-badge--countdown-urgent .thumbnail-purge-badge__icon {
-  color: rgb(var(--v-theme-dark-surface-error));
-}
-
-/* Format and resolution badges are hover-only */
-.resolution-hover-overlay,
-.thumbnail-id-overlay {
-  opacity: 0;
-  transition: opacity 0.12s ease;
-}
-
-.image-card:hover .resolution-hover-overlay,
-.image-card:hover .thumbnail-id-overlay {
-  opacity: 1;
-}
-
-.thumbnail-reference-badge {
-  opacity: 1;
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  padding-left: 2px;
-  background: none !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-.thumbnail-reference-badge .v-icon {
-  color: rgb(var(--v-theme-primary)) !important;
-}
-
-.thumbnail-share-badge .v-icon {
-  color: rgb(var(--v-theme-accent)) !important;
-}
-
-/* Lock badge: styled as a sibling of the problem indicator — no scrim, zero
-   padding, same left edge and inset. See the shared
-   `.penalised-tag-indicator, .stack-indicator, .thumbnail-lock-badge` rules
-   below, which it joins rather than restating. */
-
-.thumbnail-share-badge {
-  opacity: 1;
-  display: flex;
-  align-items: center;
-  padding-left: 2px;
-  background: none !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-.thumbnail-badge--bottom-right {
-  right: 2px;
-  bottom: 2px;
-}
-
-.thumbnail-badge--bottom-right-raised {
-  bottom: 22px;
-}
-
-.likeness-group-indicator {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.face-bbox-label {
-  font-size: 0.7em;
-  background-color: rgba(var(--v-theme-surface), 0.3);
-  color: rgb(var(--v-theme-on-surface));
-  text-overflow: ellipsis;
-  overflow-y: hidden;
-  overflow-x: hidden;
-  white-space: nowrap;
-}
-
-.grid-content-area {
-  /* Offset for the absolutely-positioned 36px toolbar. Set 2px under the toolbar
-     height so the grid content tucks right beneath the toolbar's bottom border
-     with no dark seam (the toolbar overlays the 2px, so nothing is clipped). */
-  --selbar-height: 34px;
-  /* Container context for the floating SelectionBar's `@container selbar`
-     query. The bar itself is `width: max-content` and cannot host the
-     container (inline-size containment collapses the pill — see the note in
-     SelectionBar.vue), so the query tracks the available grid-content width
-     here, on the bar's `position: relative` containing block. */
-  container: selbar / inline-size;
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .grid-content-area {
-    --selbar-height: 56px;
-  }
-}
-
-/* ── Visible range pill overlay ── */
-.grid-range-pill {
-  position: absolute;
-  top: calc(var(--selbar-height, 48px) + 10px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(var(--v-theme-surface), 0.82);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 999px;
-  color: rgb(var(--v-theme-on-surface));
-  font-size: 0.72em;
-  font-weight: 600;
-  line-height: 1;
-  padding: 4px 12px;
-  white-space: nowrap;
-  backdrop-filter: blur(6px);
-  box-shadow: var(--elevation-2);
-  pointer-events: none;
-  user-select: none;
-  z-index: 50;
-}
-
-/* Breadcrumb: translucent "you are here" path, bottom-left of the grid. */
-.grid-breadcrumb {
-  position: absolute;
-  bottom: 12px;
-  left: 12px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  max-width: calc(100% - 24px);
-  padding: 5px 12px;
-  background: rgba(var(--v-theme-surface), 0.82);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 999px;
-  color: rgb(var(--v-theme-on-surface));
-  font-size: 0.74em;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  backdrop-filter: blur(6px);
-  box-shadow: var(--elevation-2);
-  user-select: none;
-  z-index: 50;
-  transition: bottom 0.15s;
-}
-/* Lift above the 36px multi-select (union/overlap) bar so the breadcrumb
-   overlaps the visible grid, not that bar. */
-.grid-breadcrumb--above-bar {
-  bottom: 48px;
-}
-.grid-breadcrumb-crumb {
-  margin: 0;
-  padding: 0;
-  border: none;
-  background: none;
-  font: inherit;
-  /* Plain crumbs (scope labels + the current leaf) read as normal text. */
-  color: rgb(var(--v-theme-on-surface));
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* Clickable ancestor crumbs look like links, not disabled text. */
-.grid-breadcrumb-crumb.is-link {
-  cursor: pointer;
-  color: rgb(var(--v-theme-primary));
-  transition: text-decoration-color 0.12s;
-}
-.grid-breadcrumb-crumb.is-link:hover {
-  text-decoration: underline;
-}
-.grid-breadcrumb-sep {
-  flex: 0 0 auto;
-  opacity: 0.5;
-}
-.grid-loading-more-pill {
-  position: absolute;
-  top: calc(var(--selbar-height, 48px) + 10px);
-  right: 16px;
-  background: rgba(var(--v-theme-surface), 0.82);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 999px;
-  color: rgb(var(--v-theme-on-surface));
-  font-size: 0.72em;
-  font-weight: 600;
-  line-height: 1;
-  padding: 4px 12px;
-  white-space: nowrap;
-  backdrop-filter: blur(6px);
-  box-shadow: var(--elevation-2);
-  pointer-events: none;
-  user-select: none;
-  z-index: 50;
-}
-.grid-range-fade-enter-active,
-.grid-range-fade-leave-active {
-  transition: opacity 0.15s ease;
-}
-.grid-range-fade-enter-from,
-.grid-range-fade-leave-to {
-  opacity: 0;
-}
-
-.pending-imports-pill-anchor {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  height: 0;
-  overflow: visible;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  /* Offset the floating pill 8px from the top with a transform, not padding: a
-     sticky element reserves its box in normal flow, so padding-top here added
-     8px of height that pushed the grid down. transform doesn't affect layout,
-     so the grid stays flush while the pill still sits 8px below the top. */
-  transform: translateY(8px);
-  pointer-events: none;
-}
-
-.pending-imports-pill {
-  pointer-events: all;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: rgba(var(--v-theme-primary), 0.92);
-  color: #fff;
-  padding: 6px 18px;
-  border-radius: 9999px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  border: none;
-  user-select: none;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
-  white-space: nowrap;
-  transition: opacity 0.15s;
-}
-
-.pending-imports-pill:hover {
-  opacity: 0.88;
-}
-
-.grid-scroll-wrapper {
-  overflow-y: auto;
-  overflow-x: hidden;
-  width: 100%;
-  padding-right: 0px;
-  /* Shared subtle scrollbar treatment — keep in sync with .sidebar-scroll in SideBar.vue */
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.05) transparent;
-  scrollbar-width: thin;
-}
-.grid-scroll-wrapper:hover {
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.18) transparent;
-}
-.empty-state {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: auto;
-  z-index: 5;
-}
-.empty-state-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 26px 30px;
-  border-radius: 18px;
-  border: 1px dashed rgba(var(--v-theme-border), 0.5);
-  background: rgba(var(--v-theme-panel), 0.72);
-  color: rgb(var(--v-theme-on-background));
-  text-align: center;
-  max-width: 420px;
-  box-shadow: 0 10px 30px rgba(var(--v-theme-shadow), 0.08);
-  pointer-events: auto;
-}
-.empty-state-illustration {
-  color: rgba(var(--v-theme-on-panel), 0.45);
-}
-.empty-state-title {
-  font-size: 1.2em;
-  font-weight: 600;
-}
-.empty-state-subtitle {
-  font-size: 0.95em;
-  opacity: 0.8;
-}
-.empty-state-action {
-  margin-top: 6px;
-}
-.image-grid {
-  height: 100%;
-  display: grid;
-  gap: 4px;
-  width: 100%;
-  box-sizing: border-box;
-  flex: 1 1 0%;
-  /* No right padding: the scrollbar's own symmetric gutter provides the gap to
-     the thumb, so thumbnails sit an equal distance on both sides of it. */
-  padding: 0 0 2px 0 !important;
-  align-content: start;
-  justify-content: start;
-}
-.compact-mode.image-grid {
-  padding-top: 0 !important;
-  gap: 0px;
-}
-/* Justified (Google-Photos-style) mode: the grid becomes a flex-wrap row
-   layout. Every card carries an exact inline width/height from the packed
-   model (useJustifiedLayout), and the inline column/row gap on the container
-   mirrors the packing gap, so flex line breaks land exactly on the packed row
-   boundaries — the invariant the virtual-scroll spacer arithmetic relies on. */
-.image-grid.image-grid--justified {
-  display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  align-items: flex-start;
-  justify-content: flex-start;
-}
-.image-grid--justified .image-card {
-  flex: 0 0 auto;
-  width: auto;
-}
-/* The packing gap is the only spacing between cards; the square-mode padding
-   would shrink thumbnails inside their packed boxes. */
-.image-grid--justified .thumbnail-card {
-  padding: 0;
-  height: 100%;
-}
-.grid-scroll-wrapper::-webkit-scrollbar {
-  width: 8px;
-}
-.image-card-cursor .thumbnail-img {
-  outline: 2px solid rgba(var(--v-theme-primary), 0.9);
-  outline-offset: -2px;
-}
-
-.image-card {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  margin-bottom: 2.2em;
-  padding: 0px;
-  margin: 0;
-  transition:
-    box-shadow 0.2s,
-    border 0.2s,
-    z-index 0s;
-  position: relative;
-  z-index: 0;
-  border: 0px solid transparent;
-}
-
-.image-card:hover {
-  z-index: 20;
-}
-
-.image-card-stack-reorder-left::after,
-.image-card-stack-reorder-right::after {
-  content: "";
-  position: absolute;
-  top: 8px;
-  bottom: 32px;
-  width: 6px;
-  border-radius: 999px;
-  background: rgba(var(--v-theme-accent), 0.95);
-  box-shadow: 0 2px 8px rgba(var(--v-theme-accent), 0.45);
-  pointer-events: none;
-  z-index: 6;
-}
-
-.image-card-stack-reorder-left::after {
-  left: -3px;
-}
-
-.image-card-stack-reorder-right::after {
-  right: -3px;
-}
-
-.selection-overlay {
-  position: absolute;
-  inset: 0;
-  /* Amber "safelight" selection (was cold-blue info) — the brighter glow token. */
-  background: rgba(var(--v-theme-accent-bright), 0.38);
-  pointer-events: none;
-  z-index: 25;
-  border-radius: 8px;
-  transition: none;
-}
-/* Touch select mode: show a checkmark badge on each selected image */
-.touch-select-mode .image-card {
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-/* Suppress Safari's image save / link callout on all image cards */
-.image-card {
-  -webkit-touch-callout: none;
-}
-/* Suppress all hover-revealed elements in touch-select mode */
-.touch-select-mode .image-card:hover .resolution-hover-overlay,
-.touch-select-mode .image-card:hover .thumbnail-id-overlay,
-.touch-select-mode .image-card:hover .thumbnail-top-right-badges {
-  opacity: 0 !important;
-  pointer-events: none !important;
-}
-.touch-select-mode .image-card .selection-overlay::after {
-  content: "✓";
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-  font-size: 16px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 26px;
-  text-align: center;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-}
-/* Empty circle on unselected images in touch-select mode */
-.touch-select-mode .image-card::after {
-  content: "";
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.85);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
-  pointer-events: none;
-  z-index: 26;
-}
-.touch-select-mode .image-card:has(.selection-overlay)::after {
-  display: none;
-}
-.thumbnail-info-row {
-  margin-top: 2px;
-  text-align: center;
-  height: 24px;
-  min-height: 24px;
-  max-height: 24px;
-  overflow: hidden;
-  background: none;
-  width: 100%;
-}
-.thumbnail-info {
-  font-size: 0.88em;
-  color: rgba(var(--v-theme-on-background), 0.78);
-  text-align: center;
-  line-height: 24px;
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  padding: 0 8px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-shadow: 0 1px 1px rgba(var(--v-theme-shadow), 0.12);
-}
-.thumbnail-container {
-  width: 100%;
-  height: 100%;
-  position: relative;
-  aspect-ratio: 1 / 1;
-}
-/* Justified mode: width/height come from the packed layout's inline styles;
-   the square aspect ratio must not fight them. object-fit: cover stays on the
-   image so existing square-cropped thumbnails still fill the variable-width
-   boxes until AR-preserving thumbnails are regenerated backend-side. */
-.thumbnail-container--justified,
-.thumbnail-container--justified .thumbnail-img {
-  aspect-ratio: auto;
-}
-/* Square-crop mode (thumbnail v2): the AR bitmap is sprite-cropped to the stored
-   face-weighted rectangle. The oversized, translated <img> is clipped to the
-   square cell, so the rounded corners and the card drop shadow move onto the
-   container (the img's own radius/shadow would sit off-screen and get clipped).
-   Face/detection overlays outside the crop are clipped at the cell edge here. */
-.thumbnail-container--cropped {
-  overflow: hidden;
-  border-radius: 8px;
-  box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
-  transition: box-shadow 0.18s;
-}
-.thumbnail-container--cropped .thumbnail-img {
-  border-radius: 0;
-  box-shadow: none;
-  object-position: top center;
-}
-.compact-mode .thumbnail-container--cropped {
-  border-radius: 0;
-  box-shadow: none;
-}
-.thumbnail-container::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 8px;
-  box-shadow: inset 0 0 12px 4px rgba(var(--v-theme-accent), 0.3);
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  z-index: 22;
-  pointer-events: none;
-}
-.image-card:hover .thumbnail-container::after,
-.stack-hover-active .thumbnail-container::after {
-  opacity: 1;
-}
-.compact-mode .thumbnail-container::after {
-  border-radius: 0;
-}
-
-.thumbnail-container-drag-source .thumbnail-img,
-.thumbnail-container-drag-source .thumbnail-placeholder {
-  filter: grayscale(1) brightness(0.65);
-  opacity: 0.75;
-}
-.thumbnail-img {
-  width: 100%;
-  height: 100%;
-  aspect-ratio: 1 / 1;
-  object-fit: cover;
-  object-position: top center;
-  display: block;
-  border-radius: 8px;
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 1;
-  box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
-  transition: box-shadow 0.18s;
-}
-.thumbnail-img:hover {
-  box-shadow:
-    1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3),
-    inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
-  z-index: 20;
-}
-.stack-hover-active .thumbnail-img {
-  box-shadow:
-    1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3),
-    inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
-  z-index: 20;
-}
-.thumbnail-card {
-  width: 100%;
-  max-width: none;
-  min-width: none;
-  position: relative;
-  padding: 4px;
-}
-
-/* Compact mode: no info row gap, no rounded corners, no shadow */
-.compact-mode .thumbnail-card {
-  padding: 0px 0px 0px 0px;
-}
-
-.compact-mode .thumbnail-img {
-  border-radius: 0;
-  box-shadow: none;
-}
-.compact-mode .thumbnail-img:hover {
-  box-shadow: inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
-}
-.compact-sticky-label,
-.compact-group-label {
-  transform: translateX(-50%) translateY(4px);
-  background: rgba(var(--v-theme-surface), 0.82);
-  color: rgb(var(--v-theme-accent));
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.18);
-  border-radius: 999px;
-  padding: 1px 9px;
-  font-size: 0.72em;
-  font-weight: 600;
-  line-height: 1.6;
-  white-space: nowrap;
-  max-width: 80%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  pointer-events: none;
-  z-index: 400;
-  box-shadow: 0 1px 4px rgba(var(--v-theme-shadow), 0.25);
-  backdrop-filter: blur(4px);
-}
-.compact-sticky-label {
-  position: sticky;
-  top: 0;
-  left: 50%;
-  width: fit-content;
-  transform: translateX(-50%) translateY(4px);
-  margin-bottom: -24px;
-}
-.compact-group-label {
-  position: absolute;
-  top: 0;
-  left: 30%;
-}
-
-.thumbnail-card-new {
-  animation: gridNewPulse 2.2s ease-out;
-  box-shadow: 0 0 0 rgba(var(--v-theme-accent), 0);
-}
-
-@keyframes gridNewPulse {
-  0% {
-    transform: translateZ(0) scale(1);
-    box-shadow: 0 0 0 rgba(var(--v-theme-accent), 0);
-  }
-  35% {
-    transform: translateZ(0) scale(1.015);
-    box-shadow:
-      0 0 10px rgba(var(--v-theme-accent), 0.5),
-      0 0 18px rgba(var(--v-theme-accent), 0.25);
-  }
-  100% {
-    transform: translateZ(0) scale(1);
-    box-shadow: 0 0 0 rgba(var(--v-theme-accent), 0);
-  }
-}
-/* Overlay for image index on thumbnail */
-.thumbnail-index-overlay {
-  pointer-events: none;
-}
-
-.thumbnail-drag-preview {
-  position: fixed;
-  width: 160px;
-  height: auto;
-  opacity: 0.01;
-  pointer-events: none;
-  left: -9999px;
-  top: -9999px;
-  object-fit: cover;
-  border-radius: 8px;
-}
-
-/* The lock badge joins these two so the three read as siblings in the top-left
-   column: same flex centring, same `padding: 0` (so their icons share one left
-   edge and inset), and — for the lock and problem indicators — no chrome at all.
-   Icon size is already shared: both bind `badgeIconSizes.penalised`, so they
-   track each other at every column count. */
-.penalised-tag-indicator,
-.stack-indicator,
-.thumbnail-lock-badge {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 30;
-  pointer-events: auto;
-  padding: 0;
-}
-
-.penalised-tag-indicator,
-.thumbnail-lock-badge {
-  background: none !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-.penalised-tag-indicator .v-icon {
-  filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.55));
-}
-
-.stack-indicator {
-  cursor: pointer;
-}
-
-.stack-band-overlay {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 10;
-  border-radius: inherit;
-}
-
-/* Top-left permanent badges column (reference, share, problem) */
-.thumbnail-top-left-badges {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  z-index: 30;
-  pointer-events: auto;
-}
-
-/* Top-right hover badges column (stars, stack) */
-.thumbnail-top-right-badges {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-  z-index: 120;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  pointer-events: none;
-}
-
-.image-card:hover .thumbnail-top-right-badges {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.thumbnail-placeholder {
-  width: 100%;
-  height: 100%;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: absolute;
-  top: 0;
-  left: 0;
-  color: rgb(var(--v-theme-on-background));
-}
-
-.thumbnail-placeholder-icon {
-  font-size: 28px;
-  opacity: 0.7;
-  animation: thumbnailPlaceholderSpin 1.1s linear infinite;
-}
-
-.thumbnail-broken-icon {
-  font-size: 48px;
-  opacity: 0.5;
-}
-
-@keyframes thumbnailPlaceholderSpin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.multi-select-toolbar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 300;
-  display: flex;
-  align-items: center;
-  gap: 0;
-  height: 36px;
-  background: rgb(var(--v-theme-surface-variant));
-  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  color: rgb(var(--v-theme-on-surface-variant));
-  font-size: 13px;
-}
-
-.multi-select-toolbar__mode {
-  height: 100%;
-  padding: 0 10px;
-  border: none;
-  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  outline: none;
-  appearance: auto;
-  flex: 0 0 auto;
-}
-
-.multi-select-toolbar__label {
-  padding: 0 12px;
-  white-space: nowrap;
-  color: rgb(var(--v-theme-on-surface-variant));
-  font-size: 13px;
-}
-
-.multi-select-toolbar__spacer {
-  flex: 1;
-}
-
-.multi-select-toolbar__separator {
-  padding: 0 2px;
-  color: rgba(var(--v-theme-on-surface), 0.3);
-  font-size: 13px;
-  flex: 0 0 auto;
-  user-select: none;
-}
-
-.multi-select-toolbar__base-label {
-  padding: 0 6px 0 4px;
-  font-size: 12px;
-  font-weight: 600;
-  color: rgb(var(--v-theme-on-surface-variant));
-  white-space: nowrap;
-  flex: 0 0 auto;
-}
-
-.multi-select-toolbar__base {
-  height: 100%;
-  padding: 0 8px;
-  border: none;
-  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  background: transparent;
-  color: rgb(var(--v-theme-on-surface-variant));
-  font-size: 13px;
-  cursor: pointer;
-  outline: none;
-  appearance: auto;
-  flex: 0 0 auto;
-}
-
-.multi-select-toolbar__clear {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 100%;
-  padding: 0 14px;
-  border: none;
-  border-left: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  background: transparent;
-  color: rgb(var(--v-theme-on-surface-variant));
-  font-size: 13px;
-  cursor: pointer;
-  flex: 0 0 auto;
-  transition: background 0.15s;
-}
-
-.multi-select-toolbar__clear:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
-}
-
-@media (max-width: 900px) {
-  .multi-select-toolbar {
-    height: 40px;
-    font-size: 12px;
-  }
-  .multi-select-toolbar__mode {
-    font-size: 12px;
-  }
-}
-
-/* ── Shared-link indicator on thumbnail ──────────────────────────────── */
-.thumbnail-share-badge {
-  opacity: 0.65;
-  padding: 1px 2px;
-  display: flex;
-  align-items: center;
-  color: rgb(var(--v-theme-primary));
-}
-</style>
-
-<style>
-/* Non-scoped so pseudo-element selectors aren't weakened by the data-v attribute */
-/* Shared subtle scrollbar treatment — keep in sync with .sidebar-scroll in SideBar.vue:
-   nearly invisible at rest, fades in on hover/use. The transparent border +
-   background-clip insets the thumb equally from both track edges so it floats
-   as a centred pill with symmetric gutters (no flush-against-the-panel edge). */
-.grid-scroll-wrapper::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.05) !important;
-  background-clip: padding-box !important;
-  border: 2px solid transparent !important;
-  border-radius: 8px !important;
-  transition: background 0.15s ease !important;
-}
-.grid-scroll-wrapper:hover::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.18) !important;
-}
-.grid-scroll-wrapper::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--v-theme-on-surface), 0.3) !important;
-}
-.grid-scroll-wrapper::-webkit-scrollbar-track {
-  background: transparent !important;
-}
-.grid-scroll-wrapper::-webkit-scrollbar-corner {
-  background: transparent !important;
-}
-</style>
+<style scoped src="./ImageGrid.css"></style>
+<style src="./ImageGrid.global.css"></style>

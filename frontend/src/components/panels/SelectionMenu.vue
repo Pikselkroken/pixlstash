@@ -15,6 +15,7 @@
     <!-- ── Set / Character / Project ─────────────────────── -->
     <template v-if="!isScrapheapView">
       <AddToEntityControl
+        v-if="entityLists.canSeeProjects"
         ref="ateProjectRef"
         type="project"
         placement="right"
@@ -275,10 +276,48 @@
         <v-icon class="ctx-icon" size="15">mdi-image-search-outline</v-icon>
         Reverse image search
       </button>
+      <!-- ── Segment ───────────────────────────────────────
+           Selection-scoped in the context menu too (gated on
+           `selectedImageIds.length`), so it belongs here as well. Unlike
+           Reverse image search it writes bounding boxes, hence the read-only
+           gate. -->
+      <button
+        class="ctx-item"
+        :disabled="selectedCount === 0 || isReadOnly"
+        title="Detect objects and store bounding boxes"
+        @click="
+          $emit('segment');
+          $emit('close');
+        "
+      >
+        <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
+        Segment
+      </button>
       <div class="ctx-sep" />
     </template>
 
-    <!-- ── Remove / Delete (danger) ──────────────────────── -->
+    <!-- ── Remove / Delete (danger) ────────────────────────
+         Ordered by escalating severity: Keep cover only → Move to the
+         Scrapheap → Delete forever. There is deliberately NO top-level Keep
+         cover only button on the pill itself: a floating pill over a photo grid
+         is the wrong place for an error-filled control, and this is periodic
+         cleanup rather than a high-frequency verb. -->
+    <button
+      v-if="showKeepCoverOnly"
+      class="ctx-item ctx-item--danger"
+      :disabled="isReadOnly || !!keepCoverOnlyLockReason"
+      :title="
+        keepCoverOnlyLockReason ||
+        'Keep each selected stack\'s cover and move its other pictures to the Scrapheap'
+      "
+      @click="
+        $emit('keep-cover-only');
+        $emit('close');
+      "
+    >
+      <v-icon class="ctx-icon" size="15">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
+      {{ keepCoverOnlyLabel }}
+    </button>
     <button
       v-if="showRemoveButton"
       class="ctx-item ctx-item--danger"
@@ -310,6 +349,11 @@ import { computed, nextTick, ref, watch } from "vue";
 import { hashCompareSnapshot } from "../../api/snapshots";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import {
+  KEEP_COVER_ONLY_ICON,
+  keepCoverOnlyMenuLabel,
+} from "../../utils/keepCoverOnly";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
@@ -329,6 +373,14 @@ const props = defineProps({
   selectedSort: { type: String, default: "" },
   selectedGroupName: String,
   selectedMultipleStackIds: { type: Array, default: () => [] },
+  // How many collapsible stacks the selection names. The unit of Keep cover
+  // only is the stack, so the item is offered only when the selection names at
+  // least one, and its label counts stacks rather than echoing the tile count.
+  keepCoverOnlyStackCount: { type: Number, default: 0 },
+  // Reason string when EVERY stack the selection names is frozen by a locked
+  // set. A mixed selection stays enabled and the dialog reports the skips,
+  // which is the same rule the shipped Delete item follows.
+  keepCoverOnlyLockReason: { type: String, default: null },
   showRemoveFromStack: Boolean,
 });
 
@@ -347,13 +399,19 @@ const emit = defineEmits([
   "open-plugin-panel",
   "open-comfyui-panel",
   "reverse-image-search",
+  "segment",
   "remove-from-group",
+  "keep-cover-only",
   "delete-selected",
   "close",
 ]);
 
 const snapshotsStore = useSnapshotsStore();
 const lockedSetsStore = useLockedSetsStore();
+// A token scoped to a character / picture / set was granted no project scope,
+// so the Project row would open a flyout that lists nothing and POSTs a
+// membership read the server 403s. Omit the row instead of offering a dead one.
+const entityLists = useEntityListsStore();
 
 const selectionMenuPanelRef = ref(null);
 const selectionPanelFlipped = ref(false);
@@ -397,6 +455,19 @@ const showAnyStackAction = computed(() => {
     showGroupStackButton.value
   );
 });
+
+// Offered only when the selection actually names a stack, the same gating the
+// stack actions above use, and the reason ignoring loose pictures is honest.
+const showKeepCoverOnly = computed(
+  () => !props.isScrapheapView && props.keepCoverOnlyStackCount > 0,
+);
+
+const keepCoverOnlyLabel = computed(() =>
+  keepCoverOnlyMenuLabel({
+    stackCount: props.keepCoverOnlyStackCount,
+    selectedCount: props.selectedCount,
+  }),
+);
 
 const showRemoveButton = computed(() => {
   if (props.selectedCount <= 0) return false;

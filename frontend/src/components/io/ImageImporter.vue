@@ -4,6 +4,7 @@ import { VIcon } from "vuetify/components";
 import { isReadOnly } from "../../utils/apiClient";
 import { sleep } from "../../utils/utils";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import {
   cancelStaging,
   commitStaging,
@@ -11,6 +12,10 @@ import {
   openStagingSession,
   stageFiles,
 } from "../../api/pictureImport";
+// The Scrapheap restore offer below reuses the SHIPPED restore route rather than
+// a second restore path, so it comes from the pictures resource module (the
+// import module owns the staging session, not the whole picture domain).
+import { restoreScrapheap } from "../../api/pictures";
 
 // ── Async streaming-staging import (#459) ────────────────────────────────────
 // This component owns the two-phase import experience over the finalised
@@ -27,7 +32,13 @@ import {
 //     task row (useTasksStore import run) counting server-side progress polled
 //     BY staging id. Refresh is harmless. The grid refreshes off the backend's
 //     CHANGED_PICTURES / PICTURE_IMPORTED WS broadcast (no results payload).
-// ALL backend calls are isolated behind ../../api/pictureImport.js.
+//   Scrapheap matches:  a staged file whose content matches a SOFT-DELETED
+//     picture is reported in its own bucket. It is not imported again (that
+//     would put a second copy of every scrapheaped picture back on disk) and not
+//     restored behind the user's back either. Completion pushes ONE sticky
+//     notice whose action calls the shipped POST /pictures/scrapheap/restore.
+// ALL import backend calls are isolated behind ../../api/pictureImport.js; the
+// restore offer reuses api/pictures.js rather than growing a second restore.
 // The public API (startImport + the four emits) is unchanged so existing call
 // sites keep working. Drop-target association (project / set / character) is
 // passed through startImport options into openStagingSession and applied
@@ -50,6 +61,95 @@ const emit = defineEmits([
 ]);
 
 const tasksStore = useTasksStore();
+const noticeStore = useNoticeStore();
+
+// One coalescing key for the whole offer, so back-to-back imports replace the
+// standing offer instead of stacking cards (§9.1). The newest import's ids win,
+// which is what the user is looking at.
+const SCRAPHEAP_OFFER_KEY = "import-scrapheap-offer";
+
+function plural(count, word) {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The completion headline, built from the buckets it actually names.
+ *
+ * The old line asked "did anything import?" and answered "All files were
+ * duplicates", which became a lie the moment a third outcome existed: files
+ * matching a picture in the Scrapheap are not duplicates and saying so hides
+ * the one thing the user can act on.
+ */
+function summariseImport({ imported, duplicate, scrapheaped }) {
+  if (imported > 0) return `Imported ${plural(imported, "image")}`;
+  if (scrapheaped > 0 && duplicate > 0)
+    return "Nothing new: already in your library or Scrapheap";
+  if (scrapheaped > 0)
+    return `Already in your Scrapheap (${plural(scrapheaped, "file")})`;
+  if (duplicate > 0) return "All files were duplicates";
+  return "Nothing to import";
+}
+
+/**
+ * Offer the restore. Deliberately an offer and not an automatic restore: the
+ * user put those pictures in the Scrapheap on purpose, so bringing them back
+ * without asking would be its own surprise. The import already refused to write
+ * a second copy, which is the part that must not wait for a click.
+ */
+function offerScrapheapRestore(fileCount, pictureIds) {
+  const ids = Array.isArray(pictureIds)
+    ? pictureIds.filter((id) => id != null)
+    : [];
+  if (!fileCount || !ids.length) return;
+  noticeStore.push({
+    level: "info",
+    key: SCRAPHEAP_OFFER_KEY,
+    text:
+      fileCount === 1
+        ? "1 file is already in your Scrapheap, so it was not imported again."
+        : `${fileCount} files are already in your Scrapheap, so they were not imported again.`,
+    action: {
+      label: `Restore ${plural(ids.length, "picture")}`,
+      handler: async () => {
+        try {
+          const data = await restoreScrapheap(ids, {
+            baseUrl: props.backendUrl,
+          });
+          // The offer is not a promise: retention can sweep a match away
+          // between the import and the click. Report what came back.
+          const restored = Number(data?.restored_count ?? 0);
+          if (restored === ids.length) {
+            noticeStore.push({
+              level: "success",
+              text: `Restored ${plural(restored, "picture")} from the Scrapheap.`,
+            });
+          } else if (restored > 0) {
+            noticeStore.push({
+              level: "warning",
+              text: `Restored ${restored} of ${ids.length}. The rest had already left the Scrapheap.`,
+            });
+          } else {
+            noticeStore.push({
+              level: "warning",
+              text: "Nothing was restored. Those pictures had already left the Scrapheap.",
+            });
+          }
+        } catch (error) {
+          console.error(
+            "Restoring the scrapheaped import matches failed.",
+            error,
+          );
+          noticeStore.push({
+            level: "error",
+            text:
+              error?.response?.data?.detail ||
+              "Could not restore those pictures. Please try again.",
+          });
+        }
+      },
+    },
+  });
+}
 
 // Dialog visibility is the Phase-A staging surface only; Phase B lives in the
 // task manager, not here.
@@ -408,7 +508,7 @@ async function startImport(files, options = {}) {
   currentStagingId = null;
   // Drop any lingering handler from a previous run before minting a new id.
   if (importRunId) tasksStore.unregisterImportAbort(importRunId);
-  importRunId = `import-${(crypto?.randomUUID?.() ?? Date.now().toString(36))}`;
+  importRunId = `import-${crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
   // Make the (otherwise dead) import-abort subsystem live: register the real
   // client-side abort so tasksStore.abortImportRun(runId) actually stops the
   // in-flight upload. Mirrors ComfyUiRunner's registerComfyuiAbort. Unregistered
@@ -570,7 +670,11 @@ async function startImport(files, options = {}) {
             );
             console.warn(
               `[IMPORT] Batch ${batchIndex} aborted (attempt ${attempt}). reason=${
-                noProgressAbortFired ? "no-progress" : isTimeout ? "timeout" : "abort"
+                noProgressAbortFired
+                  ? "no-progress"
+                  : isTimeout
+                    ? "timeout"
+                    : "abort"
               }`,
             );
           } else {
@@ -699,6 +803,11 @@ async function startImport(files, options = {}) {
     // PICTURE_IMPORTED WebSocket broadcast, which the grid already consumes.
     const importedCount = finalStatus.importedCount ?? 0;
     const duplicateCount = finalStatus.duplicateCount ?? 0;
+    // The third bucket: content that matches a picture in the Scrapheap. Not
+    // imported again (a re-import would put a second copy of every scrapheaped
+    // picture back on disk) and not silently restored either.
+    const scrapheapedCount = finalStatus.scrapheapedCount ?? 0;
+    const scrapheapedPictureIds = finalStatus.scrapheapedPictureIds ?? [];
 
     importPhase.value = importedCount === 0 ? "duplicates" : "done";
     importServerStage.value = "completed";
@@ -714,14 +823,14 @@ async function startImport(files, options = {}) {
       percent: 100,
       current: importTotal.value,
       total: importTotal.value,
-      message:
-        importedCount === 0
-          ? duplicateCount > 0
-            ? "All files were duplicates"
-            : "Nothing to import"
-          : `Imported ${importedCount} image${importedCount !== 1 ? "s" : ""}`,
+      message: summariseImport({
+        imported: importedCount,
+        duplicate: duplicateCount,
+        scrapheaped: scrapheapedCount,
+      }),
       label: "Importing pictures",
     });
+    offerScrapheapRestore(scrapheapedCount, scrapheapedPictureIds);
     const finishedRunId = importRunId;
     tasksStore.unregisterImportAbort(finishedRunId);
     setTimeout(() => tasksStore.clearImportRun(finishedRunId), 2600);
@@ -739,6 +848,8 @@ async function startImport(files, options = {}) {
     logImportTrace("Import finished", {
       importedCount,
       duplicateCount,
+      scrapheapedCount,
+      scrapheapedPictureIds,
       phase: importPhase.value,
     });
   } catch (error) {
@@ -788,7 +899,9 @@ defineExpose({ startImport });
         </div>
       </div>
       <div v-else class="note-row note-row--error">
-        <VIcon class="note-icon note-icon--error" size="18">mdi-alert-outline</VIcon>
+        <VIcon class="note-icon note-icon--error" size="18"
+          >mdi-alert-outline</VIcon
+        >
         <div>
           <div class="note-title">Import failed</div>
           <div class="note-sub">{{ importError }}</div>

@@ -110,6 +110,68 @@ export async function getPictureWorkflow(pictureId, { baseUrl = "" } = {}) {
 }
 
 /**
+ * Read whether a picture carries a replayable ComfyUI recipe.
+ *
+ * The response is
+ * `{available, reason, summary, positive_prompt, seed, models, loras,
+ * node_count, node_classes, source_is_imported, source_label, seed_inputs,
+ * preflight}`. A picture with no recipe is a normal answer, not an error: the
+ * call resolves with `available: false` and `reason: "no_prompt_chunk"` for
+ * imported photos, so callers should read `available` rather than rely on a
+ * rejection.
+ *
+ * `preflight` reports whether the recipe's models and LoRAs are present on the
+ * ComfyUI server. `preflight.checked === false` means ComfyUI could not be
+ * reached at all — it does NOT mean the recipe passed its checks.
+ *
+ * `node_classes` is the distinct list of ComfyUI node classes the graph would
+ * execute. It is read from the file, so it is populated even when the
+ * pre-flight could not run, which is exactly when the user has nothing else to
+ * judge the graph by. `source_is_imported` / `source_label` say whether the
+ * file came from outside this PixlStash instance, and by which route.
+ *
+ * @param {number|string} pictureId
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""] - explicit backend base, if the caller
+ *   has one.
+ * @returns {Promise<Object>} the response body described above.
+ */
+export async function getPictureRecipe(pictureId, { baseUrl = "" } = {}) {
+  const res = await apiClient.get(
+    comfyUrl(`/pictures/${pictureId}/recipe`, baseUrl),
+  );
+  return res.data;
+}
+
+/**
+ * Re-run a picture's own recipe to generate variants of it.
+ *
+ * The graph itself is never sent by the client: the backend re-extracts it from
+ * the picture on every call, so a run always replays what the picture actually
+ * carries rather than a copy the client may have gone stale on.
+ *
+ * @param {Object} body
+ * @param {number|string} body.picture_id - the picture whose recipe to replay.
+ * @param {string} body.seed_mode - how the seed is chosen for the variants.
+ * @param {number} [body.seed] - the explicit seed, when `seed_mode` needs one.
+ * @param {string} [body.client_id] - ties progress events back to this tab.
+ * @param {boolean} [body.stack] - stack the outputs with their source.
+ * @param {boolean} [body.allow_unchecked] - the user's explicit acknowledgement
+ *   that they want to run a graph the server could not inspect. The backend
+ *   refuses the run with a 400 without it whenever `preflight.checked` is
+ *   false, so this must only ever be sent for a run the user acknowledged, and
+ *   never as a constant.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body:
+ *   `{status, prompts: [{picture_id, prompt_id}]}`.
+ */
+export async function runRecipe(body, { baseUrl = "" } = {}) {
+  const res = await apiClient.post(comfyUrl("/run_recipe", baseUrl), body);
+  return res.data;
+}
+
+/**
  * Run a text-to-image workflow.
  *
  * @param {Object} body - the prompt, workflow name, and the view context

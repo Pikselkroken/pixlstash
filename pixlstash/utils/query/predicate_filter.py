@@ -33,9 +33,11 @@ from typing import List, Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel
-from sqlalchemy import or_, text
+from sqlalchemy import exists, or_, text
 from sqlalchemy.sql.elements import ColumnElement
+from sqlmodel import select
 
+from pixlstash.db_models.dedup import DedupGroup, DedupGroupMember
 from pixlstash.db_models.picture import Picture
 from pixlstash.utils.service.person_tags import (
     FACE_REQUIRING_TAGS,
@@ -138,6 +140,13 @@ class PredicateFilter(BaseModel):
     tags_confidence_above_filter: Optional[List[str]] = None
     tags_confidence_below_filter: Optional[List[str]] = None
     face_filter: Optional[str] = None
+    # The grid's "Stacks" segment: ``"stacked"`` / ``"unstacked"`` / ``"unresolved"``.
+    # "All" is the absence of the filter, so it is spelled as ``None`` rather than as a
+    # fourth value the compiler would have to recognise and then ignore.  The first two
+    # read the picture's own stack membership; ``"unresolved"`` is dedup-queue state, so
+    # it is the one value that leaves the ``picture`` table.  An unrecognised value
+    # compiles to no predicate (same as ``face_filter``).
+    stack_state: Optional[str] = None
     # "Impossible tags" grid filters — live, computed from the picture's own tags/faces
     # (no precomputed queue). Recognised kinds: ``"no_face"`` (no detected face yet a
     # face-requiring tag) and ``"no_humans"`` (no face, tagged "no humans"/"scenery", yet
@@ -358,6 +367,51 @@ class PredicateFilter(BaseModel):
                 )
             )
 
+        if self.stack_state in ("stacked", "unstacked"):
+            # Both halves ask "is this picture in a stack that is still a stack",
+            # not "does this row carry a stack_id". A soft-deleted picture keeps
+            # its stack_id so a Scrapheap restore can put it back, so a stack
+            # whose other members are all scrapheaped leaves one live picture
+            # still carrying one. Keying on the column alone served that survivor
+            # under `stacked` while the grid drew it as a plain picture, because
+            # `_enrich_stack_counts` counts live members and `StackBadge` hides
+            # below two. It also fell out of `unstacked`, so it appeared under
+            # neither. Collapsing a stack to its cover produces that state every
+            # time, which is how a rare inconsistency became a guaranteed one.
+            #
+            # Imported lazily for the same reason `live_groups_filter` below is:
+            # `db_models.picture` sits between this module and that one.
+            from pixlstash.services.stack_membership import in_a_live_stack
+
+            live_stack = in_a_live_stack()
+            preds.append(live_stack if self.stack_state == "stacked" else ~live_stack)
+        elif self.stack_state == "unresolved":
+            # A picture the duplicate detector grouped with others and nobody has
+            # ruled on yet. Deliberately keyed on ``DedupGroup.resolved`` alone and
+            # NOT on the caller's tier policy, so this matches what the sidebar
+            # badge counts (see ``DedupGroup.resolved``); filtering by tier here
+            # would show a count the grid could not account for.
+            #
+            # ``live_groups_filter`` is the OTHER half of what the badge counts,
+            # and leaving it out is what let a scrapheaped partner keep marking
+            # its survivor: the group had left the queue and the badge, but the
+            # grid still called the remaining picture unresolved. It is imported
+            # lazily for the same reason ``Picture.find`` imports this module
+            # lazily: ``db_models.picture`` sits between the two.
+            from pixlstash.services.dedup_tier_service import live_groups_filter
+
+            preds.append(
+                exists(
+                    select(DedupGroupMember.picture_id)
+                    .join(DedupGroup, DedupGroup.id == DedupGroupMember.group_id)
+                    .where(
+                        DedupGroupMember.picture_id == Picture.id,
+                        DedupGroup.resolved.is_(False),
+                        live_groups_filter(),
+                    )
+                )
+            )
+
         if self.impossible_sources:
             # Each selected kind is a live "impossible combination" predicate over the
             # picture's own tags/faces (no precomputed queue). Multiple selected kinds
@@ -396,8 +450,6 @@ class PredicateFilter(BaseModel):
         auto-triage.  There is no separate Python-side evaluator; the SQL semantics
         are the same as the set queries.
         """
-        from sqlmodel import select
-
         stmt = self.apply(select(Picture.id)).where(Picture.id == picture_id)
         return session.exec(stmt).first() is not None
 
@@ -444,6 +496,7 @@ class PredicateFilter(BaseModel):
             tags_confidence_above_filter=qp.getlist("tag_confidence_above") or None,
             tags_confidence_below_filter=qp.getlist("tag_confidence_below") or None,
             face_filter=qp.get("face_filter") or None,
+            stack_state=qp.get("stack_state") or None,
             impossible_sources=qp.getlist("impossible_tag_source") or None,
             file_path_prefix=qp.get("file_path_prefix") or None,
             file_path_prefix_children_only=children_only,

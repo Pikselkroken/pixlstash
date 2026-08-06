@@ -1,12 +1,10 @@
 <template>
-  <transition name="selbar-pop">
-    <div v-if="visible" ref="barEl" class="floating-selection-bar">
-      <span
-        v-if="visible && selectedFaceCount > 0"
-        class="selection-face-count"
-      >
-        {{ selectedFaceCount }} Faces selected
-      </span>
+  <!-- The selection half of the grid action pill. It is a run of controls, not
+       a surface: GridActionPill owns the background, the seam, the motion and
+       the bottom-edge anchor. The face count is folded into the menu trigger's
+       label rather than standing on its own, so the half opens with exactly one
+       number (merged-grid-action-pill.md §6.3). -->
+  <div class="selection-bar">
       <div
         v-if="
           selectedCount > 0 &&
@@ -187,21 +185,26 @@
           transition="scale-transition"
         >
           <template #activator="{ props: menuProps }">
+            <!-- A menu button with neither aria-haspopup nor aria-expanded
+                 gives a screen-reader user no signal that it opens anything.
+                 The count rides in the accessible name so it is read on focus,
+                 which is why selecting images one at a time needs no live
+                 region of its own. -->
             <button
               v-bind="menuProps"
               class="stack-btn"
               type="button"
-              :disabled="selectedCount === 0"
-              :title="
-                selectedCount === 0
-                  ? 'Select images to apply actions'
-                  : props.selectedExpandedCount > selectedCount
-                    ? `Actions for ${selectedCount} selected (${props.selectedExpandedCount} total including stacks) — press S`
-                    : `Actions for ${selectedCount} selected — press S`
-              "
+              :disabled="selectedCount === 0 && selectedFaceCount === 0"
+              :title="triggerTitle"
+              :aria-label="triggerTitle"
+              aria-haspopup="menu"
+              :aria-expanded="selectionMenuOpen ? 'true' : 'false'"
+              aria-keyshortcuts="S"
             >
               <v-icon size="20">mdi-image-multiple-outline</v-icon>
-              <span class="bar-btn-apply-label">({{ selectedCount }})</span>
+              <!-- Never truncated by the ladder: a count is the blast radius of
+                   everything else in this half. -->
+              <span class="bar-btn-apply-label">{{ selectionCountLabel }}</span>
               <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
             </button>
           </template>
@@ -221,6 +224,8 @@
             :selected-sort="props.selectedSort"
             :selected-group-name="props.selectedGroupName"
             :selected-multiple-stack-ids="props.selectedMultipleStackIds"
+            :keep-cover-only-stack-count="props.keepCoverOnlyStackCount"
+            :keep-cover-only-lock-reason="props.keepCoverOnlyLockReason"
             :show-remove-from-stack="props.showRemoveFromStack"
             @close="selectionMenuOpen = false"
             @set-project="$emit('set-project', $event)"
@@ -237,7 +242,9 @@
             @open-plugin-panel="openPluginPanel()"
             @open-comfyui-panel="openComfyuiPanel()"
             @reverse-image-search="$emit('reverse-image-search')"
+            @segment="$emit('segment')"
             @remove-from-group="$emit('remove-from-group')"
+            @keep-cover-only="$emit('keep-cover-only')"
             @delete-selected="$emit('delete-selected')"
           />
         </v-menu>
@@ -289,31 +296,38 @@
         </button>
         <button
           class="clear-btn"
-          :disabled="!visible"
+          type="button"
+          :disabled="!hasSelection"
+          :title="clearTitle"
+          :aria-label="clearTitle"
+          :aria-keyshortcuts="ownsEscape ? 'Escape' : undefined"
           @click="$emit('clear-selection')"
-          title="Clear selection (ESC)"
         >
           <v-icon size="20" color="primary">mdi-selection-off</v-icon>
         </button>
+        <!-- Separated from Clear selection by its own group gap. Two identical
+             40px transparent icon buttons 8px apart, one of them destructive,
+             is the adjacency this pill can least afford — and Delete now also
+             sits in the same surface as the bulk Assign write. -->
         <button
           class="delete-btn"
-          :disabled="!visible || isReadOnly"
+          type="button"
+          :disabled="!hasSelection || isReadOnly"
+          :title="deleteTitle"
+          :aria-label="deleteTitle"
           @click="$emit('delete-selected')"
-          title="Delete selected items (DEL)"
         >
           <v-icon size="20" color="error">mdi-delete</v-icon>
         </button>
-      </div>
-      <!-- /selection-ctx-bar -->
     </div>
-  </transition>
+    <!-- /selection-ctx-bar -->
+  </div>
 </template>
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { listWorkflows, runImageToImage } from "../../api/comfyui";
-import { useBottomAnchor } from "../../composables/useBottomAnchor";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
@@ -325,7 +339,12 @@ const props = defineProps({
   selectedFaceCount: { type: Number, default: 0 },
   selectedGroupName: String,
   selectedSort: { type: String, default: "" },
-  visible: Boolean,
+  /**
+   * Esc reaches THIS half. Esc peels one layer per press (open menu → the
+   * selection → the search), so while anything is selected the keycap belongs
+   * here and the search half must not also claim it.
+   */
+  ownsEscape: { type: Boolean, default: true },
   scrapheapPicturesId: { type: String, required: true },
   backendUrl: { type: String, required: true },
   selectedImageIds: { type: Array, default: () => [] },
@@ -337,6 +356,10 @@ const props = defineProps({
   comfyuiConfigured: { type: Boolean, default: false },
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },
+  // Forwarded straight to SelectionMenu: Keep cover only lives in the overflow
+  // only, never as a top-level pill button.
+  keepCoverOnlyStackCount: { type: Number, default: 0 },
+  keepCoverOnlyLockReason: { type: String, default: null },
   groupingLockReason: { type: String, default: null },
   availablePlugins: { type: Array, default: () => [] },
   taggerPlugins: { type: Array, default: () => [] },
@@ -352,6 +375,7 @@ const emit = defineEmits([
   "clear-selection",
   "added-to-set",
   "remove-from-group",
+  "keep-cover-only",
   "delete-selected",
   "set-project",
   "add-to-character",
@@ -366,16 +390,10 @@ const emit = defineEmits([
   "auto-tag",
   "generate-description",
   "reverse-image-search",
+  "segment",
   "selection-menu-open",
   "clear-impossible-tags",
 ]);
-
-// The pill parks on the bottom edge, inside the notice column's footprint, so
-// per notice-surface.md §2.2 it owns its contribution to `--floating-bottom-h`.
-// Registering the real element (not a constant) is the point: the pill wraps and
-// grows on coarse pointers, so a hardcoded height would let a notice overlap it.
-const barEl = ref(null);
-useBottomAnchor("selection-bar", barEl);
 
 const isScrapheapView = computed(() => {
   const scrapheapId = String(
@@ -383,6 +401,43 @@ const isScrapheapView = computed(() => {
   ).toUpperCase();
   const selected = String(props.selectedCharacter || "").toUpperCase();
   return selected === scrapheapId;
+});
+
+const hasSelection = computed(
+  () => props.selectedCount > 0 || props.selectedFaceCount > 0,
+);
+
+// One number opens the half. Pictures and faces are different units, so when
+// both are live they are stated as two, never summed.
+const selectionCountLabel = computed(() => {
+  if (props.selectedCount > 0 && props.selectedFaceCount > 0) {
+    return `${props.selectedCount} selected · ${props.selectedFaceCount} faces`;
+  }
+  if (props.selectedCount > 0) return `${props.selectedCount} selected`;
+  return `${props.selectedFaceCount} faces selected`;
+});
+
+const triggerTitle = computed(() => {
+  if (!hasSelection.value) return "Select images to apply actions";
+  const stacks =
+    props.selectedExpandedCount > props.selectedCount
+      ? ` (${props.selectedExpandedCount} total including stacks)`
+      : "";
+  return `Actions for ${selectionCountLabel.value}${stacks} — press S`;
+});
+
+const clearTitle = computed(() =>
+  props.ownsEscape ? "Clear selection (Esc)" : "Clear selection",
+);
+
+// "Delete" mis-set the expectation in the more alarming direction: outside the
+// scrapheap the action moves pictures there, records to the operation log and
+// raises an undoable receipt. Inside it, it is the irreversible one.
+const deleteTitle = computed(() => {
+  const n = props.selectedCount;
+  return isScrapheapView.value
+    ? `Delete ${n} forever (Del)`
+    : `Move ${n} to Scrapheap (Del)`;
 });
 
 const pluginOptions = computed(() => {
@@ -679,10 +734,10 @@ function handleComfyuiMenuEsc(event) {
 const tagMenuOpen = ref(false);
 const tagBtnRef = ref(null);
 
-// Same guard as the plugin/comfyui menus above. The tag v-menu lives in the
-// selection bar's `v-if="visible"` region. If ESC clears the selection before
-// Vuetify emits update:modelValue, the menu unmounts with tagMenuOpen still
-// true and auto-reopens on the next selection. Reset it when the host hides.
+// Same guard as the plugin/comfyui menus above. The whole half is unmounted by
+// GridActionPill the moment the selection empties. If ESC clears the selection
+// before Vuetify emits update:modelValue, the menu unmounts with tagMenuOpen
+// still true and auto-reopens on the next selection. Reset it when it hides.
 const showTagControls = computed(
   () => props.selectedCount > 0 && !isScrapheapView.value && !isReadOnly.value,
 );
@@ -722,78 +777,11 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 </script>
 
 <style scoped>
-.floating-selection-bar {
-  position: absolute;
-  /* --space-5, not the old off-grid 18px. This is the prerequisite for the
-     notice stack's arithmetic landing on tokens (notice-surface.md §2.2): the
-     stack rests at `--space-5 + measured pill height + --space-3`, which only
-     leaves an exact `--space-3` gap if the pill's own inset is also --space-5.
-     Only the pill's HEIGHT is measured (useBottomAnchor observes the border
-     box), never its inset, so moving it here does not disturb that measurement. */
-  bottom: var(--space-5);
-  left: 50%;
-  /* width: max-content so the pill hugs its icons. NOTE: do NOT add
-     container-type here — inline-size containment makes the width ignore the
-     contents, collapsing the pill to ~0 and leaving the icons floating with no
-     visible background. The `selbar` container for the @container query below
-     is declared on `.grid-content-area` (ImageGrid.vue), the bar's positioned
-     ancestor. */
-  width: max-content;
-  transform: translateX(-50%);
-  z-index: 200;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  max-width: calc(100% - var(--space-6));
-  /* Block padding deliberately left at 6px: it sets the pill's occupied height,
-     and that dimension belongs to the UI/UX-gated action-bar reconciliation
-     (visual-language.md §5/§13, the 34/40/48/56px drift), not to a token swap. */
-  padding: 6px var(--space-4);
-  border-radius: var(--radius-pill);
-  background: rgba(var(--v-theme-surface), 0.86);
-  /* --elevation-3, not -4: -4 is reserved for dialogs and lightbox chrome. The
-     pill is persistent floating chrome, and it now sits --space-3 from the
-     notice cards, which are also -3. Peers on the bottom edge read as one layer. */
-  box-shadow: var(--elevation-3);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  backdrop-filter: blur(12px);
-}
-
-/* Entering the screen decelerates, leaving it accelerates and is quicker
-   (visual-language.md §10) — the same pairing the notice stack beside it uses. */
-.selbar-pop-enter-active {
-  transition:
-    transform var(--dur-2) var(--ease-decelerate),
-    opacity var(--dur-2) var(--ease-decelerate);
-}
-.selbar-pop-leave-active {
-  transition:
-    transform var(--dur-1) var(--ease-accelerate),
-    opacity var(--dur-1) var(--ease-accelerate);
-}
-.selbar-pop-enter-from,
-.selbar-pop-leave-to {
-  transform: translateX(-50%) translateY(120%);
-  opacity: 0;
-}
-
-.selection-count,
-.selection-face-count {
-  /* 600, not `bold`: 700 is reserved (visual-language.md §3). Size from the ramp
-     in rem — the old `1.1em` compounded off the inherited 16px to 17.6px. */
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-md);
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-.selection-expanded-count {
-  font-size: var(--text-sm);
-  opacity: 0.75;
-  white-space: nowrap;
-  cursor: default;
+/* No box of its own: the pill surface, the seam, the motion and the bottom-edge
+   anchor all live in GridActionPill. `display: contents` lets these controls sit
+   directly in the pill's flex run, so the half adds no nesting to the layout. */
+.selection-bar {
+  display: contents;
 }
 
 .selection-ctx-bar {
@@ -850,6 +838,9 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   align-items: center;
   justify-content: center;
   gap: 4px;
+  /* 8px here plus the run's own 8px gap = the --space-5 group gap that keeps
+     the destructive control off its neighbour's elbow. */
+  margin-left: var(--space-3);
   background: transparent;
   color: rgb(var(--v-theme-on-background));
   border: none;
@@ -1012,12 +1003,24 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   flex-shrink: 0;
 }
 
-@container selbar (max-width: 660px) {
-  .bar-btn-apply-label {
-    display: none;
-  }
+/* The ladder drops the label of the conditional action first and NEVER the
+   count: losing a selection count is worse than losing any word beside it
+   (merged-grid-action-pill.md §7). The old rule hid both at 660px together. */
+@container selbar (max-width: 1100px) {
   .clear-impossible-label {
     display: none;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .stack-btn,
+  .clear-btn,
+  .delete-btn {
+    height: var(--bar-height);
+  }
+  .clear-btn,
+  .delete-btn {
+    width: var(--bar-height);
   }
 }
 </style>

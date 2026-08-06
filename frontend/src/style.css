@@ -49,6 +49,14 @@ body {
    Restoring .08 / .18 would silently reintroduce a near-invisible 1.072 hover.
    Recompute these if an action fill ever moves again. */
 .v-theme--pixlStashDark {
+  /* Native form-control internals — the range TRACK (the part `accent-color`
+     does not paint), select/checkbox chrome and scrollbars — follow
+     `color-scheme`, not the Vuetify theme. Declared only on `:root` (as
+     `light dark`) it resolves from the OS preference, so the app's dark theme
+     on a light-mode OS rendered a light slider track inside a dark surface.
+     Pinning it to the chosen theme is what makes the grid action pill's
+     threshold slider correct in both (merged-grid-action-pill.md §9). */
+  color-scheme: dark;
   /* .08 → .14: compensates the deepened accent (#f28f3b → #b85c0c). */
   --hover-wash: rgba(var(--v-theme-accent), 0.14);
   /* .18 → .26: compensates the deepened primary (#8EA604 → #6b7d04). */
@@ -61,6 +69,8 @@ body {
   --active-text: rgb(var(--v-theme-on-primary));
 }
 .v-theme--pixlStashLight {
+  /* See the note on the dark theme above. */
+  color-scheme: light;
   /* Selection reads warm (accent) on the light theme instead of the olive `primary`
      green, which clashes with the warm palette. Dark keeps the green convention. */
   --hover-wash: rgba(var(--v-theme-accent), 0.14);

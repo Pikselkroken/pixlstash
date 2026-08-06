@@ -8,18 +8,21 @@ import os
 import struct
 import threading
 import queue
+import traceback
 from contextlib import contextmanager
 from pathlib import Path
 from concurrent.futures import Future
 from enum import IntEnum
 from typing import Optional
 from sqlalchemy import (
+    bindparam as sa_bindparam,
     event,
     inspect as sa_inspect,
     update as sa_update,
     select as sa_select,
 )
 from sqlmodel import create_engine, Session
+from fastapi import HTTPException
 from rapidfuzz.distance import Levenshtein
 
 import numpy as np
@@ -61,13 +64,158 @@ _HASH_SKIP_COLS: frozenset = frozenset(
 )
 
 
+# Maximum number of picture ids per ``IN (...)`` list when batching the
+# metadata-hash inputs. A bulk import or a library-wide task can dirty
+# thousands of pictures in one flush, and SQLite caps bind variables per
+# statement (``SQLITE_LIMIT_VARIABLE_NUMBER``: 32766 on some builds, 999 on
+# older ones). 500 keeps every statement safely inside the smallest cap while
+# still collapsing a realistic 64-picture task batch into a single round trip.
+_HASH_ID_CHUNK = 500
+
+
+def _compute_picture_metadata_hashes(session: Session, picture_ids) -> dict[int, str]:
+    """Return ``{picture_id: sha256_hex}`` for every requested picture that exists.
+
+    Batched equivalent of :func:`_compute_picture_metadata_hash`: five queries
+    per chunk of ``_HASH_ID_CHUNK`` ids instead of five queries per picture.
+    The digest input is byte-for-byte identical to the per-picture version —
+    ``metadata_hash`` is persisted into snapshots and compared against live
+    rows, so any change to the canonical string would make every picture in
+    every existing snapshot compare as "changed".
+
+    Ids with no picture row simply have no entry in the result, matching the
+    ``None`` the per-picture helper returns for a missing picture.
+
+    Args:
+        session: Active DB session (must be within an open transaction).
+        picture_ids: Iterable of picture primary keys; duplicates are ignored.
+
+    Returns:
+        Mapping of picture id to hex-encoded SHA-256 string.
+    """
+    ids = list(dict.fromkeys(pid for pid in picture_ids if pid is not None))
+    if not ids:
+        return {}
+
+    pictures: dict[int, Picture] = {}
+    tags_by_pid: dict[int, list] = {}
+    faces_by_pid: dict[int, list] = {}
+    sets_by_pid: dict[int, list] = {}
+    projects_by_pid: dict[int, list] = {}
+
+    for start in range(0, len(ids), _HASH_ID_CHUNK):
+        chunk = ids[start : start + _HASH_ID_CHUNK]
+        # ORM entity select (NOT a Core column select): the returned instances
+        # come from the session's identity map, so ``getattr`` below sees the
+        # same in-memory values ``session.get`` used to return — including the
+        # ndarray columns that must be skipped and the datetimes that must be
+        # ``isoformat``-ed. A Core select would hand back raw driver values and
+        # silently change the digest.
+        for pic in (
+            session.execute(sa_select(Picture).where(Picture.id.in_(chunk)))
+            .scalars()
+            .all()
+        ):
+            pictures[pic.id] = pic
+        for pid, tag in session.execute(
+            sa_select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(chunk))
+        ):
+            tags_by_pid.setdefault(pid, []).append(tag)
+        for pid, frame_index, face_index, bbox_, character_id in session.execute(
+            sa_select(
+                Face.picture_id,
+                Face.frame_index,
+                Face.face_index,
+                Face.bbox_,
+                Face.character_id,
+            ).where(Face.picture_id.in_(chunk))
+        ):
+            faces_by_pid.setdefault(pid, []).append(
+                (frame_index, face_index, bbox_, character_id)
+            )
+        for pid, set_id in session.execute(
+            sa_select(PictureSetMember.picture_id, PictureSetMember.set_id).where(
+                PictureSetMember.picture_id.in_(chunk)
+            )
+        ):
+            sets_by_pid.setdefault(pid, []).append(set_id)
+        for pid, project_id in session.execute(
+            sa_select(
+                PictureProjectMember.picture_id, PictureProjectMember.project_id
+            ).where(PictureProjectMember.picture_id.in_(chunk))
+        ):
+            projects_by_pid.setdefault(pid, []).append(project_id)
+
+    hashes: dict[int, str] = {}
+    for pid in ids:
+        pic = pictures.get(pid)
+        if pic is None:
+            continue
+        # Iterate only persisted columns — NOT ``model_fields``, which also
+        # contains SQLModel relationship fields (``tags``, ``faces``,
+        # ``project``, ...). ``getattr`` on a relationship triggers a lazy load
+        # whose ORM objects aren't JSON-serialisable; ``json.dumps(...,
+        # default=str)`` then digests Python ``repr()`` (memory addresses) and
+        # the hash becomes non-deterministic across reloads.
+        col_vals: dict = {}
+        for col_attr in sa_inspect(type(pic)).column_attrs:
+            col = col_attr.key
+            if col in _HASH_SKIP_COLS:
+                continue
+            val = getattr(pic, col, None)
+            if isinstance(val, np.ndarray):
+                continue
+            if hasattr(val, "isoformat"):
+                val = val.isoformat()
+            col_vals[col] = val
+        # Face-derived state: the before-flush hash tracker dirties on Face
+        # mutations (a Face add / remove / character reassignment is a
+        # user-visible change), so the digest must include face state — else
+        # the recompute would round-trip to the same value and the UI's
+        # identical-state detection would lie for face-only edits.  We hash
+        # the bbox + character_id of every face, sorted so the digest is
+        # insensitive to row order.  ``features`` (the embedding BLOB) is
+        # deliberately excluded — it's a derived column the WorkPlanner
+        # regenerates and is not user-visible.
+        #
+        # LOAD-BEARING: ``str(tuple(...))`` is not cosmetic. The original
+        # per-picture implementation put SQLAlchemy ``Row`` objects in this
+        # list, and ``json.dumps(..., default=str)`` cannot serialise a Row, so
+        # it fell back to ``str(row)`` and emitted each face as a JSON *string*
+        # like ``"(0, 0, '[1, 2, 3, 4]', 5)"`` rather than a JSON array.
+        # ``Row.__str__`` is identical to ``tuple.__str__`` (verified on this
+        # repo's SQLAlchemy 2.0.51), so formatting the plain tuple reproduces
+        # the stored digests exactly. Emitting real JSON arrays here would
+        # invalidate the ``metadata_hash`` of every picture in every existing
+        # snapshot.
+        faces = [str(face) for face in sorted(faces_by_pid.get(pid, ()))]
+        # Picture-set and project membership are user-visible and reverted by a
+        # full restore, but live in their own tables (not Picture columns), so
+        # they must be folded in explicitly — otherwise a picture whose only
+        # change is being moved between sets/projects hashes identically and
+        # the restore preview / identical-state detection would wrongly report
+        # "unchanged".
+        state = {
+            "cols": col_vals,
+            "tags": sorted(tags_by_pid.get(pid, ())),
+            "faces": faces,
+            "sets": sorted(sets_by_pid.get(pid, ())),
+            "projects": sorted(projects_by_pid.get(pid, ())),
+        }
+        hashes[pid] = hashlib.sha256(
+            json.dumps(state, sort_keys=True, default=str).encode()
+        ).hexdigest()
+    return hashes
+
+
 def _compute_picture_metadata_hash(session: Session, picture_id: int) -> Optional[str]:
     """Return a SHA-256 hex digest of a picture's user-visible metadata.
 
     Covers all Picture columns not in ``_HASH_SKIP_COLS`` plus the sorted tag
     list, face state, and picture-set / project **membership** — everything a
-    full restore would revert. Called inside ``after_flush`` so all pending
-    writes are already visible on the connection.
+    full restore would revert. Thin wrapper over
+    :func:`_compute_picture_metadata_hashes` so the single-picture and batched
+    paths can never drift apart in what they digest.
 
     Args:
         session: Active DB session (must be within an open transaction).
@@ -76,80 +224,7 @@ def _compute_picture_metadata_hash(session: Session, picture_id: int) -> Optiona
     Returns:
         Hex-encoded SHA-256 string, or None if the picture is not found.
     """
-    pic = session.get(Picture, picture_id)
-    if pic is None:
-        return None
-    # Iterate only persisted columns — NOT ``model_fields``, which also
-    # contains SQLModel relationship fields (``tags``, ``faces``, ``project``,
-    # ...). ``getattr`` on a relationship triggers a lazy load whose ORM
-    # objects aren't JSON-serialisable; ``json.dumps(..., default=str)``
-    # then digests Python ``repr()`` (memory addresses) and the hash
-    # becomes non-deterministic across reloads.
-    col_vals: dict = {}
-    for col_attr in sa_inspect(type(pic)).column_attrs:
-        col = col_attr.key
-        if col in _HASH_SKIP_COLS:
-            continue
-        val = getattr(pic, col, None)
-        if isinstance(val, np.ndarray):
-            continue
-        if hasattr(val, "isoformat"):
-            val = val.isoformat()
-        col_vals[col] = val
-    tags = sorted(
-        session.execute(sa_select(Tag.tag).where(Tag.picture_id == picture_id))
-        .scalars()
-        .all()
-    )
-    # Face-derived state: the before-flush hash tracker dirties on Face
-    # mutations (a Face add / remove / character reassignment is a
-    # user-visible change), so the digest must include face state — else
-    # the recompute would round-trip to the same value and the UI's
-    # identical-state detection would lie for face-only edits.  We hash
-    # the bbox + character_id of every face, sorted so the digest is
-    # insensitive to row order.  ``features`` (the embedding BLOB) is
-    # deliberately excluded — it's a derived column the WorkPlanner
-    # regenerates and is not user-visible.
-    faces = sorted(
-        session.execute(
-            sa_select(
-                Face.frame_index, Face.face_index, Face.bbox_, Face.character_id
-            ).where(Face.picture_id == picture_id)
-        ).all()
-    )
-    # Picture-set and project membership are user-visible and reverted by a
-    # full restore, but live in their own tables (not Picture columns), so they
-    # must be folded in explicitly — otherwise a picture whose only change is
-    # being moved between sets/projects hashes identically and the restore
-    # preview / identical-state detection would wrongly report "unchanged".
-    set_ids = sorted(
-        session.execute(
-            sa_select(PictureSetMember.set_id).where(
-                PictureSetMember.picture_id == picture_id
-            )
-        )
-        .scalars()
-        .all()
-    )
-    project_ids = sorted(
-        session.execute(
-            sa_select(PictureProjectMember.project_id).where(
-                PictureProjectMember.picture_id == picture_id
-            )
-        )
-        .scalars()
-        .all()
-    )
-    state = {
-        "cols": col_vals,
-        "tags": tags,
-        "faces": faces,
-        "sets": set_ids,
-        "projects": project_ids,
-    }
-    return hashlib.sha256(
-        json.dumps(state, sort_keys=True, default=str).encode()
-    ).hexdigest()
+    return _compute_picture_metadata_hashes(session, (picture_id,)).get(picture_id)
 
 
 def _before_flush_hash_tracker(session, flush_context, instances) -> None:
@@ -179,6 +254,13 @@ def _before_flush_hash_tracker(session, flush_context, instances) -> None:
 def _after_flush_hash_updater(session, flush_context) -> None:
     """Recompute and persist metadata_hash for dirty pictures in the same txn.
 
+    Runs on the single writer thread INSIDE the write transaction, so its cost
+    is held against the SQLite write lock: the old shape issued five SELECTs
+    plus one UPDATE per dirty picture, which turned a 64-picture tag batch into
+    ~384 extra statements before the lock could be released (#651). It is now a
+    constant number of statements per flush — the batched hash read plus one
+    executemany UPDATE.
+
     Uses Core SQL UPDATE so the change is committed with the same transaction
     without triggering a second ORM flush cycle.
     """
@@ -190,19 +272,29 @@ def _after_flush_hash_updater(session, flush_context) -> None:
     if not dirty_pids:
         return
     with session.no_autoflush:
-        for pid in dirty_pids:
-            new_hash = _compute_picture_metadata_hash(session, pid)
-            if new_hash is not None:
-                session.execute(
-                    sa_update(Picture)
-                    .where(Picture.id == pid)
-                    .values(metadata_hash=new_hash)
-                )
-                # Expire the in-memory attribute so it reflects the new value
-                # on next access (the Core UPDATE bypasses ORM tracking).
-                cached = session.identity_map.get((Picture, (pid,)))
-                if cached is not None:
-                    session.expire(cached, ["metadata_hash"])
+        new_hashes = _compute_picture_metadata_hashes(session, dirty_pids)
+        if not new_hashes:
+            return
+        # One prepared statement, N parameter sets. Target ``Picture.__table__``
+        # (Core ``Table``) rather than the ORM ``Picture`` mapper so SQLAlchemy
+        # does not route this through the ORM bulk-by-primary-key path (which
+        # clashes with the explicit WHERE bindparam) and so this very hook does
+        # not re-fire. Same precedent as ``tasks/smart_score_task.py``.
+        stmt = (
+            sa_update(Picture.__table__)
+            .where(Picture.__table__.c.id == sa_bindparam("_pid"))
+            .values(metadata_hash=sa_bindparam("_hash"))
+        )
+        session.execute(
+            stmt,
+            [{"_pid": pid, "_hash": new_hash} for pid, new_hash in new_hashes.items()],
+        )
+        for pid in new_hashes:
+            # Expire the in-memory attribute so it reflects the new value
+            # on next access (the Core UPDATE bypasses ORM tracking).
+            cached = session.identity_map.get((Picture, (pid,)))
+            if cached is not None:
+                session.expire(cached, ["metadata_hash"])
 
 
 def _attach_session_hooks(session: Session) -> None:
@@ -502,17 +594,114 @@ def character_face_likeness(candidate_blob: bytes, refs_blob: bytes) -> float:
         return 0.0
 
 
-def init_database(dbapi_conn, conn_record):
+# ---------------------------------------------------------------------------
+# SQLite connection settings (documented in docs/backend_architecture.md §13)
+# ---------------------------------------------------------------------------
+
+# How long a connection waits for the write lock before raising
+# "database is locked". sqlite3's default is 5 s, which is short for a vault
+# where a background task batch can hold the write transaction longer than
+# that. Passed as ``connect_args={"timeout": ...}``, which sqlite3 turns into
+# ``PRAGMA busy_timeout``. The engine the restore path rebuilds after a DB
+# swap already used 30 s (services/restore/full_restore.py); this makes the
+# engine built at startup match it.
+SQLITE_BUSY_TIMEOUT_S = 30
+
+# Per-connection page cache. Negative means KiB rather than pages, so this is
+# 16 MiB against SQLite's 2 MiB default. It is a cap, not a reservation, but a
+# single index scan is enough to reach it: measured peak RSS for 15 connections
+# (QueuePool size=5 + max_overflow=10) is ~263 MB versus ~79 MB at the default.
+# 16 MiB is where a scan of this repo's largest dev vault stopped growing its
+# cache; larger values cost proportionally more resident memory for no
+# measured gain (32 MiB -> ~513 MB, 64 MiB -> ~1010 MB across 15 connections).
+SQLITE_CACHE_SIZE_KIB = -16384
+
+
+def _apply_sqlite_settings(dbapi_conn, *, wal: bool, foreign_keys: bool) -> None:
+    """Apply the documented SQLite connection settings to a raw DBAPI connection.
+
+    Registers the custom SQL functions the ORM queries rely on and sets the
+    per-connection PRAGMAs from §13 of docs/backend_architecture.md.
+
+    Args:
+        dbapi_conn: The sqlite3 connection handed over by SQLAlchemy's
+            ``connect`` event.
+        wal: When True, put the file in WAL mode and pair it with
+            ``synchronous=NORMAL``. The two travel together: ``NORMAL`` is only
+            crash-safe under WAL, so with ``wal=False`` ``synchronous`` is left
+            at SQLite's ``FULL`` default rather than silently weakening
+            durability in rollback-journal mode.
+        foreign_keys: Whether to enable FK enforcement (SQLite defaults it off).
+    """
     dbapi_conn.create_function("levenshtein", 2, levenshtein)
     dbapi_conn.create_function("levenshtein_with_id", 3, levenshtein_with_id)
     dbapi_conn.create_function("cosine_similarity", 2, ImageUtils.cosine_similarity)
     dbapi_conn.create_function("character_face_likeness", 2, character_face_likeness)
 
     cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL;")
-    cursor.execute("PRAGMA synchronous=NORMAL;")
-    cursor.execute("PRAGMA foreign_keys=ON")
+    if wal:
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+    cursor.execute(f"PRAGMA foreign_keys={'ON' if foreign_keys else 'OFF'}")
+    cursor.execute(f"PRAGMA cache_size={SQLITE_CACHE_SIZE_KIB}")
     cursor.close()
+
+
+def init_database(dbapi_conn, conn_record):
+    """SQLAlchemy ``connect`` listener for the live vault engine.
+
+    Kept as a named listener because the vault engine is the fully configured
+    case (WAL + FK on); ``create_configured_engine`` attaches it for the
+    default settings.
+    """
+    _apply_sqlite_settings(dbapi_conn, wal=True, foreign_keys=True)
+
+
+def create_configured_engine(
+    db_path,
+    *,
+    wal: bool = True,
+    foreign_keys: bool = True,
+    echo: bool = False,
+):
+    """Build a SQLite engine with the settings documented in §13.
+
+    **This is the only supported way to build a SQLite engine in PixlStash.**
+    The busy timeout (``connect_args``) and the PRAGMAs (the ``connect``
+    listener) are one configuration in two halves; a bare ``create_engine``
+    call gets neither, and that drift has been a real bug twice (#651, #709).
+    Anything other than the defaults is a deliberate deviation and must be
+    justified where it is requested.
+
+    Args:
+        db_path: Filesystem path to the SQLite database file.
+        wal: Whether to use WAL journalling (with ``synchronous=NORMAL``).
+            Pass ``False`` for a database that must stay a **single file** on
+            disk. WAL is a persistent property of the file header and spawns
+            ``-wal``/``-shm`` companions, which a path that copies the main
+            file by name would silently truncate away. See
+            ``services/restore/schema_upgrade.snapshot_engine``.
+        foreign_keys: Whether to enforce foreign keys. Reads are unaffected
+            either way; this only matters for a connection that writes.
+        echo: SQLAlchemy statement echo.
+
+    Returns:
+        A configured SQLAlchemy ``Engine``.
+    """
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        echo=echo,
+        connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S},
+    )
+    if wal and foreign_keys:
+        event.listen(engine, "connect", init_database)
+    else:
+
+        def _listener(dbapi_conn, conn_record):
+            _apply_sqlite_settings(dbapi_conn, wal=wal, foreign_keys=foreign_keys)
+
+        event.listen(engine, "connect", _listener)
+    return engine
 
 
 def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
@@ -644,8 +833,7 @@ class VaultDatabase:
         db_exists = os.path.exists(self._db_path)
         logger.debug(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
 
-        self._engine = create_engine(f"sqlite:///{self._db_path}", echo=False)
-        event.listen(self._engine, "connect", init_database)
+        self._engine = create_configured_engine(self._db_path)
 
         _run_migrations(self._engine, self._db_path, db_exists)
         _ensure_user_stack_strictness(self._engine)
@@ -824,12 +1012,30 @@ class VaultDatabase:
     @staticmethod
     def result_or_throw(future: Future):
         """
-        Helper to get result from a Future or throw its exception. Logs full stack trace.
-        """
-        import traceback
+        Helper to get result from a Future or throw its exception.
 
+        A task that raises a 4xx ``HTTPException`` has not failed: the services
+        use it as the way to refuse a request the caller is allowed to make (a
+        locked set, a name conflict, an out-of-scope token), and FastAPI turns it
+        into that exact response. Logging those at ERROR with a stack trace makes
+        every ordinary refusal look like a server fault and buries the real
+        faults in them, so they are logged as one INFO line instead. Everything
+        else - including a 5xx ``HTTPException`` - keeps the ERROR and the trace.
+        """
         try:
             return future.result()
+        except HTTPException as exc:
+            if not 400 <= exc.status_code < 500:
+                raise
+            caller = inspect.currentframe().f_back
+            logger.info(
+                "Database task refused with %d: %s at %s:%d",
+                exc.status_code,
+                exc.detail,
+                caller.f_code.co_filename,
+                caller.f_lineno,
+            )
+            raise
         except Exception:
             frame = inspect.currentframe()
             caller = frame.f_back

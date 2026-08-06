@@ -411,6 +411,25 @@ def test_assign_face_picture_ids_branch_denied(env, monkeypatch):
     assert r.status_code == 403, r.text
 
 
+def test_assign_face_denied_when_a_stack_sibling_is_out_of_scope(env, monkeypatch):
+    """Stack-atomic assignment must authorize the whole expanded mutation."""
+    server, client, picture_ids, character_id = env
+    in_scope, out_of_scope = picture_ids[0], picture_ids[1]
+    _scope_to(monkeypatch, [characters_faces_module], None)
+    stacked = client.post(
+        f"{API}/stacks", json={"picture_ids": [in_scope, out_of_scope]}
+    )
+    assert stacked.status_code == 200, stacked.text
+
+    _scope_to(monkeypatch, [characters_faces_module], {in_scope})
+    response = client.post(
+        f"{API}/characters/{character_id}/faces",
+        json={"picture_ids": [in_scope]},
+    )
+
+    assert response.status_code == 403, response.text
+
+
 def test_assign_face_face_ids_branch_denied(env, monkeypatch):
     """The face_ids alternate branch must resolve face -> picture and deny."""
     server, client, picture_ids, character_id = env
@@ -433,6 +452,27 @@ def test_assign_face_face_ids_branch_denied(env, monkeypatch):
         "face_ids branch must resolve the face to its picture and deny an "
         f"out-of-scope target (alternate-branch BOLA); got {r.status_code}: {r.text}"
     )
+
+
+def test_assign_authoritative_face_checks_actual_face_owner(env, monkeypatch):
+    """A forged in-scope picture_id cannot launder an out-of-scope face_id."""
+    server, client, picture_ids, character_id = env
+    in_scope, out_of_scope = picture_ids[0], picture_ids[1]
+    _scope_to(monkeypatch, [crud_module], None)
+    created = client.post(
+        f"{API}/pictures/{out_of_scope}/face",
+        json={"bbox": [1, 1, 20, 20], "frame_index": 0},
+    )
+    assert created.status_code == 200, created.text
+    out_face_id = created.json()["id"]
+
+    _scope_to(monkeypatch, [characters_faces_module], {in_scope})
+    response = client.post(
+        f"{API}/characters/{character_id}/faces",
+        json={"face_assignments": [{"picture_id": in_scope, "face_id": out_face_id}]},
+    )
+
+    assert response.status_code == 403, response.text
 
 
 def test_remove_character_face_ids_branch_denied(env, monkeypatch):
@@ -510,3 +550,55 @@ def test_comfyui_t2i_source_picture_scoped_token_blocked(env, scoped):
         headers=_bearer(tok),
     )
     assert r.status_code == 403, r.text
+
+
+# ---------------------------------------------------------------------------
+# Remix recipe routes (v1.9). Both read and replay the graph embedded in one
+# picture's FILE, so both are per-object reads of that picture's contents and
+# both must be scoped. Tested in both directions: over-blocking the owner is
+# its own regression.
+# ---------------------------------------------------------------------------
+
+
+def test_comfyui_recipe_read_scoped_token_blocked(env, scoped):
+    server, client, picture_ids, _ = env
+    anon, tok = scoped
+    r = anon.get(
+        f"{API}/comfyui/pictures/{picture_ids[1]}/recipe", headers=_bearer(tok)
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_comfyui_recipe_read_owner_succeeds(env, monkeypatch):
+    server, client, picture_ids, _ = env
+    _scope_to(monkeypatch, [comfyui_module], None)
+    r = client.get(f"{API}/comfyui/pictures/{picture_ids[1]}/recipe")
+    # The test fixtures are ordinary photos with no embedded graph, so the
+    # honest answer is a 200 saying so — NOT an error.
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["available"] is False
+    assert body["reason"] == "no_prompt_chunk"
+
+
+def test_comfyui_run_recipe_scoped_token_blocked(env, scoped):
+    server, client, picture_ids, _ = env
+    anon, tok = scoped
+    r = anon.post(
+        f"{API}/comfyui/run_recipe",
+        json={"picture_id": picture_ids[1]},
+        headers=_bearer(tok),
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_comfyui_run_recipe_owner_passes_scope_guard(env, monkeypatch):
+    server, client, picture_ids, _ = env
+    _scope_to(monkeypatch, [comfyui_module], None)
+    r = client.post(f"{API}/comfyui/run_recipe", json={"picture_id": picture_ids[1]})
+    # Owner is not scope-blocked; it reaches the handler and is refused for the
+    # real reason — the picture carries no executable graph. Asserting the exact
+    # status and detail rather than a bare `!= 403` keeps this from passing
+    # after the handler it targets stops existing.
+    assert r.status_code == 400, r.text
+    assert "no executable workflow embedded" in r.json()["detail"]

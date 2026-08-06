@@ -1,0 +1,1226 @@
+// Pure helpers for the duplicate triage queue. No Vue, no Pinia, no network.
+//
+// The cover formula lives here rather than in a component because three
+// surfaces need the same answer: the queue row's preselected cover, the compare
+// view's "best value" highlight per column, and the auto-stack dialog's
+// explanation of which copy it keeps. Three implementations would drift.
+//
+// The field names here are the backend's (`routes/dedup.py`): a candidate is
+// keyed on `picture_id`, carries `is_raw`, `size_bytes`, `created_at`,
+// `reference_folder_id` and `file_path`, and already ships its own
+// `cover_score`. The local formula is kept as the fallback and as the thing
+// the tests pin, so a server that stops sending `cover_score` degrades to a
+// correct preselection rather than to none.
+
+/**
+ * Megapixels of a candidate, from whichever shape the record carries.
+ * @param {Object} candidate
+ * @returns {number} megapixels, or 0 when the dimensions are unknown.
+ */
+export function candidateMegapixels(candidate) {
+  if (!candidate) return 0;
+  const direct = Number(candidate.megapixels);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const width = Number(candidate.width);
+  const height = Number(candidate.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return 0;
+  if (width <= 0 || height <= 0) return 0;
+  return (width * height) / 1e6;
+}
+
+/**
+ * Whether a candidate is a RAW capture, which earns the cover-score bonus.
+ *
+ * RAW wins the tie against a same-resolution JPEG because it is the copy that
+ * still holds the latitude to be re-edited; losing it to a re-export is the
+ * expensive mistake this bonus exists to prevent.
+ *
+ * @param {Object} candidate
+ * @returns {boolean}
+ */
+export function isRawCandidate(candidate) {
+  // The server decides this: it knows the decoder that opened the file, where
+  // the client only has an extension. The format list below is the fallback.
+  if (typeof candidate?.is_raw === "boolean") return candidate.is_raw;
+  const format = String(candidate?.format ?? "").toUpperCase();
+  return format === "RAW" || RAW_FORMATS.has(format);
+}
+
+const RAW_FORMATS = new Set([
+  "ARW",
+  "CR2",
+  "CR3",
+  "DNG",
+  "NEF",
+  "ORF",
+  "RAF",
+  "RW2",
+]);
+
+/** The RAW bonus, in cover-score points. */
+export const RAW_COVER_BONUS = 8;
+
+/**
+ * The design's cover score: `pixels x 4 + tags x 3 + userScore x 2 + RAW bonus`.
+ *
+ * Higher wins. The weights are the design's, not a heuristic to tune here.
+ *
+ * @param {Object} candidate
+ * @returns {number}
+ */
+export function coverScore(candidate) {
+  if (!candidate) return 0;
+  const served = Number(candidate.cover_score);
+  if (Number.isFinite(served)) return served;
+  const megapixels = candidateMegapixels(candidate);
+  const tags = Number(candidate.tag_count) || 0;
+  const score = Number(candidate.score) || 0;
+  return (
+    megapixels * 4 +
+    tags * 3 +
+    score * 2 +
+    (isRawCandidate(candidate) ? RAW_COVER_BONUS : 0)
+  );
+}
+
+/**
+ * Capture time as a sortable number, for the tie-break.
+ * @param {Object} candidate
+ * @returns {number} epoch ms, or `Infinity` when unknown so an undated
+ *   candidate never wins a tie against a dated one.
+ */
+function captureTime(candidate) {
+  const raw = candidate?.created_at ?? candidate?.captured_at;
+  if (!raw) return Number.POSITIVE_INFINITY;
+  const parsed = Date.parse(raw);
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+}
+
+/**
+ * Index of the candidate the cover formula preselects.
+ *
+ * Ties break to the oldest capture time, so the original beats the copy that
+ * was made from it.
+ *
+ * @param {Array<Object>} candidates
+ * @returns {number} the winning index, or -1 for an empty list.
+ */
+export function pickCoverIndex(candidates) {
+  if (!Array.isArray(candidates) || !candidates.length) return -1;
+  let best = 0;
+  let bestScore = coverScore(candidates[0]);
+  let bestTime = captureTime(candidates[0]);
+  for (let i = 1; i < candidates.length; i += 1) {
+    const score = coverScore(candidates[i]);
+    const time = captureTime(candidates[i]);
+    if (score > bestScore || (score === bestScore && time < bestTime)) {
+      best = i;
+      bestScore = score;
+      bestTime = time;
+    }
+  }
+  return best;
+}
+
+/**
+ * The picture id the cover formula preselects, honouring a server preselection.
+ *
+ * The backend runs the same formula, so its answer wins when present; the local
+ * computation is the fallback that keeps the queue usable if the field is ever
+ * absent, and is what the tests pin the formula against.
+ *
+ * @param {Object} group - a queue group.
+ * @returns {number|string|null}
+ */
+export function suggestedCoverId(group) {
+  if (
+    group?.cover_picture_id !== undefined &&
+    group.cover_picture_id !== null
+  ) {
+    return group.cover_picture_id;
+  }
+  const candidates = group?.candidates ?? [];
+  const index = pickCoverIndex(candidates);
+  return index < 0 ? null : (candidateId(candidates[index]) ?? null);
+}
+
+/**
+ * A candidate's picture id.
+ *
+ * One accessor rather than `candidate.picture_id` scattered through the views,
+ * so the day a candidate carries something else the change is here.
+ *
+ * @param {Object} candidate
+ * @returns {number|null}
+ */
+export function candidateId(candidate) {
+  const id = candidate?.picture_id ?? candidate?.id;
+  return id === undefined ? null : id;
+}
+
+/**
+ * Whether a candidate may legally join its group's stack.
+ *
+ * False when a locked picture set freezes it: such a picture can be in neither
+ * the stack (a locked set's membership cannot change) nor the metadata union
+ * (its labels cannot change), so the server refuses it. The queue marks it and
+ * leaves it out of the request rather than letting the user press Stack into a
+ * guaranteed refusal.
+ *
+ * **Defaults to true.** A backend that predates the field serves no `stackable`,
+ * and treating "absent" as "blocked" would empty every group on the queue.
+ *
+ * @param {Object} candidate
+ * @returns {boolean}
+ */
+export function candidateStackable(candidate) {
+  return candidate?.stackable !== false;
+}
+
+/**
+ * The locked sets keeping a candidate out of the stack, as `[{id, name}]`.
+ *
+ * Empty for a stackable candidate, and for a backend that serves no
+ * `blocked_by_sets`.
+ *
+ * @param {Object} candidate
+ * @returns {Array<Object>}
+ */
+export function candidateBlockedBySets(candidate) {
+  const sets = candidate?.blocked_by_sets;
+  return Array.isArray(sets) ? sets : [];
+}
+
+/**
+ * The ids of a group's candidates that a locked set keeps out of the stack.
+ *
+ * @param {Object} group
+ * @returns {Array<number>}
+ */
+export function lockedCandidateIds(group) {
+  return (group?.candidates ?? [])
+    .filter((candidate) => !candidateStackable(candidate))
+    .map((candidate) => candidateId(candidate))
+    .filter((id) => id !== null);
+}
+
+// --- Units: what a stack verdict can actually move ---------------------------
+//
+// The queue used to render one tile per picture, but the backend folds whole
+// STACKS (`_stack_members` in `dedup_verdict_service.py`), so a row offering to
+// exclude one member of an existing stack, or to make one member the cover, was
+// offering a gesture the server cannot honour.
+//
+// A **unit** is the smallest thing a verdict moves independently:
+//
+//   * a **loose picture**, `stack_id IS NULL`, its own unit;
+//   * a **deck**, every candidate sharing one non-null `stack_id`, collapsed.
+//
+// A deck stands for the ENTIRE existing stack, not the members that happen to
+// be in the group: `stacks[id].member_count` is the stack's live depth and is
+// routinely larger than the number of matched candidates, so a group's true
+// picture total can exceed `candidates.length`. Its face is the stack's leader,
+// which is frequently NOT one of the matched members; that is the common case,
+// and it is deliberately the picture shown, because a cover choice on a deck
+// resolves to the leader.
+
+/**
+ * A candidate's stack id, normalised.
+ *
+ * @param {Object} candidate
+ * @returns {number|string|null} null when the picture is not stacked.
+ */
+export function candidateStackId(candidate) {
+  const raw = candidate?.stack_id ?? candidate?.stackId;
+  if (raw === null || raw === undefined || raw === "") return null;
+  return raw;
+}
+
+/**
+ * @typedef {Object} DedupUnit
+ * @property {"picture"|"deck"} kind
+ * @property {string} key - stable `v-for` key.
+ * @property {number|string|null} stackId
+ * @property {number|string|null} coverPictureId - the picture a cover choice on
+ *   this unit resolves to: a deck's stack leader, or the loose picture itself.
+ * @property {number} depth - how many pictures the unit stands for.
+ * @property {number} matchedCount - how many of them are in this group.
+ * @property {Array<Object>} candidates - the group candidates it collapses.
+ * @property {Array<number|string>} pictureIds - their ids.
+ * @property {boolean} stackable - false when a locked set freezes ANY member.
+ * @property {Array<Object>} blockedBySets
+ * @property {string} thumbnailVersion - the face's thumbnail cache-buster.
+ * @property {Object|null} face - the candidate the face is drawn from, when the
+ *   group carries it. Null for a deck whose leader is not a group member, which
+ *   is why the per-picture overlays are conditional on it.
+ */
+
+/**
+ * Build a loose picture's unit.
+ * @param {Object} candidate
+ * @returns {DedupUnit}
+ */
+function looseUnit(candidate) {
+  const id = candidateId(candidate);
+  return {
+    kind: "picture",
+    key: `p:${id}`,
+    stackId: null,
+    coverPictureId: id,
+    depth: 1,
+    matchedCount: 1,
+    candidates: [candidate],
+    pictureIds: [id],
+    stackable: candidateStackable(candidate),
+    blockedBySets: candidateBlockedBySets(candidate),
+    thumbnailVersion: String(candidate?.thumbnail_version ?? ""),
+    face: candidate,
+  };
+}
+
+/**
+ * Partition a group's candidates into units, in candidate order.
+ *
+ * A stack's first candidate holds the deck's place in the strip; the rest of
+ * that stack's candidates fold into it rather than taking a slot of their own.
+ *
+ * Degrades on a backend that serves no `stacks` block: candidates are still
+ * collapsed by `stack_id`, and a stack the payload cannot size falls back to
+ * the number of its members that are in the group. A unit that ends up standing
+ * for one picture is a `picture`, not a one-deep deck.
+ *
+ * @param {Object} group - a queue group.
+ * @param {Object} [options]
+ * @param {boolean} [options.collapseStacks=true] - false for read-only history
+ *   surfaces that need to show every candidate the original group contained,
+ *   even though those pictures now share a stack.
+ * @returns {Array<DedupUnit>}
+ */
+export function groupUnits(group, { collapseStacks = true } = {}) {
+  const candidates = group?.candidates ?? [];
+  if (!collapseStacks) return candidates.map(looseUnit);
+  const stacks = group?.stacks ?? {};
+  const units = [];
+  const byStack = new Map();
+  for (const candidate of candidates) {
+    const stackId = candidateStackId(candidate);
+    if (stackId === null) {
+      units.push(looseUnit(candidate));
+      continue;
+    }
+    const key = String(stackId);
+    const existing = byStack.get(key);
+    if (existing) {
+      existing.candidates.push(candidate);
+      existing.pictureIds.push(candidateId(candidate));
+      continue;
+    }
+    const unit = {
+      kind: "deck",
+      key: `s:${key}`,
+      stackId,
+      coverPictureId: null,
+      depth: 0,
+      matchedCount: 0,
+      candidates: [candidate],
+      pictureIds: [candidateId(candidate)],
+      stackable: true,
+      blockedBySets: [],
+      thumbnailVersion: "",
+      face: null,
+    };
+    byStack.set(key, unit);
+    units.push(unit);
+  }
+  for (const [key, unit] of byStack)
+    finaliseDeck(unit, stacks[key], candidates);
+  return units;
+}
+
+/**
+ * Fill in a deck's depth, face and lock rollup from the group's `stacks` block.
+ *
+ * @param {DedupUnit} unit
+ * @param {Object} [entry] - the group's `stacks[stack_id]` entry, when served.
+ * @param {Array<Object>} candidates - the whole group, because a deck's leader
+ *   may sit anywhere in it (or nowhere at all).
+ */
+function finaliseDeck(unit, entry, candidates) {
+  unit.matchedCount = unit.pictureIds.length;
+  const served = Number(entry?.member_count);
+  unit.depth = Math.max(
+    Number.isFinite(served) ? served : 0,
+    unit.matchedCount,
+  );
+  const leaderId = entry?.leader_picture_id ?? unit.pictureIds[0] ?? null;
+  unit.coverPictureId = leaderId;
+  unit.face =
+    candidates.find((candidate) => candidateId(candidate) === leaderId) ?? null;
+  unit.thumbnailVersion = String(
+    entry?.leader_thumbnail_version ?? unit.face?.thumbnail_version ?? "",
+  );
+  // The entry IS the server's unit-level rollup (it already accounts for a
+  // locked sibling OUTSIDE the group). The per-candidate check is the belt:
+  // a payload that predates the rollup still blocks a deck whose visible
+  // member is frozen, rather than sending it into a guaranteed refusal.
+  unit.stackable =
+    entry?.stackable !== false && unit.candidates.every(candidateStackable);
+  const sets = Array.isArray(entry?.blocked_by_sets)
+    ? entry.blocked_by_sets
+    : [];
+  unit.blockedBySets = sets.length
+    ? sets
+    : unit.candidates.flatMap(candidateBlockedBySets);
+  // A stack has two or more members by definition; anything that sizes to one
+  // is a payload that could not describe a stack, and it renders as a picture.
+  if (unit.depth < 2) {
+    unit.kind = "picture";
+    unit.depth = 1;
+  }
+}
+
+/**
+ * The unit one picture id belongs to.
+ *
+ * A deck answers to any of its matched members AND to its leader, because the
+ * leader is what a cover choice on the deck resolves to and it is frequently
+ * not a group member at all.
+ *
+ * @param {Array<DedupUnit>} units
+ * @param {number|string} pictureId
+ * @returns {DedupUnit|null}
+ */
+export function unitForPictureId(units, pictureId) {
+  if (pictureId === null || pictureId === undefined) return null;
+  for (const unit of units ?? []) {
+    if (unit.pictureIds.includes(pictureId)) return unit;
+    if (unit.coverPictureId === pictureId) return unit;
+  }
+  return null;
+}
+
+/**
+ * Whether every picture a unit stands for is currently excluded.
+ *
+ * Exclusion is a whole-unit gesture, so a partially-excluded deck is a state
+ * the row never produces; reading it as "still in" is the safe direction.
+ *
+ * @param {DedupUnit} unit
+ * @param {Array<number|string>} excludedIds
+ * @returns {boolean}
+ */
+export function isUnitExcluded(unit, excludedIds) {
+  const ids = unit?.pictureIds ?? [];
+  if (!ids.length) return false;
+  return ids.every((id) => (excludedIds ?? []).includes(id));
+}
+
+/**
+ * The units a Stack verdict would actually collect.
+ * @param {Array<DedupUnit>} units
+ * @param {Array<number|string>} excludedIds
+ * @returns {Array<DedupUnit>}
+ */
+export function includedUnits(units, excludedIds) {
+  return (units ?? []).filter(
+    (unit) => unit.stackable && !isUnitExcluded(unit, excludedIds),
+  );
+}
+
+/**
+ * How a group is composed, for the row header: `Stack of 5 + 1 picture`.
+ *
+ * Decks lead, in strip order, then the loose pictures as one count, the shape
+ * the spec's examples take, and the one that stays readable when a group holds
+ * two stacks and three strays. A group with no deck keeps the plain `N
+ * pictures` the header has always shown.
+ *
+ * @param {Array<DedupUnit>} units
+ * @returns {string}
+ */
+export function unitCompositionLabel(units) {
+  const list = units ?? [];
+  const decks = list.filter((unit) => unit.kind === "deck");
+  const loose = list.length - decks.length;
+  if (!decks.length) return `${loose} ${loose === 1 ? "picture" : "pictures"}`;
+  const parts = decks.map((deck) => `stack of ${deck.depth}`);
+  if (loose) parts.push(`${loose} ${loose === 1 ? "picture" : "pictures"}`);
+  const sentence = parts.join(" + ");
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1);
+}
+
+/**
+ * What the Stack button is about to do, at three widths.
+ *
+ * The outcome, not the gesture: the three shapes match the backend's own
+ * `SweepOutcome`, and the button is the last text a user working at speed reads
+ * before committing, because expansion is opt-in and they may never open one.
+ *
+ *   | all loose   | `Stack 3`             |
+ *   | deck + loose| `Add 1 to stack of 4` |
+ *   | deck + deck | `Merge 2 stacks`      |
+ *
+ * `degrades` says whether the three differ at all, so a label that cannot
+ * shorten is never given the classes that would hide it under width pressure.
+ *
+ * @param {Array<DedupUnit>} units - the INCLUDED units, exclusions applied.
+ * @returns {{full: string, mid: string, short: string, degrades: boolean}}
+ */
+export function stackVerdictLabel(units) {
+  const list = units ?? [];
+  const decks = list.filter((unit) => unit.kind === "deck");
+  const loose = list.length - decks.length;
+  const plain = `Stack ${list.length}`;
+  if (decks.length >= 2) {
+    const merge = `Merge ${decks.length} stacks`;
+    // Loose pictures fold in alongside the merge, and `Merge 2 stacks` would
+    // move three things while naming two. Rare (11 of 1,726 unresolved groups
+    // on a real library) but it is exactly the lie this labelling exists to
+    // stop, so it is named in full and sheds only under width pressure, where
+    // the header's composition still carries it.
+    if (loose > 0) {
+      return {
+        full: `${merge} + ${loose} ${loose === 1 ? "picture" : "pictures"}`,
+        mid: merge,
+        short: "Merge",
+        degrades: true,
+      };
+    }
+    return same(merge);
+  }
+  if (decks.length === 1 && loose > 0) {
+    return {
+      full: `Add ${loose} to stack of ${decks[0].depth}`,
+      mid: `Add ${loose} to stack`,
+      short: `Add ${loose}`,
+      degrades: true,
+    };
+  }
+  return same(plain);
+}
+
+/**
+ * A label with nothing to shed.
+ * @param {string} text
+ * @returns {{full: string, mid: string, short: string, degrades: boolean}}
+ */
+function same(text) {
+  return { full: text, mid: text, short: text, degrades: false };
+}
+
+/**
+ * The largest value of one numeric field across a group's candidates.
+ *
+ * Drives the compare view's per-column "best value" highlight.
+ *
+ * @param {Array<Object>} candidates
+ * @param {function(Object): number} read - reads the field off a candidate.
+ * @returns {number} the maximum, or 0 when nothing is comparable.
+ */
+/**
+ * A candidate's displayable smart score, or null.
+ *
+ * The backend serves `smart_score` as NULL while the score is not yet
+ * computed and `-1.0` when computation failed; neither is a number a person
+ * should read, so both come back as null and every display simply omits the
+ * cell. A genuine 0 is displayable.
+ *
+ * @param {Object} candidate
+ * @returns {number|null}
+ */
+export function candidateSmartScore(candidate) {
+  const raw = candidate?.smart_score;
+  // Checked BEFORE coercion: Number(null) is 0, which would turn
+  // "not yet computed" into a confident 0.00 on screen.
+  if (raw === null || raw === undefined) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/**
+ * A candidate's displayable sharpness, or null.
+ *
+ * The server serves `sharpness` (the cover ranking's third tier) already
+ * nulled for missing/failed, so null simply means "nothing to show"; the
+ * guard mirrors {@link candidateSmartScore}'s as a belt against older
+ * payloads. A genuine 0 is displayable.
+ *
+ * @param {Object} candidate
+ * @returns {number|null}
+ */
+export function candidateSharpness(candidate) {
+  const raw = candidate?.sharpness;
+  if (raw === null || raw === undefined) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+export function bestOf(candidates, read) {
+  if (!Array.isArray(candidates) || !candidates.length) return 0;
+  let best = 0;
+  for (const candidate of candidates) {
+    const value = Number(read(candidate));
+    if (Number.isFinite(value) && value > best) best = value;
+  }
+  return best;
+}
+
+/**
+ * Order a group's evidence so the counter-evidence is read first.
+ *
+ * A group carrying red pills is exactly the one that needs Compare, so the
+ * pills do the warning instead of a generic "review carefully" line. Putting
+ * them first means the two pills a collapsed row has room for are the two that
+ * matter.
+ *
+ * @param {Array<Object>} why - `[{ text, against }]` evidence entries, the
+ *   backend's `WhyPillModel` shape.
+ * @returns {Array<Object>} counter-evidence first, original order within each
+ *   half.
+ */
+export function orderEvidence(why) {
+  if (!Array.isArray(why)) return [];
+  return [...why.filter((w) => w?.against), ...why.filter((w) => !w?.against)];
+}
+
+/**
+ * A pill's rendered label.
+ *
+ * The backend calls it `text`; accepting `label` as well keeps a fixture or a
+ * hand-built pill working rather than rendering an empty chip.
+ *
+ * @param {Object} pill
+ * @returns {string}
+ */
+export function evidenceLabel(pill) {
+  return String(pill?.text ?? pill?.label ?? "");
+}
+
+/**
+ * Shorten a file path to its last two segments, head first.
+ *
+ * Truncation happens in JS rather than with `direction: rtl` because the RTL
+ * trick reorders punctuation inside the filename on some paths, which is worse
+ * than the overflow it fixes.
+ *
+ * @param {string} path
+ * @returns {string}
+ */
+export function shortenPath(path) {
+  if (!path) return "";
+  const segments = String(path).split("/").filter(Boolean);
+  if (segments.length <= 2) return path;
+  return `…/${segments.slice(-2).join("/")}`;
+}
+
+/**
+ * Whether a candidate's path should be shown.
+ *
+ * File location is shown only for pictures in reference folders, where the user
+ * manages the files themselves and needs to know which copy is which. For a
+ * managed library picture the path is an implementation detail.
+ *
+ * @param {Object} candidate
+ * @returns {boolean}
+ */
+export function showsPath(candidate) {
+  // The server already applies this rule: `file_path` is populated only for a
+  // reference-folder picture and is null for a managed one. The id check is
+  // belt and braces, so a future server that always sent the path would not
+  // silently start leaking library layout into the UI.
+  const path = candidatePath(candidate);
+  return Boolean(path) && candidate?.reference_folder_id != null;
+}
+
+/**
+ * A candidate's file path, or an empty string when it has none to show.
+ * @param {Object} candidate
+ * @returns {string}
+ */
+export function candidatePath(candidate) {
+  return String(candidate?.file_path ?? candidate?.path ?? "");
+}
+
+/**
+ * A candidate's file size in megabytes, from the stored byte count.
+ * @param {Object} candidate
+ * @returns {number} 0 when the size is unknown.
+ */
+export function candidateSizeMb(candidate) {
+  const bytes = Number(candidate?.size_bytes);
+  if (Number.isFinite(bytes) && bytes > 0) return bytes / 1e6;
+  const mb = Number(candidate?.file_size_mb);
+  return Number.isFinite(mb) && mb > 0 ? mb : 0;
+}
+
+/**
+ * Human label for a group's confidence.
+ *
+ * The exact tier is not a percentage and must not be rendered as "100% similar":
+ * "Exact" is a different kind of claim, and blurring the two is what makes a
+ * near-duplicate suggestion look more certain than it is.
+ *
+ * @param {Object} group
+ * @returns {{ exact: boolean, label: string }}
+ */
+export function confidenceLabel(group) {
+  const tier = group?.tier ?? group?.kind;
+  if (tier === "exact") return { exact: true, label: "Exact" };
+  const confidence = Number(group?.confidence);
+  if (!Number.isFinite(confidence)) return { exact: false, label: "Similar" };
+  return { exact: false, label: `${Math.round(confidence * 100)}% similar` };
+}
+
+// --- Verdict-refusal copy ---------------------------------------------------
+//
+// Pure string builders over a verdict response or an axios rejection. They live
+// here rather than in DuplicateQueue.vue because they are the wire contract
+// rendered as English, with no component state in them, and because a sentence
+// the user reads on a refusal deserves a test that does not need a mounted view.
+
+/**
+ * The `detail.code` values that mean "a locked picture set refused this".
+ *
+ * Two codes, one meaning: `set_locked` is the verdict routes' spelling and
+ * `pictures_locked` the mixed-stack routes'. Reading only one of them is what
+ * makes half the surface fall back to the generic sentence.
+ */
+const LOCK_CODES = new Set(["set_locked", "pictures_locked"]);
+
+/**
+ * One sentence naming the sets that froze something, in the app's own voice.
+ *
+ * Shared by the 423 path and by a row that already KNOWS it is frozen
+ * (`blocked_by_sets`), because the two carry the same `[{id, name}]` shape and
+ * a refusal the user meets twice must not be worded two ways.
+ *
+ * @param {Array<Object>} [sets] - `[{id, name}]`.
+ * @returns {string}
+ */
+export function lockedSetsSentence(sets) {
+  const names = (sets ?? []).map((entry) => entry?.name).filter(Boolean);
+  if (!names.length) return "A locked set is freezing these pictures.";
+  const joined = names.join(", ");
+  return names.length === 1
+    ? `They are in the locked set '${joined}', which cannot gain or change members.`
+    : `They are in the locked sets '${joined}', which cannot gain or change members.`;
+}
+
+/**
+ * The server's own explanation for a refusal, when it gave one.
+ *
+ * A dedup verdict is refused for reasons the user can act on ("a stack needs at
+ * least two pictures", a locked set), and a generic "could not stack that
+ * group" hides every one of them behind the same sentence. FastAPI puts the
+ * reason in `detail`; anything else is not a message worth quoting.
+ *
+ * @param {*} err - the rejection the store recorded.
+ * @returns {string} the server's sentence, or the empty string.
+ */
+export function serverDetail(err) {
+  const detail = err?.response?.data?.detail;
+  // A locked-set refusal is a structured detail, not a sentence: the backend
+  // serves `{code, action, sets, picture_ids}` precisely so the client can build
+  // its own copy without string-parsing. Reading only strings here is what made
+  // the one refusal the user can actually act on arrive as the generic line.
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    if (!LOCK_CODES.has(detail.code)) return "";
+    return lockedSetsSentence(detail.sets);
+  }
+  if (typeof detail !== "string") return "";
+  const text = detail.trim();
+  if (!text) return "";
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
+/**
+ * The picture ids a refusal named, for the lock-chip flash.
+ *
+ * @param {*} err
+ * @returns {Array<number>}
+ */
+export function lockedPictureIds(err) {
+  const ids = err?.response?.data?.detail?.picture_ids;
+  return Array.isArray(ids) ? ids : [];
+}
+
+/**
+ * Whether a rejection is the locked-set refusal rather than any other failure.
+ *
+ * The status alone is enough (423 is only ever this), and the code is honoured
+ * as well so a transport that loses the status still resolves it.
+ *
+ * @param {*} err
+ * @returns {boolean}
+ */
+export function isLockedRefusal(err) {
+  if (Number(err?.response?.status) === 423) return true;
+  return LOCK_CODES.has(err?.response?.data?.detail?.code);
+}
+
+/**
+ * The picture sets a refusal named, in the shape a row already carries them.
+ *
+ * A 423 is FRESHER truth about a row than the page it was read from, and its
+ * `sets` are the same `[{id, name}]` as `blocked_by_sets`, so a caller can
+ * patch the row it holds with this rather than keeping a second vocabulary for
+ * the same fact.
+ *
+ * @param {*} err
+ * @returns {Array<Object>}
+ */
+export function lockedSets(err) {
+  const detail = err?.response?.data?.detail;
+  if (!LOCK_CODES.has(detail?.code)) return [];
+  return Array.isArray(detail.sets)
+    ? detail.sets.filter((entry) => entry && typeof entry === "object")
+    : [];
+}
+
+/**
+ * One sentence for a partial stack: what landed, and what a locked set held back.
+ *
+ * @param {Array<Object>} skipped - the response's `skipped` entries.
+ * @param {number} stacked - how many pictures actually went into the stack.
+ * @returns {string} empty when nothing was skipped.
+ */
+export function partialStackSentence(skipped, stacked) {
+  if (!skipped?.length) return "";
+  const names = [
+    ...new Set(
+      skipped.flatMap((entry) =>
+        (entry?.sets ?? []).map((s) => s?.name).filter(Boolean),
+      ),
+    ),
+  ];
+  const held =
+    skipped.length === 1
+      ? "1 picture stayed out"
+      : `${skipped.length} pictures stayed out`;
+  const where = names.length
+    ? ` (locked set${names.length > 1 ? "s" : ""} '${names.join(", ")}')`
+    : "";
+  return `Stacked ${stacked}; ${held}${where}.`;
+}
+
+// --- Mixed stacks (design D5) -----------------------------------------------
+//
+// A **mixed stack** is a live stack whose members do not form one connected
+// cluster at the queue's similarity threshold. The helpers below turn one
+// server row into the three things the list draws: its title, the sentence
+// that says what is wrong with it, and the outcome its primary button names.
+//
+// They are pure and live here for the same reason the verdict copy does: the
+// wire contract rendered as English deserves a test that does not mount a view.
+
+/**
+ * The strip height below which the deck badge runs its DENSE rule.
+ *
+ * 168px is the `small` rung of the shared thumbnail ladder, and the rule
+ * inverts there rather than fading: an unflagged deck keeps its numeral and
+ * drops the icon, a flagged one keeps the icon and drops the numeral. Below
+ * that width a badge carrying both is wider than the tile it labels.
+ */
+export const DENSE_STACK_BADGE_BELOW_PX = 168;
+
+/**
+ * Whether one mixed-stack row is the STRONG case: a member joined to nothing
+ * else in the stack at this threshold.
+ *
+ * Only the strong case is ever marked on a tile. At the measured 12% a mark is
+ * one tile in eight and becomes a warning field, and the soft cases are often
+ * legitimate (a burst where one frame panned off), so marking them trains the
+ * user to dismiss the colour before the real one appears. The soft cases
+ * surface in words instead, on this list and in the expansion.
+ *
+ * @param {Object} stack - one `MixedStackModel` row.
+ * @returns {boolean}
+ */
+export function hasStrandedMember(stack) {
+  return (stack?.stranded_picture_ids?.length ?? 0) > 0;
+}
+
+/**
+ * The stack ids the queue's deck badges flag, from a page of mixed stacks.
+ *
+ * The list is ranked stranded-members-descending, so every strong case sits at
+ * the head of it: one page is enough to answer this honestly, and a stack that
+ * never appears is simply not flagged.
+ *
+ * @param {Array<Object>} stacks
+ * @returns {Set<string>} stack ids as strings, because the row's `stackId`
+ *   arrives from a different payload and the two must compare.
+ */
+export function flaggedStackIdSet(stacks) {
+  const flagged = new Set();
+  for (const stack of stacks ?? []) {
+    if (hasStrandedMember(stack)) flagged.add(String(stack.stack_id));
+  }
+  return flagged;
+}
+
+/**
+ * What one mixed-stack row is called: the stack, at its live size.
+ *
+ * The same noun phrase the queue's deck already uses, so a user meeting the
+ * same stack on both surfaces meets the same words.
+ *
+ * @param {Object} stack
+ * @returns {string}
+ */
+export function mixedStackTitle(stack) {
+  const count = Number(stack?.member_count) || 0;
+  return `Stack of ${count}`;
+}
+
+/**
+ * Why this stack is listed, in one line.
+ *
+ * The strong case names the strangers, because that is what the primary button
+ * is about to remove. The soft case says only that the members do not all
+ * match, because there is no single member to blame and naming one would be a
+ * claim the data does not support.
+ *
+ * @param {Object} stack
+ * @returns {string}
+ */
+export function mixedStackReason(stack) {
+  const stranded = stack?.stranded_picture_ids?.length ?? 0;
+  if (stranded === 1) return "1 picture doesn't match the rest";
+  if (stranded > 1) return `${stranded} pictures don't match the rest`;
+  const components = Number(stack?.component_count) || 0;
+  if (components > 2) {
+    return `These don't all match: ${components} groups that don't overlap`;
+  }
+  return "These don't all match";
+}
+
+/**
+ * The members the row shows as suspects, worst first.
+ *
+ * The stranded members lead: they are what the primary button acts on, and
+ * they are the row's reason to exist. Below the strong case there is no single
+ * stranger, so the row shows every member that is NOT in the majority cluster
+ * instead: the pictures the stack would shed if it were split. The largest
+ * component is deliberately excluded: it is the stack that survives, and
+ * showing four of its members beside a warning border would accuse the
+ * majority of being the problem.
+ *
+ * Capped, because the row is a list entry and not a second queue.
+ *
+ * @param {Object} stack
+ * @param {number} [limit=6]
+ * @returns {Array<number>} picture ids.
+ */
+export function mixedStackSuspects(stack, limit = 6) {
+  const seen = new Set();
+  const suspects = [];
+  const push = (id) => {
+    if (id === undefined || id === null) return;
+    const key = String(id);
+    if (seen.has(key)) return;
+    seen.add(key);
+    suspects.push(id);
+  };
+  for (const id of stack?.stranded_picture_ids ?? []) push(id);
+  // The two readings are alternatives, not a union. The non-largest components
+  // are the fallback for a row with NO stranded member, which is what "Below
+  // the strong case ... instead" means above. Appending them unconditionally
+  // (the shipped behaviour until now) accused a whole two-member cluster of not
+  // belonging whenever one lone member was already stranded, which named the
+  // wrong pictures. It matters more than it did: this list is now what opens
+  // marked on the row, so a wrong id here is a wrong id in the request.
+  if (!suspects.length) {
+    // Smallest first, largest dropped: the survivors are not suspects.
+    const components = [...(stack?.components ?? [])]
+      .sort((a, b) => (a?.length ?? 0) - (b?.length ?? 0))
+      .slice(0, -1);
+    for (const component of components) {
+      for (const id of component ?? []) push(id);
+    }
+  }
+  return suspects.slice(0, Math.max(0, limit));
+}
+
+// --- The Mixed stacks QUEUE ---------------------------------------------------
+//
+// The Mixed stacks page is the third queue, not a bespoke list: a row is one
+// stack, its tiles are that stack's members, and the verdicts are split /
+// unstack / keep. The helpers below turn one server row into the member models
+// the strip draws and the outcome the primary button names.
+//
+// Two facts from the payload drive all of it. `member_ids` is the stack in
+// canonical order (leader first) and `member_edges` is PARALLEL to it, one
+// entry per member. Each entry carries TWO numbers and they are not
+// interchangeable: `strongest_edge` is the best edge that survives at the row's
+// threshold, so it is null for a stranded member by construction, and
+// `nearest_edge` is how close that member really gets to its closest sibling,
+// measured whatever the threshold says. The verdict is made on the first; the
+// number shown to a user is always the second.
+
+/** A stack needs two members; anything fewer dissolves it (`MIN_STACK_MEMBERS`). */
+const MIXED_STACK_FLOOR = 2;
+
+/**
+ * @typedef {Object} MixedStackMember
+ * @property {number} pictureId
+ * @property {string} key - stable `v-for` key.
+ * @property {number|null} strongestEdge - similarity to its closest sibling
+ *   counting only edges that survive at the row's threshold, so null for a
+ *   stranded member by construction. Not the number to display.
+ * @property {number|null} closestPictureId - the sibling on the other end.
+ * @property {number|null} nearestEdge - similarity to its closest sibling,
+ *   full stop: not thresholded, so present even for a stranded member. Null
+ *   only when there is nothing comparable to measure against. THIS is the
+ *   number the Match column and the tile chips show.
+ * @property {number|null} nearestPictureId - the sibling that was measured.
+ * @property {boolean} unhashed - not comparable yet, which is NOT a mistake.
+ * @property {boolean} stranded - the engine's own verdict: no edge to anything.
+ */
+
+/**
+ * One edge value, or null.
+ *
+ * The null check comes before the coercion because `Number(null)` is 0 and 0 is
+ * finite: reading it as a similarity would turn "nothing was measured here" into
+ * a measured zero, which is the one thing this number must never say. Same rule
+ * {@link candidateSmartScore} follows for the same reason.
+ *
+ * @param {*} raw
+ * @returns {number|null}
+ */
+function edgeValue(raw) {
+  if (raw === null || raw === undefined) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * One mixed stack's members, in canonical stack order.
+ *
+ * `member_edges` is keyed by picture rather than trusted positionally: it is
+ * documented as parallel to `member_ids`, but a row that arrives from an older
+ * server carries none at all and a mismatched pair must degrade to "no edge
+ * known" rather than to another member's number.
+ *
+ * @param {Object} stack - one `MixedStackModel` row.
+ * @returns {Array<MixedStackMember>}
+ */
+export function mixedStackMembers(stack) {
+  const edges = new Map(
+    (stack?.member_edges ?? []).map((edge) => [String(edge?.picture_id), edge]),
+  );
+  const unhashed = new Set(
+    (stack?.unhashed_picture_ids ?? []).map((id) => String(id)),
+  );
+  const stranded = new Set(
+    (stack?.stranded_picture_ids ?? []).map((id) => String(id)),
+  );
+  return (stack?.member_ids ?? []).map((pictureId) => {
+    const key = String(pictureId);
+    const edge = edges.get(key);
+    return {
+      pictureId,
+      key: `m:${key}`,
+      // Checked BEFORE coercion: `Number(null)` is 0, which is finite, and
+      // would turn "nothing was measured" into a confident 0% edge. A member
+      // with no measurement is a member nothing has been compared against, and
+      // it must not be shown as one that resembles nothing.
+      strongestEdge: edgeValue(edge?.strongest_edge),
+      closestPictureId: edge?.closest_picture_id ?? null,
+      nearestEdge: edgeValue(edge?.nearest_edge),
+      nearestPictureId: edge?.nearest_picture_id ?? null,
+      unhashed: unhashed.has(key),
+      stranded: stranded.has(key),
+    };
+  });
+}
+
+/**
+ * The members the row opens MARKED: the engine's own strangers.
+ *
+ * The server pre-marks them, exactly as the review queue opens with the
+ * server's exclusions already applied on an unstackable candidate. They are the
+ * opening position and nothing more: the user adds and removes marks, and their
+ * marks are what the request carries.
+ *
+ * **A not-yet-analysed member is never pre-marked.** It carries no hash, so it
+ * can carry no edge, so the cohesion fold necessarily lists it as stranded;
+ * marking it would report "this does not belong" about a picture nothing has
+ * compared yet, which is the one false positive this feature cannot afford. The
+ * row says so in words instead. This is the same subtraction the backend's own
+ * evidence pills make.
+ *
+ * @param {Object} stack
+ * @returns {Array<number>} picture ids, in the row's own suspect order.
+ */
+export function mixedStackEngineMarks(stack) {
+  const unhashed = new Set(
+    (stack?.unhashed_picture_ids ?? []).map((id) => String(id)),
+  );
+  return mixedStackSuspects(stack, Number.POSITIVE_INFINITY).filter(
+    (id) => !unhashed.has(String(id)),
+  );
+}
+
+/**
+ * What the row's primary button is about to do, given the marks in force.
+ *
+ * Three rules, in order:
+ *
+ *   * **no marks at all** means there is no stranger to take out, so the only
+ *     outcome left is to free the whole stack. `Split off 0` is a button that
+ *     cannot do anything;
+ *   * **marks that would leave fewer than two members** dissolve the stack
+ *     anyway (the server applies the same floor), so the button says so BEFORE
+ *     the press rather than reporting it afterwards;
+ *   * otherwise the strangers come out and the rest stays together.
+ *
+ * The label is a PREDICTION and the icon moves with it, at the same moment. The
+ * outcome that gets reported comes from the response's `stack_dissolved`, never
+ * from this: the stack can have changed between the read and the press.
+ *
+ * Both outcomes travel as one call. The split route takes any live member of
+ * the stack, so an unstack is "every member leaves", which is one operation and
+ * one Ctrl+Z exactly as a split is.
+ *
+ * @param {Object} stack - one `MixedStackModel` row.
+ * @param {Array<number>} markedIds - the marks in force.
+ * @returns {{action: string, label: string, icon: string,
+ *   pictureIds: Array<number>, dissolves: boolean}}
+ */
+export function mixedStackPrimary(stack, markedIds) {
+  const members = (stack?.member_ids ?? []).map((id) => id);
+  const total = members.length || Number(stack?.member_count) || 0;
+  const marked = new Set((markedIds ?? []).map((id) => String(id)));
+  const leaving = members.filter((id) => marked.has(String(id)));
+  const remaining = total - leaving.length;
+  if (!leaving.length || remaining < MIXED_STACK_FLOOR) {
+    return {
+      action: "unstack",
+      label: `Unstack all ${total}`,
+      icon: "layers-off",
+      // Every live member, because the split route is what carries both
+      // outcomes and an empty list is a 400.
+      pictureIds: [...members],
+      dissolves: true,
+    };
+  }
+  return {
+    action: "split",
+    label: `Split off ${leaving.length}`,
+    icon: "call-split",
+    pictureIds: leaving,
+    dissolves: false,
+  };
+}
+
+/**
+ * The primary button's tooltip, matching the outcome it names.
+ *
+ * @param {{action: string, pictureIds: Array<number>}} plan
+ * @returns {string}
+ */
+export function mixedStackPrimaryTitle(plan) {
+  if (plan?.action !== "split") {
+    return "Free every picture in this stack. Nothing is deleted, and Ctrl+Z restores the stack exactly as it was.";
+  }
+  const one = plan.pictureIds.length === 1;
+  return `Take ${one ? "that picture" : "those pictures"} out of the stack and leave the rest together. Nothing is deleted, and Ctrl+Z puts ${one ? "it" : "them"} back.`;
+}
+
+/**
+ * One similarity, as a percentage.
+ *
+ * Feed it `nearestEdge`, never `strongestEdge`: the thresholded value is absent
+ * for every stranded member, and printing a dash there told people a picture
+ * matched nothing when its closest sibling was 89% similar.
+ *
+ * The en dash rather than a zero when there really is no number: "0%" is a
+ * measured similarity and this is the absence of one. That absence now means
+ * one thing only, that the picture has nothing comparable to be measured
+ * against, which is why the callers say "not comparable" in words beside it.
+ *
+ * @param {number|null} edge
+ * @returns {string}
+ */
+export function edgePercentText(edge) {
+  const value = edgeValue(edge);
+  return value === null ? "–" : `${Math.round(value * 100)}%`;
+}
+
+/**
+ * Whether one mixed-stack row's primary action can succeed.
+ *
+ * `stackable: false` means a locked picture set freezes a member, and a stack
+ * moves whole or not at all: BOTH writes (split and unstack) then answer 423
+ * and change nothing, so the row must not offer either.
+ *
+ * Only an explicit `false` blocks. A row from a server that does not publish
+ * the field is treated as live, because over-blocking a row the user could
+ * actually have resolved is its own regression and a silent one.
+ *
+ * @param {Object} stack
+ * @returns {boolean}
+ */
+export function isMixedStackStackable(stack) {
+  return stack?.stackable !== false;
+}
+
+/**
+ * The locked sets freezing one mixed stack, as the row was served them.
+ *
+ * @param {Object} stack
+ * @returns {Array<Object>} `[{id, name}]`, empty when the row is not frozen.
+ */
+export function mixedStackLockedSets(stack) {
+  if (isMixedStackStackable(stack)) return [];
+  const sets = stack?.blocked_by_sets;
+  return Array.isArray(sets)
+    ? sets.filter((entry) => entry && typeof entry === "object")
+    : [];
+}
+
+/**
+ * The row's visible lock note: what is frozen, named.
+ *
+ * Named, not just "locked": the set is the thing the user has to go and
+ * unlock, and a disabled button with an unnamed reason is a dead end. The
+ * names are joined inside ONE pair of quotes, the same way
+ * {@link lockedSetsSentence} does it, so the note and the sentence the same
+ * refusal produces cannot look like two different conventions.
+ *
+ * @param {Object} stack
+ * @returns {string} empty when the row is not frozen.
+ */
+export function mixedStackLockNote(stack) {
+  if (isMixedStackStackable(stack)) return "";
+  const names = mixedStackLockedSets(stack)
+    .map((entry) => entry?.name)
+    .filter(Boolean);
+  if (!names.length) return "Frozen by a locked set";
+  return names.length === 1
+    ? `Frozen by locked set '${names[0]}'`
+    : `Frozen by locked sets '${names.join(", ")}'`;
+}
+
+/**
+ * The lock note's tooltip: the cause, then the remedy.
+ *
+ * Same convention as the review surface's lock copy: name the set, state why
+ * it blocks, then say the one thing that clears it.
+ *
+ * @param {Object} stack
+ * @returns {string} empty when the row is not frozen.
+ */
+export function mixedStackLockTitle(stack) {
+  if (isMixedStackStackable(stack)) return "";
+  const names = mixedStackLockedSets(stack)
+    .map((entry) => entry?.name)
+    .filter(Boolean);
+  const where = names.length
+    ? `the locked set${names.length > 1 ? "s" : ""} '${names.join(", ")}'`
+    : "a locked set";
+  const it = names.length > 1 ? "them" : "it";
+  return `Splitting or unstacking would change a picture in ${where}, which cannot gain or change members. Unlock ${it} to change this stack.`;
+}

@@ -15,7 +15,15 @@ from sqlalchemy.pool import NullPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 # Importing the models registers them on SQLModel.metadata.
-from pixlstash.db_models import Face, Picture, Tag, TagPrediction  # noqa: F401
+from pixlstash.db_models import (  # noqa: F401
+    DedupGroup,
+    DedupGroupMember,
+    Face,
+    Picture,
+    PictureStack,
+    Tag,
+    TagPrediction,
+)
 from pixlstash.utils.query.predicate_filter import PredicateFilter
 
 
@@ -299,6 +307,34 @@ def test_comfyui_loras_filter(session):
     _assert_matches_agrees(session, flt, {a.id})
 
 
+def _add_stack(session, stack_id):
+    """A real ``picturestack`` row: the fixture runs with foreign keys ON, so a
+    picture cannot carry a ``stack_id`` that does not exist."""
+    stack = PictureStack(id=stack_id)
+    session.add(stack)
+    session.commit()
+    return stack
+
+
+def _add_dedup_group(session, picture_ids, *, signature, resolved):
+    group = DedupGroup(
+        signature=signature,
+        tier="exact",
+        confidence=1.0,
+        member_count=len(picture_ids),
+        resolved=resolved,
+    )
+    session.add(group)
+    session.commit()
+    session.refresh(group)
+    for position, pid in enumerate(picture_ids):
+        session.add(
+            DedupGroupMember(group_id=group.id, picture_id=pid, position=position)
+        )
+    session.commit()
+    return group
+
+
 def test_face_filter(session):
     with_face = _add_picture(session, file_path="a.jpg")
     without_face = _add_picture(session, file_path="b.jpg")
@@ -311,6 +347,134 @@ def test_face_filter(session):
 
     without_flt = PredicateFilter(face_filter="without_face")
     _assert_matches_agrees(session, without_flt, {without_face.id, sentinel_only.id})
+
+
+# --------------------------------------------------------------------------- #
+# Stack state
+#
+# The grid shipped this filter with no backend behind it: the frontend sent
+# ``stack_state`` from 9b6aabc0 on, ``Picture.find`` swallowed it in the
+# ``hasattr(cls, attr)`` fallthrough for unknown kwargs, and the grid returned
+# every picture. These assert the predicate exists AND that it stops there;
+# an over-broad "unresolved" would be just as wrong as no filter at all.
+# --------------------------------------------------------------------------- #
+
+
+def test_stack_state_stacked_and_unstacked(session):
+    _add_stack(session, 7)
+    leader = _add_picture(session, file_path="a.jpg", stack_id=7, stack_position=0)
+    member = _add_picture(session, file_path="b.jpg", stack_id=7, stack_position=1)
+    loose = _add_picture(session, file_path="c.jpg")
+
+    # Every member of a stack, not only its leader: collapsing to one tile per
+    # stack is the grid's job (``stack_leaders_only``), not the filter's.
+    stacked = PredicateFilter(stack_state="stacked")
+    _assert_matches_agrees(session, stacked, {leader.id, member.id})
+
+    unstacked = PredicateFilter(stack_state="unstacked")
+    _assert_matches_agrees(session, unstacked, {loose.id})
+
+
+def test_stack_state_unresolved_is_group_membership_not_stack_membership(session):
+    pending_a = _add_picture(session, file_path="a.jpg")
+    pending_b = _add_picture(session, file_path="b.jpg")
+    settled = _add_picture(session, file_path="c.jpg")
+    untouched = _add_picture(session, file_path="d.jpg")
+
+    _add_dedup_group(
+        session, [pending_a.id, pending_b.id], signature="s1", resolved=False
+    )
+    _add_dedup_group(session, [settled.id], signature="s2", resolved=True)
+
+    flt = PredicateFilter(stack_state="unresolved")
+    _assert_matches_agrees(session, flt, {pending_a.id, pending_b.id})
+
+    # Neither a ruled-on group nor a picture the detector never grouped counts as
+    # waiting for a decision.
+    assert flt.matches(session, settled.id) is False
+    assert flt.matches(session, untouched.id) is False
+
+
+def test_stack_state_unresolved_survives_a_second_resolved_group(session):
+    # A picture can sit in more than one group. One unresolved group is enough
+    # to keep it in the queue, so the predicate must be an EXISTS over the
+    # picture's groups rather than a property of any single one.
+    #
+    # Both groups are seeded with TWO members, because that is the smallest
+    # group the detector can produce and the predicate now requires a group to
+    # still pose a decision (two live members) before it marks anything.
+    pic = _add_picture(session, file_path="a.jpg")
+    settled_partner = _add_picture(session, file_path="b.jpg")
+    pending_partner = _add_picture(session, file_path="c.jpg")
+    _add_dedup_group(
+        session, [pic.id, settled_partner.id], signature="resolved-one", resolved=True
+    )
+    _add_dedup_group(
+        session, [pic.id, pending_partner.id], signature="pending-one", resolved=False
+    )
+
+    _assert_matches_agrees(
+        session,
+        PredicateFilter(stack_state="unresolved"),
+        {pic.id, pending_partner.id},
+    )
+
+
+def test_stack_state_unresolved_drops_a_group_thinned_by_the_scrapheap(session):
+    """A scrapheaped partner must stop marking its survivor as unresolved.
+
+    The group has already left the Duplicates queue and the sidebar badge the
+    moment one of its two members is soft-deleted (``live_groups_filter``), so a
+    grid that still called the survivor "unresolved" was quoting a decision that
+    no longer exists. Both directions: the thinned group's survivor drops out,
+    the intact group's members stay in.
+    """
+    thinned_survivor = _add_picture(session, file_path="a.jpg")
+    scrapheaped = _add_picture(session, file_path="b.jpg", deleted=True)
+    intact_a = _add_picture(session, file_path="c.jpg")
+    intact_b = _add_picture(session, file_path="d.jpg")
+
+    _add_dedup_group(
+        session, [thinned_survivor.id, scrapheaped.id], signature="s1", resolved=False
+    )
+    _add_dedup_group(
+        session, [intact_a.id, intact_b.id], signature="s2", resolved=False
+    )
+
+    flt = PredicateFilter(stack_state="unresolved")
+    # `deleted` defaults to False on the filter, so the scrapheaped picture is
+    # out of the listing anyway; the point is its SURVIVOR.
+    _assert_matches_agrees(session, flt, {intact_a.id, intact_b.id})
+    assert flt.matches(session, thinned_survivor.id) is False
+
+
+def test_stack_state_absent_or_unrecognised_filters_nothing(session):
+    # The positive direction of the bug: over-filtering is its own regression.
+    # "All" is spelled as the absence of the param, and an unknown value must not
+    # quietly empty the grid.
+    _add_stack(session, 3)
+    stacked = _add_picture(session, file_path="a.jpg", stack_id=3, stack_position=0)
+    loose = _add_picture(session, file_path="b.jpg")
+    everything = {stacked.id, loose.id}
+
+    _assert_matches_agrees(session, PredicateFilter(), everything)
+    _assert_matches_agrees(session, PredicateFilter(stack_state=None), everything)
+    _assert_matches_agrees(session, PredicateFilter(stack_state="all"), everything)
+    _assert_matches_agrees(session, PredicateFilter(stack_state="nonsense"), everything)
+
+
+def test_stack_state_composes_with_another_predicate(session):
+    # The compiler ANDs its predicates; a filter that ignored its neighbours
+    # would widen the grid rather than narrow it.
+    _add_stack(session, 1)
+    keep = _add_picture(
+        session, file_path="a.jpg", stack_id=1, stack_position=0, score=5
+    )
+    _add_picture(session, file_path="b.jpg", stack_id=1, stack_position=1, score=1)
+    _add_picture(session, file_path="c.jpg", score=5)
+
+    flt = PredicateFilter(stack_state="stacked", min_score=4)
+    _assert_matches_agrees(session, flt, {keep.id})
 
 
 # --------------------------------------------------------------------------- #
@@ -391,6 +555,7 @@ def test_from_query_params_full_vocabulary():
             ("tag_confidence_above", "sunset:0.5"),
             ("tag_confidence_below", "noise:0.2"),
             ("face_filter", "with_face"),
+            ("stack_state", "stacked"),
             ("file_path_prefix", "/ref/photos"),
             ("import_source_folder", "/inbox"),
         ]
@@ -410,6 +575,7 @@ def test_from_query_params_full_vocabulary():
     assert flt.tags_confidence_above_filter == ["sunset:0.5"]
     assert flt.tags_confidence_below_filter == ["noise:0.2"]
     assert flt.face_filter == "with_face"
+    assert flt.stack_state == "stacked"
     assert flt.file_path_prefix == "/ref/photos"
     assert flt.import_source_folder == "/inbox"
     assert flt.file_path_prefix_children_only is True

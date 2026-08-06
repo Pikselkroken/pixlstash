@@ -15,7 +15,13 @@ function parseVersion(v) {
   if (!m) return null;
   const preTag = m[4]?.toLowerCase().replace(/^\./, "");
   const preWeight = { dev: -4, a: -3, b: -2, rc: -1 }[preTag] ?? 0;
-  return [Number(m[1]), Number(m[2]), Number(m[3]), preWeight, Number(m[5] || 0)];
+  return [
+    Number(m[1]),
+    Number(m[2]),
+    Number(m[3]),
+    preWeight,
+    Number(m[5] || 0),
+  ];
 }
 function isRemoteNewer(current, remote) {
   const a = parseVersion(current);
@@ -34,7 +40,12 @@ function isRemoteNewer(current, remote) {
 const LATEST_VERSION_BASE_URL = "https://pixlstash.dev/latest-version";
 // Install-type buckets allowed in the telemetry path; anything else (or
 // empty) collapses to "other". Detection must never block the check.
-const TELEMETRY_INSTALL_BUCKETS = new Set(["docker", "pip", "electron", "other"]);
+const TELEMETRY_INSTALL_BUCKETS = new Set([
+  "docker",
+  "pip",
+  "electron",
+  "other",
+]);
 const UPDATE_PAGE_URL = "https://pixlstash.dev/upgrade.html";
 
 const VERSION_CHECK_STORAGE_KEY = "pixlstash:lastVersionCheck";

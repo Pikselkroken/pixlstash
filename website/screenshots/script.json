@@ -84,7 +84,7 @@
     "asset": "ComfyFaceLikenessGate.jpg",
     "label": "Face Likeness Gate write scope",
     "alt": "PixlStash Face Likeness Gate splitting a batch into accepted and rejected by character match",
-    "caption": "Keep only the generations that actually match a reference character. Wire in a Character Loader plus a batch of images, set a likeness threshold, and the gate splits the batch into accepted and rejected streams (with counts) — so you never waste compute polishing an off-model render. Requires PixlStash v1.4+ and a running face-extraction worker.",
+    "caption": "Keep only the generations that actually match a reference character. Wire in a Character Loader plus a batch of images, set a likeness threshold, and the gate splits the batch into accepted and rejected streams (with counts), so you never waste compute polishing an off-model render. Requires PixlStash v1.4+ and a running face-extraction worker.",
     "kind": "image"
   },
   {
@@ -124,7 +124,7 @@
     "asset": "ComfyResult.jpg",
     "label": "Results land back in your vault",
     "alt": "Generated and edited images saved back into a PixlStash set",
-    "caption": "Because the Picture Saver writes straight to PixlStash, everything you generate or edit shows up organised by project, set, and character — ready to search, tag, and curate.",
+    "caption": "Because the Picture Saver writes straight to PixlStash, everything you generate or edit shows up organised by project, set, and character, ready to search, tag, and curate.",
     "kind": "image"
   },
   {
@@ -152,6 +152,14 @@
     "kind": "image"
   },
   {
+    "page": "whatsnew.html",
+    "asset": "DuplicatesReview.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
     "page": "comfyui.html",
     "asset": "FaceLikenessSearch.jpg",
     "label": "Likeness Search read scope",
@@ -176,6 +184,14 @@
     "kind": "image"
   },
   {
+    "page": "whatsnew.html",
+    "asset": "NewGridView.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
+  },
+  {
     "page": "features.html",
     "asset": "ReverseImageSearch.jpg",
     "label": "Reverse image & face search",
@@ -186,16 +202,16 @@
   {
     "page": "whatsnew.html",
     "asset": "ScreenshotApp.jpg",
-    "label": "PixlStash 1.6 — the desktop app showing the library grid in a native window",
-    "alt": "PixlStash 1.6 — the desktop app showing the library grid in a native window",
+    "label": "PixlStash 1.6: the desktop app showing the library grid in a native window",
+    "alt": "PixlStash 1.6: the desktop app showing the library grid in a native window",
     "caption": null,
     "kind": "image"
   },
   {
     "page": "whatsnew.html",
     "asset": "ScreenshotBackend.jpg",
-    "label": "PixlStash desktop Backend settings — compute acceleration and remote access",
-    "alt": "PixlStash desktop Backend settings — compute acceleration and remote access",
+    "label": "PixlStash desktop Backend settings: compute acceleration and remote access",
+    "alt": "PixlStash desktop Backend settings: compute acceleration and remote access",
     "caption": null,
     "kind": "image"
   },
@@ -273,6 +289,14 @@
   },
   {
     "page": "features.html",
+    "asset": "ScreenshotDuplicates.jpg",
+    "label": "Duplicate review",
+    "alt": "PixlStash Duplicates view with likely copies grouped for review",
+    "caption": "Compare likely copies, choose a cover, stack the group, keep it separate, and undo the decision when it was not right.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
     "asset": "ScreenshotGrid.jpg",
     "label": "Image grid",
     "alt": "PixlStash grid view",
@@ -321,9 +345,33 @@
   },
   {
     "page": "whatsnew.html",
+    "asset": "ScreenshotInstallId.jpg",
+    "label": "PixlStash upgrade dialog explaining the optional anonymous install ID and offering No thanks or Add the random number",
+    "alt": "PixlStash upgrade dialog explaining the optional anonymous install ID and offering No thanks or Add the random number",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
     "asset": "ScreenshotJoyCaption.jpg",
     "label": "Tagger and description plugin settings in PixlStash 1.3",
     "alt": "Tagger and description plugin settings in PixlStash 1.3",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotKeepCoverOnly.jpg",
+    "label": "PixlStash picture menu with Keep cover only available for a selected stack",
+    "alt": "PixlStash picture menu with Keep cover only available for a selected stack",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotKeepCoverOnly2.jpg",
+    "label": "Keep cover only preview showing three pictures moving to the recoverable Scrapheap in one undoable step",
+    "alt": "Keep cover only preview showing three pictures moving to the recoverable Scrapheap in one undoable step",
     "caption": null,
     "kind": "image"
   },
@@ -361,6 +409,22 @@
   },
   {
     "page": "whatsnew.html",
+    "asset": "ScreenshotMixedStacks.jpg",
+    "label": "PixlStash Mixed stacks view showing stacks flagged for review",
+    "alt": "PixlStash Mixed stacks view showing stacks flagged for review",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotMultiProject.jpg",
+    "label": "Multi-project organisation",
+    "alt": "One PixlStash character assigned to more than one project",
+    "caption": "Keep one person or picture set in several projects without duplicating it or moving it back and forth.",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
     "asset": "ScreenshotOverlap.jpg",
     "label": "Multi-select with Overlap mode showing pictures containing both selected people",
     "alt": "Multi-select with Overlap mode showing pictures containing both selected people",
@@ -378,8 +442,8 @@
   {
     "page": "api.html",
     "asset": "ScreenshotPhotographySaver.jpg",
-    "label": "ComfyUI-PixlStash PhotographySaver node — saves outputs to a vault with metadata",
-    "alt": "ComfyUI-PixlStash PhotographySaver node — saves outputs to a vault with metadata",
+    "label": "ComfyUI-PixlStash PhotographySaver node: saves outputs to a vault with metadata",
+    "alt": "ComfyUI-PixlStash PhotographySaver node: saves outputs to a vault with metadata",
     "caption": null,
     "kind": "image"
   },
@@ -397,6 +461,14 @@
     "label": "Add your own image filter plugins",
     "alt": "PixlStash plugins",
     "caption": "Extend PixlStash's functionality with custom Python plugins for image processing.",
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "ScreenshotPrivacy.jpg",
+    "label": "PixlStash Privacy settings with independent controls for update checks and anonymous install telemetry",
+    "alt": "PixlStash Privacy settings with independent controls for update checks and anonymous install telemetry",
+    "caption": null,
     "kind": "image"
   },
   {
@@ -497,6 +569,22 @@
   },
   {
     "page": "features.html",
+    "asset": "ScreenshotsJustified.jpg",
+    "label": "Justified or square layout",
+    "alt": "PixlStash justified grid with thumbnails at their own aspect ratios filling each row to the full grid width",
+    "caption": "Thumbnails can keep their own aspect ratio and fill each row to the full grid width, or stay as squares. One size control in the toolbar, from Tiny to Huge, sets the thumbnail size in both layouts.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
+    "asset": "ScreenshotsJustifiedSettings.jpg",
+    "label": "Justified or square layout",
+    "alt": "PixlStash Appearance settings with a Square and Justified thumbnail layout picker",
+    "caption": "Thumbnails can keep their own aspect ratio and fill each row to the full grid width, or stay as squares. One size control in the toolbar, from Tiny to Huge, sets the thumbnail size in both layouts.",
+    "kind": "image"
+  },
+  {
+    "page": "features.html",
     "asset": "ScreenshotSnapshots.jpg",
     "label": "Snapshots & restore",
     "alt": "PixlStash snapshots panel with daily, weekly, and monthly restore points",
@@ -505,9 +593,17 @@
   },
   {
     "page": "whatsnew.html",
+    "asset": "ScreenshotStackFilter.jpg",
+    "label": "PixlStash grid filtered to show stacked pictures",
+    "alt": "PixlStash grid filtered to show stacked pictures",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
     "asset": "ScreenshotTaggers.jpg",
-    "label": "PixlStash 1.3 — tagger and description engine settings",
-    "alt": "PixlStash 1.3 — tagger and description engine settings",
+    "label": "PixlStash 1.3: tagger and description engine settings",
+    "alt": "PixlStash 1.3: tagger and description engine settings",
     "caption": null,
     "kind": "image"
   },
@@ -544,6 +640,14 @@
     "kind": "image"
   },
   {
+    "page": "features.html",
+    "asset": "ScreenshotUndoHistory.jpg",
+    "label": "Full undo and redo",
+    "alt": "PixlStash history showing several recent library changes and multi-step undo",
+    "caption": "Inspect named changes, undo one or several steps, and redo them across metadata edits, assignments, moves, and stack decisions.",
+    "kind": "image"
+  },
+  {
     "page": "whatsnew.html",
     "asset": "ScreenshotUrl.jpg",
     "label": "Browser URL bar showing a persistent PixlStash view URL",
@@ -554,8 +658,8 @@
   {
     "page": "whatsnew.html",
     "asset": "ScreenshotWhatsNew1_2.jpg",
-    "label": "PixlStash 1.2 — redesigned sidebar and toolbar",
-    "alt": "PixlStash 1.2 — redesigned sidebar and toolbar",
+    "label": "PixlStash 1.2: redesigned sidebar and toolbar",
+    "alt": "PixlStash 1.2: redesigned sidebar and toolbar",
     "caption": null,
     "kind": "image"
   },
@@ -570,18 +674,26 @@
   {
     "page": "install.html",
     "asset": "SmartScreen.jpg",
-    "label": "The Windows SmartScreen dialog as it first appears, reading Windows protected your PC, with a More info link",
-    "alt": "The Windows SmartScreen dialog as it first appears, reading Windows protected your PC, with a More info link",
+    "label": "The Windows protected your PC dialog as it first appears, with a More info link",
+    "alt": "The Windows protected your PC dialog as it first appears, with a More info link",
     "caption": null,
     "kind": "image"
   },
   {
     "page": "install.html",
     "asset": "SmartScreen2.jpg",
-    "label": "The same dialog expanded, listing the publisher as Open Source Developer Gaute Lindkvist above a Run anyway button",
-    "alt": "The same dialog expanded, listing the publisher as Open Source Developer Gaute Lindkvist above a Run anyway button",
+    "label": "The expanded dialog showing the app filename and the publisher, with a Run anyway button",
+    "alt": "The expanded dialog showing the app filename and the publisher, with a Run anyway button",
     "caption": null,
     "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
+    "asset": "SuggestMorePictures.mp4",
+    "label": null,
+    "alt": null,
+    "caption": null,
+    "kind": "video"
   },
   {
     "page": "index.html",
