@@ -57,6 +57,9 @@ class WorkPlanner:
             MissingSourceFaceLikenessCharacterFinder,
         )
         from pixlstash.tasks.missing_file_purge_finder import MissingFilePurgeFinder
+        from pixlstash.tasks.missing_snapshot_identity_scrub_finder import (
+            MissingSnapshotIdentityScrubFinder,
+        )
         from pixlstash.tasks.reference_folder_scan_finder import (
             ReferenceFolderScanFinder,
         )
@@ -121,6 +124,9 @@ class WorkPlanner:
                 database=database,
             ),
             TaskType.MISSING_FILE_PURGE: MissingFilePurgeFinder(
+                database=database,
+            ),
+            TaskType.SNAPSHOT_IDENTITY_SCRUB: MissingSnapshotIdentityScrubFinder(
                 database=database,
             ),
             TaskType.REFERENCE_FOLDER_SCAN: ReferenceFolderScanFinder(

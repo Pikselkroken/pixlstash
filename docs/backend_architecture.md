@@ -1146,13 +1146,33 @@ hub UUID. Startup is deliberately two-phase:
    first; SQLite `secure_delete`, WAL checkpoint/truncation, DELETE journal mode,
    and `VACUUM` erase free-page and journal remnants; and the result is checked
    for integrity, zero portable rows, and absent sidecars before its inode and
-   parent directory are synced. Every registered legacy plain or zstd snapshot
-   is materialized, scrubbed, recompressed when needed, independently verified,
-   and atomically replaced under strict path, type, ownership, and symlink
-   checks. Only after the live vault and all archives succeed does the hub mark
-   the library `complete`. A crash resumes the incomplete work; later opens skip
-   historical rewrites. This applies to attached secondary libraries as well as
-   the one explicit legacy identity donor.
+   parent directory are synced. That covers the **live vault** and is what marks
+   the library `complete`. This applies to attached secondary libraries as well
+   as the one explicit legacy identity donor.
+
+**Historical archives are scrubbed in the background, not at startup.** Each
+registered legacy plain or zstd snapshot is materialized, scrubbed, recompressed
+when needed, independently verified, and atomically replaced under strict path,
+type, ownership, and symlink checks. Doing that inline cost minutes ahead of the
+listening socket (22 archives / 5.7 GB measured at 5 min 47 s) with no port open,
+which is indistinguishable from a hang. `MissingSnapshotIdentityScrubFinder`
+drains them one at a time at `LOW` priority instead, and serving does not depend
+on it because every restore and preview path scrubs the scratch database it
+materializes. Progress is durable per archive in `snapshot.identity_scrubbed_at`
+(0102), so an interrupted pass resumes rather than restarting. `NULL` means
+exactly "a legacy archive still owed work": snapshots created since are stamped
+at creation, because `SnapshotService` scrubs the scratch database before
+compressing it.
+
+**`create_backup` finishes any outstanding archives before packaging.**
+`_library_files` collects `snapshots/**` verbatim and `_DATABASE_FILES` excludes
+only the root-level vault, so a backup taken mid-drain would carry pre-hub
+`user`/`usertoken` rows out of the machine, and the restore-path scrub cannot
+help because nothing materializes those archives: they are copied as bytes. The
+scrub runs strictly **after** the vault guard, since opening the vault earlier
+would let SQLite consume a pre-positioned `-wal` sidecar that `_open_guarded_source`
+exists to refuse. A scrub that fails aborts the backup rather than writing a
+tarball holding credentials.
 
 New snapshots are scrubbed before compression and written mode `0600` on POSIX.
 All restore, preview, and resource-restore paths scrub their materialized scratch

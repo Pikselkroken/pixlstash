@@ -30,10 +30,7 @@ from pixlstash.hub.registry import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
-from pixlstash.services.portable_identity import (
-    sanitize_historical_snapshots,
-    sanitize_vault_connection,
-)
+from pixlstash.services.portable_identity import sanitize_vault_connection
 
 logger = get_logger(__name__)
 
@@ -663,21 +660,26 @@ def finalize_library_connection(hub: HubDatabase, library: Library, connection) 
             observed = vault_changes()
 
     # Alembic has completed and the fingerprint is durable. Every existing or
-    # attached legacy library is scrubbed exactly once, whether or not its owner
-    # identity was the explicitly approved one copied into this hub. Historical
-    # archives finish before the hub marker advances; each one records its own
-    # completion, so an interrupted run resumes instead of restarting.
+    # attached legacy library has its LIVE vault scrubbed exactly once here,
+    # whether or not its owner identity was the explicitly approved one copied
+    # into this hub. This part stays synchronous: it is the database about to be
+    # served, it is one file, and it is fast.
+    #
+    # Historical snapshot archives are deliberately NOT scrubbed here. Rewriting
+    # them is minutes of blocking work ahead of the listening socket (22
+    # archives / 5.7 GB measured at 5 min 47 s), and serving does not depend on
+    # it: every restore and preview path scrubs the scratch database it
+    # materializes before anything opens it. MissingSnapshotIdentityScrubFinder
+    # drains them in the background, one archive at a time, and create_backup
+    # finishes any outstanding ones before it can package them.
     if needs_scrub:
         logger.info(
-            "Library %s needs the one-time portable-identity migration. This "
-            "rewrites the vault and every historical snapshot before the server "
-            "starts listening, so first start after upgrading takes noticeably "
-            "longer on a library with a large snapshot history. It is safe to "
-            "interrupt: the next start resumes where this one stopped.",
+            "Library %s needs the one-time portable-identity migration. The "
+            "vault is scrubbed now; its historical snapshot archives are "
+            "scrubbed in the background afterwards and do not hold up startup.",
             current.name,
         )
         sanitize_vault_connection(connection, current.vault_path, restore_wal=True)
-        sanitize_historical_snapshots(connection, current.path)
 
     with hub.transaction() as hub_conn:
         row = hub_conn.execute(

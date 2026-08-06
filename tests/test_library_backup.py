@@ -177,6 +177,90 @@ class TestWhatIsInTheArchive:
         assert "vault.db" in read_archive(result.path)
 
 
+class TestLegacySnapshotIdentity:
+    """A backup must never carry pre-hub credentials out of the machine.
+
+    ``_library_files`` packages ``snapshots/**`` verbatim and ``_DATABASE_FILES``
+    excludes only the root-level vault, so an archive that still holds the old
+    ``user`` / ``usertoken`` rows would travel inside the tarball. The
+    restore-path scrub cannot help: nothing materializes these archives here,
+    they are copied as bytes. Now that the scrub runs in the background rather
+    than before the listening socket, a backup can genuinely race it.
+    """
+
+    @staticmethod
+    def _legacy_snapshot(library, marker):
+        """Register one unscrubbed legacy archive containing *marker*."""
+        snapshots = os.path.join(library.path, "snapshots")
+        os.makedirs(snapshots, exist_ok=True)
+        archive = os.path.join(snapshots, "legacy.sqlite")
+        conn = sqlite3.connect(archive)
+        conn.execute("CREATE TABLE user (id INTEGER PRIMARY KEY, password_hash TEXT)")
+        conn.execute("INSERT INTO user (password_hash) VALUES (?)", (marker,))
+        conn.execute("CREATE TABLE usertoken (id INTEGER PRIMARY KEY, token_hash TEXT)")
+        conn.execute("INSERT INTO usertoken (token_hash) VALUES (?)", (marker,))
+        conn.commit()
+        conn.close()
+
+        vault = sqlite3.connect(os.path.join(library.path, "vault.db"))
+        vault.execute(
+            "CREATE TABLE snapshot (id INTEGER PRIMARY KEY, relative_path TEXT, "
+            "byte_size INTEGER, identity_scrubbed_at TIMESTAMP)"
+        )
+        vault.execute(
+            "INSERT INTO snapshot (id, relative_path, byte_size) "
+            "VALUES (1, 'snapshots/legacy.sqlite', 0)"
+        )
+        vault.commit()
+        vault.close()
+        return archive
+
+    def test_backup_scrubs_outstanding_archives_before_packaging_them(
+        self, registry, library, tmp_path
+    ):
+        marker = b"BACKUP-MUST-NOT-CARRY-THIS-4f21"
+        self._legacy_snapshot(library, marker.decode())
+
+        result = create_backup(
+            library, str(tmp_path / "out.tar.zst"), registry.hub_path
+        )
+
+        entries = read_archive(result.path)
+        packaged = [name for name in entries if "snapshots/" in name]
+        assert packaged, "the archive should still be included, just scrubbed"
+        for name in packaged:
+            assert marker not in entries[name], (
+                f"{name} carried pre-hub credentials out of the machine"
+            )
+        # The scrub is recorded, so the background finder does not redo it.
+        vault = sqlite3.connect(os.path.join(library.path, "vault.db"))
+        outstanding = vault.execute(
+            "SELECT COUNT(*) FROM snapshot WHERE identity_scrubbed_at IS NULL"
+        ).fetchone()[0]
+        vault.close()
+        assert outstanding == 0
+
+    def test_a_failed_scrub_refuses_to_publish(
+        self, registry, library, tmp_path, monkeypatch
+    ):
+        """Better no backup than one holding credentials."""
+        import pixlstash.services.library_backup_service as backup_module
+        from pixlstash.services.portable_identity import PortableIdentityScrubError
+
+        self._legacy_snapshot(library, "UNSCRUBBABLE-9c02")
+        destination = tmp_path / "refused.tar.zst"
+
+        def explode(*_args, **_kwargs):
+            raise PortableIdentityScrubError("injected scrub failure")
+
+        monkeypatch.setattr(backup_module, "sanitize_historical_snapshots", explode)
+
+        with pytest.raises(BackupError, match="stale owner credentials"):
+            create_backup(library, str(destination), registry.hub_path)
+
+        assert not destination.exists()
+
+
 class TestConsistencyAndSafety:
     def test_missing_internal_picture_refuses_to_publish(
         self, registry, library, tmp_path

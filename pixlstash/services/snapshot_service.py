@@ -165,6 +165,12 @@ class SnapshotService:
                 picture_count=manifest.get("picture_count", 0),
                 schema_version=manifest.get("schema_version", ""),
                 label=label,
+                # Stamped because ``sanitize_vault_file`` above already scrubbed
+                # the scratch database this archive was compressed from. Marking
+                # it here is what makes NULL mean exactly one thing: a legacy
+                # archive written before the hub, which the background scrub
+                # (MissingSnapshotIdentityScrubFinder) still owes work to.
+                identity_scrubbed_at=now,
             )
             session.add(cp)
             session.commit()

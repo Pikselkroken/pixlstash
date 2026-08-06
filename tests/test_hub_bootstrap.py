@@ -1298,25 +1298,30 @@ class TestPortableIdentityScrub:
         )
         live.close()
 
-    def test_attached_library_scrubs_once_then_uses_durable_complete_marker(
-        self, tmp_path, monkeypatch
-    ):
-        import pixlstash.hub.bootstrap as bootstrap_module
-        from pixlstash.utils.snapshot_compression import materialize_snapshot
+    def test_attached_library_scrubs_the_vault_and_defers_its_archives(self, tmp_path):
+        """Startup scrubs the live vault; archives are left to the background.
 
+        Rewriting every archive inline is minutes of work ahead of the listening
+        socket, and serving does not depend on it: restore paths scrub whatever
+        they materialize. So finalize must clear the vault's own identity rows
+        and mark the library complete, while leaving the archive untouched and
+        still claimed by ``identity_scrubbed_at IS NULL``.
+        """
         folder = make_vault(str(tmp_path / "attached"), username="secondary")
         snapshots = tmp_path / "attached" / "snapshots"
         snapshots.mkdir()
         marker = "SECONDARY-LIBRARY-HISTORY-51ce"
         archive = snapshots / "legacy.sqlite"
         _make_portable_identity_db(archive, marker).close()
+        before = archive.read_bytes()
         connection = sqlite3.connect(os.path.join(folder, "vault.db"))
         connection.execute(
             "CREATE TABLE snapshot (id INTEGER PRIMARY KEY, relative_path TEXT, "
-            "byte_size INTEGER)"
+            "byte_size INTEGER, identity_scrubbed_at TIMESTAMP)"
         )
         connection.execute(
-            "INSERT INTO snapshot VALUES (1, 'snapshots/legacy.sqlite', 0)"
+            "INSERT INTO snapshot (id, relative_path, byte_size) "
+            "VALUES (1, 'snapshots/legacy.sqlite', 0)"
         )
         connection.commit()
         connection.close()
@@ -1325,16 +1330,14 @@ class TestPortableIdentityScrub:
         assert result.library.identity_migration_state == "not_required"
         finalize_opened_library(result)
         assert result.library.identity_migration_state == "complete"
-        materialized = tmp_path / "secondary-verified.sqlite"
-        materialize_snapshot(str(archive), str(materialized))
-        _assert_portable_identity_absent(materialized, marker)
 
-        def must_not_repeat(*_args, **_kwargs):
-            raise AssertionError("historical archives were rewritten a second time")
-
-        monkeypatch.setattr(
-            bootstrap_module, "sanitize_historical_snapshots", must_not_repeat
-        )
-        finalize_opened_library(result)
+        # The live vault is clean...
+        assert vault_query(folder, "SELECT COUNT(*) FROM user") == [(0,)]
+        assert vault_query(folder, "SELECT COUNT(*) FROM usertoken") == [(0,)]
+        # ...and the archive is untouched, still owed to the background finder.
+        assert archive.read_bytes() == before
+        assert vault_query(
+            folder, "SELECT COUNT(*) FROM snapshot WHERE identity_scrubbed_at IS NULL"
+        ) == [(1,)]
         result.engine.close()
         result.hub.close()

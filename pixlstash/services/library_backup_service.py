@@ -43,6 +43,10 @@ import zstandard
 from pixlstash.hub.registry import VAULT_FILENAME, Library
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.library_switch_service import known_vault_revisions
+from pixlstash.services.portable_identity import (
+    PortableIdentityScrubError,
+    sanitize_historical_snapshots,
+)
 from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
     TrustedSQLiteLocationError,
@@ -302,6 +306,63 @@ def _verify_required_files(required: set[str], payload: list[tuple[str, str]]) -
         )
 
 
+def _scrub_outstanding_snapshot_identity(library: Library, vault_path: str) -> None:
+    """Finish any legacy snapshot scrub before the archives can be packaged.
+
+    ``_library_files`` collects ``snapshots/**`` verbatim, and ``_DATABASE_FILES``
+    excludes only the root-level vault. So a backup taken before the background
+    scrub has drained would package pre-hub ``user`` / ``usertoken`` rows -- a
+    password hash and live token hashes -- into a portable artifact, which is
+    precisely the leak the scrub exists to prevent. The restore-path scrub does
+    not help here: nothing materializes these archives, they are copied as bytes.
+
+    Doing the work rather than refusing follows the convention this codebase
+    already uses for permissions (``hub.db.check_file_mode``): the CLI repairs,
+    the server reports. A backup is an operator-initiated, non-interactive
+    command where waiting is acceptable; being unable to back up until an
+    unrelated background pass finishes is not.
+
+    Args:
+        library: The library being archived.
+        vault_path: Its vault database.
+
+    Raises:
+        BackupError: An archive could not be scrubbed, so the backup must not
+            proceed: the alternative is writing the credentials into the tarball.
+    """
+    connection = sqlite3.connect(vault_path)
+    try:
+        outstanding = connection.execute(
+            "SELECT COUNT(*) FROM snapshot WHERE identity_scrubbed_at IS NULL"
+        ).fetchone()[0]
+    except sqlite3.Error:
+        # No snapshot table, or no identity_scrubbed_at column: a vault from
+        # before 0102, which the migration has not reached yet. Nothing to
+        # reason about here, and the caller's own validation covers the rest.
+        connection.close()
+        return
+    if not outstanding:
+        connection.close()
+        return
+
+    logger.info(
+        "Backup: %d legacy snapshot archive(s) in %s still carry portable "
+        "identity. Scrubbing them before packaging; this is one-time work that "
+        "the background pass would otherwise have done.",
+        outstanding,
+        library.name,
+    )
+    try:
+        sanitize_historical_snapshots(connection, library.path)
+    except PortableIdentityScrubError as exc:
+        raise BackupError(
+            f'Could not remove stale owner credentials from "{library.name}" '
+            f"snapshot archives, so the backup was not written: {exc}"
+        ) from exc
+    finally:
+        connection.close()
+
+
 def create_backup(
     library: Library,
     destination: str,
@@ -349,6 +410,12 @@ def create_backup(
         _validate_vault_connection(
             vault_source, library, label=f"Vault database {vault_path}"
         )
+        # Strictly after the guard. Scrubbing opens its own writable connection
+        # to the vault, and opening it any earlier would let SQLite consume a
+        # pre-positioned -wal sidecar that _open_guarded_source exists to
+        # refuse. Skipped for metadata_only, which never packages snapshots/**.
+        if not metadata_only:
+            _scrub_outstanding_snapshot_identity(library, vault_path)
     except Exception:
         vault_source.close()
         vault_guard.close()
