@@ -298,8 +298,6 @@ const hostEl = ref(null);
 .notice-action {
   flex-shrink: 0;
   margin-inline-start: auto;
-  border: none;
-  background: none;
   font-family: inherit;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
@@ -308,7 +306,6 @@ const hostEl = ref(null);
   text-underline-offset: 2px;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
-  cursor: pointer;
 }
 
 .notice-action:hover {
@@ -323,12 +320,9 @@ const hostEl = ref(null);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
-  background: none;
   padding: 0;
   border-radius: var(--radius-sm);
   color: rgba(var(--v-theme-on-surface), 0.7);
-  cursor: pointer;
 }
 
 /* Hit area expanded to 40×40 (WCAG 2.5.8 floor is 24×24) without punching a

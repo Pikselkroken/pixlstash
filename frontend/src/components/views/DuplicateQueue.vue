@@ -3008,12 +3008,10 @@ defineExpose({ windowedGroups, tierLabel });
   padding: 0 var(--space-4);
   border-radius: var(--radius-md);
   border: 1px solid rgb(var(--v-theme-border));
-  background: transparent;
   color: inherit;
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 
@@ -3059,12 +3057,10 @@ defineExpose({ windowedGroups, tierLabel });
   padding: var(--space-1) var(--space-3);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  background: transparent;
   font-size: var(--text-xs);
   font-family: var(--font-ui);
   color: inherit;
   white-space: nowrap;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 
@@ -3117,13 +3113,10 @@ defineExpose({ windowedGroups, tierLabel });
 }
 
 .qselclear {
-  border: none;
-  background: none;
   padding: 0;
   font: inherit;
   font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-accent));
-  cursor: pointer;
 }
 
 .qselclear:focus-visible {

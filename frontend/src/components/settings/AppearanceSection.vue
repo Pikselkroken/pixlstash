@@ -388,7 +388,6 @@ async function clearGuestSession() {
   font-family: inherit;
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
-  cursor: pointer;
   transition:
     border-color 0.12s,
     background 0.12s,
@@ -491,7 +490,6 @@ async function clearGuestSession() {
   font-family: inherit;
   font-size: var(--text-base);
   font-weight: var(--weight-medium);
-  cursor: pointer;
   transition:
     border-color 0.12s,
     background 0.12s,

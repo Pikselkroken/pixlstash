@@ -76,14 +76,12 @@ const tasksStore = useTasksStore();
   align-items: center;
   gap: var(--space-2);
   padding: 0 var(--space-3);
-  cursor: pointer;
   font-size: var(--text-base);
   font-family: inherit;
   /* Icons and labels take the sidebar's treatment: the toolbar-text token
      (identical to sidebar-text) at the sidebar's muted alpha, brightening on
      hover/active — so the toolbar and sidebar chrome read as one strip. */
   color: rgb(var(--v-theme-toolbar-text));
-  background: transparent;
   /* A transparent 1px border is reserved so the open state (which colours the
      border) does not change the box size and make the button jump. */
   border: 1px solid transparent;

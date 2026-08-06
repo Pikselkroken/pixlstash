@@ -395,14 +395,11 @@ defineExpose({
 }
 
 .section-meta-btn {
-  border: none;
-  background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
   padding: var(--space-1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
 }
 
 .section-meta-btn:disabled {
@@ -463,8 +460,6 @@ defineExpose({
 }
 
 .overlay-icon-btn {
-  border: none;
-  background: none;
   color: rgb(var(--v-theme-on-dark-surface));
   height: 32px;
   padding: 6px 14px;
@@ -473,7 +468,6 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   font-size: 1em;
 }
 

@@ -1209,14 +1209,11 @@ const gbCollapseAllStacksDisabled = computed(
   gap: var(--space-3);
   width: 100%;
   padding: var(--space-2) var(--space-3);
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgb(var(--v-theme-on-panel));
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   text-align: left;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 .gb-recent-row:hover {
@@ -1246,14 +1243,12 @@ const gbCollapseAllStacksDisabled = computed(
   align-items: center;
   gap: var(--space-2);
   padding: 0 var(--space-3);
-  cursor: pointer;
   font-size: var(--text-base);
   font-family: inherit;
   /* Icons and labels take the sidebar's treatment: the toolbar-text token
      (identical to sidebar-text) at the sidebar's muted alpha, brightening on
      hover/active — so the toolbar and sidebar chrome read as one strip. */
   color: rgb(var(--v-theme-toolbar-text));
-  background: transparent;
   /* A transparent 1px border is reserved so the open state (which colours the
      border) does not change the box size and make the button jump. */
   border: 1px solid transparent;
@@ -1380,8 +1375,6 @@ const gbCollapseAllStacksDisabled = computed(
 }
 
 .gb-sort-migration-open {
-  border: none;
-  background: transparent;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-surface));
@@ -1390,19 +1383,15 @@ const gbCollapseAllStacksDisabled = computed(
   font-weight: var(--weight-semibold);
   text-decoration: underline;
   text-underline-offset: 2px;
-  cursor: pointer;
 }
 
 .gb-sort-migration-dismiss {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
-  background: transparent;
   border-radius: var(--radius-sm);
   padding: var(--space-1);
   color: rgba(var(--v-theme-on-surface), 0.7);
-  cursor: pointer;
 }
 
 .gb-sort-migration-open:hover,
@@ -1435,14 +1424,11 @@ const gbCollapseAllStacksDisabled = computed(
      rather than forcing a horizontal scrollbar. */
   min-width: 0;
   padding: var(--space-2) var(--space-3);
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgb(var(--v-theme-on-panel));
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   text-align: left;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 

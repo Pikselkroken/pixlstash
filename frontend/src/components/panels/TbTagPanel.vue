@@ -1128,15 +1128,12 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-current-toggle {
-  border: none;
-  background: transparent;
   color: inherit;
   font: inherit;
   text-transform: inherit;
   letter-spacing: inherit;
   opacity: inherit;
   padding: 0;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -1196,7 +1193,6 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   border-radius: var(--radius-lg);
   padding: var(--space-1) var(--space-3);
   font-size: var(--text-xs);
-  cursor: pointer;
   transition:
     background 0.15s,
     opacity 0.15s;
@@ -1221,7 +1217,6 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-chip--some {
-  background: transparent;
   border: 1px dashed rgba(var(--v-theme-on-surface), 0.35);
   color: rgb(var(--v-theme-on-surface));
   opacity: 0.7;
@@ -1343,10 +1338,7 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   text-align: left;
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);
-  background: transparent;
-  border: none;
   color: rgb(var(--v-theme-on-surface));
-  cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1475,12 +1467,9 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0 var(--space-3);
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-base);
   font-family: inherit;
   height: 40px;

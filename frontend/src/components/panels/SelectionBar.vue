@@ -784,14 +784,11 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   align-items: center;
   justify-content: center;
   gap: 4px;
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0;
   width: 40px;
   height: 40px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-family: inherit;
   flex-shrink: 0;
 }
@@ -799,7 +796,6 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   background: rgba(var(--v-theme-on-background), 0.12);
 }
 .clear-btn:disabled {
-  background: transparent;
   border-color: transparent;
   color: rgb(var(--v-theme-on-background));
   opacity: 0.35;
@@ -830,14 +826,11 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   /* 8px here plus the run's own 8px gap = the --space-5 group gap that keeps
      the destructive control off its neighbour's elbow. */
   margin-left: var(--space-3);
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0;
   width: 40px;
   height: 40px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-family: inherit;
   flex-shrink: 0;
 }
@@ -845,7 +838,6 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   background: rgba(var(--v-theme-on-background), 0.12);
 }
 .delete-btn:disabled {
-  background: transparent;
   border-color: transparent;
   color: rgb(var(--v-theme-on-background));
   opacity: 0.35;
@@ -855,12 +847,9 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0 10px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-base);
   font-family: inherit;
   height: 40px;

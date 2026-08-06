@@ -501,12 +501,9 @@ async function create() {
 .rs-dialog-order-btn {
   height: 24px;
   padding: 0 10px;
-  border: none;
   border-radius: calc(var(--radius-sm) - 2px);
-  cursor: pointer;
   font-size: 12px;
   font-weight: var(--weight-semibold);
-  background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 .rs-dialog-order-btn--on {
@@ -528,7 +525,6 @@ async function create() {
   height: 28px;
   padding: 0 11px;
   border-radius: 999px;
-  cursor: pointer;
   font-size: 12.5px;
   font-weight: var(--weight-semibold);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
@@ -599,7 +595,6 @@ async function create() {
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
   color: rgb(var(--v-theme-on-dark-surface));
   font-size: var(--text-xs);
-  cursor: pointer;
   text-align: left;
 }
 /* A locked set can be prefilled from the launch context, so the trigger takes
@@ -737,7 +732,6 @@ async function create() {
   gap: 7px;
   height: 34px;
   padding: 0 14px;
-  cursor: pointer;
   border-radius: var(--radius-sm);
   font-size: 13.5px;
   font-weight: var(--weight-semibold);

@@ -780,10 +780,7 @@ watch(
   right: 6px;
   display: inline-flex;
   align-items: center;
-  border: none;
-  background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.7);
-  cursor: pointer;
   padding: var(--space-2);
 }
 

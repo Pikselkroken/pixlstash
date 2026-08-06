@@ -106,12 +106,10 @@ defineExpose({ close });
   flex-shrink: 0;
   position: relative;
   color: rgb(var(--v-theme-toolbar-text));
-  background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   box-sizing: border-box;
   font-family: inherit;
-  cursor: pointer;
 }
 
 .tbo-trigger:hover {

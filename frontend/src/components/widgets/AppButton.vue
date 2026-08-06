@@ -115,7 +115,6 @@ defineExpose({ focus });
   font-weight: var(--weight-medium);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  cursor: pointer;
   white-space: nowrap;
   transition:
     background var(--dur-1) var(--ease-standard),

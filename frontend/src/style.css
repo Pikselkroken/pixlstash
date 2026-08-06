@@ -182,6 +182,26 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Button reset. Every hand-rolled control in this app is a bare <button> that
+   paints itself, so all 66 of them opened by undoing the same three pieces of
+   browser chrome — 350 declarations of it. Undo it once here instead.
+
+   Element specificity (0,0,1) is the lowest there is, so this loses to
+   everything: Vuetify's `.v-btn` keeps its own fill and border, and any
+   component asking for a real border or background still wins. `:disabled`
+   keeps the browser's own `default` cursor rather than inheriting `pointer` —
+   a control that cannot be pressed must not advertise that it can. Components
+   wanting the stronger `not-allowed` (AppButton, and every `aria-disabled`
+   control) still say so themselves. */
+button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+}
+
 /* THE focus indicator (visual-language.md §11). One rule, app-wide, so a
    focusable element gets the ring by default instead of by remembering to ask:
    44 byte-identical `outline: none; box-shadow: var(--focus-ring)` blocks in 34

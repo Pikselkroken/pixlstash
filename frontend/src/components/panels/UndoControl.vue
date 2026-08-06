@@ -374,14 +374,12 @@ defineExpose({
   padding: 0;
   flex-shrink: 0;
   color: rgb(var(--v-theme-toolbar-text));
-  background: transparent;
   /* A transparent 1px border is reserved so the open state does not resize the
      button and make the group jump. */
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   box-sizing: border-box;
   font-family: inherit;
-  cursor: pointer;
 }
 
 .uc-btn:hover {
@@ -449,14 +447,11 @@ defineExpose({
   gap: var(--space-3);
   width: 100%;
   padding: var(--space-2) var(--space-3);
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgb(var(--v-theme-on-panel));
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   text-align: left;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 
@@ -512,7 +507,6 @@ defineExpose({
   cursor: default;
 }
 .uc-row--future:hover {
-  background: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {

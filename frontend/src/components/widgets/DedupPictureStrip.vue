@@ -359,7 +359,6 @@ watch(
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-on-surface), 0.06);
   overflow: hidden;
-  cursor: pointer;
 }
 
 .gthumb--cover {

@@ -403,7 +403,6 @@ function confirmDeleteUnprotected() {
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -422,7 +421,6 @@ function confirmDeleteUnprotected() {
 }
 
 .btn-outline {
-  background: none;
   border: 1px solid rgb(var(--v-theme-border));
   color: rgba(var(--v-theme-on-surface), 0.85);
 }

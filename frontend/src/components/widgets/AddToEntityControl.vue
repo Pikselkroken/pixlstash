@@ -1013,7 +1013,6 @@ defineExpose({
 .ate-btn {
   background-color: rgba(var(--v-theme-surface), 0.85);
   color: rgb(var(--v-theme-on-surface));
-  border: none;
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
   display: inline-flex;
@@ -1021,7 +1020,6 @@ defineExpose({
   gap: var(--space-2);
   font-size: var(--text-sm);
   line-height: 1.4;
-  cursor: pointer;
 }
 
 .ate--force-dark .ate-btn {
@@ -1040,7 +1038,6 @@ defineExpose({
 
 .ate-btn:hover {
   filter: brightness(1.75);
-  border: none;
 }
 
 .ate-label {
@@ -1172,13 +1169,10 @@ defineExpose({
   border-radius: var(--radius-sm);
   font-size: var(--text-xs);
   color: rgb(var(--v-theme-on-surface));
-  background: transparent;
-  border: none;
   text-align: left;
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  cursor: pointer;
   transition:
     background var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard);

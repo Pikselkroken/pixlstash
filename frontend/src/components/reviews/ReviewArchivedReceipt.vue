@@ -122,7 +122,6 @@ function formatWhen(iso) {
   gap: 6px;
   height: 30px;
   padding: 0 11px;
-  cursor: pointer;
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);

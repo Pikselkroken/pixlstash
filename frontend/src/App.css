@@ -362,7 +362,6 @@ button:focus:not(:focus-visible) {
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   opacity: 0.7;
   transition: opacity 0.15s;
   box-shadow: var(--elevation-2);
@@ -604,10 +603,8 @@ kbd {
   font-size: var(--text-sm);
   text-align: left;
   color: rgb(var(--v-theme-on-panel));
-  background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  cursor: pointer;
   transition:
     background var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard),
@@ -693,10 +690,8 @@ kbd {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-panel));
-  background: transparent;
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  cursor: pointer;
   white-space: nowrap;
   transition:
     background var(--dur-1) var(--ease-standard),
@@ -735,10 +730,7 @@ kbd {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-panel), 0.7);
-  background: transparent;
-  border: none;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   white-space: nowrap;
   transition:
     background var(--dur-1) var(--ease-standard),
@@ -837,9 +829,7 @@ kbd {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  border: none;
   border-radius: var(--radius-md);
-  cursor: pointer;
   white-space: nowrap;
   transition: filter var(--dur-1) var(--ease-standard);
 }
@@ -860,7 +850,6 @@ kbd {
   color: rgb(var(--v-theme-on-panel));
 }
 .tbm-action--outline {
-  background: transparent;
   border: 1px solid rgb(var(--v-theme-border));
   color: rgb(var(--v-theme-on-panel));
 }
@@ -947,10 +936,7 @@ kbd {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-panel), 0.75);
-  background: transparent;
-  border: none;
   border-radius: var(--radius-md);
-  cursor: pointer;
   white-space: nowrap;
   transition:
     background var(--dur-1) var(--ease-standard),
@@ -963,7 +949,6 @@ kbd {
 .tbm-ghost:disabled {
   opacity: 0.4;
   cursor: default;
-  background: transparent;
 }
 
 /* ── Open trigger state — the toolbar button while its menu is open ────────── */

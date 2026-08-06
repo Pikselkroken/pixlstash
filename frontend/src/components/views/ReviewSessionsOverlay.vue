@@ -621,7 +621,6 @@ onUnmounted(() => {
 .rs-keys-close {
   height: 30px;
   padding: 0 12px;
-  cursor: pointer;
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
@@ -672,7 +671,6 @@ onUnmounted(() => {
   gap: 6px;
   height: 30px;
   padding: 0 11px;
-  cursor: pointer;
   border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: var(--weight-semibold);

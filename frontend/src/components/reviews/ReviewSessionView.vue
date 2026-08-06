@@ -762,7 +762,6 @@ defineExpose({ handleKey });
   color: rgb(var(--v-theme-warning));
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  cursor: pointer;
 }
 
 .rs-xp-pill {
@@ -932,7 +931,6 @@ defineExpose({ handleKey });
   gap: 7px;
   height: 34px;
   padding: 0 14px;
-  cursor: pointer;
   border-radius: var(--radius-sm);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
@@ -977,11 +975,9 @@ defineExpose({ handleKey });
   flex-shrink: 0;
   height: 26px;
   padding: 0 var(--space-3);
-  cursor: pointer;
   border-radius: var(--radius-sm);
   border: 1px solid
     color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 55%, transparent);
-  background: transparent;
   color: rgb(var(--v-theme-dark-surface-error));
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
@@ -1011,7 +1007,6 @@ defineExpose({ handleKey });
   gap: 6px;
   height: 30px;
   padding: 0 11px;
-  cursor: pointer;
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);

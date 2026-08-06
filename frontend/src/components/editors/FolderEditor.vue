@@ -1514,8 +1514,6 @@ async function copyToClipboard(value, successMessage) {
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   text-align: left;
-  cursor: pointer;
-  border: none;
   color: inherit;
 }
 

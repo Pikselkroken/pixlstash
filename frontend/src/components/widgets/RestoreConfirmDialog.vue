@@ -719,9 +719,6 @@ const canRestore = computed(
 }
 
 .restore-diff-toggle {
-  background: none;
-  border: none;
-  cursor: pointer;
   font-size: var(--text-xs);
   display: flex;
   align-items: center;

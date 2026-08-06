@@ -2387,9 +2387,6 @@ defineExpose({ focusTasksTab });
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  background: none;
-  border: none;
-  cursor: pointer;
   padding: 0;
   color: inherit;
 }
@@ -2500,8 +2497,6 @@ defineExpose({ focusTasksTab });
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-pill);
   border: 1px solid rgba(var(--v-theme-warning), 0.4);
-  background: none;
-  cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.45);
   transition:
     background 0.12s,
@@ -2679,9 +2674,6 @@ defineExpose({ focusTasksTab });
   width: 16px;
   height: 16px;
   padding: 0;
-  background: none;
-  border: none;
-  cursor: pointer;
   border-radius: var(--radius-sm);
   color: rgba(var(--v-theme-on-surface), 0.45);
   flex-shrink: 0;
@@ -2730,10 +2722,7 @@ defineExpose({ focusTasksTab });
   font-size: var(--text-2xs);
   font-weight: 500;
   padding: 0 var(--space-3);
-  background: none;
-  border: none;
   border-bottom: 2px solid transparent;
-  cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.45);
   transition:
     color 0.12s,
@@ -3012,10 +3001,7 @@ defineExpose({ focusTasksTab });
 
 .tm-comfy-abort {
   flex-shrink: 0;
-  border: none;
-  background: none;
   color: rgba(var(--v-theme-on-surface), 0.45);
-  cursor: pointer;
   font-size: var(--text-xs);
   line-height: 1;
   padding: var(--space-1) var(--space-2);

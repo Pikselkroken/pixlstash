@@ -530,14 +530,12 @@ onMounted(() => {
   top: 2px;
   right: 2px;
   background: rgba(var(--v-theme-surface), 0.6);
-  border: none;
   border-radius: 50%;
   width: 18px;
   height: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   opacity: 0;
   transition:
     opacity 0.12s,
@@ -625,9 +623,6 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  background: none;
-  border: none;
-  cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.45);
   font-size: var(--text-xs);
   padding: 0;
@@ -680,8 +675,6 @@ onMounted(() => {
   font-size: var(--text-xs);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
-  border: none;
-  cursor: pointer;
   transition:
     background 0.12s,
     opacity 0.12s;

@@ -1062,14 +1062,11 @@ defineExpose({
 }
 
 .section-meta-btn {
-  border: none;
-  background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
   padding: var(--space-1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
 }
 
 .section-meta-btn:disabled {
@@ -1220,9 +1217,6 @@ defineExpose({
 .tag-pred-btn {
   margin: 0 1px;
   padding: 1px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
   font-size: 0.75em;
   line-height: 1;
   vertical-align: middle;
@@ -1280,10 +1274,7 @@ defineExpose({
 .tag-delete-btn {
   margin: 0;
   padding: var(--space-1);
-  background: transparent;
-  border: none;
   color: rgb(var(--v-theme-primary));
-  cursor: pointer;
   font-size: 0.8em; /* relative em scale, not absolute px; no token */
   line-height: 1;
   vertical-align: middle;
@@ -1321,10 +1312,7 @@ defineExpose({
   text-align: left;
   padding: 5px 10px; /* no clean token: 5px is between --space-2(4px) and --space-3(8px); 10px between --space-3(8px) and --space-4(12px) */
   font-size: var(--text-2xs);
-  background: transparent;
-  border: none;
   color: rgb(var(--v-theme-on-dark-surface));
-  cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

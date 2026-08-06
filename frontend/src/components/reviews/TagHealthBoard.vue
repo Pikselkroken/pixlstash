@@ -761,7 +761,6 @@ const TAIL_TOGGLE_TITLE =
   background: rgba(var(--v-theme-on-dark-surface), 0.05);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
   font-size: var(--text-2xs);
-  cursor: pointer;
   white-space: nowrap;
 }
 .rs-board-rebuild-persistent:hover:not(:disabled) {
@@ -822,7 +821,6 @@ const TAIL_TOGGLE_TITLE =
   height: 30px;
   padding: 0 11px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
@@ -967,7 +965,6 @@ const TAIL_TOGGLE_TITLE =
   color: rgb(var(--v-theme-on-dark-surface));
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  cursor: pointer;
 }
 
 .rs-board-table {
@@ -1127,7 +1124,6 @@ button.rs-board-hdr {
   height: 28px;
   padding: 0 11px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   white-space: nowrap;

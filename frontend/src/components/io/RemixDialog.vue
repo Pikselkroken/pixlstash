@@ -1010,13 +1010,10 @@ async function submit() {
 }
 
 .remix-link {
-  border: none;
-  background: none;
   padding: 0;
   font: inherit;
   font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-accent));
-  cursor: pointer;
 }
 
 .remix-link:focus-visible {
@@ -1307,9 +1304,6 @@ async function submit() {
   font-size: var(--text-sm);
   font-family: var(--font-ui);
   color: rgba(var(--v-theme-on-surface), 0.7);
-  background: transparent;
-  border: none;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 

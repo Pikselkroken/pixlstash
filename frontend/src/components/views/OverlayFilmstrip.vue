@@ -199,10 +199,7 @@ function onFilmstripWheel(event) {
 }
 
 .filmstrip-thumb {
-  border: none;
   padding: 0;
-  background: transparent;
-  cursor: pointer;
   border-radius: 0;
   overflow: visible;
   width: var(--filmstrip-thumb-size, 100%);

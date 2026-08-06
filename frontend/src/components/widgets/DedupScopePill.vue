@@ -89,11 +89,8 @@ const countText = computed(() =>
   justify-content: center;
   flex-shrink: 0;
   padding: var(--space-1);
-  border: none;
   border-radius: var(--radius-pill);
-  background: transparent;
   color: rgb(var(--v-theme-on-surface));
-  cursor: pointer;
 }
 .scope-pill__dismiss:hover {
   background: var(--hover-wash);

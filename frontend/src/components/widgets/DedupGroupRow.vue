@@ -1165,12 +1165,10 @@ function onDblClick(event) {
   padding: 0 var(--space-4);
   border-radius: var(--radius-md);
   border: 1px solid rgb(var(--v-theme-border));
-  background: transparent;
   color: rgb(var(--v-theme-on-surface));
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  cursor: pointer;
   transition:
     background var(--dur-1) var(--ease-standard),
     border-color var(--dur-1) var(--ease-standard);

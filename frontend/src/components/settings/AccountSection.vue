@@ -1003,7 +1003,6 @@ watch(
   border-radius: var(--radius-md);
   background: rgb(var(--v-theme-input-background));
   color: rgba(var(--v-theme-on-surface), 0.6);
-  cursor: pointer;
   transition:
     border-color var(--dur-1) var(--ease-standard),
     background var(--dur-1) var(--ease-standard);
@@ -1037,12 +1036,10 @@ watch(
   right: var(--space-2);
   width: 24px;
   height: 24px;
-  border: none;
   border-radius: var(--radius-pill);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   /* The one allowed exception: a translucent black scrim with a white icon. */
   background: rgba(var(--v-theme-scrim), 0.6);
   color: #fff;

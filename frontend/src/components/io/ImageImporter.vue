@@ -1136,7 +1136,6 @@ defineExpose({ startImport });
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);

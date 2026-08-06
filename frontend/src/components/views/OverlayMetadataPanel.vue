@@ -501,10 +501,7 @@ watch(
   padding: 6px var(--space-3); /* 6px vertical has no token: between --space-2 (4px) and --space-3 (8px) */
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  border: none;
-  background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.5);
-  cursor: pointer;
   transition:
     color 0.15s,
     background 0.15s;
@@ -616,13 +613,10 @@ watch(
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  border: none;
-  background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.75);
   font-size: var(--text-2xs);
   padding: var(--space-1) var(--space-1);
   border-radius: var(--radius-sm);
-  cursor: pointer;
 }
 
 .metadata-comfy-workflow-action:hover {

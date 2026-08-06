@@ -250,7 +250,6 @@ function onPick(member) {
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-on-surface), 0.06);
   overflow: hidden;
-  cursor: pointer;
 }
 
 .sxthumb:hover:not(:disabled) {
@@ -304,13 +303,11 @@ function onPick(member) {
   padding: var(--space-2) var(--space-3);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.75);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   line-height: var(--leading-snug);
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 

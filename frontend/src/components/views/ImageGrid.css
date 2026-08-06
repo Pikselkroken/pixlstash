@@ -1020,12 +1020,9 @@
   gap: 5px;
   height: 100%;
   padding: 0 14px;
-  border: none;
   border-left: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  background: transparent;
   color: rgb(var(--v-theme-on-surface-variant));
   font-size: 13px;
-  cursor: pointer;
   flex: 0 0 auto;
   transition: background 0.15s;
 }

@@ -285,12 +285,10 @@ const close = () => desktop?.windowClose?.();
   padding: var(--space-1) var(--space-2);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
   font-family: var(--font-ui);
   font-size: var(--text-xs);
   line-height: 1;
-  cursor: pointer;
   -webkit-app-region: no-drag;
 }
 
@@ -420,9 +418,6 @@ const close = () => desktop?.windowClose?.();
   height: 12px;
   font-size: var(--text-2xs);
   line-height: 1;
-  background: transparent;
-  border: none;
-  cursor: pointer;
   color: rgba(var(--v-theme-on-background), 0.5);
 }
 
@@ -441,8 +436,6 @@ const close = () => desktop?.windowClose?.();
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
-  border: none;
   color: inherit;
   opacity: 0.8;
   cursor: default;
