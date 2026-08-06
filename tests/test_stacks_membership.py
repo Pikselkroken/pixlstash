@@ -9,6 +9,7 @@ import gc
 import json
 import os
 import tempfile
+from contextlib import ExitStack
 
 from fastapi.testclient import TestClient
 from sqlmodel import select
@@ -38,19 +39,16 @@ def _import_pictures(client, names):
     """Import the given image filenames from the repo ``pictures/`` dir and
     return their new picture ids in order."""
     pictures_dir = os.path.join(os.path.dirname(__file__), "..", "pictures")
-    handles = []
-    files = []
-    try:
+    # The handles must all stay open across the one multipart upload, so they
+    # are closed together on exit rather than per-file.
+    with ExitStack() as open_files:
+        files = []
         for name in names:
             path = os.path.join(pictures_dir, name)
-            fh = open(path, "rb")
-            handles.append(fh)
+            fh = open_files.enter_context(open(path, "rb"))
             mime = "image/png" if name.lower().endswith(".png") else "image/jpeg"
             files.append(("file", (name, fh, mime)))
         result = upload_pictures_and_wait(client, files)
-    finally:
-        for fh in handles:
-            fh.close()
     ids = [r["picture_id"] for r in result["results"] if r.get("picture_id")]
     assert len(ids) == len(names), f"Expected {len(names)} imports, got {ids}"
     return ids
