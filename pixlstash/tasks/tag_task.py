@@ -146,33 +146,44 @@ class TagTask(BaseTask):
         if self._model_preload_thread is not None:
             self._model_preload_thread.join(timeout=5)
 
+    def _load_pic(self, pic) -> tuple[str, PILImage.Image|None]:
+        video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
+        file_path = ImageUtils.resolve_picture_path(
+            self._db.image_root, pic.file_path
+        )
+        try:
+            ext = os.path.splitext(str(file_path))[1].lower()
+            if ext in video_exts:
+                frames = VideoUtils.extract_representative_video_frames(
+                    str(file_path), count=1
+                )
+                if not frames:
+                    logger.debug(
+                        "TaskTask load image failed for %s: no frames", str(file_path)
+                    )
+                    return file_path, None
+                return file_path, frames[0].convert("RGB")
+            return file_path, PILImage.open(file_path).convert("RGB")
+        except Exception as exc:
+            logger.debug(
+                "TagTask load image failed for %s: %s", str(file_path), exc
+            )
+            return file_path, None
+
     _PRELOAD_WORKERS = 4
 
     def _preload_images(self) -> None:
         preloaded = {}
-        video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
 
-        def _load_one(pic):
+        def _load_one(pic) -> tuple[str|None, PILImage.Image|None]:
             if self._preload_cancel.is_set():
                 return None, None
-            try:
-                file_path = ImageUtils.resolve_picture_path(
-                    self._db.image_root, pic.file_path
-                )
-                ext = os.path.splitext(str(file_path))[1].lower()
-                if ext in video_exts:
-                    frames = VideoUtils.extract_representative_video_frames(
-                        str(file_path), count=1
-                    )
-                    if not frames:
-                        return None, None
-                    return file_path, frames[0].convert("RGB")
-                return file_path, PILImage.open(file_path).convert("RGB")
-            except Exception as exc:
+            file_path, img = self._load_pic(pic)
+            if img is None:
                 logger.debug(
-                    "Preload failed for %s: %s", getattr(pic, "file_path", None), exc
+                    "Preload failed for %s (%s)", getattr(pic, "id", None), str(file_path)
                 )
-                return None, None
+            return file_path, img
 
         n_workers = min(self._PRELOAD_WORKERS, max(1, len(self._pictures)))
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
@@ -574,67 +585,55 @@ class TagTask(BaseTask):
                             for face in faces
                             if face.bbox and getattr(face, "face_index", 0) >= 0
                         ]
-                        try:
-                            img = preloaded_images.get(file_path)
+                        img = preloaded_images.get(file_path)
+                        if img is None:
+                            file_path, img = self._load_pic(pic)
                             if img is None:
-                                ext = os.path.splitext(str(file_path))[1].lower()
-                                if ext in {
-                                    ".mp4",
-                                    ".avi",
-                                    ".mov",
-                                    ".mkv",
-                                    ".webm",
-                                    ".flv",
-                                    ".wmv",
-                                }:
-                                    frames = (
-                                        VideoUtils.extract_representative_video_frames(
-                                            str(file_path),
-                                            count=1,
-                                        )
+                                registry = getattr(self._db, "unprocessable_images", None)
+                                if registry is not None:
+                                    registry.mark_unprocessable(
+                                        getattr(pic, "id", None),
+                                        str(file_path),
+                                        reason="tag source could not be decoded",
                                     )
-                                    if not frames:
-                                        continue
-                                    img = frames[0].convert("RGB")
                                 else:
-                                    img = PILImage.open(file_path).convert("RGB")
-                                preloaded_images[file_path] = img
-                            w, h = img.size
-                            if valid_faces:
-                                largest_face = max(
-                                    valid_faces,
-                                    key=lambda face: max(
-                                        0,
-                                        (float(face.bbox[2]) - float(face.bbox[0]))
-                                        * (float(face.bbox[3]) - float(face.bbox[1])),
-                                    ),
-                                )
-                                expanded = expand_bbox_to_square(
-                                    largest_face.bbox, w, h, target
-                                )
-                                key = f"{file_path}#face{largest_face.id}"
-                            else:
-                                # No face detected: fall back to a centre crop so
-                                # whole-image quality defects (blockiness, blur, jpeg
-                                # artifacts) still get a high-resolution pass instead of
-                                # relying only on the downscaled full-image pass. A
-                                # zero-size box at the image centre expands to the same
-                                # target-sized square the face path uses.
-                                centre_bbox = [w / 2.0, h / 2.0, w / 2.0, h / 2.0]
-                                expanded = expand_bbox_to_square(
-                                    centre_bbox, w, h, target
-                                )
-                                key = f"{file_path}#centre"
-                                centre_crop_paths.add(file_path)
-                            crop = img.crop(expanded)
-                            quality_items.append((key, crop))
-                            key_to_path[key] = file_path
-                        except Exception as exc:
-                            logger.warning(
-                                "Could not load %s for quality crop pass: %s",
-                                file_path,
-                                exc,
+                                    logger.warning(
+                                        "TagTask: failed to load source for picture %s (%s)",
+                                        getattr(pic, "id", None),
+                                        str(file_path),
+                                    )
+                                continue
+                            preloaded_images[file_path] = img
+                        w, h = img.size
+                        if valid_faces:
+                            largest_face = max(
+                                valid_faces,
+                                key=lambda face: max(
+                                    0,
+                                    (float(face.bbox[2]) - float(face.bbox[0]))
+                                    * (float(face.bbox[3]) - float(face.bbox[1])),
+                                ),
                             )
+                            expanded = expand_bbox_to_square(
+                                largest_face.bbox, w, h, target
+                            )
+                            key = f"{file_path}#face{largest_face.id}"
+                        else:
+                            # No face detected: fall back to a centre crop so
+                            # whole-image quality defects (blockiness, blur, jpeg
+                            # artifacts) still get a high-resolution pass instead of
+                            # relying only on the downscaled full-image pass. A
+                            # zero-size box at the image centre expands to the same
+                            # target-sized square the face path uses.
+                            centre_bbox = [w / 2.0, h / 2.0, w / 2.0, h / 2.0]
+                            expanded = expand_bbox_to_square(
+                                centre_bbox, w, h, target
+                            )
+                            key = f"{file_path}#centre"
+                            centre_crop_paths.add(file_path)
+                        crop = img.crop(expanded)
+                        quality_items.append((key, crop))
+                        key_to_path[key] = file_path
                     if quality_items:
                         # Single GPU pass: get quality tags AND raw scores for predictions.
                         crop_raw_scores: dict = {}
