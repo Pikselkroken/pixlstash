@@ -10,6 +10,7 @@ import { getPictureId } from "../utils/media.js";
 import { toggleScore } from "../utils/utils.js";
 import { useSortStore } from "../stores/useSortStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
+import { errorDetail } from "../utils/apiError";
 
 /**
  * Scoring, and everything the grid has to do about it.
@@ -50,7 +51,6 @@ export function useGridScoring({
   triggerNewImageHighlight,
   updateVisibleThumbnails,
   maybeRefreshOverlayForComfyui,
-  errorDetail,
 }) {
   const sortStore = useSortStore();
   const noticeStore = useNoticeStore();

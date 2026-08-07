@@ -192,7 +192,6 @@ useWindowFileImport({ sidebarRef });
 
 const {
   handleViewProject,
-  handleUpdateSelectedSort,
   handleStackStatsUpdate,
   handleUpdateCheckForUpdates,
   handleEmptyScrapheapFromSidebar,
@@ -201,7 +200,6 @@ const {
 } = useAppSettingsHandlers({
   gridContainer,
   statsSidebarRef,
-  onNavigated: () => closeSidebarIfMobile(),
   pushAppRoute,
 });
 
@@ -538,7 +536,6 @@ defineExpose({
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMoved"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
-            @open-import-dialog="openImportDialog"
             @update:set-error="error = $event"
             @update:set-loading="loading = $event"
             @update:check-for-updates="handleUpdateCheckForUpdates"

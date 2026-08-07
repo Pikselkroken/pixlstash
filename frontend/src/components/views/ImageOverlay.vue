@@ -1137,11 +1137,8 @@ function setOverlayImageById(nextId) {
 
 const emit = defineEmits([
   "close",
-  "prev",
-  "next",
   "apply-score",
   "set-guest-score",
-  "remove-tag",
   "add-tag",
   "update-description",
   "overlay-change",

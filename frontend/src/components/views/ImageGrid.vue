@@ -26,7 +26,6 @@
     @apply-score="applyScore"
     @set-guest-score="(img, n) => setGuestScore(img, n)"
     @add-tag="addTagToImage"
-    @remove-tag="removeTagFromImage"
     @update-description="updateDescriptionForImage"
     @overlay-change="handleOverlayChange"
     @added-to-set="handleOverlayAddedToSet"
@@ -1203,7 +1202,7 @@ import {
   downloadExport,
   listPicturesByIds,
 } from "../../api/pictures";
-import { addPictureTag, removePictureTag } from "../../api/tags";
+import { addPictureTag } from "../../api/tags";
 import {
   getStack,
   keepCoverOnly,
@@ -1254,13 +1253,11 @@ import {
 } from "../../utils/dedup.js";
 import {
   dedupeTagList,
-  getTagId,
   hasPenalisedTags,
   penalisedTagsTitle,
   penalisedTagIcon,
   penalisedTagColor,
   getTagList,
-  tagMatches,
 } from "../../utils/tags.js";
 import {
   getStackBadgeCount,
@@ -1310,7 +1307,6 @@ const emit = defineEmits([
   "clear-search",
   "reset-to-all",
   "search-all",
-  "update:selected-sort",
   "update:stack-stats",
   "import-started",
   "import-ended",
@@ -5661,7 +5657,6 @@ const {
   triggerNewImageHighlight,
   updateVisibleThumbnails,
   maybeRefreshOverlayForComfyui,
-  errorDetail,
 });
 
 // ============================================================
@@ -7074,33 +7069,6 @@ async function _afterTagMutation(imageId) {
     updateVisibleThumbnails();
   } else {
     refreshGridImage(imageId);
-  }
-}
-
-async function removeTagFromImage(imageId, tag) {
-  if (!imageId) {
-    console.error("Image ID is required to remove a tag.");
-    return;
-  }
-
-  try {
-    const tagId = getTagId(tag);
-    if (tagId == null) {
-      console.warn("Tag id is required to remove a tag.", tag);
-      return;
-    }
-    const tagKey = String(tagId);
-    await removePictureTag(imageId, tagKey);
-    const gridImg = allGridImages.value.find(
-      (img) => img && img.id === imageId,
-    );
-    if (gridImg && Array.isArray(gridImg.tags)) {
-      const d = getTagList(gridImg.tags);
-      gridImg.tags = d.filter((t) => !tagMatches(t, tag));
-    }
-    await _afterTagMutation(imageId);
-  } catch (error) {
-    console.error("Error removing tag:", error);
   }
 }
 
