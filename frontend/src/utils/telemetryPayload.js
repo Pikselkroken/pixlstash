@@ -9,10 +9,10 @@
 // Nothing in this module performs a request.
 
 /** Host that answers the version check. Static, CDN-cached, no compute. */
-export const VERSION_CHECK_HOST = "https://pixlstash.dev";
+const VERSION_CHECK_HOST = "https://pixlstash.dev";
 
 /** Host that answers the install-ID ping. Separate on purpose: see the Worker README. */
-export const TELEMETRY_HOST = "https://t.pixlstash.dev";
+const TELEMETRY_HOST = "https://t.pixlstash.dev";
 
 /**
  * The version check, as a URL.

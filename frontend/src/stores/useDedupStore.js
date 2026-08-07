@@ -95,7 +95,7 @@ const WINDOW_RELOAD_CONTEXT = QUEUE_PAGE_SIZE;
  * Three rows is one Enter-Enter-Enter burst of headroom, which is what a user
  * working the queue by keyboard actually consumes between frames.
  */
-export const PREFETCH_MARGIN = 3;
+const PREFETCH_MARGIN = 3;
 
 /**
  * The most groups one Ctrl+A may take.
@@ -126,7 +126,7 @@ export const MIN_STACK_MEMBERS = 2;
  * answer "is this deck flagged" would be a request that is nearly always
  * empty. Clamped server-side to its own 200 ceiling.
  */
-export const MIXED_STACK_PAGE_SIZE = 100;
+const MIXED_STACK_PAGE_SIZE = 100;
 
 /**
  * The tier ids the server publishes, mapped to the copy the menu renders.
@@ -135,7 +135,7 @@ export const MIXED_STACK_PAGE_SIZE = 100;
  * says what they mean to a person. An id the server adds later renders under
  * its own id rather than vanishing from the menu.
  */
-export const TIER_LABELS = Object.freeze({
+const TIER_LABELS = Object.freeze({
   exact: { label: "Exact matches", hint: "identical file" },
   near: { label: "Near-identical", hint: "bursts, re-exports, resizes" },
   embedding: { label: "Same scene", hint: "cross-folder, re-framed" },
@@ -149,7 +149,7 @@ export const TIER_LABELS = Object.freeze({
  * (`bounds.verdicts`), the client owns the words. A verdict the server adds
  * later renders under its own id rather than vanishing from the menu.
  */
-export const VERDICT_LABELS = Object.freeze({
+const VERDICT_LABELS = Object.freeze({
   stacked: { label: "Stacked", hint: "folded into one stack" },
   keep_separate: { label: "Kept separate", hint: "not duplicates" },
 });
@@ -322,7 +322,7 @@ function normalizeScan(raw) {
  * @param {Set<number|string>} removed - the picture ids that went away.
  * @returns {Object|null}
  */
-export function groupWithoutPictures(group, removed) {
+function groupWithoutPictures(group, removed) {
   const candidates = group?.candidates ?? [];
   const kept = candidates.filter((c) => !removed.has(candidateId(c)));
   const stacks = group?.stacks ?? {};

@@ -11,9 +11,9 @@ export const PIL_IMAGE_EXTENSIONS = [
 export const VIDEO_EXTENSIONS =
     ['mp4', 'avi', 'mov', 'webm', 'mkv', 'flv', 'wmv', 'm4v'];
 
-export const ARCHIVE_EXTENSIONS = ['zip'];
+const ARCHIVE_EXTENSIONS = ['zip'];
 
-export const CAPTION_EXTENSIONS = ['txt'];
+const CAPTION_EXTENSIONS = ['txt'];
 
 export function isSupportedImageFile(file) {
   const filename = typeof file === 'string' ? file : file?.name || '';
@@ -28,17 +28,17 @@ export function isSupportedVideoFile(file) {
   return VIDEO_EXTENSIONS.includes(ext);
 }
 
-export function isSupportedArchiveFile(file) {
+function isSupportedArchiveFile(file) {
   const filename = typeof file === 'string' ? file : file.name || '';
   const ext = filename.split('.').pop().toLowerCase();
   return ARCHIVE_EXTENSIONS.includes(ext);
 }
 
-export function isSupportedMediaFile(file) {
+function isSupportedMediaFile(file) {
   return isSupportedImageFile(file) || isSupportedVideoFile(file);
 }
 
-export function isSupportedCaptionFile(file) {
+function isSupportedCaptionFile(file) {
   const filename = typeof file === 'string' ? file : file?.name || '';
   const lastDot = filename.lastIndexOf('.');
   const ext =  lastDot > 0 && lastDot < filename.length - 1 ?

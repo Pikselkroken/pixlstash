@@ -31,7 +31,7 @@ function loadMultiMode(key, fallback) {
   }
 }
 
-export function saveMultiMode(key, val) {
+function saveMultiMode(key, val) {
   try {
     window.sessionStorage?.setItem(key, val);
   } catch {
@@ -50,7 +50,7 @@ function loadBaseId(key) {
   }
 }
 
-export function saveBaseId(key, val) {
+function saveBaseId(key, val) {
   try {
     window.sessionStorage?.setItem(key, val != null ? String(val) : "");
   } catch {

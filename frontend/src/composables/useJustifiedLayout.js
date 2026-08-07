@@ -23,7 +23,7 @@ export const JUSTIFIED_ROW_GAP = 2;
 /** Lower clamp for a scaled row's content height, in px. */
 export const JUSTIFIED_MIN_ROW_HEIGHT = 160;
 /** Upper clamp for a scaled row's content height, in px. */
-export const JUSTIFIED_MAX_ROW_HEIGHT = 360;
+const JUSTIFIED_MAX_ROW_HEIGHT = 360;
 
 /**
  * Normalise an aspect ratio for packing. Missing / zero / negative /

@@ -28,9 +28,9 @@
 // view-shaping state that is cheap to re-apply and would otherwise ride along
 // in shared links as somebody else's incidental filter.
 
-export const REVIEW_KEY = "review";
+const REVIEW_KEY = "review";
 export const REVIEW_BOARD = "board";
-export const REVIEW_SCOPE_KEYS = {
+const REVIEW_SCOPE_KEYS = {
   projectId: "review_project",
   setId: "review_set",
   characterId: "review_character",

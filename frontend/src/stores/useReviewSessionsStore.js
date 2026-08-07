@@ -67,7 +67,7 @@ export const STICKER_ICONS = SET_ICONS.map((ic) => ({
   icon: ic.value,
   label: ic.label,
 }));
-export const STICKER_COLORS = SET_COLORS.map((c) => c.value);
+const STICKER_COLORS = SET_COLORS.map((c) => c.value);
 
 // --- Decision mapping -------------------------------------------------------
 //
@@ -133,7 +133,7 @@ export function pairSides(item) {
 
 // Per-picture has/not votes a decision asserts, for the session consistency
 // ledger (port of the old CORNER_VOTES translation).
-export function votesForDecision(item, kind, decision) {
+function votesForDecision(item, kind, decision) {
   if (!item) return [];
   if (kind === "binary") {
     if (item.picture_id == null) return [];
