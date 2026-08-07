@@ -158,12 +158,12 @@ import { isSupportedVideoFile, getOverlayFormat } from "../../utils/media.js";
 import { formatUserDate } from "../../utils/utils.js";
 import { openPictureLocation } from "../../api/pictures";
 import { copyText } from "../../utils/clipboard";
-
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   image: { type: Object, default: null },
   comfyMetadata: { type: Object, default: null },
   dateFormat: { type: String, default: "locale" },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   videoDuration: { type: Number, default: null },
 });
 

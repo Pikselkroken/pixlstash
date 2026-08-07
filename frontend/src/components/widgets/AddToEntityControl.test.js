@@ -32,6 +32,7 @@ vi.mock("../../api/projects", () => ({
   getProjectMembership: vi.fn(),
 }));
 vi.mock("../../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   isReadOnly: ref(false),
   sessionContext: ref(null),
   onSessionReset: () => () => {},

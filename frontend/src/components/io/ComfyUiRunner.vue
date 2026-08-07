@@ -55,8 +55,9 @@ import { listStackPictures } from "../../api/stacks";
 import { formatComfyuiExecutionErrorMessage } from "../../utils/utils.js";
 import { useTasksStore } from "../../stores/useTasksStore";
 
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   wsPluginProgress: {
     type: Object,
     default: () => ({ key: 0, payload: null }),

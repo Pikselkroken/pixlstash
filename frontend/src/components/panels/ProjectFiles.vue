@@ -144,10 +144,10 @@ import {
 } from "../../api/projects";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { errorDetail } from "../../utils/apiError";
-
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   projectId: { type: Number, required: true },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
 });
 
 const expanded = ref(false);

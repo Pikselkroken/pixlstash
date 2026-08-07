@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
   // Same shape as the real helper: the header only exists when the caller is
   // part of a gesture, so an ordinary call still sends no config at all.

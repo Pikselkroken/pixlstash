@@ -13,10 +13,11 @@ import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import { errorDetail } from "../../utils/apiError";
 
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   open: { type: Boolean, default: false },
   project: { type: Object, default: null },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
 });
 
 const emit = defineEmits(["close", "saved", "deleted"]);

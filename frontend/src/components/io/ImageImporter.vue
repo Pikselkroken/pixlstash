@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref } from "vue";
 import { VIcon } from "vuetify/components";
-import { isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { sleep } from "../../utils/utils";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -48,10 +48,7 @@ import { errorDetail } from "../../utils/apiError";
 // empty results list. Media, .zip archives and .txt sidecars all stream.
 
 const props = defineProps({
-  backendUrl: { type: String, required: true },
-  selectedCharacterId: { type: [String, Number, null], default: null },
-  allPicturesId: { type: String, default: "" },
-  unassignedPicturesId: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
 });
 
 const emit = defineEmits([

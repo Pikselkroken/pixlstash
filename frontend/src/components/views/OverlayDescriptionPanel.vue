@@ -140,7 +140,7 @@
 
 <script setup>
 import { ref, computed, nextTick, watch } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import {
   patchPicture,
   resetPictureDescription,
@@ -160,7 +160,7 @@ const noticeStore = useNoticeStore();
 
 const props = defineProps({
   image: { type: Object, default: null },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   // True when the picture is frozen by a locked set: render read-only.
   locked: { type: Boolean, default: false },
   // Lock-reason tooltip copy (single source from useLockedSetsStore).

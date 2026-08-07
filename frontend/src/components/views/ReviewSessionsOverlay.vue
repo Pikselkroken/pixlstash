@@ -37,7 +37,6 @@
       <TbTagPanel
         v-if="tagApplyOpen"
         class="rs-tag-apply-panel"
-        :backend-url="props.backendUrl"
         :selected-count="cardImages.length"
         :selected-image-ids="cardImages.map((i) => i.id)"
         :all-grid-images="cardImages"
@@ -136,14 +135,14 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { formatKeyHint, undoKeyHint } from "../../utils/shortcutHints";
-
+import { API_BASE_URL } from "../../utils/apiClient";
 // Sidebar selection sentinels (mirrors useSelectionStore.js / App.vue).
 const ALL_PICTURES_ID = "ALL";
 const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
 const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
 
 const props = defineProps({
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
 });
 const emit = defineEmits(["close", "tags-applied"]);
 

@@ -176,6 +176,7 @@ import AppSelect from "../widgets/AppSelect.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
 import { errorDetail } from "../../utils/apiError";
 
+import { API_BASE_URL } from "../../utils/apiClient";
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
 const noticeStore = useNoticeStore();
@@ -184,7 +185,7 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   set: { type: Object, default: null },
   thumbnailUrl: { type: String, default: null },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   projects: { type: Array, default: () => [] },
 });
 

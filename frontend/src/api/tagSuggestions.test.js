@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { post: vi.fn() },
 }));
 

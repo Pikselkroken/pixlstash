@@ -11,6 +11,7 @@ import { mount } from "@vue/test-utils";
 vi.mock("../../utils/apiClient", async () => {
   const { ref } = await import("vue");
   return {
+    API_BASE_URL: "/api/v1",
     apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
     isReadOnly: ref(false), // real ref so the menu template unwraps it
     onSessionReset: () => () => {},

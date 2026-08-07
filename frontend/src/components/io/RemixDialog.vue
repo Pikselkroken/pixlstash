@@ -349,6 +349,7 @@ import {
 import { getPictureMetadata } from "../../api/pictures";
 import { errorDetail } from "../../utils/apiError";
 
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   open: { type: Boolean, default: false },
   /** The right-clicked picture. The dialog always acts on this one. */
@@ -357,7 +358,7 @@ const props = defineProps({
   selectedImageIds: { type: Array, default: () => [] },
   /** Ties ComfyUI progress events back to this tab. */
   clientId: { type: String, default: "" },
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   /** Whether generated outputs join the source's stack. */
   stackOutputs: { type: Boolean, default: true },
 });

@@ -213,7 +213,6 @@
             :open="selectionMenuOpen"
             :selected-count="selectedCount"
             :selected-image-ids="selectedImageIds"
-            :backend-url="backendUrl"
             :is-read-only="isReadOnly"
             :is-scrapheap-view="isScrapheapView"
             :grouping-lock-reason="props.groupingLockReason"
@@ -266,7 +265,6 @@
               ></div>
             </template>
             <TbTagPanel
-              :backend-url="props.backendUrl"
               :selected-count="selectedCount"
               :selected-image-ids="props.selectedImageIds"
               :all-grid-images="props.allGridImages"
@@ -326,7 +324,7 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { listWorkflows, runImageToImage } from "../../api/comfyui";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import SelectionMenu from "./SelectionMenu.vue";
@@ -348,7 +346,7 @@ const props = defineProps({
    */
   ownsEscape: { type: Boolean, default: true },
   scrapheapPicturesId: { type: String, required: true },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   selectedImageIds: { type: Array, default: () => [] },
   selectedMediaSupport: {
     type: Object,

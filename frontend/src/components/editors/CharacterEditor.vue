@@ -102,7 +102,7 @@
 
 <script setup>
 import { computed, ref, watch, nextTick, onUnmounted } from "vue";
-import { appendShareToken } from "../../utils/apiClient";
+import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import {
   createCharacter,
   patchCharacter,
@@ -127,7 +127,7 @@ const noticeStore = useNoticeStore();
 const props = defineProps({
   open: { type: Boolean, default: false },
   character: { type: Object, default: null },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   projects: { type: Array, default: () => [] },
 });
 

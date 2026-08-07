@@ -579,14 +579,14 @@
 
 <script setup>
 import { ref, computed, watch } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { listTags } from "../../api/tags";
 import { listComfyuiModels, listComfyuiLoras } from "../../api/pictures";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 
 const props = defineProps({
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   selectedCharacter: { type: String, default: null },
   allPicturesId: { type: String, default: null },
   open: { type: Boolean, default: false },

@@ -19,11 +19,7 @@ import FolderBrowser from "../editors/FolderBrowser.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
-import {
-  appendShareToken,
-  isReadOnly,
-  sessionContext,
-} from "../../utils/apiClient";
+import { API_BASE_URL, appendShareToken, isReadOnly, sessionContext } from "../../utils/apiClient";
 import {
   patchCharacter,
   getCharacterSummary,
@@ -162,7 +158,7 @@ const READ_ONLY_DEDUP_HINT =
   "Duplicate review is only available in your own library";
 
 const props = defineProps({
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   installType: { type: String, default: "pip" },
   dockerVariant: { type: String, default: "gpu" },
 });
@@ -3775,16 +3771,11 @@ defineExpose({
 <template>
   <ImageImporter
     ref="imageImporterRef"
-    :backend-url="props.backendUrl"
-    :selected-character-id="selectionStore.selectedCharacter"
-    :all-pictures-id="ALL_PICTURES_ID"
-    :unassigned-pictures-id="UNASSIGNED_PICTURES_ID"
     @import-finished="handleImportFinished"
   />
   <CharacterEditor
     :open="characterEditorOpen"
     :character="characterEditorCharacter"
-    :backendUrl="props.backendUrl"
     :projects="projects"
     @close="closeCharacterEditor"
     @saved="characterSaved"
@@ -3795,7 +3786,6 @@ defineExpose({
     :thumbnailUrl="
       setEditorSet ? (setThumbnails[setEditorSet.id] ?? null) : null
     "
-    :backendUrl="props.backendUrl"
     :projects="projects"
     @close="closeSetEditor"
     @refresh-sidebar="refreshSidebar"
@@ -3803,7 +3793,6 @@ defineExpose({
   <ProjectEditor
     :open="projectEditorOpen"
     :project="projectEditorProject"
-    :backend-url="props.backendUrl"
     @close="closeProjectEditor"
     @saved="projectSaved"
     @deleted="projectDeleted"
@@ -6268,7 +6257,6 @@ defineExpose({
                   >
                     <ProjectFiles
                       :projectId="p.id"
-                      :backendUrl="props.backendUrl"
                       compact
                     />
                   </div>
@@ -6970,7 +6958,6 @@ defineExpose({
     :resource-id="shareDialogPending?.resourceId"
     :resource-label="shareDialogPending?.label"
     :embed-watermark="userPrefsStore.embedWatermark"
-    :backend-url="props.backendUrl"
     :public-url="userPrefsStore.publicUrl"
     @update:embed-watermark="userPrefsStore.embedWatermark = $event"
   />

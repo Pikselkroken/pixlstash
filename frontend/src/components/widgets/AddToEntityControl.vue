@@ -170,7 +170,7 @@ import {
 } from "../../api/characters";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { errorDetail } from "../../utils/apiError";
-
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   // 'set' | 'project' | 'character' | 'face'.
   //
@@ -183,7 +183,7 @@ const props = defineProps({
   // overlay menu because the `.ate-*` skin is scoped to this file, and one
   // create rule has to serve both call sites.
   type: { type: String, required: true },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   pictureIds: { type: Array, default: () => [] },
   disabled: { type: Boolean, default: false },
   readonly: { type: Boolean, default: false },

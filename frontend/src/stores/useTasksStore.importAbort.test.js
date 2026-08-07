@@ -3,6 +3,7 @@ import { setActivePinia, createPinia } from "pinia";
 
 // The store imports the singleton apiClient (+ isReadOnly); mock so no HTTP runs.
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn() },
   isReadOnly: { value: false },
 }));

@@ -259,7 +259,7 @@
  *   refetchPredictions(id) - Re-fetch predictions after parent metadata refresh.
  */
 import { ref, reactive, computed, watch, nextTick, onMounted } from "vue";
-import { isReadOnly, newOperationBatchId } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly, newOperationBatchId } from "../../utils/apiClient";
 import {
   listTags,
   removeTagEverywhere,
@@ -281,7 +281,7 @@ import {
 
 const props = defineProps({
   image: { type: Object, default: null },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
   // True when the picture is frozen by a locked set: render tags read-only.

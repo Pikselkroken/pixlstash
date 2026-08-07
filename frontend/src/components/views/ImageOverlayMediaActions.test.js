@@ -28,6 +28,7 @@ const apiGet = vi.fn(async (url) => {
 vi.mock("../../utils/apiClient", async () => {
   const { ref } = await import("vue");
   return {
+    API_BASE_URL: "/api/v1",
     onSessionReset: () => () => {},
     sessionContext: { value: null },
     apiClient: { get: (...args) => apiGet(...args), post: vi.fn(), delete: vi.fn() },

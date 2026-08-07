@@ -12,6 +12,7 @@ import { setActivePinia, createPinia } from "pinia";
 import { mount } from "@vue/test-utils";
 
 vi.mock("../../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn().mockResolvedValue({ data: { sets: [] } }) },
   onSessionReset: () => () => {},
 }));

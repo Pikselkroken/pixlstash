@@ -8,10 +8,11 @@ import { listProjects } from "../../api/projects.js";
 import { listImportFolders } from "../../api/folders.js";
 import ProjectEditor from "../editors/ProjectEditor.vue";
 
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   open: { type: Boolean, default: false },
   defaultProjectId: { type: [Number, null], default: null },
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
 });
 
 const emit = defineEmits(["update:open", "local-import", "project-created"]);
@@ -229,7 +230,6 @@ watch(dialogOpen, (isOpen) => {
           <ProjectEditor
             :open="projectEditorOpen"
             :project="null"
-            :backend-url="props.backendUrl"
             @close="projectEditorOpen = false"
             @saved="onProjectSaved"
           />

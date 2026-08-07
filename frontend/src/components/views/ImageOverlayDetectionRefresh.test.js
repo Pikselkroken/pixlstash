@@ -47,6 +47,7 @@ const getMock = vi.fn(async (url) => {
 });
 
 vi.mock("../../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   onSessionReset: () => () => {},
   sessionContext: { value: null },
   apiClient: { get: (...a) => getMock(...a), post: vi.fn(), delete: vi.fn() },

@@ -7,6 +7,7 @@ import { useSearchStore } from "../stores/useSearchStore.js";
 // The composable imports the singleton apiClient for isReadOnly; mock it so no
 // real axios instance is constructed and read-only is deterministic.
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   isReadOnly: { value: false },
 }));
 

@@ -310,7 +310,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick } from "vue";
-import { isReadOnly, newOperationBatchId } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly, newOperationBatchId } from "../../utils/apiClient";
 import {
   listTags,
   addPictureTag,
@@ -330,7 +330,7 @@ const MAX_TAG_FETCH = 100;
 const MAX_PREVIEW_IMAGES = 16;
 
 const props = defineProps({
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   selectedCount: { type: Number, default: 0 },
   selectedImageIds: { type: Array, default: () => [] },
   allGridImages: { type: Array, default: () => [] },
