@@ -56,10 +56,18 @@ jobs:
               return;
             }
 
+            // Tested per line, and an UNCHECKED box never counts. The bare
+            // sentence is still accepted on its own (a contributor who writes
+            // it out rather than ticking a box has still said it), but
+            // "- [ ] I have read and agree..." contains that same sentence, so
+            // a body-wide match would accept the untouched prompt from
+            // .github/pull_request_template.md and pass every PR unread.
+            const ACK = /I have read and agree to the CLA in `pixlstash\/CLA\.md`\./;
+            const UNCHECKED_BOX = /^\s*[-*]\s*\[\s*\]/;
             const body = String(pr.body || "");
-            const hasAck =
-              /-\s*\[(x|X)\]\s*I have read and agree to the CLA in `pixlstash\/CLA\.md`\./.test(body) ||
-              /I have read and agree to the CLA in `pixlstash\/CLA\.md`\./.test(body);
+            const hasAck = body
+              .split(/\r?\n/)
+              .some((line) => !UNCHECKED_BOX.test(line) && ACK.test(line));
 
             if (!hasAck) {
               core.setFailed(
