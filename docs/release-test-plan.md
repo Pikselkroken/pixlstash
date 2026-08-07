@@ -58,7 +58,7 @@ section is the only place they are executed.
 
 ### 1.1 pip + venv (PyPI)
 
-Requires Python 3.10+.
+Requires Python 3.11+.
 
 ```
 python -m venv venv

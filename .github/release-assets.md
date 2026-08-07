@@ -22,7 +22,7 @@ is awkward there:
 
 | File | Platform | Size | Notes |
 |------|----------|------|-------|
-| `pixlstash-server-*-windows-x64.exe` | Windows | ~9 MB | Needs Python 3.10+; installs into a managed virtualenv. Digitally signed |
+| `pixlstash-server-*-windows-x64.exe` | Windows | ~9 MB | Needs Python 3.11+; installs into a managed virtualenv. Digitally signed |
 
 On **Linux and macOS**, where that is already easy, there is no separate
 download — use whichever fits your setup:
