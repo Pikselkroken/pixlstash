@@ -6,9 +6,18 @@ keeps the whole HTTP surface of this feature to one read and one state change.
 
 **The two routes sit at different access tiers on purpose** (multi-library plan
 §11 q3/q4). Listing is ``OWNER_ONLY``, so the Settings tab always renders for an
-owner. Switching is ``LOCAL_OWNER_ONLY``, because it is the pivot that turns one
-owner token into access to every registered library, and because it resets every
-connected client's session rather than only the caller's.
+owner. Switching is ``LOCAL_OWNER_ONLY`` because it resets every connected
+client's session rather than only the caller's, and takes the outgoing library's
+share links offline: it exercises authority over other principals' state.
+
+*Switching is not a confidentiality boundary* (corrected 2026-08-07). Plan §11 q4
+justified the tier as stopping a stolen token from reaching every library by
+switching. That held for the unpinned-token design it was written against; the
+library pin landed later and closes it on its own. A token stamped for a
+non-active library is refused on every data route, and minting is pinned too, so
+switching locks a thief out of what they had and gains them nothing. This is a
+single-owner convenience feature with a disruptive side effect, which is all the
+tier needs to be about.
 
 **Host information is locality-conditioned.** A password/cookie owner on the
 machine, the LAN or Tailscale sees the folder path and exact CLI command; any

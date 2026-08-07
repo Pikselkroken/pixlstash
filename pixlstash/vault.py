@@ -116,13 +116,13 @@ class Vault:
                 prevalidate_opened_library,
             )
 
+            # The engine's connect hook legitimately creates WAL/SHM before
+            # verification. That is handled inside the guard now, for every
+            # caller, rather than by this one site opting out of a directory
+            # check the other three still paid for.
             location_guard = TrustedSQLiteLocation.open(
                 self._db_path,
                 create=not os.path.exists(self._db_path),
-                # The engine's connect hook legitimately creates WAL/SHM
-                # before verification. Main-file and parent-directory inode
-                # checks remain decisive; sidecars are validated afterwards.
-                strict_parent_changes=False,
             )
             self.db = VaultDatabase(
                 self._db_path,

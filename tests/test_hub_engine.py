@@ -20,6 +20,10 @@ from pixlstash.db_models.user_token import UserToken
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.db import HubPermissionError
 from pixlstash.hub.engine import HubEngine
+from pixlstash.trusted_sqlite import (
+    TrustedSQLiteLocation,
+    TrustedSQLiteLocationError,
+)
 
 
 @pytest.fixture
@@ -172,26 +176,48 @@ class TestHubFileSecurity:
             HubDatabase(str(path))
 
     def test_simultaneous_first_open_never_observes_a_creation_race(self, tmp_path):
-        path = str(tmp_path / "hub.db")
-        barrier = threading.Barrier(2)
-        errors = []
+        """Every concurrent opener must succeed, on every attempt.
 
-        def open_hub():
-            try:
-                barrier.wait(timeout=5)
-                HubDatabase(path).close()
-            except Exception as exc:  # pragma: no cover - asserted below
-                errors.append(exc)
+        Four openers AND repeated trials. Both matter, and the second was the
+        one that had been missing: the original two-thread single-trial version
+        passed 20/20 while the defect was live, and so did a four-thread single
+        trial. The window is only hit ~22% of the time, so a test that runs one
+        trial is a coin flip, not a regression test. Twenty trials makes a live
+        defect essentially certain to surface.
 
-        threads = [threading.Thread(target=open_hub) for _ in range(2)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=10)
+        The defect: verify_after_open compared the parent directory's
+        mtime/ctime to a snapshot, and SQLite creating our own -wal/-shm moves
+        both, so a second opener was refused as though the namespace had been
+        tampered with.
+        """
+        openers = 4
+        trials = 20
+        failures = []
 
-        assert all(not thread.is_alive() for thread in threads)
-        assert errors == []
-        assert stat.S_IMODE(os.lstat(path).st_mode) == 0o600
+        for trial in range(trials):
+            path = str(tmp_path / f"hub-{trial}.db")
+            barrier = threading.Barrier(openers)
+
+            def open_hub():
+                try:
+                    barrier.wait(timeout=10)
+                    HubDatabase(path).close()
+                except Exception as exc:  # pragma: no cover - asserted below
+                    failures.append(f"trial {trial}: {type(exc).__name__}: {exc}")
+
+            threads = [threading.Thread(target=open_hub) for _ in range(openers)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=20)
+
+            assert all(not thread.is_alive() for thread in threads)
+            assert stat.S_IMODE(os.lstat(path).st_mode) == 0o600
+
+        assert failures == [], (
+            f"{len(failures)}/{trials} trials refused a concurrent opener: "
+            f"{failures[:3]}"
+        )
 
     def test_path_replacement_during_sqlite_open_is_refused_before_schema_writes(
         self, tmp_path, monkeypatch
@@ -216,9 +242,25 @@ class TestHubFileSecurity:
 
         assert open(path, "rb").read() == b"replacement"
 
-    def test_swap_away_and_back_cannot_redirect_the_sqlite_connection(
+    def test_a_same_uid_swap_during_open_is_a_documented_non_goal(
         self, tmp_path, monkeypatch
     ):
+        """Swap-away-and-back by the SAME uid is out of scope, on purpose.
+
+        This replaces a test that asserted the swap WAS caught. It was caught,
+        by comparing the parent directory's mtime/ctime, and that comparison
+        also refused ~22% of concurrent opens because SQLite creating our own
+        -wal/-shm is indistinguishable from tampering when you watch a
+        directory's timestamps. The trade was withdrawn (2026-08-07, human
+        decision after principal review) because the attacker it stopped is one
+        the threat model excludes: these files are mode 600 owned by this uid,
+        so a same-uid process can already read and rewrite them directly, with
+        no race to win. See the module docstring of pixlstash/trusted_sqlite.py.
+
+        The test is kept, inverted, so the boundary is asserted rather than
+        merely written down: if someone reintroduces the timestamp comparison,
+        this fails and points at the reasoning.
+        """
         path = str(tmp_path / "hub.db")
         decoy = str(tmp_path / "decoy.db")
         held_original = str(tmp_path / "held-original.db")
@@ -246,8 +288,31 @@ class TestHubFileSecurity:
             return real_connect(database, *args, **kwargs)
 
         monkeypatch.setattr(sqlite3, "connect", swapping_connect)
-        with pytest.raises(HubPermissionError, match="namespace.*changed"):
-            HubDatabase(path)
+        # Not raising is the documented outcome, not an oversight.
+        HubDatabase(path).close()
+
+    def test_a_directory_that_turns_writable_after_open_is_refused(self, tmp_path):
+        """The property that replaced the timestamp snapshot, asserted directly.
+
+        verify_after_open now re-runs the ownership/permission check instead of
+        comparing timestamps. That is strictly more than the old comparison
+        managed: a chmod between open and verify used to be caught only
+        incidentally, through the ctime it happened to bump. Here it is the
+        thing being tested.
+        """
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        path = str(directory / "hub.db")
+        guard = TrustedSQLiteLocation.open(path, private=True, create=True)
+        try:
+            guard.verify_after_open()  # clean while the directory is private
+
+            os.chmod(directory, 0o777)
+            with pytest.raises(TrustedSQLiteLocationError, match="world-writable"):
+                guard.verify_after_open()
+        finally:
+            os.chmod(directory, 0o700)
+            guard.close()
 
 
 class TestAuthServiceOnTheHub:

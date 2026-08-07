@@ -366,6 +366,13 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
         logger.info("Upgrading hub schema to version %d", target_version)
         try:
             with conn:
+                # Take the write lock before reading the schema. _apply_v2 asks
+                # PRAGMA table_info what exists and then ALTERs what does not,
+                # and under sqlite3's default DEFERRED transaction two processes
+                # opening the same hub can both read "column absent" and both
+                # try to add it. The loser fails with "duplicate column name"
+                # and the hub stays on the old version.
+                conn.execute("BEGIN IMMEDIATE")
                 if target_version == 2:
                     _apply_v2(conn)
                 for statement in statements:

@@ -5,6 +5,27 @@ WAL is enabled: its ``-wal`` and ``-shm`` siblings are derived from the path.
 Instead, require a namespace in which another OS principal cannot replace the
 main file or pre-position a sidecar, hold a no-follow guard, open SQLite by the
 canonical path, and compare identities before doing decisive work.
+
+**Who this defends against, and who it does not.** The actor is a *different* OS
+principal: another account that can reach a shared or badly-permissioned
+directory and substitute the database or one of its sidecars. That is what
+``_validate_namespace`` excludes, and it is the only actor the checks here can
+meaningfully stop.
+
+A *same-uid* attacker is explicitly out of scope, and not because it would be
+hard: the databases are mode 600 owned by this uid, so a same-uid process can
+already open, read and rewrite them directly, with no race to win and no guard
+to defeat. Anything it could achieve by racing an open, it can achieve more
+simply by editing the file. The multi-library plan §8 says the same thing from
+the product side, classifying this lane "Severity LOW single-owner" and naming
+its real concerns as removable media, network shares and replaced symlinks, all
+of which change ``st_dev``/``st_ino`` and are caught here.
+
+State the actor before adding a check. A control justified by an actor outside
+the threat model reads as free protection and is not: the parent-directory
+timestamp comparison bought same-uid swap detection nobody needed and refused
+roughly a fifth of concurrent opens, because SQLite creating our own WAL is
+indistinguishable from tampering when you are watching a directory's mtime.
 """
 
 from __future__ import annotations
@@ -106,9 +127,8 @@ class TrustedSQLiteLocation:
     path: str
     fd: int
     identity: tuple[int, int]
-    parent_identity: tuple[int, int, int, int]
+    parent_identity: tuple[int, int]
     private: bool = False
-    strict_parent_changes: bool = True
 
     @classmethod
     def open(
@@ -118,7 +138,6 @@ class TrustedSQLiteLocation:
         private: bool = False,
         create: bool = False,
         allow_windows_app_config: bool = False,
-        strict_parent_changes: bool = True,
     ) -> "TrustedSQLiteLocation":
         absolute = os.path.abspath(os.path.expanduser(path))
         canonical = os.path.realpath(absolute)
@@ -158,13 +177,7 @@ class TrustedSQLiteLocation:
                 ) from exc
             else:
                 os.close(created_fd)
-        parent_info = os.lstat(os.path.dirname(canonical))
-        parent_identity = (
-            parent_info.st_dev,
-            parent_info.st_ino,
-            parent_info.st_mtime_ns,
-            parent_info.st_ctime_ns,
-        )
+        parent_identity = _identity(os.lstat(os.path.dirname(canonical)))
         expected = _validate_file(canonical, private=private)
         for suffix in _SIDECAR_SUFFIXES:
             sidecar = canonical + suffix
@@ -190,7 +203,6 @@ class TrustedSQLiteLocation:
             _identity(guarded),
             parent_identity,
             private,
-            strict_parent_changes,
         )
 
     def verify_after_open(self) -> None:
@@ -199,28 +211,27 @@ class TrustedSQLiteLocation:
             raise TrustedSQLiteLocationError(
                 f"SQLite file {self.path} changed while it was being opened."
             )
-        parent = os.lstat(os.path.dirname(self.path))
-        current_parent = (
-            parent.st_dev,
-            parent.st_ino,
-            parent.st_mtime_ns,
-            parent.st_ctime_ns,
-        )
-        expected_parent = (
-            self.parent_identity
-            if self.strict_parent_changes
-            else self.parent_identity[:2]
-        )
-        observed_parent = (
-            current_parent if self.strict_parent_changes else current_parent[:2]
-        )
-        if observed_parent != expected_parent:
+        # Re-check the directory for the PROPERTY that matters rather than
+        # comparing it against a snapshot of its timestamps. Those are not the
+        # same question. mtime/ctime move whenever any entry is created in the
+        # directory, so SQLite creating our own -wal/-shm, or a second process
+        # opening the same database, was indistinguishable from tampering: it
+        # refused ~22% of concurrent opens (measured at four openers) while the
+        # only thing it could observe was same-uid activity, which is out of
+        # scope per the module docstring. Asking _require_owned_directory again
+        # is stable under concurrency (creating a sidecar changes neither the
+        # owner nor the mode) and is strictly MORE than the old comparison: a
+        # chmod between open and verify used to be caught only incidentally,
+        # via the ctime it happened to bump.
+        parent = _require_owned_directory(os.path.dirname(self.path), immediate=True)
+        if _identity(parent) != self.parent_identity:
             raise TrustedSQLiteLocationError(
-                f"SQLite namespace for {self.path} changed while it was being opened."
+                f"SQLite namespace for {self.path} was replaced while it was "
+                "being opened."
             )
-        # SQLite may have created WAL/SHM between the guard and this check;
-        # validate those new namespace entries now rather than treating the
-        # expected directory timestamp change as a replacement attack.
+        # The sidecars SQLite just created are new entries in a directory we
+        # have re-verified as unwritable by anyone else. Validate them directly
+        # anyway: this is the check that actually catches a hostile sidecar.
         for suffix in _SIDECAR_SUFFIXES:
             sidecar = self.path + suffix
             if os.path.lexists(sidecar):
