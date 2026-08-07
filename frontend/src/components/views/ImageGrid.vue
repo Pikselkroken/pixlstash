@@ -1297,7 +1297,7 @@ import { useStackOrdering } from "../../composables/useStackOrdering.js";
 import { useGridFetch } from "../../composables/useGridFetch.js";
 import { useGridScoring } from "../../composables/useGridScoring.js";
 import { useGridKeyboardNav } from "../../composables/useGridKeyboardNav.js";
-import { debounce } from "lodash-es";
+import { debounce } from "../../utils/utils";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useProjectStore } from "../../stores/useProjectStore";

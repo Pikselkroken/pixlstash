@@ -20,7 +20,7 @@ import {
   PIL_IMAGE_EXTENSIONS,
   VIDEO_EXTENSIONS,
 } from "../utils/media.js";
-import { debounce } from "lodash-es";
+import { debounce } from "../utils/utils";
 import { useFilterStore } from "../stores/useFilterStore";
 import { useGridStore } from "../stores/useGridStore";
 import { useSelectionStore } from "../stores/useSelectionStore";

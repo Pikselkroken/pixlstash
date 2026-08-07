@@ -371,3 +371,32 @@ export function shiftRangesForDelta(ranges, start, delta, end = null) {
   }
   return result;
 }
+
+/**
+ * Trailing-edge debounce: run `fn` once, `wait` ms after the last call.
+ *
+ * Replaces lodash's `debounce` for the two call sites that used it, which is
+ * the whole reason `lodash-es` was a dependency. Only the trailing edge and
+ * `.cancel()` are implemented, because that is all either site uses: there is
+ * no leading edge, no `maxWait`, and no return value from the deferred call.
+ *
+ * @param {Function} fn - the function to defer.
+ * @param {number} wait - milliseconds of quiet required before it runs.
+ * @returns {Function} the debounced function, carrying a `.cancel()` that
+ *   drops a pending call.
+ */
+export function debounce(fn, wait) {
+  let timer = null;
+  function debounced(...args) {
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      fn.apply(this, args);
+    }, wait);
+  }
+  debounced.cancel = () => {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+  };
+  return debounced;
+}

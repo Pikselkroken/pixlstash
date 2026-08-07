@@ -20,7 +20,6 @@
   "dependencies": {
     "@mdi/font": "^7.4.47",
     "axios": "^1.18.0",
-    "lodash-es": "^4.18.1",
     "pinia": "^3.0.4",
     "vue": "^3.5.22",
     "vue-router": "^4.6.4",
