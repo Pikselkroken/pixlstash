@@ -165,7 +165,7 @@ def test_compute_character_likeness_combine_modes():
     the combine strategy, and defaults to the legacy softmax behaviour."""
     import types
     import numpy as np
-    from pixlstash.picture_scoring import compute_character_likeness_for_faces
+    from pixlstash.scoring import compute_character_likeness_for_faces
 
     def face(vec, fid=None):
         return types.SimpleNamespace(

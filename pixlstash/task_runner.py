@@ -25,22 +25,6 @@ class TaskCancelledError(RuntimeError):
     before it had a chance to complete (e.g. the runner was stopped)."""
 
 
-class CallableTask(BaseTask):
-    """Task wrapper for running callables in the TaskRunner."""
-
-    def __init__(
-        self,
-        task_type: str,
-        func: Callable[..., Any],
-        params: Optional[dict[str, Any]] = None,
-    ):
-        super().__init__(task_type=task_type, params=params)
-        self._func = func
-
-    def _run_task(self) -> Any:
-        return self._func()
-
-
 class TaskRunner:
     """Multi-thread in-memory task orchestrator.
 
@@ -394,11 +378,6 @@ class TaskRunner:
             time.sleep(0.1)
         return 0
 
-    def set_task_complete_callback(
-        self, callback: Callable[[BaseTask, Optional[BaseException]], None]
-    ):
-        self._on_task_complete_callbacks = [callback]
-
     def add_task_complete_callback(
         self, callback: Callable[[BaseTask, Optional[BaseException]], None]
     ):
@@ -437,60 +416,6 @@ class TaskRunner:
             "TaskRunner %s: cancelled %d pending task(s).", self._name, cancelled
         )
         return cancelled
-
-    def cancel_pending_tasks_for_pictures(self, picture_ids: set) -> int:
-        """Drain and cancel queued tasks whose ``params['picture_ids']`` overlap *picture_ids*.
-
-        Tasks that are already executing are not interrupted.
-
-        Args:
-            picture_ids: Set of Picture IDs to match against task params.
-
-        Returns:
-            Number of tasks cancelled.
-        """
-        cancelled = 0
-        for q in (self._queue, self._gpu_queue):
-            kept: list[tuple] = []
-            while True:
-                try:
-                    item = q.get_nowait()
-                except queue.Empty:
-                    break
-                _priority, _seq, queued_task = item
-                if isinstance(queued_task, _StopTask):
-                    kept.append(item)
-                    continue
-                task_pids = set((queued_task.params or {}).get("picture_ids") or [])
-                if task_pids & picture_ids:
-                    try:
-                        queued_task.on_cancel()
-                    except Exception as exc:
-                        logger.warning(
-                            "Task %s (%s) cancel hook failed: %s",
-                            queued_task.id,
-                            queued_task.type,
-                            exc,
-                        )
-                    queued_task.status = TaskStatus.CANCELLED
-                    queued_task.completed_at = datetime.now(UTC)
-                    cancelled += 1
-                else:
-                    kept.append(item)
-            for item in kept:
-                q.put(item)
-        logger.debug(
-            "TaskRunner %s: cancelled %d pending task(s) for picture ids %s.",
-            self._name,
-            cancelled,
-            picture_ids,
-        )
-        return cancelled
-
-    def has_active_task_of_type(self, task_type: str) -> bool:
-        """Return True if any task of the given type is currently executing."""
-        with self._active_task_lock:
-            return any(t.type == task_type for t in self._active_tasks.values())
 
     def get_active_tasks_of_type(self, task_type: str) -> list:
         """Return a list of currently executing task instances of the given type."""

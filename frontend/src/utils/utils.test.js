@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
+  debounce,
   toggleScore,
   formatUserDate,
   getStackThreshold,
@@ -336,5 +337,43 @@ describe('applyStackBadgeTint', () => {
     const chip = composite('#000000', '#ffffff', 0.55)
     const worst = applyStackBadgeTint(getStackColor(7)) // hue 258, the darkest
     expect(contrastRatio(hslToRgb(worst), chip)).toBeLessThan(3)
+  })
+})
+
+describe('debounce', () => {
+  it('runs once on the trailing edge, with the last arguments', () => {
+    vi.useFakeTimers()
+    const spy = vi.fn()
+    const debounced = debounce(spy, 100)
+
+    debounced('a')
+    debounced('b')
+    debounced('c')
+    expect(spy).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(99)
+    expect(spy).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1)
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('c')
+    vi.useRealTimers()
+  })
+
+  it('cancel() drops the pending call', () => {
+    vi.useFakeTimers()
+    const spy = vi.fn()
+    const debounced = debounce(spy, 100)
+
+    debounced()
+    debounced.cancel()
+    vi.advanceTimersByTime(1000)
+    expect(spy).not.toHaveBeenCalled()
+
+    // cancel() must not poison the instance: it debounces again afterwards.
+    debounced()
+    vi.advanceTimersByTime(100)
+    expect(spy).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
   })
 })

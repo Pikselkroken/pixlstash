@@ -20,6 +20,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { nextTick, h } from "vue";
 
 vi.mock("../../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   onSessionReset: () => () => {},
   sessionContext: { value: null },
   apiClient: {

@@ -2,7 +2,7 @@ import time
 from collections import defaultdict
 
 import numpy as np
-from sqlmodel import Session, func, select
+from sqlmodel import select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Face, Picture
@@ -140,19 +140,3 @@ class SourceFaceLikenessTask(BaseTask):
                 session.commit()
 
         self._db.run_task(clear, priority=DBPriority.LOW)
-
-    @staticmethod
-    def count_pending(session: Session) -> int:
-        from sqlalchemy import exists as sa_exists
-
-        return session.exec(
-            select(func.count(Picture.id)).where(
-                Picture.source_picture_id.is_not(None),
-                sa_exists(
-                    select(Face.id).where(
-                        Face.picture_id == Picture.id,
-                        Face.features.is_not(None),
-                    )
-                ),
-            )
-        ).one()

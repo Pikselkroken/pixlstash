@@ -49,7 +49,7 @@ from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
-from pixlstash.services.restore_service import RestoreService
+from pixlstash.services.restore import RestoreService
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 
 
@@ -836,19 +836,6 @@ class Vault:
             session.commit()
 
         self.db.submit_task(op, priority=DBPriority.IMMEDIATE)
-
-    def get_description(self) -> Optional[str]:
-        return self.db.submit_task(
-            lambda session: (
-                session.exec(
-                    select(MetaData).where(
-                        MetaData.schema_version == MetaData.CURRENT_SCHEMA_VERSION
-                    )
-                )
-                .first()
-                .description
-            )
-        ).result()
 
     def submit_task(self, task):
         """Submit an in-memory task to the shared task runner."""

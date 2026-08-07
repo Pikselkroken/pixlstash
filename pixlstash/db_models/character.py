@@ -85,10 +85,3 @@ class Character(SQLModel, table=True):
         Return a list of relationship fields
         """
         return set(cls.__mapper__.relationships.keys())
-
-    @classmethod
-    def all_fields(cls):
-        """
-        Return a list of all field names
-        """
-        return cls.scalar_fields().union(cls.relationship_fields())

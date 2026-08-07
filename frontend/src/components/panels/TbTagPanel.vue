@@ -310,7 +310,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick } from "vue";
-import { isReadOnly, newOperationBatchId } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly, newOperationBatchId } from "../../utils/apiClient";
 import {
   listTags,
   addPictureTag,
@@ -324,12 +324,13 @@ import { resetPictureTags } from "../../api/pictures";
 import { listTaggers } from "../../api/taggers";
 import { getUserConfig } from "../../api/config";
 import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
+import { errorDetail } from "../../utils/apiError";
 
 const MAX_TAG_FETCH = 100;
 const MAX_PREVIEW_IMAGES = 16;
 
 const props = defineProps({
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   selectedCount: { type: Number, default: 0 },
   selectedImageIds: { type: Array, default: () => [] },
   allGridImages: { type: Array, default: () => [] },
@@ -626,7 +627,7 @@ async function confirmPredictionOnAll(
       fetchSelectedImagePredictions(),
     ]);
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     predActionLoading.value = predActionLoading.value.filter(
       (n) => n !== predEntry.tag,
@@ -677,7 +678,7 @@ async function removeTagFromAll(
     });
     await fetchSelectedImageTags();
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     tagActionLoading.value = tagActionLoading.value.filter(
       (n) => n !== tagEntry.name,
@@ -705,7 +706,7 @@ async function addTagToRemaining(tagEntry) {
     });
     await fetchSelectedImageTags();
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     tagActionLoading.value = tagActionLoading.value.filter(
       (n) => n !== tagEntry.name,
@@ -747,8 +748,7 @@ async function generateTagsForAll(model = null) {
     generateTagsSuccess.value = `Queued ${ids.length} image${ids.length !== 1 ? "s" : ""} for re-tagging${suffix}`;
     emit("tags-applied", { pictureIds: ids, action: "reset" });
   } catch (err) {
-    generateTagsError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+    generateTagsError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     generateTagsLoading.value = false;
   }
@@ -947,7 +947,7 @@ async function applyTag() {
     emit("tags-applied", { tag, pictureIds: ids });
     await fetchSelectedImageTags();
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     tagLoading.value = false;
   }
@@ -1007,7 +1007,7 @@ async function rejectTagOnAll(tagEntry, { batchId } = {}) {
     );
     await fetchSelectedImagePredictions();
   } catch (err) {
-    tagError.value = err?.response?.data?.detail || err?.message || String(err);
+    tagError.value = errorDetail(err) || err?.message || String(err);
   }
 }
 
@@ -1128,15 +1128,12 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-current-toggle {
-  border: none;
-  background: transparent;
   color: inherit;
   font: inherit;
   text-transform: inherit;
   letter-spacing: inherit;
   opacity: inherit;
   padding: 0;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -1196,7 +1193,6 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   border-radius: var(--radius-lg);
   padding: var(--space-1) var(--space-3);
   font-size: var(--text-xs);
-  cursor: pointer;
   transition:
     background 0.15s,
     opacity 0.15s;
@@ -1221,7 +1217,6 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 }
 
 .tag-chip--some {
-  background: transparent;
   border: 1px dashed rgba(var(--v-theme-on-surface), 0.35);
   color: rgb(var(--v-theme-on-surface));
   opacity: 0.7;
@@ -1343,10 +1338,7 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   text-align: left;
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);
-  background: transparent;
-  border: none;
   color: rgb(var(--v-theme-on-surface));
-  cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1475,12 +1467,9 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0 var(--space-3);
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-base);
   font-family: inherit;
   height: 40px;

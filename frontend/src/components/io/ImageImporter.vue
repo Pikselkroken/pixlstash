@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref } from "vue";
 import { VIcon } from "vuetify/components";
-import { isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { sleep } from "../../utils/utils";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -16,6 +16,7 @@ import {
 // a second restore path, so it comes from the pictures resource module (the
 // import module owns the staging session, not the whole picture domain).
 import { restoreScrapheap } from "../../api/pictures";
+import { errorDetail } from "../../utils/apiError";
 
 // ── Async streaming-staging import (#459) ────────────────────────────────────
 // This component owns the two-phase import experience over the finalised
@@ -47,10 +48,7 @@ import { restoreScrapheap } from "../../api/pictures";
 // empty results list. Media, .zip archives and .txt sidecars all stream.
 
 const props = defineProps({
-  backendUrl: { type: String, required: true },
-  selectedCharacterId: { type: [String, Number, null], default: null },
-  allPicturesId: { type: String, default: "" },
-  unassignedPicturesId: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
 });
 
 const emit = defineEmits([
@@ -140,7 +138,7 @@ function offerScrapheapRestore(fileCount, pictureIds) {
           noticeStore.push({
             level: "error",
             text:
-              error?.response?.data?.detail ||
+              errorDetail(error) ||
               "Could not restore those pictures. Please try again.",
           });
         }
@@ -718,7 +716,7 @@ async function startImport(files, options = {}) {
       // reason (400 empty / face-worker-down, 409 committed, 507 disk) and
       // discard the session. A 409 means it is already handed off, so leave it.
       const detail =
-        err?.response?.data?.detail || err?.message || "Import commit failed.";
+        errorDetail(err) || err?.message || "Import commit failed.";
       const status = err?.response?.status;
       if (status !== 409 && currentStagingId) {
         const stagingId = currentStagingId;
@@ -1136,7 +1134,6 @@ defineExpose({ startImport });
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);

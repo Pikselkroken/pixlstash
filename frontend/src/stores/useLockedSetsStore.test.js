@@ -4,6 +4,7 @@ import { setActivePinia, createPinia } from "pinia";
 // The store imports the singleton apiClient; mock it so no real HTTP happens and
 // we can drive the locked-members payload.
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn() },
   onSessionReset: () => () => {},
 }));

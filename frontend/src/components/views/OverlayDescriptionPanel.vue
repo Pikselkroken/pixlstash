@@ -140,7 +140,7 @@
 
 <script setup>
 import { ref, computed, nextTick, watch } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import {
   patchPicture,
   resetPictureDescription,
@@ -148,6 +148,7 @@ import {
 import { listTaggers } from "../../api/taggers";
 import { copyText } from "../../utils/clipboard";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { errorDetail } from "../../utils/apiError";
 import {
   isDescriptionSentinel,
   formatDescriptionSentinel,
@@ -159,7 +160,7 @@ const noticeStore = useNoticeStore();
 
 const props = defineProps({
   image: { type: Object, default: null },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   // True when the picture is frozen by a locked set: render read-only.
   locked: { type: Boolean, default: false },
   // Lock-reason tooltip copy (single source from useLockedSetsStore).
@@ -247,7 +248,7 @@ async function saveDescription() {
   } catch (err) {
     console.error("Failed to update description", err);
     noticeStore.error(
-      `Couldn't save the description. ${err?.response?.data?.detail || err?.message || "Please try again."}`,
+      `Couldn't save the description. ${errorDetail(err) || err?.message || "Please try again."}`,
       { key: "description-save" },
     );
   } finally {
@@ -319,7 +320,7 @@ async function refreshDescription(model = null) {
   } catch (err) {
     console.error("Failed to reset description", err);
     noticeStore.error(
-      `Couldn't reset the description. ${err?.response?.data?.detail || err?.message || "Please try again."}`,
+      `Couldn't reset the description. ${errorDetail(err) || err?.message || "Please try again."}`,
       { key: "description-reset" },
     );
   } finally {
@@ -395,14 +396,11 @@ defineExpose({
 }
 
 .section-meta-btn {
-  border: none;
-  background: transparent;
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
   padding: var(--space-1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
 }
 
 .section-meta-btn:disabled {
@@ -463,8 +461,6 @@ defineExpose({
 }
 
 .overlay-icon-btn {
-  border: none;
-  background: none;
   color: rgb(var(--v-theme-on-dark-surface));
   height: 32px;
   padding: 6px 14px;
@@ -473,7 +469,6 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   font-size: 1em;
 }
 

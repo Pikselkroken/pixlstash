@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import time
 
-from sqlmodel import Column, ForeignKey, Integer, SQLModel, Field, Relationship, Session
+from sqlmodel import Column, ForeignKey, Integer, SQLModel, Field, Relationship
 from typing import List, Optional, TYPE_CHECKING
 
 from scipy.ndimage import median_filter
@@ -48,20 +48,6 @@ class Quality(SQLModel, table=True):
         # Weights: Sharpness (40%), Contrast (40%), Exposure/Brightness (20%)
         heuristic = (s * 0.4 + c * 0.4 + b * 0.2) * 9.0 + 1.0
         return round(heuristic, 2)
-
-    @staticmethod
-    def batch_likeness_scores(features_a, features_b):
-        """
-        Given two lists of facial feature arrays (np.ndarray), compute cosine similarity for each pair.
-        Returns a numpy array of likeness scores (shape: [len(features_a)]).
-        """
-        X_a = np.stack(features_a, axis=0)
-        X_b = np.stack(features_b, axis=0)
-        norms_a = np.linalg.norm(X_a, axis=1, keepdims=True)
-        norms_b = np.linalg.norm(X_b, axis=1, keepdims=True)
-        X_a_norm = X_a / (norms_a + 1e-8)
-        X_b_norm = X_b / (norms_b + 1e-8)
-        return np.sum(X_a_norm * X_b_norm, axis=1)
 
     @staticmethod
     def calculate_quality_batch(
@@ -565,41 +551,3 @@ class Quality(SQLModel, table=True):
 
         # Geometric mean: both signals must be strong for a high overall score.
         return float(np.sqrt(bg_score * cc_score))
-
-    @classmethod
-    def quality_metric_fields(cls) -> set[str]:
-        """
-        Return list of quality metric field names common for pictures and picture faces
-        """
-        return [
-            "sharpness",
-            "edge_density",
-            "contrast",
-            "brightness",
-            "noise_level",
-            "colorfulness",
-            "luminance_entropy",
-            "dominant_hue",
-        ]
-
-    @classmethod
-    def quality_read_for_picture(
-        cls, session: Session, picture_id: int
-    ) -> Optional["Quality"]:
-        """
-        Load quality record for given picture ID.
-        """
-        return (
-            session.query(cls)
-            .filter(cls.picture_id == picture_id, cls.face_id.is_(None))
-            .first()
-        )
-
-    @classmethod
-    def quality_read_for_face(
-        cls, session: Session, face_id: int
-    ) -> Optional["Quality"]:
-        """
-        Load quality record for given face ID.
-        """
-        return session.query(cls).filter(cls.face_id == face_id).first()

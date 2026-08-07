@@ -348,13 +348,10 @@ watch(
   text-align: left;
   position: relative;
   padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
-  border: none;
-  cursor: pointer;
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   color: rgba(var(--v-theme-on-surface), 0.65);
-  background: transparent;
   transition:
     color var(--dur-1) var(--ease-standard),
     background var(--dur-1) var(--ease-standard);

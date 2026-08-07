@@ -27,7 +27,7 @@
 // drew its copies too small to judge a duplicate by, which is the one thing
 // the strip exists for. The ratios between the levels are unchanged, so the
 // control still steps the way it did.
-export const THUMBNAIL_SIZE_STEPS = [
+const THUMBNAIL_SIZE_STEPS = [
   { key: "tiny", label: "Tiny", columns: 14, rowHeight: 128, stripHeight: 112 },
   {
     key: "very_small",
@@ -68,7 +68,7 @@ export const THUMBNAIL_SIZE_STEPS = [
 ];
 
 export const DEFAULT_THUMBNAIL_SIZE_LEVEL = 3; // Medium
-export const MIN_THUMBNAIL_SIZE_LEVEL = 0;
+const MIN_THUMBNAIL_SIZE_LEVEL = 0;
 export const MAX_THUMBNAIL_SIZE_LEVEL = THUMBNAIL_SIZE_STEPS.length - 1;
 
 /** Round and clamp an arbitrary value to a valid size level. */

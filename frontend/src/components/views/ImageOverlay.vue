@@ -252,7 +252,6 @@
             type="set"
             ref="addToSetControlRef"
             :key="addToSetControlKey"
-            :backend-url="backendUrl"
             :picture-ids="[image.id]"
             :include-deleted-members="true"
             :force-dark="true"
@@ -265,7 +264,6 @@
           <AddToEntityControl
             v-if="image && !isReadOnly"
             type="project"
-            :backend-url="backendUrl"
             :picture-ids="[image.id]"
             :include-deleted-members="true"
             :expand-stacks="false"
@@ -663,7 +661,6 @@
           <OverlayDescriptionPanel
             ref="descriptionPanelRef"
             :image="image"
-            :backend-url="backendUrl"
             :locked="isCurrentLocked"
             :lock-note="currentLockReason"
             @update-description="handleDescriptionUpdate"
@@ -714,7 +711,6 @@
                           allow-create
                           float-menu
                           :force-dark="true"
-                          :backend-url="backendUrl"
                           :face-id="face.id"
                           :assigned-character-id="face.character_id"
                           :assigned-character-name="faceAssignedName(face)"
@@ -736,7 +732,6 @@
           <OverlayTagsPanel
             ref="tagsPanelRef"
             :image="image"
-            :backend-url="backendUrl"
             :hidden-tags="hiddenTags"
             :apply-tag-filter="applyTagFilter"
             :locked="isCurrentLocked"
@@ -751,7 +746,6 @@
             :image="image"
             :comfy-metadata="comfyMetadata"
             :date-format="dateFormat"
-            :backend-url="backendUrl"
             :video-duration="videoMeta.duration"
           />
         </aside>
@@ -777,7 +771,6 @@
     <CharacterEditor
       :open="createPersonOpen"
       :character="createPersonCharacter"
-      :backend-url="backendUrl"
       :projects="createPersonProjects"
       @close="handleCreatePersonClose"
       @saved="handleCreatePersonSaved"
@@ -813,7 +806,7 @@ import {
   mediaMimeType,
   safeDownloadName,
 } from "../../utils/media.js";
-import { appendShareToken, isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
   getPictureMetadata,
   listPictureFaces,
@@ -865,6 +858,7 @@ import {
   sortStackMembers,
 } from "../../utils/stack.js";
 import { dedupeTagList, getTagList } from "../../utils/tags.js";
+import { errorDetail } from "../../utils/apiError";
 
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
@@ -918,7 +912,7 @@ const props = defineProps({
   initialImageId: { type: [String, Number, null], default: null },
   initialExpandedStackIds: { type: Array, default: () => [] },
   allImages: { type: Array, default: () => [] },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   tagUpdate: { type: Object, default: () => ({}) },
   descriptionUpdate: { type: Object, default: () => ({}) },
   smartScoreUpdate: { type: Object, default: () => ({}) },
@@ -1143,11 +1137,8 @@ function setOverlayImageById(nextId) {
 
 const emit = defineEmits([
   "close",
-  "prev",
-  "next",
   "apply-score",
   "set-guest-score",
-  "remove-tag",
   "add-tag",
   "update-description",
   "overlay-change",
@@ -1444,7 +1435,7 @@ async function fetchComfyWorkflows() {
     comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
   } catch (err) {
     comfyuiWorkflowError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+      errorDetail(err) || err?.message || String(err);
     comfyuiWorkflows.value = [];
   } finally {
     comfyuiWorkflowLoading.value = false;
@@ -1482,8 +1473,7 @@ async function runComfyWorkflow() {
       comfyuiMenuOpen.value = false;
     }, 1200);
   } catch (err) {
-    comfyuiRunError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+    comfyuiRunError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     comfyuiRunLoading.value = false;
   }
@@ -3006,7 +2996,7 @@ async function onDrawEnd(event) {
   } catch (e) {
     console.error("Failed to create box", e);
     noticeStore.error(
-      `Couldn't create that ${drawModeLabel.value} box. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Couldn't create that ${drawModeLabel.value} box. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "overlay-create-box" },
     );
   } finally {
@@ -3598,7 +3588,7 @@ async function assignFaceToCharacter(face, character) {
   } catch (e) {
     console.error("Failed to assign character", e);
     noticeStore.error(
-      `Couldn't assign that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Couldn't assign that person. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "overlay-assign-character" },
     );
   }
@@ -3629,7 +3619,7 @@ async function unassignFaceCharacter(face) {
   } catch (e) {
     console.error("Failed to unassign character", e);
     noticeStore.error(
-      `Couldn't unassign that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Couldn't unassign that person. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "overlay-unassign-character" },
     );
   }
@@ -3806,7 +3796,7 @@ async function handleCreatePersonSaved(savedCharacter) {
   } catch (e) {
     console.error("Failed to assign the new person to the face", e);
     noticeStore.error(
-      `Created ${name}, but couldn't assign this face. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Created ${name}, but couldn't assign this face. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "overlay-create-person" },
     );
   }
@@ -4051,8 +4041,7 @@ function mediaActionInfo(target = null) {
 
 function mediaActionError(err, fallback = "Please try again.") {
   return (
-    err?.response?.data?.detail || err?.message || String(err || fallback)
-  );
+    errorDetail(err) || err?.message || String(err || fallback) );
 }
 
 function triggerMediaDownload(blob, filename) {

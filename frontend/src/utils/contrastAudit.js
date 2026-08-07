@@ -219,7 +219,7 @@ export function auditContrast(themes = readThemeColors()) {
 }
 
 /** Pretty-print the audit. Returns the process exit code. */
-export function reportContrast(rows = auditContrast(), log = console.log) {
+function reportContrast(rows = auditContrast(), log = console.log) {
   let lastGroup = null
   let failures = 0
 

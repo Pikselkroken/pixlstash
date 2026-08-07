@@ -251,16 +251,13 @@ function onUndo(event) {
   gap: var(--space-2);
   flex-shrink: 0;
   padding: var(--space-2) var(--space-3);
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgb(var(--v-theme-on-surface));
   font-family: inherit;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   text-decoration: underline;
   text-underline-offset: 2px;
-  cursor: pointer;
 }
 .r-btn:hover:not([aria-disabled="true"]) {
   background: var(--hover-wash);

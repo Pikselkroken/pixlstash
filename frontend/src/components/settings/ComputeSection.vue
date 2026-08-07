@@ -13,6 +13,7 @@ import SettingsSection from "./SettingsSection.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsTwoCol from "./SettingsTwoCol.vue";
 import { VSwitch, VIcon, VTooltip, VProgressLinear } from "vuetify/components";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -282,7 +283,7 @@ async function applyServer() {
     }
     await desktop.setServerSettings({ ...serverDraft.value });
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     if (claiming) ownerError.value = detail;
     else error.value = detail;
   } finally {
@@ -780,10 +781,7 @@ watch(
   right: 6px;
   display: inline-flex;
   align-items: center;
-  border: none;
-  background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.7);
-  cursor: pointer;
   padding: var(--space-2);
 }
 

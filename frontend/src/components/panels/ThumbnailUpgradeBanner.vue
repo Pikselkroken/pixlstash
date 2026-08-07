@@ -265,14 +265,11 @@ function viewProgress() {
   flex: none;
   margin-left: auto;
   padding: var(--space-2) var(--space-3);
-  border: 0;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgb(var(--v-theme-primary));
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   font-family: inherit;
-  cursor: pointer;
 }
 
 .tub-view:hover {
@@ -293,11 +290,8 @@ function viewProgress() {
   width: 24px;
   height: 24px;
   padding: 0;
-  border: 0;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgba(var(--v-theme-on-panel), 0.6);
-  cursor: pointer;
 }
 
 .tub-dismiss:hover {

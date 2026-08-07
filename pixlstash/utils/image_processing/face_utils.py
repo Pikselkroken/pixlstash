@@ -1,7 +1,6 @@
 """Face cropping, detection helpers, and face-weighted thumbnail generation."""
 
 import cv2
-import numpy as np
 from typing import List, Optional
 
 from PIL import Image
@@ -192,54 +191,6 @@ class FaceUtils:
         return img[top : top + side, left : left + side]
 
     @staticmethod
-    def batch_facial_likeness(facial_features_list: list) -> np.ndarray:
-        """
-        Given a list of facial feature arrays (all same shape), compute a cosine
-        similarity matrix.
-
-        Each entry ``[i, j]`` is the cosine similarity between
-        ``facial_features_list[i]`` and ``facial_features_list[j]``.
-
-        Returns an ``(N, N)`` numpy array.
-        """
-        X = np.stack(facial_features_list, axis=0)
-        norms = np.linalg.norm(X, axis=1, keepdims=True)
-        X_norm = X / (norms + 1e-8)
-        return np.dot(X_norm, X_norm.T)
-
-    @staticmethod
-    def batch_face_likeness(face_crops: list) -> np.ndarray:
-        """
-        Given a list of lists of face crops (as numpy arrays), compute an
-        ``(N, N)`` likeness matrix.
-
-        Each entry ``[i, j]`` is the best cosine similarity between any crop in
-        group ``i`` and any crop in group ``j``.
-        """
-        N = len(face_crops)
-        likeness_matrix = np.zeros((N, N), dtype=np.float32)
-        flat_crops = [
-            [
-                crop.flatten().astype(np.float32)
-                / (np.linalg.norm(crop.flatten().astype(np.float32)) + 1e-8)
-                for crop in crops
-            ]
-            for crops in face_crops
-        ]
-        for i in range(N):
-            for j in range(N):
-                if i == j or not flat_crops[i] or not flat_crops[j]:
-                    likeness_matrix[i, j] = 0.0
-                else:
-                    sims = [
-                        float(np.dot(c1, c2))
-                        for c1 in flat_crops[i]
-                        for c2 in flat_crops[j]
-                    ]
-                    likeness_matrix[i, j] = max(sims) if sims else 0.0
-        return likeness_matrix
-
-    @staticmethod
     def crop_face_bbox_exact(file_path, bbox):
         """
         Load an image or video file and return a crop exactly matching the face bbox
@@ -281,22 +232,6 @@ class FaceUtils:
         y1c = max(0, min(h, y1))
         y2c = max(0, min(h, y2))
         return img.crop((x1c, y1c, x2c, y2c))
-
-    @staticmethod
-    def softmax_weighted_average(scores, alpha: float = 5.0) -> float:
-        """
-        Compute a softmax-weighted average of likeness scores.
-
-        Args:
-            scores: List or np.ndarray of likeness scores (floats between 0 and 1).
-            alpha: Controls sharpness; higher alpha makes the max more dominant.
-
-        Returns:
-            Softmax-weighted average likeness as a float.
-        """
-        scores = np.array(scores)
-        weights = np.exp(alpha * scores)
-        return float(np.sum(weights * scores) / np.sum(weights))
 
 
 def expand_bbox_to_square(

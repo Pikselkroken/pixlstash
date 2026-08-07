@@ -309,11 +309,8 @@ function cancelReduction() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
-  background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.6);
   border-radius: var(--radius-sm);
-  cursor: pointer;
   transition: color var(--dur-1) var(--ease-standard);
 }
 

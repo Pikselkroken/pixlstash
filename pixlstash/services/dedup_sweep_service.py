@@ -63,6 +63,7 @@ from sqlmodel import Session, select
 from pixlstash.db_models import Picture
 from pixlstash.db_models.picture_likeness import PictureLikeness
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK as ID_CHUNK
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pixlstash.vault import Vault
@@ -88,9 +89,6 @@ DEFAULT_MAX_GROUPS_LISTED = 500
 # Edge rows pulled per keyset page. Large enough that a vault-sized sweep is a
 # handful of round-trips, small enough that no page dominates memory.
 EDGE_PAGE_SIZE = 20000
-
-# SQLite caps bound variables per statement (~999); chunk every ``IN`` load.
-ID_CHUNK = 900
 
 
 class CrossStackPolicy(str, Enum):

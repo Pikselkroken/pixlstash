@@ -1,7 +1,6 @@
 import { nextTick } from "vue";
 import { patchUserConfig } from "../api/config";
 import { useGridStore } from "../stores/useGridStore";
-import { useSortStore } from "../stores/useSortStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
 import { useUserPrefsStore } from "../stores/useUserPrefsStore";
 
@@ -19,19 +18,15 @@ import { useUserPrefsStore } from "../stores/useUserPrefsStore";
  *   actions it exposes imperatively.
  * @param {import("vue").Ref} deps.statsSidebarRef - the stats panel, for the
  *   Tasks-tab deep link.
- * @param {Function} deps.onNavigated - close the mobile sidebar after an
- *   action that moves the view.
  * @param {Function} deps.pushAppRoute - navigate (viewing a project is the
  *   one control here that does move the grid).
  */
 export function useAppSettingsHandlers({
   gridContainer,
   statsSidebarRef,
-  onNavigated,
   pushAppRoute,
 }) {
   const gridStore = useGridStore();
-  const sortStore = useSortStore();
   const sidebarStore = useSidebarStore();
   const userPrefsStore = useUserPrefsStore();
 
@@ -41,12 +36,6 @@ export function useAppSettingsHandlers({
   function handleViewProject(id) {
     if (id == null) return;
     pushAppRoute({ name: "project", params: { id: String(id) } });
-  }
-
-  async function handleUpdateSelectedSort({ sort, descending }) {
-    sortStore.selectedSort = sort;
-    sortStore.selectedDescending = descending;
-    onNavigated?.();
   }
 
   function handleStackStatsUpdate(payload) {
@@ -101,7 +90,6 @@ export function useAppSettingsHandlers({
 
   return {
     handleViewProject,
-    handleUpdateSelectedSort,
     handleStackStatsUpdate,
     handleUpdateCheckForUpdates,
     handleEmptyScrapheapFromSidebar,

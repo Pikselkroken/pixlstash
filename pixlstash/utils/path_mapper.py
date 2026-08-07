@@ -52,7 +52,3 @@ class PathMapper:
                 rel = os.path.relpath(norm, host_prefix)
                 return os.path.join(container_prefix, rel)
         return path
-
-    def has_mappings(self) -> bool:
-        """Return True if any path mappings are configured."""
-        return bool(self._mappings)

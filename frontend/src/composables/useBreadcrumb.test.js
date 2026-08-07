@@ -31,6 +31,7 @@ vi.mock("vue-router", () => ({
 }));
 
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   onSessionReset: () => () => {},
 }));
 

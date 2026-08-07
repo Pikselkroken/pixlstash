@@ -347,7 +347,9 @@ import {
   runRecipe,
 } from "../../api/comfyui";
 import { getPictureMetadata } from "../../api/pictures";
+import { errorDetail } from "../../utils/apiError";
 
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   open: { type: Boolean, default: false },
   /** The right-clicked picture. The dialog always acts on this one. */
@@ -356,7 +358,7 @@ const props = defineProps({
   selectedImageIds: { type: Array, default: () => [] },
   /** Ties ComfyUI progress events back to this tab. */
   clientId: { type: String, default: "" },
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   /** Whether generated outputs join the source's stack. */
   stackOutputs: { type: Boolean, default: true },
 });
@@ -887,7 +889,7 @@ async function loadRecipe(generation, imageId) {
     if (!isCurrentLoad(generation, imageId)) return;
     recipe.value = null;
     recipeError.value =
-      err?.response?.data?.detail ||
+      errorDetail(err) ||
       "Could not check this image for an embedded workflow.";
     console.error("Failed to read remix recipe:", err);
   } finally {
@@ -1057,7 +1059,7 @@ async function submit() {
     // A submission error is a FORM error: keep the dialog and every input.
     submitting.value = false;
     submitError.value =
-      err?.response?.data?.detail || err?.message || "Could not start the run.";
+      errorDetail(err) || err?.message || "Could not start the run.";
   }
 }
 </script>
@@ -1080,13 +1082,10 @@ async function submit() {
 }
 
 .remix-link {
-  border: none;
-  background: none;
   padding: 0;
   font: inherit;
   font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-accent));
-  cursor: pointer;
 }
 
 .remix-link:focus-visible {
@@ -1377,9 +1376,6 @@ async function submit() {
   font-size: var(--text-sm);
   font-family: var(--font-ui);
   color: rgba(var(--v-theme-on-surface), 0.7);
-  background: transparent;
-  border: none;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 

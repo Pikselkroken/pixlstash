@@ -169,12 +169,10 @@ function formatCount(value) {
   padding: var(--space-3);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  background: transparent;
   color: inherit;
   font-family: var(--font-ui);
   font-size: var(--text-base);
   text-align: left;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 

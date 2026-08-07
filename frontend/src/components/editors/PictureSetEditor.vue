@@ -174,7 +174,9 @@ import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
+import { errorDetail } from "../../utils/apiError";
 
+import { API_BASE_URL } from "../../utils/apiClient";
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
 const noticeStore = useNoticeStore();
@@ -183,7 +185,7 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   set: { type: Object, default: null },
   thumbnailUrl: { type: String, default: null },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   projects: { type: Array, default: () => [] },
 });
 
@@ -318,7 +320,7 @@ async function saveSetFromEditor(setData) {
   } catch (e) {
     console.error("Failed to save picture set", e);
     noticeStore.error(
-      `Couldn't save that set. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Couldn't save that set. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "set-save" },
     );
   }
@@ -489,8 +491,6 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   height: 48px;
   border-radius: var(--radius-md);
   border: 2px solid transparent;
-  background: transparent;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -541,8 +541,6 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   height: 32px;
   border-radius: var(--radius-sm);
   border: 2px solid transparent;
-  background: transparent;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -589,7 +587,6 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   height: 30px;
   border-radius: var(--radius-sm);
   border: 2px solid transparent;
-  cursor: pointer;
   outline: none;
   padding: 0;
   box-sizing: border-box;

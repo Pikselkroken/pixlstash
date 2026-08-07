@@ -579,14 +579,14 @@
 
 <script setup>
 import { ref, computed, watch } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { listTags } from "../../api/tags";
 import { listComfyuiModels, listComfyuiLoras } from "../../api/pictures";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 
 const props = defineProps({
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   selectedCharacter: { type: String, default: null },
   allPicturesId: { type: String, default: null },
   open: { type: Boolean, default: false },
@@ -1065,9 +1065,6 @@ watch(
   align-items: center;
   justify-content: center;
   padding: var(--space-1) var(--space-1);
-  background: none;
-  border: none;
-  cursor: pointer;
   color: rgba(var(--v-theme-on-panel), 0.7);
   line-height: 1;
 }
@@ -1105,10 +1102,7 @@ watch(
   width: 100%;
   padding: var(--space-2) var(--space-4);
   text-align: left;
-  cursor: pointer;
   font-size: var(--text-sm);
-  background: transparent;
-  border: none;
   color: rgb(var(--v-theme-on-panel));
 }
 
@@ -1140,7 +1134,6 @@ watch(
   border-radius: var(--radius-pill);
   padding: var(--space-1) var(--space-3);
   font-size: var(--text-xs);
-  cursor: pointer;
   transition:
     background var(--dur-1) var(--ease-standard),
     opacity var(--dur-1) var(--ease-standard);

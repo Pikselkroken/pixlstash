@@ -37,6 +37,7 @@ vi.mock("../../api/pictures", () => ({
   listPicturesByIds: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("../../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   appendShareToken: (u) => u,
   apiClient: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));

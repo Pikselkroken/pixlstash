@@ -102,7 +102,7 @@
 
 <script setup>
 import { computed, ref, watch, nextTick, onUnmounted } from "vue";
-import { appendShareToken } from "../../utils/apiClient";
+import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import {
   createCharacter,
   patchCharacter,
@@ -118,6 +118,7 @@ import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import { errorDetail } from "../../utils/apiError";
 
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
@@ -126,7 +127,7 @@ const noticeStore = useNoticeStore();
 const props = defineProps({
   open: { type: Boolean, default: false },
   character: { type: Object, default: null },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   projects: { type: Array, default: () => [] },
 });
 
@@ -314,7 +315,7 @@ async function saveCharacter(charData) {
   } catch (e) {
     console.error("Failed to save character", e);
     noticeStore.error(
-      `Couldn't save that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      `Couldn't save that person. ${errorDetail(e) || e?.message || "Please try again."}`,
       { key: "character-save" },
     );
   }

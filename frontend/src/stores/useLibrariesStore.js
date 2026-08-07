@@ -4,6 +4,7 @@ import { defineStore } from "pinia";
 import { listLibraries, setActiveLibrary } from "../api/libraries";
 import { onSessionReset } from "../utils/apiClient";
 import { reloadPage } from "../utils/reloadPage";
+import { errorDetail } from "../utils/apiError";
 
 /**
  * App-level owner view of the hub registry.
@@ -46,7 +47,7 @@ export const useLibrariesStore = defineStore("libraries", () => {
       if (startedAt !== epoch) return;
       hasLoadedSuccessfully.value = false;
       loadError.value =
-        error?.response?.data?.detail ||
+        errorDetail(error) ||
         "Could not read the list of libraries.";
     } finally {
       if (startedAt === epoch) loading.value = false;
@@ -127,7 +128,7 @@ export const useLibrarySwitchStore = defineStore("library-switch", () => {
       reloadPage();
     } catch (requestError) {
       error.value =
-        requestError?.response?.data?.detail ||
+        errorDetail(requestError) ||
         `Could not switch to ${target.name}.`;
       phase.value = "failed";
     }

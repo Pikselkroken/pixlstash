@@ -69,9 +69,7 @@ RUN pip install --no-cache-dir \
     insightface \
     rapidfuzz \
     tqdm \
-    einops \
     sentence_transformers \
-    spacy \
     pillow-heif \
     sqlmodel \
     alembic \
@@ -82,15 +80,12 @@ RUN pip install --no-cache-dir \
     piexif \
     watchdog \
     psutil \
-    dotenv \
     python-dotenv \
     click \
     accelerate \
     bitsandbytes \
     zstandard
 
-# Download spaCy English model
-RUN python -m spacy download en_core_web_sm
 
 
 # ── Stage 3: Lean runtime image ───────────────────────────────────────────────

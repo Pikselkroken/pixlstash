@@ -145,12 +145,10 @@ const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
   width: 100%;
   background: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));
-  border: none;
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
-  cursor: pointer;
   transition: background var(--dur-2) var(--ease-standard);
 }
 

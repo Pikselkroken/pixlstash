@@ -169,7 +169,8 @@ import {
   removeCharacterFaces,
 } from "../../api/characters";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
-
+import { errorDetail } from "../../utils/apiError";
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   // 'set' | 'project' | 'character' | 'face'.
   //
@@ -182,7 +183,7 @@ const props = defineProps({
   // overlay menu because the `.ate-*` skin is scoped to this file, and one
   // create rule has to serve both call sites.
   type: { type: String, required: true },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   pictureIds: { type: Array, default: () => [] },
   disabled: { type: Boolean, default: false },
   readonly: { type: Boolean, default: false },
@@ -724,7 +725,7 @@ async function readCharacterMembers(ids) {
  */
 function reportToggleFailure(e, fallback) {
   const status = e?.response?.status;
-  const detail = e?.response?.data?.detail || e?.message || String(e);
+  const detail = errorDetail(e) || e?.message || String(e);
   console.warn(
     `[AddToEntityControl] ${props.type} assignment failed (status=${status ?? "n/a"}):`,
     e,
@@ -815,7 +816,7 @@ async function toggleSet(item) {
     // server again rather than patching the shared cache from here.
     entityLists.invalidate(["sets"], { baseUrl: baseUrl.value });
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     statusMessage.value = String(detail).includes("already in set")
       ? "Already in set"
       : reportToggleFailure(
@@ -960,7 +961,7 @@ async function addToLastSet() {
     scheduleStatusClear();
     return { success: true, setName: item.name };
   } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
+    const detail = errorDetail(e) || e?.message || String(e);
     statusMessage.value = String(detail).includes("already in set")
       ? `Already in ${item.name}`
       : reportToggleFailure(e, "Failed to add");
@@ -1013,7 +1014,6 @@ defineExpose({
 .ate-btn {
   background-color: rgba(var(--v-theme-surface), 0.85);
   color: rgb(var(--v-theme-on-surface));
-  border: none;
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
   display: inline-flex;
@@ -1021,7 +1021,6 @@ defineExpose({
   gap: var(--space-2);
   font-size: var(--text-sm);
   line-height: 1.4;
-  cursor: pointer;
 }
 
 .ate--force-dark .ate-btn {
@@ -1040,7 +1039,6 @@ defineExpose({
 
 .ate-btn:hover {
   filter: brightness(1.75);
-  border: none;
 }
 
 .ate-label {
@@ -1172,13 +1170,10 @@ defineExpose({
   border-radius: var(--radius-sm);
   font-size: var(--text-xs);
   color: rgb(var(--v-theme-on-surface));
-  background: transparent;
-  border: none;
   text-align: left;
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  cursor: pointer;
   transition:
     background var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard);

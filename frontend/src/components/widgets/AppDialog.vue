@@ -160,11 +160,8 @@ function onKeydown(e) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
   border-radius: var(--radius-md);
-  background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.6);
-  cursor: pointer;
   transition:
     background var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard);

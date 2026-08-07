@@ -11,7 +11,7 @@ import { useTheme } from "vuetify";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { useReviewRoute } from "./composables/useReviewRoute";
-import { API_BASE_URL, isReadOnly, sessionContext } from "./utils/apiClient";
+import { isReadOnly, sessionContext } from "./utils/apiClient";
 import { getInstallId } from "./api/telemetry";
 import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
@@ -63,7 +63,6 @@ import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
 import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
 import { toPx } from "./utils/floatingBottom.js";
-const BACKEND_URL = API_BASE_URL;
 
 // --- Stores ---
 const selectionStore = useSelectionStore();
@@ -193,7 +192,6 @@ useWindowFileImport({ sidebarRef });
 
 const {
   handleViewProject,
-  handleUpdateSelectedSort,
   handleStackStatsUpdate,
   handleUpdateCheckForUpdates,
   handleEmptyScrapheapFromSidebar,
@@ -202,7 +200,6 @@ const {
 } = useAppSettingsHandlers({
   gridContainer,
   statsSidebarRef,
-  onNavigated: () => closeSidebarIfMobile(),
   pushAppRoute,
 });
 
@@ -527,7 +524,6 @@ defineExpose({
         >
           <SideBar
             ref="sidebarRef"
-            :backendUrl="BACKEND_URL"
             :installType="installType"
             :dockerVariant="dockerVariant"
             @empty-scrapheap="handleEmptyScrapheapFromSidebar"
@@ -540,7 +536,6 @@ defineExpose({
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMoved"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
-            @open-import-dialog="openImportDialog"
             @update:set-error="error = $event"
             @update:set-loading="loading = $event"
             @update:check-for-updates="handleUpdateCheckForUpdates"
@@ -570,7 +565,6 @@ defineExpose({
         <PhotosImportDialog
           v-model:open="photosDialogOpen"
           :default-project-id="sidebarRef?.currentProjectId ?? null"
-          :backend-url="BACKEND_URL"
           @local-import="handleLocalImport"
           @project-created="refreshSidebar"
         />
@@ -607,11 +601,9 @@ defineExpose({
               <ImageGrid
                 v-else
                 ref="gridContainer"
-                :backendUrl="BACKEND_URL"
                 :activeCategoryLabel="activeCategoryLabel"
                 @clear-search="handleClearSearch"
                 @search-all="handleSearchAllPictures"
-                @update:selected-sort="handleUpdateSelectedSort"
                 @refresh-sidebar="refreshSidebar"
                 @reset-to-all="handleResetToAll"
                 @update:stack-stats="handleStackStatsUpdate"
@@ -651,7 +643,6 @@ defineExpose({
       <ReviewSessionsOverlay
         v-if="reviewSessionsStore.overlayOpen"
         :inert="librarySwitchOverlayOpen"
-        :backendUrl="BACKEND_URL"
         @close="reviewSessionsStore.overlayOpen = false"
       />
       <!-- The notice surface. LAST child of `.app-viewport` on purpose

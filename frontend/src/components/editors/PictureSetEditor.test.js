@@ -12,6 +12,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { h } from "vue";
 
 vi.mock("../../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   apiClient: {
     post: vi.fn().mockResolvedValue({ data: {} }),
     patch: vi.fn().mockResolvedValue({ data: {} }),

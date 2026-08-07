@@ -284,7 +284,6 @@ watch(
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
   padding: var(--space-4);
-  cursor: pointer;
   font: inherit;
   transition:
     border-color var(--dur-1) var(--ease-standard),

@@ -110,13 +110,14 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 import { listProjects } from "../../api/projects";
+import { API_BASE_URL } from "../../utils/apiClient";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isSupportedImportFile,
 } from "../../utils/media.js";
 
 const props = defineProps({
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   open: { type: Boolean, default: false },
   defaultProjectId: { type: [Number, String, null], default: null },
 });
@@ -298,15 +299,12 @@ function triggerLocalImport(files) {
   gap: var(--space-2);
   padding: var(--space-3) var(--space-1);
   margin-bottom: -1px;
-  border: none;
   border-bottom: 2px solid transparent;
-  background: transparent;
   color: rgba(var(--v-theme-on-panel), 0.6);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   white-space: nowrap;
-  cursor: pointer;
   transition: color var(--dur-1) var(--ease-standard);
 }
 .tb-import-tab:hover {

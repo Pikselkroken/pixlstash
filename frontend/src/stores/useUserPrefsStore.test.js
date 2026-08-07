@@ -4,6 +4,7 @@ import { ref } from "vue";
 
 const isReadOnly = ref(false);
 vi.mock("../utils/apiClient", () => ({
+  API_BASE_URL: "/api/v1",
   get isReadOnly() {
     return isReadOnly;
   },

@@ -127,12 +127,9 @@ defineEmits([
 }
 
 .retention-note__change {
-  border: none;
-  background: none;
   padding: 0;
   font: inherit;
   color: rgb(var(--v-theme-accent));
-  cursor: pointer;
   text-decoration: underline;
   border-radius: var(--radius-sm);
 }
@@ -144,10 +141,8 @@ defineEmits([
 .restore-btn {
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
-  border: none;
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   line-height: 1.4;
@@ -163,10 +158,8 @@ defineEmits([
 .delete-btn {
   background: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));
-  border: none;
   padding: var(--space-1) var(--space-4);
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   line-height: 1.4;

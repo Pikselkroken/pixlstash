@@ -1290,8 +1290,8 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "This workflow has no node that saves images,"
-                    "so it produces nothing PixlStash "
+                    "This workflow has no node that saves images (SaveImage or "
+                    "PixlStash Picture Saver), so it produces nothing PixlStash "
                     "can import."
                 ),
             )

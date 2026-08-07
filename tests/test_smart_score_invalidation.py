@@ -5,7 +5,7 @@ a picture's anomaly/penalised-tag state changes.
 whose score is ``NULL``, so an edit that moves the scorer's anomaly inputs must clear it
 or the stored score silently goes stale. The scorer's anomaly inputs come from
 ``TagPrediction`` rows in the anomaly vocabulary (see
-``pixlstash.picture_scoring.fetch_anomaly_confidences``), so these tests assert both
+``pixlstash.scoring.smart_score.fetch_anomaly_confidences``), so these tests assert both
 directions: a penalised-tag edit invalidates, a content-tag edit does not.
 """
 
@@ -26,7 +26,7 @@ from pixlstash.db_models import Picture, Tag
 from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.event_types import EventType
-from pixlstash.picture_scoring import fetch_anomaly_confidences
+from pixlstash.scoring import fetch_anomaly_confidences
 from pixlstash.server import Server
 from pixlstash.tasks import TaskType
 from pixlstash.tasks.base_task import TaskStatus

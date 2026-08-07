@@ -238,11 +238,6 @@ def iter_api_query_params(app) -> Iterator[QueryParam]:
             yield (method, path, getattr(field, "alias", None) or field.name)
 
 
-def api_query_param_names(app) -> set[str]:
-    """Return the distinct query-parameter names declared anywhere on ``app``."""
-    return {name for _method, _path, name in iter_api_query_params(app)}
-
-
 def route_module_names(app) -> set[str]:
     """Return the distinct route-module names (``pixlstash.routes.*``) mounted.
 

@@ -25,7 +25,7 @@ from pixlstash.db_models import (
     SortMechanism,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.picture_scoring import (
+from pixlstash.scoring import (
     fetch_smart_score_data,
     get_smart_score_penalised_tags_from_request,
     prepare_smart_score_inputs,

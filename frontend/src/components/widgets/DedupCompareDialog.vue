@@ -2286,11 +2286,8 @@ function onZoomContextMenu() {
   width: 100%;
   text-align: left;
   padding: 0;
-  border: none;
-  background: transparent;
   color: inherit;
   font: inherit;
-  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
 
@@ -2378,11 +2375,9 @@ function onZoomContextMenu() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
   border-radius: var(--radius-sm);
   background: var(--scrim-photo);
   color: rgb(var(--v-theme-on-dark-surface));
-  cursor: pointer;
 }
 
 .dc-zoom:hover {
@@ -2482,11 +2477,8 @@ function onZoomContextMenu() {
   align-items: center;
   justify-content: center;
   padding: var(--space-1);
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.7);
-  cursor: pointer;
   transition:
     background var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard);
@@ -2505,13 +2497,10 @@ function onZoomContextMenu() {
   gap: var(--space-1);
   max-width: 100%;
   padding: 0;
-  border: none;
-  background: transparent;
   color: inherit;
   font: inherit;
   font-variant-numeric: tabular-nums;
   text-align: left;
-  cursor: pointer;
 }
 
 .dc-expand:hover {
@@ -2710,11 +2699,8 @@ function onZoomContextMenu() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgba(255, 255, 255, 0.72);
-  cursor: pointer;
 }
 
 .dc-zv-close:hover {

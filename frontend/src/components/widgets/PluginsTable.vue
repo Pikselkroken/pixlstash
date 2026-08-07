@@ -15,6 +15,7 @@
 import { computed, ref } from "vue";
 import { patchUserConfig } from "../../api/config";
 import TaggerPluginSettingsDialog from "./TaggerPluginSettingsDialog.vue";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   /** Array of plugin objects from GET /taggers. */
@@ -76,7 +77,7 @@ async function setActive(pluginName) {
       [activeKey.value]: next,
     });
   } catch (e) {
-    activeError.value = e?.response?.data?.detail || "Failed to update.";
+    activeError.value = errorDetail(e) || "Failed to update.";
   } finally {
     settingActive.value = false;
   }

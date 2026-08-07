@@ -55,8 +55,9 @@ import { listStackPictures } from "../../api/stacks";
 import { formatComfyuiExecutionErrorMessage } from "../../utils/utils.js";
 import { useTasksStore } from "../../stores/useTasksStore";
 
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
-  backendUrl: { type: String, default: "" },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   wsPluginProgress: {
     type: Object,
     default: () => ({ key: 0, payload: null }),
@@ -1068,10 +1069,8 @@ defineExpose({
 .comfyui-abort-btn {
   flex-shrink: 0;
   background: rgba(var(--v-theme-on-dark-surface), 0.15);
-  border: none;
   border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-dark-surface));
-  cursor: pointer;
   font-size: var(--text-xs);
   line-height: 1;
   padding: var(--space-1) var(--space-2);

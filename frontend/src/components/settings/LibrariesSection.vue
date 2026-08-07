@@ -379,8 +379,6 @@ async function copyCommand(command) {
   display: block;
   width: 100%;
   padding: 0;
-  border: 0;
-  background: transparent;
   font-size: var(--text-xs);
   font-family: var(--font-ui);
   color: rgba(var(--v-theme-on-surface), 0.65);
@@ -390,7 +388,6 @@ async function copyCommand(command) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: pointer;
 }
 
 .library-row__path:hover {

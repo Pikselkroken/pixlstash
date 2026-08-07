@@ -143,10 +143,11 @@ import {
   deleteProjectAttachment,
 } from "../../api/projects";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
-
+import { errorDetail } from "../../utils/apiError";
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   projectId: { type: Number, required: true },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
 });
 
 const expanded = ref(false);
@@ -221,7 +222,7 @@ async function onDrop(e) {
         files.value.push(created);
       }
     } catch (err) {
-      uploadError.value = err?.response?.data?.detail ?? "Could not save URL.";
+      uploadError.value = errorDetail(err) ?? "Could not save URL.";
     }
     return;
   }
@@ -238,8 +239,7 @@ async function onDrop(e) {
     }
     await fetchFiles();
   } catch (err) {
-    uploadError.value =
-      err?.response?.data?.detail ?? "Upload failed. Please try again.";
+    uploadError.value = errorDetail(err) ?? "Upload failed. Please try again.";
   } finally {
     uploading.value = false;
   }
@@ -288,7 +288,7 @@ async function submitUrl() {
     urlTitle.value = "";
     showUrlForm.value = false;
   } catch (err) {
-    uploadError.value = err?.response?.data?.detail ?? "Could not save URL.";
+    uploadError.value = errorDetail(err) ?? "Could not save URL.";
   }
 }
 
@@ -530,14 +530,12 @@ onMounted(() => {
   top: 2px;
   right: 2px;
   background: rgba(var(--v-theme-surface), 0.6);
-  border: none;
   border-radius: 50%;
   width: 18px;
   height: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   opacity: 0;
   transition:
     opacity 0.12s,
@@ -625,9 +623,6 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  background: none;
-  border: none;
-  cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.45);
   font-size: var(--text-xs);
   padding: 0;
@@ -680,8 +675,6 @@ onMounted(() => {
   font-size: var(--text-xs);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
-  border: none;
-  cursor: pointer;
   transition:
     background 0.12s,
     opacity 0.12s;

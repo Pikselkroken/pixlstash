@@ -8,6 +8,7 @@ import SettingsChipGrid from "./SettingsChipGrid.vue";
 import SettingsChip from "./SettingsChip.vue";
 import SettingsAddTagRow from "./SettingsAddTagRow.vue";
 import AppSelect from "../widgets/AppSelect.vue";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -58,8 +59,7 @@ async function saveHiddenTags(nextTags) {
     emit("update:hidden-tags", hiddenTags.value);
     hiddenTagsSuccess.value = "Saved.";
   } catch (e) {
-    hiddenTagsError.value =
-      e?.response?.data?.detail || "Failed to update hidden tags.";
+    hiddenTagsError.value = errorDetail(e) || "Failed to update hidden tags.";
   } finally {
     hiddenTagsLoading.value = false;
     if (hiddenTagsSuccess.value) {
@@ -94,8 +94,7 @@ async function setApplyTagFilter(value) {
     applyTagFilter.value = nextValue;
     emit("update:apply-tag-filter", applyTagFilter.value);
   } catch (e) {
-    hiddenTagsError.value =
-      e?.response?.data?.detail || "Failed to update tag filter.";
+    hiddenTagsError.value = errorDetail(e) || "Failed to update tag filter.";
   } finally {
     applyTagFilterLoading.value = false;
   }
@@ -196,7 +195,7 @@ async function saveSmartScoreTags(nextTags) {
     smartScoreTagsSuccess.value = "Saved.";
   } catch (e) {
     smartScoreTagsError.value =
-      e?.response?.data?.detail || "Failed to update smart score tags.";
+      errorDetail(e) || "Failed to update smart score tags.";
     noticeStore.error(smartScoreTagsError.value);
   } finally {
     smartScoreTagsLoading.value = false;

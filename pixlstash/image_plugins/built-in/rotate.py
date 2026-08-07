@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
-import tempfile
 from typing import Any
 
-import cv2
-import numpy as np
 from PIL import Image
 
 from pixlstash.image_plugins.base import ImagePlugin
@@ -125,117 +120,14 @@ class RotatePlugin(ImagePlugin):
         if direction not in self.MODES:
             direction = "90_right"
 
-        cap = cv2.VideoCapture(source_path)
-        if not cap.isOpened():
-            raise ValueError(f"Failed to open video file: {source_path}")
-
-        frame_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-        if fps <= 0:
-            fps = 24.0
-        src_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-        src_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        if src_width <= 0 or src_height <= 0:
-            cap.release()
-            raise ValueError(f"Invalid video dimensions for {source_path}")
-
-        # 90° rotations swap width and height.
-        if direction in ("90_left", "90_right"):
-            out_width, out_height = src_height, src_width
-        else:
-            out_width, out_height = src_width, src_height
-
-        temp_path = ""
-        writer = None
-        output_ext = ".mp4"
-        processed = 0
-        try:
-            source_ext = os.path.splitext(source_path)[1].lower()
-            writer_candidates = [
-                (".mp4", "avc1"),
-                (".mp4", "H264"),
-                (".webm", "VP80"),
-                (".webm", "VP90"),
-                (".mp4", "mp4v"),
-            ]
-            if source_ext == ".webm":
-                writer_candidates = [
-                    (".webm", "VP80"),
-                    (".webm", "VP90"),
-                    (".mp4", "avc1"),
-                    (".mp4", "H264"),
-                    (".mp4", "mp4v"),
-                ]
-
-            for candidate_ext, codec in writer_candidates:
-                with tempfile.NamedTemporaryFile(
-                    suffix=candidate_ext,
-                    delete=False,
-                ) as temp_file:
-                    temp_path = temp_file.name
-                candidate_writer = cv2.VideoWriter(
-                    temp_path,
-                    cv2.VideoWriter_fourcc(*codec),
-                    fps,
-                    (out_width, out_height),
-                )
-                if candidate_writer.isOpened():
-                    writer = candidate_writer
-                    output_ext = candidate_ext
-                    break
-                candidate_writer.release()
-                with contextlib.suppress(OSError):
-                    os.remove(temp_path)
-                temp_path = ""
-
-            if writer is None:
-                raise ValueError("Failed to open output video writer")
-
-            while True:
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    break
-
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                rotated = self._rotate_image(Image.fromarray(rgb_frame), direction)
-                rotated_bgr = cv2.cvtColor(
-                    np.array(rotated.convert("RGB")),
-                    cv2.COLOR_RGB2BGR,
-                )
-                writer.write(rotated_bgr)
-
-                processed += 1
-                self.report_progress(
-                    progress_callback,
-                    current=processed,
-                    total=frame_total if frame_total > 0 else processed,
-                    message=f"Rotated video frame {processed}",
-                )
-
-            if processed == 0:
-                raise ValueError("No frames processed from video")
-
-            writer.release()
-            writer = None
-            cap.release()
-
-            with open(temp_path, "rb") as handle:
-                return handle.read(), output_ext
-        except Exception as exc:
-            self.report_error(
-                error_callback,
-                index=0,
-                message="Failed to rotate video",
-                details={"error": str(exc), "source_path": source_path},
-            )
-            raise
-        finally:
-            if writer is not None:
-                writer.release()
-            cap.release()
-            if temp_path and os.path.exists(temp_path):
-                with contextlib.suppress(OSError):
-                    os.remove(temp_path)
+        return self.transform_video(
+            source_path,
+            lambda image: self._rotate_image(image, direction),
+            progress_callback=progress_callback,
+            error_callback=error_callback,
+            error_message="Failed to rotate video",
+            progress_verb="Rotated",
+        )
 
     # ------------------------------------------------------------------
     # Helpers

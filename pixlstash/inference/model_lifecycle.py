@@ -30,11 +30,6 @@ class ModelLifecycleManager:
         self._device = device
         self._init_lock = threading.Lock()
 
-    @property
-    def init_lock(self) -> threading.Lock:
-        """The single initialisation lock shared by all services."""
-        return self._init_lock
-
     def ensure_tagging_ready(
         self,
         wd14_service,

@@ -84,13 +84,10 @@ function onBlur(e) {
   width: 30px;
   height: 26px;
   flex-shrink: 0;
-  border: none;
   padding: 0;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
   color: rgb(var(--v-theme-on-surface));
   transition: background var(--dur-1) var(--ease-standard);
 }

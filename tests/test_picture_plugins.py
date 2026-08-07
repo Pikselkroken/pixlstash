@@ -241,3 +241,88 @@ def test_create_picture_from_bytes_preserves_video_extension_format(monkeypatch)
         assert picture.format == "WEBM"
         assert picture.file_path is not None
         assert picture.file_path.endswith(".webm")
+
+
+def _write_test_video(path: str, width: int, height: int, frames: int) -> None:
+    """Write a small solid-colour video, or skip the test if no encoder is available."""
+    import cv2
+    import pytest
+
+    writer = cv2.VideoWriter(
+        path, cv2.VideoWriter_fourcc(*"mp4v"), 12.0, (width, height)
+    )
+    if not writer.isOpened():
+        pytest.skip("no OpenCV video encoder available in this environment")
+    for index in range(frames):
+        frame = np.full((height, width, 3), (index * 20) % 256, dtype=np.uint8)
+        writer.write(frame)
+    writer.release()
+
+
+def _run_video_plugin(plugin, source_path: str, params: dict):
+    """Run *plugin* over *source_path* and return ``(width, height, frames, progress)``."""
+    import cv2
+
+    progress: list = []
+    data, ext = plugin.run_video(source_path, params, progress_callback=progress.append)
+    out_path = source_path + ".out" + ext
+    with open(out_path, "wb") as handle:
+        handle.write(data)
+    try:
+        cap = cv2.VideoCapture(out_path)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        decoded = 0
+        while True:
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                break
+            decoded += 1
+        cap.release()
+    finally:
+        os.remove(out_path)
+    return width, height, decoded, progress
+
+
+def test_video_plugins_reencode_every_frame_and_size_output_from_the_transform():
+    """The shared ``ImagePlugin.transform_video`` pipeline must preserve frame
+    count and take its output dimensions from the transformed frame.
+
+    Rotation is the case that matters: a 90° turn swaps width and height, and a
+    writer opened at the *source* size would silently drop every frame. Covers
+    all four video-capable built-ins through one pipeline.
+    """
+    from pixlstash.image_plugins.registry import get_image_plugin_manager
+
+    manager = get_image_plugin_manager()
+
+    width, height, frames = 64, 48, 6
+    cases = [
+        ("blur_sharpen", {"mode": "blur", "strength": 1.5}, (width, height)),
+        ("brightness_contrast", {"brightness": 1.2, "contrast": 1.1}, (width, height)),
+        ("colour_filter", {"mode": "black_and_white"}, (width, height)),
+        # 90° rotation swaps the output dimensions.
+        ("rotate", {"direction": "90_right"}, (height, width)),
+        ("rotate", {"direction": "180"}, (width, height)),
+    ]
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source = os.path.join(temp_dir, "source.mp4")
+        _write_test_video(source, width, height, frames)
+
+        for name, params, expected_size in cases:
+            plugin = manager.get_plugin(name)
+            assert plugin is not None, f"built-in plugin {name} not registered"
+            assert plugin.supports_videos is True
+
+            got_w, got_h, decoded, progress = _run_video_plugin(plugin, source, params)
+
+            assert (got_w, got_h) == expected_size, (
+                f"{name} {params}: output {got_w}x{got_h}, expected {expected_size}"
+            )
+            assert decoded == frames, (
+                f"{name} {params}: {decoded} frames, want {frames}"
+            )
+            assert len(progress) == frames, (
+                f"{name} {params}: {len(progress)} progress events, want {frames}"
+            )

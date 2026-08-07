@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import { createToken } from '../../api/users'
 import { patchUserConfig } from '../../api/config'
-
+import { API_BASE_URL } from "../../utils/apiClient";
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   resourceType: { type: String, default: '' },
@@ -13,7 +13,7 @@ const props = defineProps({
    *  When absent a gallery ?token= link is produced and expiry/attachments are shown. */
   resourceFormat: { type: String, default: '' },
   embedWatermark: { type: Boolean, default: false },
-  backendUrl: { type: String, default: '' },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   publicUrl: { type: String, default: '' },
 })
 

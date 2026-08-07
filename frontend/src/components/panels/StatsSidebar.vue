@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
+import StatsHistogram from "../widgets/StatsHistogram.vue";
 import { getPictureStats } from "../../api/pictures";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useFilterStore } from "../../stores/useFilterStore";
@@ -768,12 +769,6 @@ const confHistBuckets = computed(() => {
     return confTagData.value?.confidence_histogram ?? [];
   return stats.value?.confidence_histogram ?? [];
 });
-const confHistMax = computed(() =>
-  Math.max(1, ...confHistBuckets.value.map((b) => b.count)),
-);
-function histBarWidth(count, maxCount) {
-  return Math.max(count > 0 ? 2 : 0, (count / maxCount) * 208);
-}
 
 // Tag / confidence filter writes. These used to be emits that App.vue turned
 // into the same store writes; the logic lives here now (Phase 3 store-direct).
@@ -804,6 +799,16 @@ function toggleConfidenceAboveFilter(entry) {
       ...filterStore.tagConfidenceAboveFilter,
       entry,
     ];
+}
+
+// An empty confidence bucket stays focusable (the row is still a filter you
+// could reach), but pressing it would toggle a filter that can only ever match
+// nothing, so it does nothing.
+function onConfBucketSelect(item, i) {
+  if (item.count > 0)
+    toggleConfidenceAboveFilter(
+      `${selectedConfTag.value}:${(i * 0.2).toFixed(2)}`,
+    );
 }
 
 function clearTagFilters(tags) {
@@ -1513,78 +1518,17 @@ defineExpose({ focusTasksTab });
             </div>
           </div>
           <div v-if="confHistOpen" class="stats-hist">
-            <svg
-              :width="260"
-              :height="confHistBuckets.length * 18 + 4"
-              class="stats-bar-chart"
+            <StatsHistogram
+              :buckets="confHistBuckets"
               aria-label="Tag confidence distribution"
-            >
-              <g
-                v-for="(item, i) in confHistBuckets"
-                :key="item.label"
-                :class="{
-                  'hist-bar-row': selectedConfTag,
-                  'hist-bar-row--disabled': !selectedConfTag,
-                  'hist-bar-row--active':
-                    selectedConfTag && isConfEntryActive(i),
-                }"
-                :transform="`translate(0, ${i * 18})`"
-                :role="selectedConfTag ? 'button' : undefined"
-                :tabindex="selectedConfTag ? 0 : undefined"
-                :title="
-                  selectedConfTag
-                    ? `Filter: ${selectedConfTag} ≥ ${i * 20}%`
-                    : undefined
-                "
-                @click="
-                  selectedConfTag && item.count > 0
-                    ? toggleConfidenceAboveFilter(
-                        `${selectedConfTag}:${(i * 0.2).toFixed(2)}`,
-                      )
-                    : undefined
-                "
-                @keydown.enter="
-                  selectedConfTag && item.count > 0
-                    ? toggleConfidenceAboveFilter(
-                        `${selectedConfTag}:${(i * 0.2).toFixed(2)}`,
-                      )
-                    : undefined
-                "
-              >
-                <text x="46" y="9" text-anchor="end" class="hist-label">
-                  {{ item.label }}
-                </text>
-                <rect
-                  x="50"
-                  y="2"
-                  :width="histBarWidth(item.count, confHistMax)"
-                  height="13"
-                  rx="2"
-                  class="hist-bar-rect hist-bar-rect--conf"
-                />
-                <text
-                  v-if="
-                    item.count > 0 &&
-                    histBarWidth(item.count, confHistMax) >= 40
-                  "
-                  :x="50 + histBarWidth(item.count, confHistMax) - 3"
-                  y="9"
-                  text-anchor="end"
-                  class="bar-count-inner"
-                >
-                  {{ item.count }}
-                </text>
-                <text
-                  v-else-if="item.count > 0"
-                  :x="50 + histBarWidth(item.count, confHistMax) + 3"
-                  y="9"
-                  text-anchor="start"
-                  class="bar-count-outer"
-                >
-                  {{ item.count }}
-                </text>
-              </g>
-            </svg>
+              fill="tertiary"
+              :interactive="() => !!selectedConfTag"
+              :active="(item, i) => isConfEntryActive(i)"
+              :row-title="
+                (item, i) => `Filter: ${selectedConfTag} \u2265 ${i * 20}%`
+              "
+              @select="onConfBucketSelect"
+            />
           </div>
         </div>
       </template>
@@ -1633,93 +1577,14 @@ defineExpose({ focusTasksTab });
               </button>
             </div>
             <div class="stats-hist">
-              <svg
-                :width="260"
-                :height="picStats.score_distribution.length * 18 + 4"
-                class="stats-bar-chart"
+              <StatsHistogram
+                :buckets="picStats.score_distribution"
                 aria-label="Manual score distribution"
-              >
-                <g
-                  v-for="item in picStats.score_distribution"
-                  :key="item.label"
-                  :transform="`translate(0, ${picStats.score_distribution.indexOf(item) * 18})`"
-                  :class="{
-                    'hist-bar-row': item.label !== 'Unscored',
-                    'hist-bar-row--active': isScoreBarActive(item.label),
-                  }"
-                  :role="item.label !== 'Unscored' ? 'button' : undefined"
-                  :tabindex="item.label !== 'Unscored' ? 0 : undefined"
-                  @click="handleScoreBarClick(item.label)"
-                  @keydown.enter="handleScoreBarClick(item.label)"
-                >
-                  <text x="46" y="9" text-anchor="end" class="hist-label">
-                    {{ item.label }}
-                  </text>
-                  <rect
-                    x="50"
-                    y="2"
-                    :width="
-                      histBarWidth(
-                        item.count,
-                        Math.max(
-                          1,
-                          ...picStats.score_distribution.map((b) => b.count),
-                        ),
-                      )
-                    "
-                    height="13"
-                    rx="2"
-                    class="hist-bar-rect hist-bar-rect--score"
-                  />
-                  <text
-                    v-if="
-                      item.count > 0 &&
-                      histBarWidth(
-                        item.count,
-                        Math.max(
-                          1,
-                          ...picStats.score_distribution.map((b) => b.count),
-                        ),
-                      ) >= 40
-                    "
-                    :x="
-                      50 +
-                      histBarWidth(
-                        item.count,
-                        Math.max(
-                          1,
-                          ...picStats.score_distribution.map((b) => b.count),
-                        ),
-                      ) -
-                      3
-                    "
-                    y="9"
-                    text-anchor="end"
-                    class="bar-count-inner"
-                  >
-                    {{ item.count }}
-                  </text>
-                  <text
-                    v-else-if="item.count > 0"
-                    :x="
-                      50 +
-                      histBarWidth(
-                        item.count,
-                        Math.max(
-                          1,
-                          ...picStats.score_distribution.map((b) => b.count),
-                        ),
-                      ) +
-                      3
-                    "
-                    y="9"
-                    text-anchor="start"
-                    class="bar-count-outer"
-                  >
-                    {{ item.count }}
-                  </text>
-                </g>
-              </svg>
+                fill="secondary"
+                :interactive="(item) => item.label !== 'Unscored'"
+                :active="(item) => isScoreBarActive(item.label)"
+                @select="(item) => handleScoreBarClick(item.label)"
+              />
             </div>
           </div>
 
@@ -1738,101 +1603,13 @@ defineExpose({ focusTasksTab });
               </button>
             </div>
             <div class="stats-hist">
-              <svg
-                :width="260"
-                :height="picStats.smart_score_distribution.length * 18 + 4"
-                class="stats-bar-chart"
+              <StatsHistogram
+                :buckets="picStats.smart_score_distribution"
                 aria-label="Smart score distribution"
-              >
-                <g
-                  v-for="item in picStats.smart_score_distribution"
-                  :key="item.label"
-                  :transform="`translate(0, ${picStats.smart_score_distribution.indexOf(item) * 18})`"
-                  class="hist-bar-row"
-                  :class="{
-                    'hist-bar-row--active': isSmartScoreBarActive(item.label),
-                  }"
-                  role="button"
-                  tabindex="0"
-                  @click="handleSmartScoreBarClick(item.label)"
-                  @keydown.enter="handleSmartScoreBarClick(item.label)"
-                >
-                  <text x="46" y="9" text-anchor="end" class="hist-label">
-                    {{ item.label }}
-                  </text>
-                  <rect
-                    x="50"
-                    y="2"
-                    :width="
-                      histBarWidth(
-                        item.count,
-                        Math.max(
-                          1,
-                          ...picStats.smart_score_distribution.map(
-                            (b) => b.count,
-                          ),
-                        ),
-                      )
-                    "
-                    height="13"
-                    rx="2"
-                    class="hist-bar-rect hist-bar-rect--smart"
-                  />
-                  <text
-                    v-if="
-                      item.count > 0 &&
-                      histBarWidth(
-                        item.count,
-                        Math.max(
-                          1,
-                          ...picStats.smart_score_distribution.map(
-                            (b) => b.count,
-                          ),
-                        ),
-                      ) >= 40
-                    "
-                    :x="
-                      50 +
-                      histBarWidth(
-                        item.count,
-                        Math.max(
-                          1,
-                          ...picStats.smart_score_distribution.map(
-                            (b) => b.count,
-                          ),
-                        ),
-                      ) -
-                      3
-                    "
-                    y="9"
-                    text-anchor="end"
-                    class="bar-count-inner"
-                  >
-                    {{ item.count }}
-                  </text>
-                  <text
-                    v-else-if="item.count > 0"
-                    :x="
-                      50 +
-                      histBarWidth(
-                        item.count,
-                        Math.max(
-                          1,
-                          ...picStats.smart_score_distribution.map(
-                            (b) => b.count,
-                          ),
-                        ),
-                      ) +
-                      3
-                    "
-                    y="9"
-                    text-anchor="start"
-                    class="bar-count-outer"
-                  >
-                    {{ item.count }}
-                  </text>
-                </g>
-              </svg>
+                fill="primary"
+                :active="(item) => isSmartScoreBarActive(item.label)"
+                @select="(item) => handleSmartScoreBarClick(item.label)"
+              />
             </div>
           </div>
 
@@ -2008,101 +1785,13 @@ defineExpose({ focusTasksTab });
               </button>
             </div>
             <div class="stats-hist">
-              <svg
-                :width="260"
-                :height="picStats.resolution_distribution.length * 18 + 4"
-                class="stats-bar-chart"
+              <StatsHistogram
+                :buckets="picStats.resolution_distribution"
                 aria-label="Resolution distribution"
-              >
-                <g
-                  v-for="item in picStats.resolution_distribution"
-                  :key="item.label"
-                  :transform="`translate(0, ${picStats.resolution_distribution.indexOf(item) * 18})`"
-                  class="hist-bar-row"
-                  :class="{
-                    'hist-bar-row--active': isResolutionBarActive(item.label),
-                  }"
-                  role="button"
-                  tabindex="0"
-                  @click="handleResolutionBarClick(item.label)"
-                  @keydown.enter="handleResolutionBarClick(item.label)"
-                >
-                  <text x="46" y="9" text-anchor="end" class="hist-label">
-                    {{ item.label }}
-                  </text>
-                  <rect
-                    x="50"
-                    y="2"
-                    :width="
-                      histBarWidth(
-                        item.count,
-                        Math.max(
-                          1,
-                          ...picStats.resolution_distribution.map(
-                            (b) => b.count,
-                          ),
-                        ),
-                      )
-                    "
-                    height="13"
-                    rx="2"
-                    class="hist-bar-rect hist-bar-rect--res"
-                  />
-                  <text
-                    v-if="
-                      item.count > 0 &&
-                      histBarWidth(
-                        item.count,
-                        Math.max(
-                          1,
-                          ...picStats.resolution_distribution.map(
-                            (b) => b.count,
-                          ),
-                        ),
-                      ) >= 40
-                    "
-                    :x="
-                      50 +
-                      histBarWidth(
-                        item.count,
-                        Math.max(
-                          1,
-                          ...picStats.resolution_distribution.map(
-                            (b) => b.count,
-                          ),
-                        ),
-                      ) -
-                      3
-                    "
-                    y="9"
-                    text-anchor="end"
-                    class="bar-count-inner"
-                  >
-                    {{ item.count }}
-                  </text>
-                  <text
-                    v-else-if="item.count > 0"
-                    :x="
-                      50 +
-                      histBarWidth(
-                        item.count,
-                        Math.max(
-                          1,
-                          ...picStats.resolution_distribution.map(
-                            (b) => b.count,
-                          ),
-                        ),
-                      ) +
-                      3
-                    "
-                    y="9"
-                    text-anchor="start"
-                    class="bar-count-outer"
-                  >
-                    {{ item.count }}
-                  </text>
-                </g>
-              </svg>
+                fill="tertiary"
+                :active="(item) => isResolutionBarActive(item.label)"
+                @select="(item) => handleResolutionBarClick(item.label)"
+              />
             </div>
           </div>
         </template>
@@ -2387,9 +2076,6 @@ defineExpose({ focusTasksTab });
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  background: none;
-  border: none;
-  cursor: pointer;
   padding: 0;
   color: inherit;
 }
@@ -2500,8 +2186,6 @@ defineExpose({ focusTasksTab });
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-pill);
   border: 1px solid rgba(var(--v-theme-warning), 0.4);
-  background: none;
-  cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.45);
   transition:
     background 0.12s,
@@ -2651,27 +2335,6 @@ defineExpose({ focusTasksTab });
   dominant-baseline: central;
 }
 
-.hist-bar-rect {
-  fill: rgba(var(--v-theme-primary), 0.5);
-}
-
-.hist-bar-row {
-  cursor: pointer;
-  outline: none;
-}
-.hist-bar-row:hover .hist-bar-rect {
-  fill: rgba(var(--v-theme-primary), 0.75);
-}
-.hist-bar-row--active .hist-bar-rect {
-  fill: rgba(var(--v-theme-primary), 0.85);
-  stroke: rgba(var(--v-theme-primary), 1);
-  stroke-width: 1;
-}
-
-.hist-bar-row--disabled {
-  cursor: default;
-}
-
 .stats-clear-btn {
   display: inline-flex;
   align-items: center;
@@ -2679,9 +2342,6 @@ defineExpose({ focusTasksTab });
   width: 16px;
   height: 16px;
   padding: 0;
-  background: none;
-  border: none;
-  cursor: pointer;
   border-radius: var(--radius-sm);
   color: rgba(var(--v-theme-on-surface), 0.45);
   flex-shrink: 0;
@@ -2730,10 +2390,7 @@ defineExpose({ focusTasksTab });
   font-size: var(--text-2xs);
   font-weight: 500;
   padding: 0 var(--space-3);
-  background: none;
-  border: none;
   border-bottom: 2px solid transparent;
-  cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.45);
   transition:
     color 0.12s,
@@ -2748,51 +2405,6 @@ defineExpose({ focusTasksTab });
 .stats-tab-btn.active {
   color: rgba(var(--v-theme-primary), 1);
   border-bottom-color: rgba(var(--v-theme-primary), 0.85);
-}
-
-.hist-bar-rect--conf {
-  fill: rgba(var(--v-theme-tertiary), 0.5);
-}
-.hist-bar-row:hover .hist-bar-rect--conf {
-  fill: rgba(var(--v-theme-tertiary), 0.75);
-}
-.hist-bar-row--active .hist-bar-rect--conf {
-  fill: rgba(var(--v-theme-tertiary), 0.85);
-  stroke: rgba(var(--v-theme-tertiary), 1);
-  stroke-width: 1;
-}
-.hist-bar-rect--score {
-  fill: rgba(var(--v-theme-secondary), 0.5);
-}
-.hist-bar-row:hover .hist-bar-rect--score {
-  fill: rgba(var(--v-theme-secondary), 0.75);
-}
-.hist-bar-row--active .hist-bar-rect--score {
-  fill: rgba(var(--v-theme-secondary), 0.85);
-  stroke: rgba(var(--v-theme-secondary), 1);
-  stroke-width: 1;
-}
-.hist-bar-rect--smart {
-  fill: rgba(var(--v-theme-primary), 0.5);
-}
-.hist-bar-row:hover .hist-bar-rect--smart {
-  fill: rgba(var(--v-theme-primary), 0.75);
-}
-.hist-bar-row--active .hist-bar-rect--smart {
-  fill: rgba(var(--v-theme-primary), 0.85);
-  stroke: rgba(var(--v-theme-primary), 1);
-  stroke-width: 1;
-}
-.hist-bar-rect--res {
-  fill: rgba(var(--v-theme-tertiary), 0.5);
-}
-.hist-bar-row:hover .hist-bar-rect--res {
-  fill: rgba(var(--v-theme-tertiary), 0.75);
-}
-.hist-bar-row--active .hist-bar-rect--res {
-  fill: rgba(var(--v-theme-tertiary), 0.85);
-  stroke: rgba(var(--v-theme-tertiary), 1);
-  stroke-width: 1;
 }
 
 /* ── Agreement matrix ──────────────────────────────────────────────────────
@@ -3012,10 +2624,7 @@ defineExpose({ focusTasksTab });
 
 .tm-comfy-abort {
   flex-shrink: 0;
-  border: none;
-  background: none;
   color: rgba(var(--v-theme-on-surface), 0.45);
-  cursor: pointer;
   font-size: var(--text-xs);
   line-height: 1;
   padding: var(--space-1) var(--space-2);

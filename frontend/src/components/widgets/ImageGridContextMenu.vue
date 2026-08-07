@@ -249,7 +249,6 @@
           v-if="entityLists.canSeeProjects"
           type="project"
           placement="right"
-          :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           :disabled="!selectedImageIds.length || !!groupingLockReason"
           :title="groupingLockReason || undefined"
@@ -260,7 +259,6 @@
           type="character"
           placement="right"
           allow-create
-          :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           :disabled="!selectedImageIds.length || !!groupingLockReason"
           :title="groupingLockReason || undefined"
@@ -272,7 +270,6 @@
         <AddToEntityControl
           type="set"
           placement="right"
-          :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           :disabled="!selectedImageIds.length || !!groupingLockReason"
           :title="groupingLockReason || undefined"
@@ -625,7 +622,7 @@ import {
   ref,
   watch,
 } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { hashCompareSnapshot } from "../../api/snapshots";
 import { getCharacterName } from "../../api/characters";
 import { faceBoxColor } from "../../utils/utils.js";
@@ -650,10 +647,8 @@ const props = defineProps({
   selectedCharacter: { type: String, default: "" },
   selectedGroupName: { type: String, default: "" },
   selectedSort: { type: String, default: "" },
-  allPicturesId: { type: String, required: true },
-  unassignedPicturesId: { type: String, required: true },
   scrapheapPicturesId: { type: String, required: true },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   comfyuiConfigured: { type: Boolean, default: false },
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },

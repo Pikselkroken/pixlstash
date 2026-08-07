@@ -37,7 +37,7 @@ export function lockedSetNamesOf(entries) {
 
 // "'Holiday 2019'" / "'Holiday 2019', 'Archive'". Empty string when unknown, so
 // callers can fall back to set-less wording rather than printing "''".
-export function joinLockedSetNames(names) {
+function joinLockedSetNames(names) {
   const list = lockedSetNamesOf(names);
   if (!list.length) return "";
   return list.map((n) => `'${n}'`).join(", ");

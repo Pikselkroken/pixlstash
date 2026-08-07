@@ -554,11 +554,8 @@ onUnmounted(() => {
   flex-shrink: 0;
   width: 32px;
   height: 32px;
-  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: rgb(var(--v-theme-on-surface));
-  cursor: pointer;
 }
 .threshold-step:hover:not(:disabled) {
   background: var(--hover-wash);
@@ -589,12 +586,9 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0 10px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-base);
   font-family: inherit;
   height: 40px;
@@ -614,7 +608,6 @@ onUnmounted(() => {
   gap: 4px;
   height: 40px;
   padding: 0 var(--space-4);
-  border: none;
   border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-accent));
   color: rgb(var(--v-theme-on-accent));
@@ -622,7 +615,6 @@ onUnmounted(() => {
   font-family: inherit;
   font-weight: var(--weight-medium);
   white-space: nowrap;
-  cursor: pointer;
 }
 .assign-btn:hover:not(:disabled) {
   filter: brightness(1.1);

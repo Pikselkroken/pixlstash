@@ -59,7 +59,7 @@ from pixlstash.utils.field_allowlist import (
 from pixlstash.utils.http_cache import conditional_file_response
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
-from pixlstash.picture_scoring import (
+from pixlstash.scoring import (
     select_reference_faces_for_character,
 )
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags

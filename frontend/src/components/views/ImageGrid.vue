@@ -5,7 +5,6 @@
     :initialImageId="overlayImageId"
     :initialExpandedStackIds="overlayInitialExpandedStackIds"
     :allImages="allGridImages"
-    :backendUrl="props.backendUrl"
     :tagUpdate="wsStore.wsTagUpdate"
     :descriptionUpdate="wsStore.wsDescriptionUpdate"
     :smartScoreUpdate="wsStore.wsSmartScoreUpdate"
@@ -27,7 +26,6 @@
     @apply-score="applyScore"
     @set-guest-score="(img, n) => setGuestScore(img, n)"
     @add-tag="addTagToImage"
-    @remove-tag="removeTagFromImage"
     @update-description="updateDescriptionForImage"
     @overlay-change="handleOverlayChange"
     @added-to-set="handleOverlayAddedToSet"
@@ -39,10 +37,6 @@
   />
   <ImageImporter
     ref="imageImporterRef"
-    :backendUrl="props.backendUrl"
-    :selectedCharacterId="selectionStore.selectedCharacter"
-    :allPicturesId="ALL_PICTURES_ID"
-    :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
     @import-started="handleImportStarted"
     @import-finished="handleImagesUploaded"
     @import-cancelled="handleImportCancelled"
@@ -54,7 +48,6 @@
       :selectedCharacter="String(selectionStore.selectedCharacter)"
       :selectedSort="sortStore.selectedSort"
       :allPicturesId="String(ALL_PICTURES_ID)"
-      :backend-url="props.backendUrl"
       :comfyui-configured="filterStore.comfyuiConfigured"
       @comfyui-run-grid="runComfyuiOnGridImages"
       @expand-all-stacks="expandAllStacks"
@@ -109,10 +102,7 @@
       :selected-character="String(selectionStore.selectedCharacter)"
       :selected-group-name="selectedGroupName"
       :selected-sort="sortStore.selectedSort"
-      :all-pictures-id="String(ALL_PICTURES_ID)"
-      :unassigned-pictures-id="String(UNASSIGNED_PICTURES_ID)"
       :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
-      :backend-url="props.backendUrl"
       :comfyui-configured="filterStore.comfyuiConfigured"
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
@@ -167,10 +157,7 @@
       :y="overlayCtxY"
       :selected-image-ids="overlayCtxSelectedIds"
       :selected-character="String(selectionStore.selectedCharacter)"
-      :all-pictures-id="String(ALL_PICTURES_ID)"
-      :unassigned-pictures-id="String(UNASSIGNED_PICTURES_ID)"
       :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
-      :backend-url="props.backendUrl"
       :lock-reason="overlayCtxLockReason"
       :context-image="overlayCtxImage"
       @close="overlayCtxVisible = false"
@@ -192,7 +179,6 @@
     <CharacterEditor
       :open="createPersonOpen"
       :character="createPersonCharacter"
-      :backend-url="props.backendUrl"
       :projects="createPersonProjects"
       @close="handleCreatePersonClose"
       @saved="handleCreatePersonSaved"
@@ -271,7 +257,6 @@
       :resource-id="contextMenuImage?.id"
       :resource-format="contextMenuImage?.format"
       :embed-watermark="userPrefsStore.embedWatermark"
-      :backend-url="props.backendUrl"
       :public-url="userPrefsStore.publicUrl"
       @update:embed-watermark="userPrefsStore.embedWatermark = $event"
       @created="onSharePicCreated"
@@ -403,7 +388,6 @@
       :image="remixImage"
       :selected-image-ids="selectedImageIds"
       :client-id="comfyuiClientId || ''"
-      :backend-url="props.backendUrl"
       :stack-outputs="genStackPrefs.stackI2IOutputs"
       @close="remixDialogOpen = false"
       @run="handleComfyuiRun"
@@ -411,7 +395,6 @@
     />
     <ComfyUiRunner
       ref="comfyuiRunner"
-      :backendUrl="props.backendUrl"
       :wsPluginProgress="wsStore.wsPluginProgress"
       :overlayOpen="overlayOpen"
       :overlayImageId="overlayImageId"
@@ -1069,7 +1052,6 @@
           :selected-sort="sortStore.selectedSort"
           :owns-escape="true"
           :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
-          :backend-url="props.backendUrl"
           :selected-image-ids="selectedImageIds"
           :selected-media-support="selectedMediaSupport"
           :comfyui-client-id="comfyuiClientId"
@@ -1220,7 +1202,7 @@ import {
   downloadExport,
   listPicturesByIds,
 } from "../../api/pictures";
-import { addPictureTag, removePictureTag } from "../../api/tags";
+import { addPictureTag } from "../../api/tags";
 import {
   getStack,
   keepCoverOnly,
@@ -1271,13 +1253,11 @@ import {
 } from "../../utils/dedup.js";
 import {
   dedupeTagList,
-  getTagId,
   hasPenalisedTags,
   penalisedTagsTitle,
   penalisedTagIcon,
   penalisedTagColor,
   getTagList,
-  tagMatches,
 } from "../../utils/tags.js";
 import {
   getStackBadgeCount,
@@ -1297,7 +1277,7 @@ import { useStackOrdering } from "../../composables/useStackOrdering.js";
 import { useGridFetch } from "../../composables/useGridFetch.js";
 import { useGridScoring } from "../../composables/useGridScoring.js";
 import { useGridKeyboardNav } from "../../composables/useGridKeyboardNav.js";
-import { debounce } from "lodash-es";
+import { debounce } from "../../utils/utils";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useProjectStore } from "../../stores/useProjectStore";
@@ -1327,7 +1307,6 @@ const emit = defineEmits([
   "clear-search",
   "reset-to-all",
   "search-all",
-  "update:selected-sort",
   "update:stack-stats",
   "import-started",
   "import-ended",
@@ -2990,7 +2969,7 @@ const noticeStore = useNoticeStore();
  * @param {string} fallback - used when the server sent nothing useful.
  */
 function errorDetail(err, fallback = "Please try again.") {
-  return err?.response?.data?.detail || err?.message || fallback;
+  return errorDetail(err) || err?.message || fallback;
 }
 // Live "is the Review Sessions overlay up" signal. It stays mounted over the
 // grid as a modal review surface with its own keyboard/drag handling, so the
@@ -4005,7 +3984,7 @@ async function handleSetProjectForSelected(payload) {
     }
     emit("refresh-sidebar");
   } catch (err) {
-    const message = err?.response?.data?.detail || err?.message || String(err);
+    const message = errorDetail(err) || err?.message || String(err);
     noticeStore.error(`Couldn't update the project. ${message}`, {
       key: "project-update",
     });
@@ -5678,7 +5657,6 @@ const {
   triggerNewImageHighlight,
   updateVisibleThumbnails,
   maybeRefreshOverlayForComfyui,
-  errorDetail,
 });
 
 // ============================================================
@@ -7094,33 +7072,6 @@ async function _afterTagMutation(imageId) {
   }
 }
 
-async function removeTagFromImage(imageId, tag) {
-  if (!imageId) {
-    console.error("Image ID is required to remove a tag.");
-    return;
-  }
-
-  try {
-    const tagId = getTagId(tag);
-    if (tagId == null) {
-      console.warn("Tag id is required to remove a tag.", tag);
-      return;
-    }
-    const tagKey = String(tagId);
-    await removePictureTag(imageId, tagKey);
-    const gridImg = allGridImages.value.find(
-      (img) => img && img.id === imageId,
-    );
-    if (gridImg && Array.isArray(gridImg.tags)) {
-      const d = getTagList(gridImg.tags);
-      gridImg.tags = d.filter((t) => !tagMatches(t, tag));
-    }
-    await _afterTagMutation(imageId);
-  } catch (error) {
-    console.error("Error removing tag:", error);
-  }
-}
-
 async function addTagToImage(imageId, tag) {
   try {
     const response = await addPictureTag(imageId, tag);
@@ -7547,8 +7498,7 @@ async function exportCurrentViewToZip(options = {}) {
     exportProgress.status = "failed";
     exportProgress.message = "Export failed";
     console.error("ZIP export failed", e);
-    noticeStore.error(`Export failed. ${errorDetail(e)}`, {
-      key: "export-zip",
+    noticeStore.error(`Export failed. ${errorDetail(e)}`, { key: "export-zip",
     });
     setTimeout(() => {
       exportProgress.visible = false;

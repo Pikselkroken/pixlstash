@@ -213,7 +213,6 @@
             :open="selectionMenuOpen"
             :selected-count="selectedCount"
             :selected-image-ids="selectedImageIds"
-            :backend-url="backendUrl"
             :is-read-only="isReadOnly"
             :is-scrapheap-view="isScrapheapView"
             :grouping-lock-reason="props.groupingLockReason"
@@ -266,7 +265,6 @@
               ></div>
             </template>
             <TbTagPanel
-              :backend-url="props.backendUrl"
               :selected-count="selectedCount"
               :selected-image-ids="props.selectedImageIds"
               :all-grid-images="props.allGridImages"
@@ -326,13 +324,14 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { listWorkflows, runImageToImage } from "../../api/comfyui";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import { isEditableElement } from "../../utils/dom.js";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   selectedCount: Number,
@@ -347,7 +346,7 @@ const props = defineProps({
    */
   ownsEscape: { type: Boolean, default: true },
   scrapheapPicturesId: { type: String, required: true },
-  backendUrl: { type: String, required: true },
+  backendUrl: { type: String, default: () => API_BASE_URL },
   selectedImageIds: { type: Array, default: () => [] },
   selectedMediaSupport: {
     type: Object,
@@ -637,7 +636,7 @@ async function fetchComfyWorkflows() {
     comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
   } catch (err) {
     comfyuiWorkflowError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+      errorDetail(err) || err?.message || String(err);
     comfyuiWorkflows.value = [];
   } finally {
     comfyuiWorkflowLoading.value = false;
@@ -681,8 +680,7 @@ async function runSelectedComfyWorkflow() {
       comfyuiMenuOpen.value = false;
     }, 1200);
   } catch (err) {
-    comfyuiRunError.value =
-      err?.response?.data?.detail || err?.message || String(err);
+    comfyuiRunError.value = errorDetail(err) || err?.message || String(err);
   } finally {
     comfyuiRunLoading.value = false;
   }
@@ -784,14 +782,11 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   align-items: center;
   justify-content: center;
   gap: 4px;
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0;
   width: 40px;
   height: 40px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-family: inherit;
   flex-shrink: 0;
 }
@@ -799,7 +794,6 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   background: rgba(var(--v-theme-on-background), 0.12);
 }
 .clear-btn:disabled {
-  background: transparent;
   border-color: transparent;
   color: rgb(var(--v-theme-on-background));
   opacity: 0.35;
@@ -830,14 +824,11 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   /* 8px here plus the run's own 8px gap = the --space-5 group gap that keeps
      the destructive control off its neighbour's elbow. */
   margin-left: var(--space-3);
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0;
   width: 40px;
   height: 40px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-family: inherit;
   flex-shrink: 0;
 }
@@ -845,7 +836,6 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   background: rgba(var(--v-theme-on-background), 0.12);
 }
 .delete-btn:disabled {
-  background: transparent;
   border-color: transparent;
   color: rgb(var(--v-theme-on-background));
   opacity: 0.35;
@@ -855,12 +845,9 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: transparent;
   color: rgb(var(--v-theme-on-background));
-  border: none;
   padding: 0 10px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   font-size: var(--text-base);
   font-family: inherit;
   height: 40px;

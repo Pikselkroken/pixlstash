@@ -117,6 +117,7 @@ import {
   createFilesystemFolder,
 } from "../../api/folders";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
+import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -192,8 +193,7 @@ async function browseDir(path) {
     browseEntries.value = listing?.entries ?? [];
     browsePath.value = listing?.path ?? path ?? "/";
   } catch (error) {
-    browseError.value =
-      error?.response?.data?.detail || "Cannot browse this directory.";
+    browseError.value = errorDetail(error) || "Cannot browse this directory.";
     browseEntries.value = [];
   } finally {
     browseLoading.value = false;
@@ -266,8 +266,7 @@ async function submitNewFolder() {
     newFolderName.value = "";
     await browseDir(created?.path || target);
   } catch (error) {
-    createFolderError.value =
-      error?.response?.data?.detail || "Could not create folder.";
+    createFolderError.value = errorDetail(error) || "Could not create folder.";
   }
 }
 

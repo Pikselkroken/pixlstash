@@ -40,6 +40,7 @@ import { getTagHealth, rebuildTagHealth } from "../api/tagHealth";
 import { getAnomalyRegion } from "../api/pictures";
 import { useEntityListsStore } from "./useEntityListsStore";
 import { SET_ICONS, SET_COLORS } from "../utils/setAppearance";
+import { errorDetail } from "../utils/apiError";
 
 const PAGE_SIZE = 200;
 
@@ -66,7 +67,7 @@ export const STICKER_ICONS = SET_ICONS.map((ic) => ({
   icon: ic.value,
   label: ic.label,
 }));
-export const STICKER_COLORS = SET_COLORS.map((c) => c.value);
+const STICKER_COLORS = SET_COLORS.map((c) => c.value);
 
 // --- Decision mapping -------------------------------------------------------
 //
@@ -132,7 +133,7 @@ export function pairSides(item) {
 
 // Per-picture has/not votes a decision asserts, for the session consistency
 // ledger (port of the old CORNER_VOTES translation).
-export function votesForDecision(item, kind, decision) {
+function votesForDecision(item, kind, decision) {
   if (!item) return [];
   if (kind === "binary") {
     if (item.picture_id == null) return [];
@@ -871,9 +872,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       createError.value =
         e?.response?.status === 409
           ? `An open review already exists for “${t}”.`
-          : e?.response?.data?.detail ||
-            e?.message ||
-            "Failed to create the review";
+          : errorDetail(e) || e?.message || "Failed to create the review";
       return null;
     } finally {
       creating.value = false;
