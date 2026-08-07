@@ -375,6 +375,7 @@ jobs:
           tests/test_stacks_api.py
           tests/test_stacks_membership.py
           tests/test_tag_prediction_scope.py
+          tests/test_tag_task.py
           tests/test_tag_worker.py
           tests/test_thumbnail_cache_headers.py
           tests/test_token_identity.py
