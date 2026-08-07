@@ -159,7 +159,7 @@ class TagTask(BaseTask):
                 )
                 if not frames:
                     logger.debug(
-                        "TaskTask load image failed for %s: no frames", str(file_path)
+                        "TagTask load image failed for %s: no frames", str(file_path)
                     )
                     return file_path, None
                 return file_path, frames[0].convert("RGB")
