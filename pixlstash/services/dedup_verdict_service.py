@@ -132,6 +132,7 @@ from pixlstash.services.stack_membership import (
     reconcile_stack_membership,
 )
 from pixlstash.stacking import normalize_stack_positions
+from pixlstash.utils.service.scope_table import scope_id_subquery
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pixlstash.vault import Vault
@@ -614,13 +615,27 @@ def _dry_run_summary_in_session(
     if not groups:
         return summary
 
-    group_ids = [int(group.id) for group in groups]
+    # Every id set below goes through a TEMP TABLE rather than a Python-set
+    # ``.in_()``: this runs over the WHOLE candidate population, not one group, so
+    # a real library plans tens of thousands of groups and hundreds of thousands
+    # of members. One bound parameter per id blows SQLite's
+    # ``SQLITE_MAX_VARIABLE_NUMBER`` and the preview dies with "too many SQL
+    # variables" (#751, reported at 30,140 exact groups). The three scopes below
+    # carry DISTINCT names on purpose: they are live at the same time and the
+    # picture scope is read again *after* the stack scope is materialised, so a
+    # shared name would clobber it and silently return wrong counts rather than
+    # raising.
+    group_scope = scope_id_subquery(
+        session,
+        [int(group.id) for group in groups],
+        name="_pixlstash_dry_run_group_ids",
+    )
     members_by_group: dict[int, list[int]] = defaultdict(list)
     for group_id, picture_id in session.exec(
         select(DedupGroupMember.group_id, DedupGroupMember.picture_id)
         .join(Picture, Picture.id == DedupGroupMember.picture_id)
         .where(
-            DedupGroupMember.group_id.in_(group_ids),
+            DedupGroupMember.group_id.in_(group_scope),
             Picture.deleted.is_(False),
         )
     ).all():
@@ -636,11 +651,16 @@ def _dry_run_summary_in_session(
         for group_id, ids in members_by_group.items()
     }
     all_ids = [pid for ids in members_by_group.values() for pid in ids]
+    # Materialised after the lock filter, so the scope is the population the run
+    # would actually move. Reused by the tag query below.
+    picture_scope = scope_id_subquery(
+        session, all_ids, name="_pixlstash_dry_run_picture_ids"
+    )
     scores: dict[int, Any] = {}
     stack_by_picture: dict[int, Optional[int]] = {}
     for picture_id, score, stack_id in session.exec(
         select(Picture.id, Picture.score, Picture.stack_id).where(
-            Picture.id.in_(all_ids)
+            Picture.id.in_(picture_scope)
         )
     ).all():
         scores[int(picture_id)] = score
@@ -657,9 +677,12 @@ def _dry_run_summary_in_session(
     stack_ids = {sid for sid in stack_by_picture.values() if sid is not None}
     members_by_stack: dict[int, list[int]] = defaultdict(list)
     if stack_ids:
+        stack_scope = scope_id_subquery(
+            session, stack_ids, name="_pixlstash_dry_run_stack_ids"
+        )
         for picture_id, stack_id in session.exec(
             select(Picture.id, Picture.stack_id).where(
-                Picture.stack_id.in_(sorted(stack_ids)),
+                Picture.stack_id.in_(stack_scope),
                 Picture.deleted.is_(False),
             )
         ).all():
@@ -667,7 +690,7 @@ def _dry_run_summary_in_session(
 
     tags_by_picture: dict[int, set[str]] = defaultdict(set)
     for picture_id, tag in session.exec(
-        select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(all_ids))
+        select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(picture_scope))
     ).all():
         if not is_tag_sentinel(tag):
             tags_by_picture[int(picture_id)].add(str(tag))
@@ -1884,8 +1907,18 @@ def bulk_auto_stack(
     source: str = "external",
     origin_client_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Write-path vault wrapper around :func:`bulk_auto_stack_in_session`."""
-    report = vault.db.run_task(
+    """Write-path vault wrapper around :func:`bulk_auto_stack_in_session`.
+
+    A dry run returns before minting a batch id and writes nothing, so it goes to
+    ``run_immediate_read_task`` instead of the serialised writer queue. On the
+    queue it held the single writer thread for as long as the aggregate took, and
+    every stack verdict behind it (also a write task) waited: the consent dialog
+    timed out and the queue then refused each group with "Could not stack that
+    group" until the preview finished (#751). The preview is read-only, so
+    it has no business blocking writes even when it is slow.
+    """
+    runner = vault.db.run_immediate_read_task if dry_run else vault.db.run_task
+    report = runner(
         bulk_auto_stack_in_session,
         scope,
         batch_id,

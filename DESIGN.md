@@ -1,12 +1,12 @@
 <!--
   AGENT-FACING DESIGN RECORD.
-  COLOR: this file now carries the DECIDED unified palette (Camp B — one brand
-  palette shared by both themes, warm-white labels). It LEADS; frontend/src/main.js
-  (pixlStashLight / pixlStashDark) is being migrated to match these values and is
-  the runtime source until that port lands. Non-color scales (spacing, radius, type,
-  elevation, motion) still mirror docs/design/design-tokens.css (the law) —
-  frontend/src/styles/design-tokens.css is the shipped copy; rationale in
-  docs/design/visual-language.md. Keep those non-color scales in sync with the repo.
+  COLOR: the unified palette (Camp B — one brand palette shared by both themes,
+  warm-white labels). The port landed: frontend/src/main.js (pixlStashLight /
+  pixlStashDark) carries these exact values and is the runtime source. This file
+  is the agent-readable record of them; main.js wins if they ever disagree.
+  Non-color scales (spacing, radius, type, elevation, motion) live in one file
+  only — frontend/src/styles/design-tokens.css, which docs/design/design-tokens.css
+  symlinks to. Rationale in docs/design/visual-language.md.
 -->
 ---
 name: PixlStash

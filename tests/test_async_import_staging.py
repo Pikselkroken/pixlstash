@@ -504,6 +504,28 @@ def test_open_with_nonexistent_project_errors(owner_server):
     assert r.status_code == 404, r.text
 
 
+def test_direct_import_with_nonexistent_project_errors(owner_server):
+    """The direct multipart endpoint fails fast on a stale project id too.
+
+    It used to skip the check the staging path runs, so the id only failed at
+    the membership INSERT — after every file had been imported and committed.
+    The caller (the ComfyUI saver node, which stores the project as
+    "<name> #<id>" and so replays whatever id was current when the workflow was
+    authored) was told the import failed while the pictures were already in the
+    vault.
+    """
+    srv, client = owner_server
+    r = client.post(
+        f"{API}/pictures/import",
+        files=[("file", ("a.png", _png_bytes(), "image/png"))],
+        data={"project_id": "999999"},
+    )
+    assert r.status_code == 404, r.text
+    assert "999999" in r.text
+    # And nothing was imported on the way to the refusal.
+    assert srv.vault.db.run_task(lambda s: s.exec(select(Picture.id)).first()) is None
+
+
 def test_reaper_evicts_stale_session_and_dir(owner_server):
     from pixlstash.routes.pictures import _import as import_mod
 

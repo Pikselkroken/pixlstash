@@ -53,6 +53,9 @@ SEED_NODE_CLASSES = {"RandomNoise", "KSampler", "KSamplerAdvanced"}
 PIXLSTASH_SAVER_CLASSES = frozenset({"PixlStashPictureSaver"})
 PIXLSTASH_IDS_KEY = "picture_ids"
 
+# Every class in the ComfyUI-PixlStash pack starts with this.
+PIXLSTASH_NODE_PREFIX = "PixlStash"
+
 # Every class that ends a graph with an image PixlStash can end up owning.
 SAVE_NODE_CLASSES = frozenset({"SaveImage"}) | PIXLSTASH_SAVER_CLASSES
 
@@ -377,6 +380,29 @@ def _extract_output_node_ids(workflow: dict, payload: dict) -> list[str]:
         if node.get("class_type") in SAVE_NODE_CLASSES:
             save_nodes.append(str(node_id))
     return save_nodes
+
+
+def graph_has_pixlstash_nodes(workflow: dict) -> bool:
+    """True when *workflow* calls back into PixlStash from inside the graph.
+
+    Every class in the ComfyUI-PixlStash pack is prefixed, so the prefix is the
+    rule: a node added to the pack later is covered without editing this.
+
+    Such a graph is a cycle — PixlStash runs ComfyUI, which calls PixlStash —
+    and it carries **frozen ids**: the loaders serialise a choice as
+    ``"<name> #<id>"``, so a replayed file re-applies whatever project, set,
+    character or picture id was current when it was authored. That is fine for a
+    template the owner picks now, and wrong for a recipe replay, where the ids
+    can name a deleted project or one belonging to a different library.
+    """
+    if not isinstance(workflow, dict):
+        return False
+    return any(
+        isinstance(node, dict)
+        and isinstance(node.get("class_type"), str)
+        and node["class_type"].startswith(PIXLSTASH_NODE_PREFIX)
+        for node in workflow.values()
+    )
 
 
 def graph_has_pixlstash_saver(workflow: dict) -> bool:

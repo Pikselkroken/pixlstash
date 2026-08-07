@@ -261,6 +261,57 @@ class TestRecipeReportsSourceOrigin:
         assert "/home/someone" not in json.dumps(body)
 
 
+class TestRunRecipeRefusesPixlStashNodes:
+    """A ComfyUI-PixlStash graph is a cycle, and its ids are frozen.
+
+    The loaders serialise a choice as ``"<name> #<id>"``, so replaying the file
+    re-applies whatever project / set / character / picture id was current when
+    it was written — ids that may name a deleted project, or one that now lives
+    in a different library. Before this refusal that surfaced as a raw SQLite
+    FOREIGN KEY error from the saver's own import, *after* the images had
+    already been imported.
+    """
+
+    @staticmethod
+    def _pixlstash_env(env, monkeypatch):
+        """Re-answer the recipe read with a graph that carries a pack node."""
+        import pixlstash.utils.comfyui_utilities as utils
+
+        graph = dict(RECIPE_GRAPH)
+        graph["11"] = {
+            "class_type": "PixlStashPictureSaver",
+            "inputs": {"filename_prefix": "v", "pixlstash_project": ["12", 0]},
+        }
+        graph["12"] = {
+            "class_type": "PixlStashProjectLoader",
+            "inputs": {"pixlstash_project": "Gone #6"},
+        }
+        monkeypatch.setattr(utils, "find_comfy_api_prompt", lambda *a, **kw: graph)
+        monkeypatch.setattr(
+            comfyui_module, "find_comfy_api_prompt", lambda *a, **kw: graph
+        )
+
+    def test_run_is_refused_and_nothing_is_submitted(self, env, monkeypatch):
+        server, client, pic_id = env
+        self._pixlstash_env(env, monkeypatch)
+        submitted = _capture_submissions(monkeypatch)
+        r = client.post(f"{API}/comfyui/run_recipe", json={"picture_id": pic_id})
+        assert r.status_code == 400, r.text
+        assert "PixlStash nodes" in r.json()["detail"]
+        assert submitted == []
+
+    def test_the_recipe_read_says_so_before_the_user_commits(self, env, monkeypatch):
+        # The dialog has to be able to offer "copy it into ComfyUI" instead,
+        # which it cannot do if the refusal only arrives on submit.
+        server, client, pic_id = env
+        self._pixlstash_env(env, monkeypatch)
+        r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["available"] is False
+        assert body["reason"] == "pixlstash_nodes"
+
+
 class TestRunRecipeRefusesAnUncheckedPreflight:
     def test_refuses_without_the_override(self, env, monkeypatch):
         server, client, pic_id = env

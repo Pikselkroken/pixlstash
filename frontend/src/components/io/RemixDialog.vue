@@ -67,6 +67,25 @@
         </div>
       </div>
 
+      <!-- The one refusal with somewhere else to go. Sits outside the
+           radiogroup: it is an action, and a button inside a radio card would
+           select the card. -->
+      <p v-if="recipeUsesPixlStashNodes" class="remix-alert">
+        <v-icon size="16" class="remix-alert-icon">mdi-alert-outline</v-icon>
+        <span>
+          Run this one in ComfyUI, where those nodes can reach the library
+          directly.
+          <button
+            type="button"
+            class="remix-link"
+            :disabled="copyState === 'copying'"
+            @click="copyWorkflowToClipboard"
+          >
+            {{ copyWorkflowLabel }}
+          </button>
+        </span>
+      </p>
+
       <!-- Announced once when the check resolves badly; silent on success,
            because a success that changes nothing the user asked about is noise. -->
       <p class="remix-live" aria-live="polite">{{ liveMessage }}</p>
@@ -141,18 +160,12 @@
       </template>
 
       <!-- ── Recipe mode ─────────────────────────────────────────────────
-           Reading order is the consent argument: what came from outside, what
-           could not be checked, what it would run, I accept, run. The
-           acknowledgement sits directly under the evidence it names. -->
+           Only blocking facts get a banner. "Imported" is not one: a watched
+           folder pointed at the user's own ComfyUI output makes every
+           self-generated image imported, so warning on it fires on the common
+           case and reads as noise. The route in stays available as the Source
+           row inside the disclosure, for whoever goes looking. -->
       <template v-else-if="selectedMode === 'recipe'">
-        <p v-if="sourceIsImported" id="remix-alert-imported" class="remix-alert">
-          <v-icon size="16" class="remix-alert-icon">mdi-alert-outline</v-icon>
-          <span>
-            This image was imported, not generated here. The workflow inside it
-            came from outside PixlStash and will run on your ComfyUI as written.
-          </span>
-        </p>
-
         <p v-if="comfyuiUnreachable" id="remix-alert-unchecked" class="remix-alert">
           <v-icon size="16" class="remix-alert-icon">mdi-alert-outline</v-icon>
           <span>
@@ -326,7 +339,13 @@ import { computed, nextTick, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
-import { getPictureRecipe, listWorkflows, runImageToImage, runRecipe } from "../../api/comfyui";
+import {
+  getPictureRecipe,
+  getPictureWorkflow,
+  listWorkflows,
+  runImageToImage,
+  runRecipe,
+} from "../../api/comfyui";
 import { getPictureMetadata } from "../../api/pictures";
 
 const props = defineProps({
@@ -466,6 +485,48 @@ const seedIsOriginal = computed(
     Number(seed.value) === originalSeed.value,
 );
 
+/** The graph calls back into PixlStash, so it runs in ComfyUI, not here. */
+const recipeUsesPixlStashNodes = computed(
+  () => recipe.value?.reason === "pixlstash_nodes",
+);
+
+const copyState = ref("idle");
+const copyWorkflowLabel = computed(
+  () =>
+    ({
+      copying: "Copying…",
+      copied: "Copied — paste into ComfyUI",
+      failed: "Copy failed",
+    })[copyState.value] || "Copy workflow",
+);
+
+/**
+ * Put the picture's own UI-format graph on the clipboard, which is the format
+ * ComfyUI accepts on paste. Fetched on demand rather than with the recipe: it
+ * is the whole graph, and only this one refusal ever needs it.
+ */
+async function copyWorkflowToClipboard() {
+  const id = props.image?.id;
+  if (!id || copyState.value === "copying") return;
+  copyState.value = "copying";
+  try {
+    const data = await getPictureWorkflow(id, { baseUrl: props.backendUrl });
+    const graph = data?.workflow;
+    if (!graph) throw new Error("No workflow in the response");
+    await navigator.clipboard.writeText(JSON.stringify(graph, null, 2));
+    copyState.value = "copied";
+    liveMessage.value = "Workflow copied. Paste it into ComfyUI.";
+  } catch (err) {
+    // Clipboard writes fail on an insecure origin, and the fetch can 404 on a
+    // file whose chunk is unreadable. Either way say so — a button that
+    // silently does nothing reads as a broken button.
+    copyState.value = "failed";
+    liveMessage.value =
+      "Could not copy the workflow. Open the picture's ComfyUI details to read it.";
+    console.error("Failed to copy workflow:", err);
+  }
+}
+
 /**
  * Why recipe mode is unavailable or guarded, phrased so each cause sends the
  * user to a different place. "Could not check" and "checked and it is broken"
@@ -478,6 +539,13 @@ const recipeReason = computed(() => {
   const info = recipe.value;
   if (!info) return "";
   if (!info.available) {
+    if (info.reason === "pixlstash_nodes") {
+      return (
+        "This workflow uses PixlStash nodes, so it reads and writes the " +
+        "library as it runs. Re-running it here would use the projects, sets " +
+        "and pictures it was saved with, not this picture's."
+      );
+    }
     if (info.reason === "no_seed_input") {
       return "This workflow has no random seed, so a re-run would produce the identical image.";
     }
@@ -611,7 +679,6 @@ function describedByFor(mode) {
   const ids = [];
   if (mode.reason) ids.push(`remix-reason-${mode.id}`);
   if (mode.id === "recipe" && selectedMode.value === "recipe") {
-    if (sourceIsImported.value) ids.push("remix-alert-imported");
     if (comfyuiUnreachable.value) ids.push("remix-alert-unchecked");
   }
   return ids.length ? ids.join(" ") : undefined;
@@ -836,13 +903,16 @@ async function loadRecipe(generation, imageId, backendUrl) {
 
 /**
  * Re-seed everything that describes the freshly-read recipe. The disclosure
- * opens itself when the graph is untrusted or uninspected — progressive
- * disclosure is only correct when the default is known safe.
+ * always starts shut: the routine re-roll is a two-click flow, and the one
+ * state that used to force it open (an unreachable ComfyUI) already disables
+ * Generate outright, so opening it there only buries the banner that says so.
  */
 function resetRecipeDisclosure() {
-  const scrutinise = sourceIsImported.value || comfyuiUnreachable.value;
-  nodeClassesExpanded.value = scrutinise;
-  disclosureOpen.value = scrutinise;
+  nodeClassesExpanded.value = false;
+  disclosureOpen.value = false;
+  // A "Copied" left over from the previous picture would claim this one's
+  // workflow is on the clipboard.
+  copyState.value = "idle";
 }
 
 /** Retry the pre-flight — the only way out of the unreachable refusal. */

@@ -39,6 +39,32 @@ class TestGraphInspection:
         )
 
 
+class TestReplayRefusal:
+    """A graph that calls back into PixlStash cannot be replayed as a variant."""
+
+    def test_any_node_from_the_pack_counts(self):
+        # Prefix rule, so a node added to the pack later is covered for free.
+        for cls in (
+            "PixlStashPictureSaver",
+            "PixlStashProjectLoader",
+            "PixlStashPictureLoader",
+            "PixlStashSemanticSearch",
+        ):
+            graph = {"9": {"class_type": cls, "inputs": {}}}
+            assert comfyui_service.graph_has_pixlstash_nodes(graph) is True, cls
+
+    def test_an_ordinary_graph_does_not(self):
+        graph = {
+            "3": {"class_type": "KSampler", "inputs": {}},
+            "9": {"class_type": "SaveImage", "inputs": {}},
+        }
+        assert comfyui_service.graph_has_pixlstash_nodes(graph) is False
+
+    def test_a_lookalike_class_name_does_not_match_by_accident(self):
+        graph = {"9": {"class_type": "NotPixlStashSaver", "inputs": {}}}
+        assert comfyui_service.graph_has_pixlstash_nodes(graph) is False
+
+
 class TestHistoryExtraction:
     def test_picture_ids_are_parsed_from_the_comma_joined_string(self):
         payload = _history(

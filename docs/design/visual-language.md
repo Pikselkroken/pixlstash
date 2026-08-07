@@ -15,8 +15,7 @@
 This is what PixlStash looks like. Not a mood board, a spec. Every value here is a
 token you can build against, and every rule has a reason. Follow it and the product
 reads as one considered thing on every screen. Ignore it and you get the drift this
-document exists to stop (see `drift-audit-2026-06.md` for what that drift looks like
-in numbers).
+document exists to stop.
 
 Owner: lead designer. Anything that changes *behaviour* (a flow, a state, what a
 control does) is agreed with the UI/UX expert first. Anything that changes *values*
@@ -838,5 +837,5 @@ exposes it. From now on a raw z-index in new code is drift.
 4. Hand the frontend exact values, not adjectives. "`--space-5` padding, `--radius-md`,
    `--elevation-2`," not "a bit more room and rounder corners."
 
-See `drift-audit-2026-06.md` for the current gap between this spec and the codebase,
-and the order to close it in.
+See `design-system-handoff.md` §9 for findings that are measured and decided but not
+yet implemented.
