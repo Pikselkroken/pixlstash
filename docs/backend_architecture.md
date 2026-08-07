@@ -291,7 +291,7 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | Config dirs | **platformdirs** |
 | Logging | **colorlog** |
 
-**Python**: 3.10+
+**Python**: 3.11+
 
 ---
 
