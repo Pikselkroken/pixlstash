@@ -32,6 +32,8 @@
 19. [Mermaid Diagrams](#19-mermaid-diagrams)
 20. [Architectural Patterns](#20-architectural-patterns)
 21. [Operation Log](#21-operation-log--undoredo-and-the-audit-trail-dam-12)
+22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection-v19-dedup--stacks)
+23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags-v19-lane-f)
 
 ---
 
@@ -289,7 +291,7 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | Config dirs | **platformdirs** |
 | Logging | **colorlog** |
 
-**Python**: 3.10+
+**Python**: 3.11+
 
 ---
 
@@ -423,7 +425,17 @@ List workflows; execute a workflow against a picture; replay the workflow a pict
 
 1. **Disclosure.** The recipe response carries `node_classes` — the distinct `class_type` list, from `collect_node_classes` — so the confirm dialog can name what will run. It is read from the file, so it is populated **even when the pre-flight could not run**, which is exactly the case where the owner has nothing else to judge by. A node *count* is not an answer to "what will this run".
 2. **Fail closed on an uninspected graph.** `preflight_prompt` degrading to `unchecked_preflight` keeps `ok: True` because the only fact known is that the check did not run — so `run_recipe` refuses `preflight.checked is False` with a 400 unless the request carries `allow_unchecked: true`, the owner's explicit acknowledgement, which is logged with the node classes. **The refusal is enforced here, not only in the dialog**; a UI-only gate is not a gate. This is the one control that is a hard gate, and it is deliberately reserved for the rare case: gating the common ones is what turns an acknowledgement into a reflex.
-3. **Provenance.** `_picture_source_origin` reports `source_is_imported` / `source_label` so the dialog can warn that the embedded workflow came from outside. There is no provenance column; the signal is the three fields only ever written on an *inbound* path (`reference_folder_id`, `import_source_folder`, `original_file_name`), all of which PixlStash's own ComfyUI import leaves NULL. The label names the route in ("Watched folder"), never the filesystem path. It is advisory only and fails toward "not imported" — it informs, it does not gate.
+3. **Provenance.** `_picture_source_origin` reports `source_is_imported` / `source_label`, surfaced as the **Source** row inside the dialog's disclosure. It stopped being a banner on 2026-08-06: a watched folder on the owner's own ComfyUI output makes every self-generated image "imported", so warning on it fired on the common case. There is no provenance column; the signal is the three fields only ever written on an *inbound* path (`reference_folder_id`, `import_source_folder`, `original_file_name`), all of which PixlStash's own ComfyUI import leaves NULL. The label names the route in ("Watched folder"), never the filesystem path. It is advisory only and fails toward "not imported" — it informs, it does not gate.
+
+**Recipe replay refuses any graph that carries a ComfyUI-PixlStash node** (`graph_has_pixlstash_nodes`, prefix rule so new pack nodes are covered). Such a graph is a cycle — PixlStash runs ComfyUI, which calls back into PixlStash — and every id in it is frozen: the loaders serialise a choice as `"<name> #<id>"`, so replaying the file re-applies whatever project, set, character or picture id was current when it was written. Three ways that breaks the "variant of *this* picture" contract: the ids can name a deleted project or one that now lives in a **different library** (which surfaced as a raw SQLite `FOREIGN KEY` failure from the saver's own import, *after* the images were imported); `PixlStashPictureLoader` sources its input by baked `picture_ids`, or **auto-selects by its own sort and filters when that field is empty**, so the variant need not be of the selected picture at all; and the saver imports the outputs itself, competing with the import PixlStash is already running for the variant. `GET .../recipe` reports `available: false, reason: "pixlstash_nodes"` so the dialog can offer the workflow for pasting into ComfyUI instead of failing on submit. **Template runs are unaffected** — the owner picks those ids now, and nothing claims the result is a variant.
+
+**Graphs saved by the ComfyUI-PixlStash node pack (`PixlStashPictureSaver`) take the other import path** (template runs only, per the refusal above). The node uploads to `POST /pictures/import` itself rather than writing a file for PixlStash to collect, so the collection pipeline has to invert for it, in three places that all key off `SAVE_NODE_CLASSES` / `PIXLSTASH_SAVER_CLASSES` in `services/comfyui_service.py`:
+
+1. **It counts as a save node.** `preflight_prompt`'s `has_save_image` and `_extract_output_node_ids` both include it; without that, `run_recipe` rejected every workflow built on the pack with "produces nothing PixlStash can import".
+2. **Its history images are not imported.** The node reports `type: "temp"` previews of pictures it has *already* imported. Downloading them re-imports a duplicate, which dedupes to an empty `new_ids` and so silently loses the stack placement, the source lineage and the import event. `_extract_comfyui_output_images` skips any node carrying `picture_ids`; a sibling `SaveImage` in the same graph is still collected normally.
+3. **Its reported ids are adopted instead.** `_extract_pixlstash_picture_ids` returns the ids the node created (`None` when no such node ran, `[]` when it ran and every image was a duplicate — the distinction is what keeps an all-duplicates run from being reported as "ComfyUI finished without outputs"). `_process_comfyui_outputs` merges them into `new_ids`, so stacking, `source_picture_id`, set/project inheritance and the single `PICTURE_IMPORTED` event are unchanged.
+
+Stack placement for these graphs therefore does **not** come from `build_stack_filename_prefix`: the filename tag is only parsed by the watch-folder importer, not by the API import endpoint the node calls. The "no SaveImage node to tag" warning is suppressed when the graph has a PixlStash saver (`graph_has_pixlstash_saver`), because there the ids arrive directly.
 
 **Seed ranges differ by route.** `run_t2i` / `run_i2i` validate a fixed seed to 32 bits; `run_recipe` allows the full 64-bit range ComfyUI's core samplers declare, because the shipped `Flux2-Klein-Image-Edit` template's own `noise_seed` is `432262096973502` and a 32-bit check would reject reproducing our own built-in's default.
 
@@ -1372,7 +1384,7 @@ a promise that Tailscale is local for every authentication mechanism.
 - **`OriginClientMiddleware`** ([utils/request_origin.py](../pixlstash/utils/request_origin.py)) reads the per-tab `X-Client-Id` header (≤200 chars, oversized **dropped not truncated**) into `request.state.origin_client_id` and an `origin_client_id_var` contextvar.
 - **Threading caveat (load-bearing).** The contextvar is valid **only on the request's own task**. The attribution-critical emits — import (`run_in_executor`), plugin service — fire on **detached worker threads** where the contextvar is dead. So those call sites capture the origin synchronously at request entry and carry it explicitly in the event `data` dict, and the broadcaster reads `source`/`origin_client_id` **from `data` only — never from the contextvar**. Synchronous in-request emits (PATCH/DELETE on pictures, tags, characters, project, apply-scores, scrapheap) take `request: Request` and pass `origin_client_id` (plus `change_kind="removed"` on deletes) into `data`. Background emitters inherit the `external`/`None` defaults.
 - **In-app ComfyUI generation is a deliberate exception.** It is UI-initiated but completes **asynchronously** on a detached worker after the request returns, so there is no optimistic client-side copy to suppress. `_process_comfyui_outputs` ([routes/comfyui.py](../pixlstash/routes/comfyui.py)) emits a **single** `PICTURE_IMPORTED` with `source: "ui"`, `change_kind: "added"`, and **no origin echo** (`origin_client_id` omitted) — so **every** owner tab, including the initiating one, does a slick in-place insert (`handleForeignUi` → `insertGridImagesById`) rather than the originator suppressing its own echo. It does **not** fire a second `CHANGED_PICTURES` broadcast (the field-scoped `Missing*Finder` events emit their own targeted events later), and already-existing re-imports (`duplicate_ids`) get no event. The runner therefore captures and threads no `origin_client_id` at all.
-- **Security.** `X-Client-Id` / `origin_client_id` is attacker-controllable and used **only** for frontend echo-matching — **never** for authorization or scoping. It is length-capped and not logged at INFO; the stream stays owner-only. See [docs/reviews/feature-slick-grid-updates.md](reviews/feature-slick-grid-updates.md).
+- **Security.** `X-Client-Id` / `origin_client_id` is attacker-controllable and used **only** for frontend echo-matching — **never** for authorization or scoping. It is length-capped and not logged at INFO; the stream stays owner-only. Signed off by the CSO when the origin-aware envelope shipped (PR #468).
 
 #### Aspirational: centralised origin-stamping chokepoint (NOT YET IMPLEMENTED — target state)
 
@@ -2860,6 +2872,21 @@ from offering a Stack the verdict would refuse:
   in the preview exactly as the run moves it, or the group would silently drop
   out of the "covers gaining metadata" row (that row stays on the group's own
   members: the tag/score union runs over those, not over the folded stack).
+- **The dry run is sized for the whole vault, and it is a read** (**#751**,
+  2026-08-07). `_dry_run_summary_in_session` aggregates over every candidate
+  group at once, so at 30,140 exact groups its group, picture and tag queries
+  each bound tens of thousands of parameters and died with `too many SQL
+  variables`; all three now scope through `scope_id_subquery`
+  (`utils/service/scope_table.py`), which binds none. The three scopes carry
+  **distinct temp-table names** because they are live at the same time and the
+  picture scope is read again after the stack scope is materialised, so a shared
+  name would clobber it and return wrong counts rather than raising. Separately,
+  `bulk_auto_stack` sends `dry_run=true` to `run_immediate_read_task`, **not**
+  the serialised writer queue: the preview returns before minting a batch id and
+  writes nothing, but on the writer it held the single write thread for its whole
+  duration and every stack verdict queued behind it, so the queue answered "Could
+  not stack that group" until the preview finished. An applied run is a real
+  mutation and still goes through `run_task`.
 
 Partial success is scoped to **dedup** deliberately. The manual `POST /stacks`
 routes still refuse whole-request: they act on exactly the pictures the user

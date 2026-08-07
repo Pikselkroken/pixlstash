@@ -12,6 +12,9 @@
     "check:config": "WRANGLER_LOG_PATH=.wrangler/logs wrangler deploy --dry-run --outdir .wrangler/dry-run",
     "deploy": "wrangler deploy --no-x-provision --no-x-auto-create"
   },
+  "overrides": {
+    "undici": "7.29.0"
+  },
   "devDependencies": {
     "miniflare": "https://registry.npmjs.org/miniflare/-/miniflare-5.20260730.0-alpha.tgz",
     "wrangler": "4.118.0"

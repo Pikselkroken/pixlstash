@@ -336,6 +336,15 @@ def register_routes(router, server):
                 detail="Face worker is not running. Start it before import.",
             )
 
+        # The same fail-fast the staging path runs. Without it a project id that
+        # does not exist here reaches the membership INSERT *after* every file
+        # has been imported and committed, where it surfaces as a raw SQLite
+        # FOREIGN KEY error and the caller is told the whole import failed while
+        # the pictures are in fact already in the vault. Ids go stale for real:
+        # a ComfyUI graph stores the project as "<name> #<id>", so a replayed
+        # workflow carries whatever id was current when it was authored.
+        _validate_association_targets(None, None, project_id)
+
         dest_folder = server.vault.image_root
         logger.debug("Importing pictures to folder: " + str(dest_folder))
         os.makedirs(dest_folder, exist_ok=True)

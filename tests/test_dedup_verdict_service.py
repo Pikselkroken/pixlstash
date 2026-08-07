@@ -19,10 +19,12 @@ Covers:
 import gc
 import json
 import os
+import sqlite3
 import tempfile
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import event
 from sqlmodel import select
 
 from pixlstash.database import DBPriority
@@ -2780,3 +2782,90 @@ def test_the_dry_run_counts_a_shared_stack_once(server):
     # Four distinct pictures would move, not six.
     assert report["pictures"] == 4
     assert report["dry_run_summary"]["pictures"] == 4
+
+
+def _force_variable_limit(server, limit=999):
+    """Lower every new vault connection to SQLite's historical bind limit.
+
+    Modern SQLite raises ``SQLITE_MAX_VARIABLE_NUMBER`` to 32766, so a query that
+    binds one parameter per id passes here at any test-sized scale and only dies
+    on a real library. Pinning the ceiling back to the pre-3.32 value is what
+    makes the regression reproducible in a test that seeds a thousand rows
+    instead of thirty thousand.
+    """
+    engine = server.vault.db._engine
+
+    def set_limit(dbapi_conn, _record):
+        dbapi_conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, limit)
+
+    event.listen(engine, "connect", set_limit)
+    engine.dispose()
+
+
+def test_the_dry_run_survives_the_sqlite_variable_ceiling(server):
+    """Regression for #751: the preview aggregates over the WHOLE candidate set.
+
+    The reporter had 30,140 exact groups. Every id set in the summary was bound
+    one parameter per id, so the group query, the picture query and the tag query
+    each blew the ceiling and the consent dialog reported "the preview could not
+    be read". Both scopes here are over 999: 1001 groups and 2002 pictures.
+    """
+    specs = []
+    for index in range(1001):
+        specs.extend(
+            [
+                {"pixel_sha": f"sha{index:05d}", "size_bytes": 100 + index},
+                {"pixel_sha": f"sha{index:05d}", "size_bytes": 100 + index},
+            ]
+        )
+    _seed(server, specs)
+    _scan(server)
+    _force_variable_limit(server)
+
+    report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, True, None)
+
+    assert report["dry_run"] is True
+    assert report["groups"] == 1001
+    assert report["pictures"] == 2002
+    assert report["dry_run_summary"]["groups"] == 1001
+    assert report["dry_run_summary"]["pictures"] == 2002
+
+
+def test_the_dry_run_does_not_occupy_the_writer_queue(server):
+    """Regression for #751, second half: a read-only preview blocked every write.
+
+    ``bulk_auto_stack`` sent the dry run to the serialised writer thread, so a
+    slow preview held it and each stack verdict queued behind it until the run
+    finished, so the queue answered "Could not stack that group" the whole time.
+    The preview writes nothing, so it must not take the writer at all.
+    """
+    _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+
+    real_run_task = server.vault.db.run_task
+    writer_calls = []
+
+    def spy(func, *args, **kwargs):
+        writer_calls.append(getattr(func, "__name__", repr(func)))
+        return real_run_task(func, *args, **kwargs)
+
+    server.vault.db.run_task = spy
+    try:
+        report = verdicts.bulk_auto_stack(server.vault, None, None, True, None)
+        assert report["dry_run"] is True
+        assert report["groups"] == 1
+        assert "bulk_auto_stack_in_session" not in writer_calls
+
+        # The applied run is a real mutation and still belongs on the writer.
+        writer_calls.clear()
+        applied = verdicts.bulk_auto_stack(server.vault, None, None, False, None)
+        assert applied["dry_run"] is False
+        assert "bulk_auto_stack_in_session" in writer_calls
+    finally:
+        server.vault.db.run_task = real_run_task

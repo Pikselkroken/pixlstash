@@ -237,7 +237,6 @@ DEFERRED_FROM_GATE = frozenset(
         "test_tag_prediction_backfill.py",
         "test_tag_predictions_api.py",
         "test_tag_suggestions_api.py",
-        "test_tag_task.py",
         "test_tagger_plugin_registry.py",
         "test_tagger_runs_api.py",
         "test_user_settings_tagger_settings.py",

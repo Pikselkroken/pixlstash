@@ -310,6 +310,7 @@ jobs:
           tests/test_ci_shards.py
           tests/test_clip_text_embedding_similarity.py
           tests/test_comfyui_api_prompt_extraction.py
+          tests/test_comfyui_pixlstash_saver.py
           tests/test_comfyui_recipe_preflight.py
           tests/test_comfyui_recipe_route.py
           tests/test_comfyui_stack_filter.py
@@ -387,6 +388,7 @@ jobs:
           tests/test_stacks_api.py
           tests/test_stacks_membership.py
           tests/test_tag_prediction_scope.py
+          tests/test_tag_task.py
           tests/test_tag_worker.py
           tests/test_thumbnail_cache_headers.py
           tests/test_token_identity.py

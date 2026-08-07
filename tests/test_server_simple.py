@@ -349,12 +349,10 @@ def test_scrapheap_purge_reports_snapshots_with_deleted(server):
     for the deleted pictures, so the user can choose to delete those snapshots."""
     server.vault.import_default_data()
     client = TestClient(server.api)
-    assert (
-        client.post(
-            "/login", json={"username": "testuser", "password": "testpassword"}
-        ).status_code
-        == 200
+    login_resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
     )
+    assert login_resp.status_code == 200
 
     pic_id = server.vault.db.run_task(lambda s: s.exec(select(Picture)).first().id)
 
@@ -458,12 +456,10 @@ def test_scrapheap_delete_forever_destroys_protected_reference_original(
     entirely — see the routine-protection and escape-hatch tests below.)
     """
     client = TestClient(server.api)
-    assert (
-        client.post(
-            "/login", json={"username": "testuser", "password": "testpassword"}
-        ).status_code
-        == 200
+    login_resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
     )
+    assert login_resp.status_code == 200
 
     folder_dir = str(tmp_path / "protected_refs")
     folder_id, pic_id, abs_file_path = _make_reference_folder_picture(
@@ -471,7 +467,8 @@ def test_scrapheap_delete_forever_destroys_protected_reference_original(
     )
     expected_path_sha = DeletedFileLog.hash_path(abs_file_path)
 
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200
     # include_protected=true is the type-to-confirm "delete all" action.
     purge_resp = _purge_scrapheap(client, include_protected=True)
     assert purge_resp.status_code == 200
@@ -523,19 +520,18 @@ def test_soft_delete_to_scrapheap_keeps_reference_original_on_disk(server, tmp_p
     Only the explicit "Delete forever" destroys the file (test above).
     """
     client = TestClient(server.api)
-    assert (
-        client.post(
-            "/login", json={"username": "testuser", "password": "testpassword"}
-        ).status_code
-        == 200
+    login_resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
     )
+    assert login_resp.status_code == 200
 
     folder_dir = str(tmp_path / "routine_protected_refs")
     _folder_id, pic_id, abs_file_path = _make_reference_folder_picture(
         server, folder_dir, "routine_keep.png", allow_delete=False
     )
 
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200
 
     # Soft-deleted: still in DB, marked deleted, and the file is untouched.
     pic = server.vault.db.run_task(lambda s: s.get(Picture, pic_id))
@@ -577,7 +573,8 @@ def _seed_scrapheap_mixed(server, client, tmp_path):
         server, unprot_dir, "gone.png", allow_delete=True
     )
     for pid in (p1, p2, p3):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200
     return [p1, p2], {path1, path2}, p3, path3
 
 
@@ -585,12 +582,10 @@ def test_scrapheap_delete_preview_reports_full_protected_set(server, tmp_path):
     """The authoritative preview names EVERY protected reference original in the
     full scrapheap set (queried from the DB, never a virtualized/grid window)."""
     client = TestClient(server.api)
-    assert (
-        client.post(
-            "/login", json={"username": "testuser", "password": "testpassword"}
-        ).status_code
-        == 200
+    login_resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
     )
+    assert login_resp.status_code == 200
     prot_ids, prot_paths, unprot_id, _unprot_path = _seed_scrapheap_mixed(
         server, client, tmp_path
     )
@@ -612,12 +607,10 @@ def test_scrapheap_delete_include_protected_false_skips_protected(server, tmp_pa
     originals are left completely intact (row kept + deleted, file kept, no
     ledger row)."""
     client = TestClient(server.api)
-    assert (
-        client.post(
-            "/login", json={"username": "testuser", "password": "testpassword"}
-        ).status_code
-        == 200
+    login_resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
     )
+    assert login_resp.status_code == 200
     prot_ids, prot_paths, unprot_id, unprot_path = _seed_scrapheap_mixed(
         server, client, tmp_path
     )
@@ -651,12 +644,10 @@ def test_scrapheap_delete_include_protected_true_destroys_all(server, tmp_path):
     """include_protected=true purges everything, destroying protected originals
     too (files removed, file_removed=True)."""
     client = TestClient(server.api)
-    assert (
-        client.post(
-            "/login", json={"username": "testuser", "password": "testpassword"}
-        ).status_code
-        == 200
+    login_resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
     )
+    assert login_resp.status_code == 200
     prot_ids, prot_paths, unprot_id, unprot_path = _seed_scrapheap_mixed(
         server, client, tmp_path
     )
@@ -683,12 +674,10 @@ def test_scrapheap_purge_unprotected_folder_removes_file_and_logs(server, tmp_pa
     entry, and remove the source file from disk.
     """
     client = TestClient(server.api)
-    assert (
-        client.post(
-            "/login", json={"username": "testuser", "password": "testpassword"}
-        ).status_code
-        == 200
+    login_resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
     )
+    assert login_resp.status_code == 200
 
     folder_dir = str(tmp_path / "unprotected_refs")
     _folder_id, pic_id, abs_file_path = _make_reference_folder_picture(
@@ -696,7 +685,8 @@ def test_scrapheap_purge_unprotected_folder_removes_file_and_logs(server, tmp_pa
     )
     expected_path_sha = DeletedFileLog.hash_path(abs_file_path)
 
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200
     purge_resp = _purge_scrapheap(client)
     assert purge_resp.status_code == 200
     assert purge_resp.json()["deleted_count"] == 1
@@ -814,12 +804,10 @@ def test_scrapheap_delete_forever_upgrades_stale_kept_flag(server, tmp_path):
     pre-existing kept entry.)
     """
     client = TestClient(server.api)
-    assert (
-        client.post(
-            "/login", json={"username": "testuser", "password": "testpassword"}
-        ).status_code
-        == 200
+    login_resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
     )
+    assert login_resp.status_code == 200
 
     abs_file_path = str(tmp_path / "kept_then_forever.png")
     Image.new("RGB", (8, 8), color=(10, 20, 30)).save(abs_file_path, format="PNG")
@@ -860,19 +848,18 @@ def test_scrapheap_count_matches_grid(server):
     """
     server.vault.import_default_data()
     client = TestClient(server.api)
-    assert (
-        client.post(
-            "/login", json={"username": "testuser", "password": "testpassword"}
-        ).status_code
-        == 200
+    login_resp = client.post(
+        "/login", json={"username": "testuser", "password": "testpassword"}
     )
+    assert login_resp.status_code == 200
 
     pic_ids = server.vault.db.run_task(
         lambda s: [p.id for p in s.exec(select(Picture)).all()]
     )
     assert pic_ids, "No pictures imported"
     for pic_id in pic_ids:
-        assert client.delete(f"/pictures/{pic_id}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pic_id}")
+        assert delete_resp.status_code == 200
 
     count = client.get("/characters/SCRAPHEAP/summary").json()
     badge_count = count.get("image_count")
