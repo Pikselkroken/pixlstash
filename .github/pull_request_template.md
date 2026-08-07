@@ -12,7 +12,8 @@
 
 ## Contributor licence agreement
 
-Required only for changes under `pixlstash/**` (the backend). Tick it yourself —
-nobody can tick it on your behalf.
+Required only for changes under `pixlstash/**` (the backend). Tick the box
+yourself; nobody can tick it on your behalf. The check wants this exact line
+with an `x` in it, so edit the box rather than rewriting the sentence.
 
 - [ ] I have read and agree to the CLA in `pixlstash/CLA.md`.
