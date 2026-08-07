@@ -40,6 +40,53 @@ from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 
 logger = get_logger(__name__)
 
+# Extensions loaded through the video frame extractor rather than PIL. Only a
+# hint for picking the *first* decoder to try: a file whose extension lies is
+# still resolved by the shared loader in `_load_pic`.
+_VIDEO_EXTS = frozenset({".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"})
+
+
+def _is_transient_load_error(exc: BaseException) -> bool:
+    """True when *exc* means the machine failed, not that the file is corrupt.
+
+    This is the gate on `mark_unprocessable`. A mark suppresses the picture in
+    `base_task_finder._filter_and_claim`, i.e. for **every** batch finder —
+    thumbnails, embeddings and quality as well as tagging — until the file's
+    mtime/size changes, and `vault._count_missing_*` subtracts suppressed ids
+    from the "remaining" counters, so the loss does not even show in the UI.
+    Marking a good picture because the machine ran out of file descriptors would
+    therefore disable it silently for the rest of the server session.
+
+    `OSError.errno` is the discriminator, and it is exact: a real filesystem or
+    resource failure carries one (``EMFILE`` 24, ``EIO`` 5, ``ESTALE`` 116),
+    while PIL's decode failures do not — both `UnidentifiedImageError` and the
+    ``"image file is truncated"`` `OSError` leave it `None`.
+    """
+    if isinstance(exc, MemoryError):
+        return True
+    return isinstance(exc, OSError) and exc.errno is not None
+
+
+def _file_is_readable(file_path: str) -> bool:
+    """True when the file's bytes can be read at all.
+
+    The last check before declaring a picture undecodable, for the decoders that
+    swallow their own errors: `extract_representative_video_frames` returns `[]`
+    whenever `cv2.VideoCapture` fails to open, which includes failing under file
+    descriptor exhaustion. Without this, that path marks a good video.
+    """
+    try:
+        with open(file_path, "rb") as handle:
+            handle.read(1)
+        return True
+    except OSError as exc:
+        logger.warning(
+            "TagTask: %s could not be read (%s); not marking it unprocessable",
+            file_path,
+            exc,
+        )
+        return False
+
 
 class TagTask(BaseTask):
     """Task that tags a batch of pictures and persists tag updates."""
@@ -146,42 +193,107 @@ class TagTask(BaseTask):
         if self._model_preload_thread is not None:
             self._model_preload_thread.join(timeout=5)
 
-    def _load_pic(self, pic) -> tuple[str, PILImage.Image|None]:
-        video_exts = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
-        file_path = ImageUtils.resolve_picture_path(
-            self._db.image_root, pic.file_path
-        )
+    _PRELOAD_WORKERS = 4
+
+    def _load_pic(self, pic) -> "tuple[str | None, PILImage.Image | None, bool]":
+        """Load *pic*'s image for tagging.
+
+        Args:
+            pic: The picture to load.
+
+        Returns:
+            ``(file_path, image, undecodable)``. ``undecodable`` is True **only**
+            when the file's bytes were readable and still could not be decoded by
+            any loader — the sole condition under which the caller may mark it in
+            the unprocessable registry (see `_is_transient_load_error` for why
+            that distinction has to be exact).
+
+        The extension only picks which decoder is tried first. Whatever it says,
+        a failure falls back to `ImageUtils.load_image_or_video`, the loader the
+        thumbnail, quality and embedding tasks use, so this path can never
+        suppress a picture those pipelines are able to read — a real mp4 named
+        `.png` is common enough with re-encoded downloads to matter.
+        """
+        file_path = ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
+        if not file_path:
+            logger.warning(
+                "TagTask: picture %s has no resolvable file path",
+                getattr(pic, "id", None),
+            )
+            return None, None, False
+
         try:
             ext = os.path.splitext(str(file_path))[1].lower()
-            if ext in video_exts:
+            if ext in _VIDEO_EXTS:
                 frames = VideoUtils.extract_representative_video_frames(
                     str(file_path), count=1
                 )
-                if not frames:
-                    logger.debug(
-                        "TagTask load image failed for %s: no frames", str(file_path)
-                    )
-                    return file_path, None
-                return file_path, frames[0].convert("RGB")
-            return file_path, PILImage.open(file_path).convert("RGB")
+                if frames:
+                    return file_path, frames[0].convert("RGB"), False
+                logger.debug(
+                    "TagTask: no frames extracted from %s; trying the shared loader",
+                    file_path,
+                )
+            else:
+                return file_path, PILImage.open(file_path).convert("RGB"), False
         except Exception as exc:
+            if _is_transient_load_error(exc):
+                logger.warning(
+                    "TagTask: transient failure loading %s (%s); leaving it to retry",
+                    file_path,
+                    exc,
+                )
+                return file_path, None, False
             logger.debug(
-                "TagTask load image failed for %s: %s", str(file_path), exc
+                "TagTask: %s did not decode by extension (%s); trying the shared loader",
+                file_path,
+                exc,
             )
-            return file_path, None
 
-    _PRELOAD_WORKERS = 4
+        # The extension lied, or the primary decoder failed on a file that is not
+        # a resource problem. Ask the loader every suppressed pipeline uses before
+        # concluding anything; it logs its own cause at ERROR.
+        array = ImageUtils.load_image_or_video(str(file_path))
+        if array is not None:
+            return file_path, PILImage.fromarray(array), False
+        return file_path, None, _file_is_readable(str(file_path))
+
+    def _mark_unprocessable(self, pic, file_path) -> None:
+        """Record *pic* as undecodable so the finders stop re-selecting it (#585).
+
+        Mirrors `thumbnail_generation_task` / `quality_task`: the registry is
+        optional on the database object, and its absence degrades to a warning
+        rather than a crash. Only ever called for a genuinely undecodable file —
+        see `_load_pic`'s ``undecodable`` flag.
+        """
+        registry = getattr(self._db, "unprocessable_images", None)
+        if registry is not None:
+            registry.mark_unprocessable(
+                getattr(pic, "id", None),
+                str(file_path),
+                reason="tag source could not be decoded",
+            )
+        else:
+            logger.warning(
+                "TagTask: failed to load source for picture %s (%s)",
+                getattr(pic, "id", None),
+                str(file_path),
+            )
 
     def _preload_images(self) -> None:
         preloaded = {}
 
-        def _load_one(pic) -> tuple[str|None, PILImage.Image|None]:
+        def _load_one(pic) -> "tuple[str | None, PILImage.Image | None]":
             if self._preload_cancel.is_set():
                 return None, None
-            file_path, img = self._load_pic(pic)
+            # The preload never marks: it is best-effort warming, and the batch
+            # path re-loads and decides. Marking here would also race the cancel.
+            file_path, img, _undecodable = self._load_pic(pic)
             if img is None:
                 logger.debug(
-                    "Preload failed for %s (%s)", getattr(pic, "id", None), str(file_path)
+                    "Preload failed for %s (%s)",
+                    getattr(pic, "id", None),
+                    str(file_path),
                 )
             return file_path, img
 
@@ -585,55 +697,61 @@ class TagTask(BaseTask):
                             for face in faces
                             if face.bbox and getattr(face, "face_index", 0) >= 0
                         ]
-                        img = preloaded_images.get(file_path)
-                        if img is None:
-                            file_path, img = self._load_pic(pic)
+                        # Per-picture guard. Everything below can raise on data
+                        # this loop does not control: `Face.bbox` is json.loads of
+                        # a free-text column and `valid_faces` never length-checks
+                        # it, so a row that is not [x1,y1,x2,y2] raises IndexError
+                        # here and ValueError in expand_bbox_to_square. Without
+                        # this try, one such row escapes to the pass-level handler
+                        # below and costs EVERY remaining picture in the task its
+                        # quality crop, silently — they are still written as
+                        # tagged, so no finder re-selects them.
+                        try:
+                            img = preloaded_images.get(file_path)
                             if img is None:
-                                registry = getattr(self._db, "unprocessable_images", None)
-                                if registry is not None:
-                                    registry.mark_unprocessable(
-                                        getattr(pic, "id", None),
-                                        str(file_path),
-                                        reason="tag source could not be decoded",
-                                    )
-                                else:
-                                    logger.warning(
-                                        "TagTask: failed to load source for picture %s (%s)",
-                                        getattr(pic, "id", None),
-                                        str(file_path),
-                                    )
-                                continue
-                            preloaded_images[file_path] = img
-                        w, h = img.size
-                        if valid_faces:
-                            largest_face = max(
-                                valid_faces,
-                                key=lambda face: max(
-                                    0,
-                                    (float(face.bbox[2]) - float(face.bbox[0]))
-                                    * (float(face.bbox[3]) - float(face.bbox[1])),
-                                ),
+                                file_path, img, undecodable = self._load_pic(pic)
+                                if img is None:
+                                    if undecodable:
+                                        self._mark_unprocessable(pic, file_path)
+                                    continue
+                                preloaded_images[file_path] = img
+                            w, h = img.size
+                            if valid_faces:
+                                largest_face = max(
+                                    valid_faces,
+                                    key=lambda face: max(
+                                        0,
+                                        (float(face.bbox[2]) - float(face.bbox[0]))
+                                        * (float(face.bbox[3]) - float(face.bbox[1])),
+                                    ),
+                                )
+                                expanded = expand_bbox_to_square(
+                                    largest_face.bbox, w, h, target
+                                )
+                                key = f"{file_path}#face{largest_face.id}"
+                            else:
+                                # No face detected: fall back to a centre crop so
+                                # whole-image quality defects (blockiness, blur, jpeg
+                                # artifacts) still get a high-resolution pass instead of
+                                # relying only on the downscaled full-image pass. A
+                                # zero-size box at the image centre expands to the same
+                                # target-sized square the face path uses.
+                                centre_bbox = [w / 2.0, h / 2.0, w / 2.0, h / 2.0]
+                                expanded = expand_bbox_to_square(
+                                    centre_bbox, w, h, target
+                                )
+                                key = f"{file_path}#centre"
+                                centre_crop_paths.add(file_path)
+                            crop = img.crop(expanded)
+                            quality_items.append((key, crop))
+                            key_to_path[key] = file_path
+                        except Exception as exc:
+                            logger.warning(
+                                "Could not build the quality crop for picture %s (%s): %s",
+                                getattr(pic, "id", None),
+                                file_path,
+                                exc,
                             )
-                            expanded = expand_bbox_to_square(
-                                largest_face.bbox, w, h, target
-                            )
-                            key = f"{file_path}#face{largest_face.id}"
-                        else:
-                            # No face detected: fall back to a centre crop so
-                            # whole-image quality defects (blockiness, blur, jpeg
-                            # artifacts) still get a high-resolution pass instead of
-                            # relying only on the downscaled full-image pass. A
-                            # zero-size box at the image centre expands to the same
-                            # target-sized square the face path uses.
-                            centre_bbox = [w / 2.0, h / 2.0, w / 2.0, h / 2.0]
-                            expanded = expand_bbox_to_square(
-                                centre_bbox, w, h, target
-                            )
-                            key = f"{file_path}#centre"
-                            centre_crop_paths.add(file_path)
-                        crop = img.crop(expanded)
-                        quality_items.append((key, crop))
-                        key_to_path[key] = file_path
                     if quality_items:
                         # Single GPU pass: get quality tags AND raw scores for predictions.
                         crop_raw_scores: dict = {}
