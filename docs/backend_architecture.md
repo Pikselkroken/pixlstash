@@ -2707,6 +2707,21 @@ from offering a Stack the verdict would refuse:
   in the preview exactly as the run moves it, or the group would silently drop
   out of the "covers gaining metadata" row (that row stays on the group's own
   members: the tag/score union runs over those, not over the folded stack).
+- **The dry run is sized for the whole vault, and it is a read** (**#751**,
+  2026-08-07). `_dry_run_summary_in_session` aggregates over every candidate
+  group at once, so at 30,140 exact groups its group, picture and tag queries
+  each bound tens of thousands of parameters and died with `too many SQL
+  variables`; all three now scope through `scope_id_subquery`
+  (`utils/service/scope_table.py`), which binds none. The three scopes carry
+  **distinct temp-table names** because they are live at the same time and the
+  picture scope is read again after the stack scope is materialised, so a shared
+  name would clobber it and return wrong counts rather than raising. Separately,
+  `bulk_auto_stack` sends `dry_run=true` to `run_immediate_read_task`, **not**
+  the serialised writer queue: the preview returns before minting a batch id and
+  writes nothing, but on the writer it held the single write thread for its whole
+  duration and every stack verdict queued behind it, so the queue answered "Could
+  not stack that group" until the preview finished. An applied run is a real
+  mutation and still goes through `run_task`.
 
 Partial success is scoped to **dedup** deliberately. The manual `POST /stacks`
 routes still refuse whole-request: they act on exactly the pictures the user
