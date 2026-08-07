@@ -287,8 +287,6 @@ class TestRunRecipeRefusesPixlStashNodes:
             "inputs": {"pixlstash_project": "Gone #6"},
         }
         monkeypatch.setattr(utils, "find_comfy_api_prompt", lambda *a, **kw: graph)
-        import pixlstash.routes.comfyui as comfyui_module
-
         monkeypatch.setattr(
             comfyui_module, "find_comfy_api_prompt", lambda *a, **kw: graph
         )
