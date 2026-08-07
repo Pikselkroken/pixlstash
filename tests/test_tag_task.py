@@ -245,3 +245,113 @@ def test_transient_error_classifier():
     assert not _is_transient_load_error(PILImage.UnidentifiedImageError("nope"))
     assert not _is_transient_load_error(OSError("image file is truncated"))
     assert not _is_transient_load_error(PILImage.DecompressionBombError("huge"))
+
+
+# --- The per-picture crop guard (PR #750 review blocker B2) ------------------
+
+
+class _FakeFace:
+    def __init__(self, face_id, bbox, face_index=0):
+        self.id = face_id
+        self.bbox = bbox
+        self.face_index = face_index
+
+
+def _png(tmp_path, name, size=(64, 48)):
+    from PIL import Image as PILImage
+
+    path = tmp_path / name
+    PILImage.new("RGB", size, "blue").save(path)
+    return path
+
+
+def test_a_malformed_bbox_costs_only_its_own_picture(tmp_path):
+    """The blocker: one bad face row must not cost the batch its crops.
+
+    `Face.bbox` is json.loads of a free-text column and is never length-checked,
+    so a row that is not [x1,y1,x2,y2] raises inside the crop build. Inline in
+    the caller's loop that escaped to the pass-level handler and every remaining
+    picture in the task silently lost its quality crop.
+    """
+    task = _task_for(_FakeDb(str(tmp_path)))
+    pics = [
+        Picture(id=1, file_path=str(_png(tmp_path, "first.png"))),
+        Picture(id=2, file_path=str(_png(tmp_path, "second.png"))),
+        Picture(id=3, file_path=str(_png(tmp_path, "third.png"))),
+    ]
+    faces_by_pic = {
+        1: [_FakeFace(11, [1, 2, 40, 30])],
+        2: [_FakeFace(22, [1, 2])],  # truncated: IndexError in the max() key
+        3: [_FakeFace(33, [3, 4, 44, 34])],
+    }
+    preloaded = {}
+
+    built = [
+        task._build_quality_crop(pic, faces_by_pic[pic.id], 32, preloaded)
+        for pic in pics
+    ]
+
+    assert built[1] is None, "the malformed row yields no crop"
+    assert built[0] is not None and built[2] is not None, (
+        "pictures either side of the bad row must still get their crops"
+    )
+    assert [b[0] for b in built if b] == [
+        f"{pics[0].file_path}#face11",
+        f"{pics[2].file_path}#face33",
+    ]
+
+
+def test_a_bbox_whose_json_is_corrupt_is_survived(tmp_path):
+    """Malformed bbox *JSON* raises on attribute access, before any indexing.
+
+    This one was unguarded even before the PR: the valid_faces comprehension sat
+    outside the old try, so json.loads blew up the whole pass.
+    """
+
+    class _CorruptBboxFace:
+        id = 44
+
+        @property
+        def bbox(self):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    task = _task_for(_FakeDb(str(tmp_path)))
+    pic = Picture(id=4, file_path=str(_png(tmp_path, "corrupt-bbox.png")))
+
+    assert task._build_quality_crop(pic, [_CorruptBboxFace()], 32, {}) is None
+
+
+def test_no_faces_falls_back_to_a_centre_crop(tmp_path):
+    """The faceless path still contributes, flagged for the reduced whitelist."""
+    task = _task_for(_FakeDb(str(tmp_path)))
+    pic = Picture(id=5, file_path=str(_png(tmp_path, "faceless.png")))
+
+    key, crop, file_path, is_centre_crop = task._build_quality_crop(pic, [], 32, {})
+
+    assert is_centre_crop is True
+    assert key == f"{file_path}#centre"
+    assert crop.size == (32, 32)
+
+
+def test_a_negative_face_index_is_not_a_face(tmp_path):
+    """face_index < 0 is filtered out, so the picture takes the centre crop."""
+    task = _task_for(_FakeDb(str(tmp_path)))
+    pic = Picture(id=6, file_path=str(_png(tmp_path, "negative-index.png")))
+
+    _key, _crop, _path, is_centre_crop = task._build_quality_crop(
+        pic, [_FakeFace(66, [1, 2, 40, 30], face_index=-1)], 32, {}
+    )
+
+    assert is_centre_crop is True
+
+
+def test_an_undecodable_picture_is_marked_once_from_the_crop_pass(tmp_path):
+    """The registry call still happens through the extracted seam."""
+    bad = tmp_path / "broken.png"
+    bad.write_bytes(b"nope")
+    registry = _RecordingRegistry()
+    task = _task_for(_FakeDb(str(tmp_path), registry))
+    pic = Picture(id=7, file_path=str(bad))
+
+    assert task._build_quality_crop(pic, [], 32, {}) is None
+    assert registry.marked == [(7, str(bad), "tag source could not be decoded")]

@@ -258,6 +258,79 @@ class TagTask(BaseTask):
             return file_path, PILImage.fromarray(array), False
         return file_path, None, _file_is_readable(str(file_path))
 
+    def _build_quality_crop(self, pic, faces, target, preloaded_images):
+        """Build the high-resolution quality crop for one picture.
+
+        Args:
+            pic: The picture to crop.
+            faces: That picture's `Face` rows, unfiltered.
+            target: Square side length the crop is expanded to.
+            preloaded_images: The task's path -> image cache; populated on a miss.
+
+        Returns:
+            ``(key, crop, file_path, is_centre_crop)``, or **None** when this
+            picture cannot contribute a crop. `is_centre_crop` marks the faceless
+            fallback, which is judged against the reduced whitelist.
+
+        **Never raises**, and that is the point of it being a separate method.
+        Everything here runs on data the caller does not control: `Face.bbox` is
+        `json.loads` of a free-text column, so a row that is not ``[x1,y1,x2,y2]``
+        raises `IndexError` in the `max()` key and `ValueError` in
+        `expand_bbox_to_square`, and a bbox whose JSON is malformed raises on
+        attribute access alone. Inline in the caller's loop, one such row escaped
+        to the pass-level handler and cost **every remaining picture in the task**
+        its quality crop — silently, because those pictures are still written as
+        tagged, so no finder re-selects them.
+        """
+        file_path = ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
+        try:
+            valid_faces = [
+                face
+                for face in faces
+                if face.bbox and getattr(face, "face_index", 0) >= 0
+            ]
+            img = preloaded_images.get(file_path)
+            if img is None:
+                file_path, img, undecodable = self._load_pic(pic)
+                if img is None:
+                    if undecodable:
+                        self._mark_unprocessable(pic, file_path)
+                    return None
+                preloaded_images[file_path] = img
+            w, h = img.size
+            if valid_faces:
+                largest_face = max(
+                    valid_faces,
+                    key=lambda face: max(
+                        0,
+                        (float(face.bbox[2]) - float(face.bbox[0]))
+                        * (float(face.bbox[3]) - float(face.bbox[1])),
+                    ),
+                )
+                expanded = expand_bbox_to_square(largest_face.bbox, w, h, target)
+                return (
+                    f"{file_path}#face{largest_face.id}",
+                    img.crop(expanded),
+                    file_path,
+                    False,
+                )
+            # No face detected: fall back to a centre crop so whole-image quality
+            # defects (blockiness, blur, jpeg artifacts) still get a high-
+            # resolution pass instead of relying only on the downscaled full-image
+            # pass. A zero-size box at the image centre expands to the same
+            # target-sized square the face path uses.
+            centre_bbox = [w / 2.0, h / 2.0, w / 2.0, h / 2.0]
+            expanded = expand_bbox_to_square(centre_bbox, w, h, target)
+            return f"{file_path}#centre", img.crop(expanded), file_path, True
+        except Exception as exc:
+            logger.warning(
+                "Could not build the quality crop for picture %s (%s): %s",
+                getattr(pic, "id", None),
+                file_path,
+                exc,
+            )
+            return None
+
     def _mark_unprocessable(self, pic, file_path) -> None:
         """Record *pic* as undecodable so the finders stop re-selecting it (#585).
 
@@ -688,70 +761,19 @@ class TagTask(BaseTask):
                     # judged against the reduced CENTRE_CROP_TAG_WHITELIST (no face tags).
                     centre_crop_paths: set = set()
                     for pic in batch:
-                        file_path = ImageUtils.resolve_picture_path(
-                            self._db.image_root, pic.file_path
+                        built = self._build_quality_crop(
+                            pic,
+                            faces_by_pic.get(pic.id, []),
+                            target,
+                            preloaded_images,
                         )
-                        faces = faces_by_pic.get(pic.id, [])
-                        valid_faces = [
-                            face
-                            for face in faces
-                            if face.bbox and getattr(face, "face_index", 0) >= 0
-                        ]
-                        # Per-picture guard. Everything below can raise on data
-                        # this loop does not control: `Face.bbox` is json.loads of
-                        # a free-text column and `valid_faces` never length-checks
-                        # it, so a row that is not [x1,y1,x2,y2] raises IndexError
-                        # here and ValueError in expand_bbox_to_square. Without
-                        # this try, one such row escapes to the pass-level handler
-                        # below and costs EVERY remaining picture in the task its
-                        # quality crop, silently — they are still written as
-                        # tagged, so no finder re-selects them.
-                        try:
-                            img = preloaded_images.get(file_path)
-                            if img is None:
-                                file_path, img, undecodable = self._load_pic(pic)
-                                if img is None:
-                                    if undecodable:
-                                        self._mark_unprocessable(pic, file_path)
-                                    continue
-                                preloaded_images[file_path] = img
-                            w, h = img.size
-                            if valid_faces:
-                                largest_face = max(
-                                    valid_faces,
-                                    key=lambda face: max(
-                                        0,
-                                        (float(face.bbox[2]) - float(face.bbox[0]))
-                                        * (float(face.bbox[3]) - float(face.bbox[1])),
-                                    ),
-                                )
-                                expanded = expand_bbox_to_square(
-                                    largest_face.bbox, w, h, target
-                                )
-                                key = f"{file_path}#face{largest_face.id}"
-                            else:
-                                # No face detected: fall back to a centre crop so
-                                # whole-image quality defects (blockiness, blur, jpeg
-                                # artifacts) still get a high-resolution pass instead of
-                                # relying only on the downscaled full-image pass. A
-                                # zero-size box at the image centre expands to the same
-                                # target-sized square the face path uses.
-                                centre_bbox = [w / 2.0, h / 2.0, w / 2.0, h / 2.0]
-                                expanded = expand_bbox_to_square(
-                                    centre_bbox, w, h, target
-                                )
-                                key = f"{file_path}#centre"
-                                centre_crop_paths.add(file_path)
-                            crop = img.crop(expanded)
-                            quality_items.append((key, crop))
-                            key_to_path[key] = file_path
-                        except Exception as exc:
-                            logger.warning(
-                                "Could not build the quality crop for picture %s (%s): %s",
-                                getattr(pic, "id", None),
-                                file_path,
-                                exc,
-                            )
+                        if built is None:
+                            continue
+                        key, crop, file_path, is_centre_crop = built
+                        quality_items.append((key, crop))
+                        key_to_path[key] = file_path
+                        if is_centre_crop:
+                            centre_crop_paths.add(file_path)
                     if quality_items:
                         # Single GPU pass: get quality tags AND raw scores for predictions.
                         crop_raw_scores: dict = {}
