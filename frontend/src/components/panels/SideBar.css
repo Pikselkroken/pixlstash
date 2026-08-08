@@ -57,7 +57,6 @@
   container: sidebartabs / inline-size;
 }
 
-
 .sidebar-view-tabs {
   display: flex;
   align-items: stretch;
@@ -322,15 +321,39 @@
    collapsible row here. It swaps glyph rather than rotating one, so a single
    mechanism expresses disclosure across the sidebar. */
 .sidebar-project-tree-chevron {
-  opacity: 0.5;
   color: inherit;
-  transition: opacity 0.12s;
 }
 
-.sidebar-project-tree-row:hover .sidebar-project-tree-chevron {
-  opacity: 0.9;
+/* ---------------------------------------------------------------------------
+   ROW EMPHASIS. A row's disclosure caret carries the SAME emphasis as that
+   row's label. One number per row type, and both the label and the caret read
+   it, so a caret can never end up brighter or dimmer than the text it belongs
+   to. That drifted twice: the project caret sat at 0.5 against a full-strength
+   label, and the caption caret inherited full strength against a 0.7 label.
+
+   Same, not a fraction of it. Caret at 0.7 x a 0.7 label is 0.49, which
+   measures 2.95:1 in the light theme and fails the 3:1 floor a disclosure
+   glyph owes as a meaningful graphical object (WCAG 1.4.11). At parity both
+   land clear: 13.45:1 / 9.73:1 at 1.0 and 5.41:1 / 5.55:1 at 0.7,
+   light / dark.
+
+   `opacity`, not `color`, on purpose: an explicit colour here would stop the
+   label following `--active-text` when its row is selected.
+   --------------------------------------------------------------------------- */
+.sidebar-project-tree-row {
+  --row-emphasis: 1;
 }
 
+.sidebar-project-tree-subheader {
+  --row-emphasis: 0.7;
+}
+
+.sidebar-project-tree-label,
+.sidebar-project-tree-chevron,
+.sidebar-project-tree-subheader-label,
+.sidebar-project-tree-sub-chevron {
+  opacity: var(--row-emphasis, 1);
+}
 
 .sidebar-project-tree-name-group {
   flex: 1;
@@ -354,7 +377,6 @@
   font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-project-tree-actions {
@@ -414,14 +436,14 @@
   color: inherit;
 }
 
-/* A caption for the list beneath it, one rank below the project. Held at 0.7 so
-   the rank difference survives even where the indent is only one 16px step. */
+/* A caption for the list beneath it, one rank below the project. Its emphasis
+   comes from --row-emphasis above, shared with its caret. */
 .sidebar-project-tree-subheader-label {
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: rgba(var(--v-theme-sidebar-text), 0.7);
+  color: inherit;
   flex: 1;
 }
 
@@ -438,8 +460,7 @@
   background: transparent;
 }
 
-.sidebar-project-tree-subheader--empty
-  .sidebar-project-tree-subheader-label {
+.sidebar-project-tree-subheader--empty .sidebar-project-tree-subheader-label {
   opacity: var(--opacity-disabled, 0.38);
 }
 
@@ -448,7 +469,6 @@
 .sidebar-project-tree-child {
   --depth: 2;
 }
-
 
 .sidebar-project-tree-files {
   padding-left: 0;
@@ -663,7 +683,6 @@
   color: rgb(var(--v-theme-sidebar-text));
 }
 
-
 /* The project menu's background is a 38% `tertiary` TINT over `sidebar`, not a
    solid `tertiary` fill, so `on-tertiary` is the wrong foreground here: an
    `on-<x>` token is authored against a solid, full-opacity `<x>` fill and is
@@ -704,7 +723,6 @@
   white-space: nowrap;
 }
 
-
 .sidebar-project-menu-add {
   display: flex;
   align-items: center;
@@ -725,7 +743,6 @@
   background: rgba(var(--v-theme-accent), 0.08);
   color: rgb(var(--v-theme-on-surface));
 }
-
 
 /* Sidebar right edge for counts */
 .sidebar {
@@ -946,7 +963,6 @@
   color: #c62828;
 }
 
-
 .sidebar-collapsed-list {
   display: flex;
   flex-direction: column;
@@ -1097,7 +1113,6 @@
   position: relative;
 }
 
-
 .sidebar-collapsed-divider {
   width: 70%;
   height: 1px;
@@ -1143,7 +1158,6 @@
   transition: transform 0.15s;
 }
 
-
 .sidebar-list-item {
   display: flex;
   align-items: center;
@@ -1163,7 +1177,6 @@
     color 0.12s,
     border-color 0.12s;
 }
-
 
 .sidebar-scroll {
   flex: 1 1 auto;
@@ -1264,7 +1277,6 @@
   object-fit: contain;
   display: block;
 }
-
 
 .sidebar-list-item.active {
   background: var(--active-wash);
@@ -1429,13 +1441,11 @@
   overflow: visible;
 }
 
-
 /* Top-level nav rows (All Pictures, Scrapheap) — slightly larger than --fixed */
 .sidebar-list-icon--toplevel {
   width: min(var(--sidebar-thumb-size), 26px) !important;
   height: min(var(--sidebar-thumb-size), 26px) !important;
 }
-
 
 .sidebar-list-icon .v-icon,
 .sidebar-collapsed-item .v-icon {
@@ -1693,7 +1703,6 @@
   z-index: 2;
 }
 
-
 .add-character-inline {
   color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: var(--text-md);
@@ -1760,7 +1769,6 @@
   color: rgb(var(--v-theme-primary)) !important;
 }
 
-
 .delete-character-inline {
   color: rgb(var(--v-theme-sidebar-text)) !important;
   font-size: var(--text-md);
@@ -1782,7 +1790,6 @@
   background: rgba(var(--v-theme-error), 0.15);
   color: rgb(var(--v-theme-error)) !important;
 }
-
 
 /* Items within People/Sets sit one step under their section header, which puts
    the thumbnail directly below the header's label. */
@@ -1813,7 +1820,6 @@
   letter-spacing: 0.02em;
   color: rgb(var(--v-theme-sidebar-text));
 }
-
 
 .sidebar-all-pictures-row .sidebar-list-item {
   flex: 1 1 0;
@@ -1928,7 +1934,6 @@
     rgba(var(--v-theme-sidebar-text), 0.05);
   color: rgb(var(--v-theme-sidebar-text));
 }
-
 
 .sidebar-folder-section-title {
   flex: 1 1 auto;
@@ -2143,7 +2148,6 @@ button.sidebar-ctx-item:disabled:hover {
   max-height: calc(100vh - 16px);
   overflow-y: auto;
 }
-
 
 .sidebar-ctx-icon-section-wrap {
   display: flex;
