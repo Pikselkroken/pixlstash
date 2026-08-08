@@ -6,6 +6,23 @@ Instead, require a namespace in which another OS principal cannot replace the
 main file or pre-position a sidecar, hold a no-follow guard, open SQLite by the
 canonical path, and compare identities before doing decisive work.
 
+**What these checks actually cover: the moment of open, not "the database".**
+``TrustedSQLiteLocation.open`` validates the main file and any pre-existing
+sidecar before SQLite touches the path, and ``verify_after_open`` re-checks the
+main file's identity and the sidecars **at one instant, on one connection**.
+Then both return, and everything after that happens by path, unguarded:
+
+* the hub closes the guard fd (``hub/db.py``, the ``finally`` after
+  ``verify_after_open``) before ``_configure()`` issues its first PRAGMA, and
+  SQLite re-opens ``-wal``/``-shm`` by name whenever it needs them;
+* the vault engine's pool opens up to 15 further connections
+  (``database.py``: QueuePool size 5 + max_overflow 10) by path over the
+  process lifetime; ``verify_after_open`` runs on the first connection only.
+
+Neither window can be closed in Python (``sqlite3`` accepts no pinned dirfd),
+so tampering that begins after the guard returns is excluded only by the
+directory permissions job 1 established, not by anything here.
+
 **Who this defends against, and who it does not.** The actor is a *different* OS
 principal: another account that can reach a shared or badly-permissioned
 directory and substitute the database or one of its sidecars. That is what
@@ -76,9 +93,9 @@ an existence check rather than a trust check:
 Revisit when a native ACL verifier exists (``win32security.GetNamedSecurityInfo``
 or ctypes against advapi32), which is the route back to tightening this.
 
-TODO(owner): this risk has no named owner or revisit date. The reviewer
-declined to accept it on the author's behalf; both must be filled in before
-this is treated as accepted rather than merely documented.
+Accepted-risk record (W17, docs/reviews/plan-windows-permissions.md): owner
+lindkvis, revisit 2026-11-08, together with the native ACL verifier (3c) that
+would close the Windows residue.
 """
 
 from __future__ import annotations

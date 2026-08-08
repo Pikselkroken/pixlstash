@@ -7,6 +7,7 @@ the claim the hub schema's shape exists to support.
 """
 
 import os
+import re
 import sqlite3
 import stat
 import threading
@@ -600,6 +601,168 @@ class TestWindowsHasNoModeBits:
 
         with pytest.raises(HubPermissionError):
             check_file_mode(str(path), repair=False)
+
+
+class TestHostileSidecarRefusal:
+    """W8: a pre-positioned ``-wal``/``-shm``/``-journal`` must be refused.
+
+    An attacker with directory write never touches ``hub.db``: they write
+    ``hub.db-wal``. SQLite replays that WAL on open and it overrides arbitrary
+    pages of the main database. The main file's ``(st_dev, st_ino)`` is
+    unchanged, no symlink is involved, and ``S_ISREG`` is true on both files,
+    so the identity and redirection checks all pass. The only refusal is the
+    sidecar loop in :meth:`TrustedSQLiteLocation.open`, which runs
+    ``_validate_file`` on every existing sidecar.
+
+    Two traps these tests are built to avoid, per the signed plan:
+
+    * The refusal must come from ``TrustedSQLiteLocation.open()``, BEFORE any
+      ``sqlite3.connect``: ``HubDatabase`` calls ``verify_after_open()`` only
+      *after* connecting, when SQLite has already replayed the hostile WAL.
+    * The directory must be self-owned and 0700, and the hostility must live
+      in the sidecar's own attributes. A loose *directory* is refused by
+      ``_validate_namespace`` first, so the naive test goes green off the
+      wrong control and proves nothing about the sidecar check. For the same
+      reason the foreign-uid case fakes the sidecar's ``st_uid`` rather than
+      monkeypatching ``os.geteuid``: a faked geteuid flips the directory- and
+      main-file ownership checks first, and the test would keep passing with
+      the sidecar loop deleted.
+
+    RESIDUE: Windows, where this attack matters most, is NOT covered here
+    and cannot be: ``_validate_file`` returns unconditionally on ``nt``
+    because ``st_mode``/``st_uid`` are synthesised there (W2), so under the
+    suite's ``nt`` simulation there is no sidecar check to exercise or to
+    break. The last test below asserts that acceptance so the gap stays
+    visible. Closing it requires the native DACL verifier (plan item 3c,
+    ctypes ``GetNamedSecurityInfoW``); tracked in the W17 accepted-risk
+    record, owner lindkvis, revisit 2026-11-08.
+    """
+
+    @staticmethod
+    def _hub_with_sidecar(tmp_path, suffix, mode):
+        """A migrated hub in a self-owned 0700 directory, plus one sidecar."""
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        path = str(directory / "hub.db")
+        HubDatabase(path).close()
+        # Drop whatever sidecars SQLite left behind so the one under test is
+        # the only one present.
+        for leftover in trusted_sqlite._SIDECAR_SUFFIXES:
+            if os.path.lexists(path + leftover):
+                os.remove(path + leftover)
+        sidecar = path + suffix
+        with open(sidecar, "wb") as handle:
+            handle.write(b"hostile frames")
+        os.chmod(sidecar, mode)
+        return path, sidecar
+
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_a_loose_mode_sidecar_is_refused_by_the_guard(self, tmp_path, suffix):
+        """Mode 0o666 on the sidecar alone must refuse the open.
+
+        The error must name the sidecar: a refusal naming the directory or the
+        main file would mean a different control fired and this attack is
+        still uncovered.
+        """
+        path, sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o666)
+
+        with pytest.raises(TrustedSQLiteLocationError, match=re.escape(sidecar)):
+            TrustedSQLiteLocation.open(path, private=True)
+
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_the_refusal_happens_before_sqlite_connects(
+        self, tmp_path, monkeypatch, suffix
+    ):
+        """SQLite must never see the path: replay happens inside connect().
+
+        Asserting that ``verify_after_open`` raises would be theatre; by then
+        the hostile WAL is already in the database. Zero connect calls is the
+        property that matters.
+        """
+        path, _sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o666)
+        real_connect = sqlite3.connect
+        connects = []
+
+        def spying_connect(database, *args, **kwargs):
+            connects.append(str(database))
+            return real_connect(database, *args, **kwargs)
+
+        monkeypatch.setattr(sqlite3, "connect", spying_connect)
+
+        with pytest.raises(HubPermissionError):
+            HubDatabase(path)
+
+        assert connects == []
+
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_a_foreign_owned_sidecar_is_refused(self, tmp_path, monkeypatch, suffix):
+        """A 0600 sidecar owned by someone else must still be refused.
+
+        The foreign uid is faked on the sidecar's ``lstat`` result (the
+        attacker's artifact), not via ``os.geteuid``, for the reason in the
+        class docstring.
+        """
+        path, sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o600)
+        real_lstat = os.lstat
+
+        class _ForeignOwnerStat:
+            def __init__(self, info):
+                self._info = info
+                self.st_uid = info.st_uid + 1
+
+            def __getattr__(self, name):
+                return getattr(self._info, name)
+
+        monkeypatch.setattr(
+            os,
+            "lstat",
+            lambda p, *a, **k: (
+                _ForeignOwnerStat(real_lstat(p, *a, **k))
+                if str(p) == sidecar
+                else real_lstat(p, *a, **k)
+            ),
+        )
+
+        with pytest.raises(TrustedSQLiteLocationError, match="not this user"):
+            TrustedSQLiteLocation.open(path, private=True)
+
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_a_self_owned_0600_sidecar_still_opens(self, tmp_path, suffix):
+        """The other direction: refusing our own sidecars breaks every WAL DB."""
+        path, _sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o600)
+
+        TrustedSQLiteLocation.open(path, private=True).close()
+
+    def test_sqlites_own_live_sidecars_still_open_end_to_end(self, tmp_path):
+        """With a live WAL connection holding real ``-wal``/``-shm`` files, a
+        guard open and a full second HubDatabase open must both succeed."""
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        path = str(directory / "hub.db")
+        first = HubDatabase(path)
+        try:
+            assert os.path.exists(path + "-wal")
+
+            TrustedSQLiteLocation.open(path, private=True).close()
+            HubDatabase(path).close()
+        finally:
+            first.close()
+
+    def test_windows_accepts_the_sidecar_it_cannot_judge(self, tmp_path, monkeypatch):
+        """On ``nt`` a hostile-looking sidecar is ACCEPTED, asserted rather than hidden.
+
+        ``st_mode`` there is synthesised (0o666 for any writable file) and
+        ``st_uid`` is meaningless, so ``_validate_file`` returns before either
+        check (W2). This pins the residue described in the class docstring: if
+        someone adds a real Windows sidecar check (plan item 3c), this test
+        fails and gets replaced by real coverage.
+        """
+        sidecar = tmp_path / "hub.db-wal"
+        sidecar.write_bytes(b"hostile frames")
+        os.chmod(sidecar, 0o666)
+        monkeypatch.setattr(os, "name", "nt")
+
+        _validate_file(str(sidecar), private=True)
 
 
 class TestAuthServiceOnTheHub:
