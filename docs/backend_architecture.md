@@ -496,6 +496,8 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                      |
 | POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                        |
 | POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                    |
+| GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                  |
+| POST   | /api/v1/libraries/active                                                      | libraries       | Switch the active library                                  |
 | GET    | /api/v1/login                                                                 | auth            | Check Registration                                         |
 | POST   | /api/v1/login                                                                 | auth            | Login                                                      |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                     |
@@ -1371,6 +1373,7 @@ a promise that Tailscale is local for every authentication mechanism.
 | `RESTORE_STARTED`      | ✗ internal  |
 | `RESTORE_COMPLETED`    | ✗ internal  |
 | `RESTORE_FAILED`       | ✗ internal  |
+| `LIBRARY_SWITCHED`     | ✓ broadcast |
 <!-- AUTOGEN:end name="events" -->
 
 - Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans the filtered subset out to **owner-level** connected clients (see WebSocket authentication below).
