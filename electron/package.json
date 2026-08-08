@@ -23,7 +23,7 @@
     "dist": "npm run build && electron-builder",
     "dist:dir": "npm run build && electron-builder --dir",
     "lint": "tsc --noEmit",
-    "pretest": "node -e \"require('node:fs').rmSync('dist-test',{recursive:true,force:true})\"",
+    "pretest": "node -e \"require('node:fs').rmSync('dist-test',{recursive:true,force:true})\" && node -e \"require('electron')\"",
     "test": "tsc -p tsconfig.test.json && node --test \"dist-test/test/*.test.js\""
   },
   "dependencies": {},
