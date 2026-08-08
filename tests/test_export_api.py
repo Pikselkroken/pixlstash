@@ -84,7 +84,7 @@ def test_pictures_export_produces_valid_zip():
         buf = BytesIO(resp.content)
         assert zipfile.is_zipfile(buf)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -105,7 +105,7 @@ def test_project_export_produces_valid_zip():
             names = zf.namelist()
         assert any("project.json" in n for n in names)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -164,6 +164,6 @@ def test_export_status_unknown_task_returns_404():
         )
         assert resp.status_code == 404
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

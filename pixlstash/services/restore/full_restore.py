@@ -1054,6 +1054,21 @@ class FullRestoreMixin:
             with db.exclusive_engine_access():
                 # Dispose engine and all pooled connections before touching the file.
                 db._engine.dispose()
+                # With every connection gone, the retained location guard may
+                # (and on Windows MUST) release its fd: os.replace onto a file
+                # with an open handle is WinError 5 there. Ordering matters —
+                # guard only after dispose, or closing it strips the process's
+                # POSIX locks out from under the live connections (the
+                # corruption the guard retention exists to prevent). No new
+                # guard is armed on the swapped file: connections take their
+                # own locks, there is no further guard-close left to strip
+                # them, and re-validating the namespace here would make restore
+                # refuse installed-base directories that startup accepts. The
+                # next process start guards the file as usual.
+                guard = getattr(db, "_location_guard", None)
+                if guard is not None:
+                    guard.close()
+                    db._location_guard = None
                 # Remove stale WAL/SHM files so the new DB starts clean.
                 for suffix in ("-wal", "-shm"):
                     stale = live_db_path + suffix
@@ -1069,6 +1084,13 @@ class FullRestoreMixin:
                 # read-only handle ("rb") with EBADF, since CommitFileBuffers
                 # requires write access.
                 with open(staged_db_path, "rb+") as staged_fd:
+                    # VACUUM INTO created the snapshot at 0644 & ~umask and
+                    # copy2 preserved that mode, so under umask 002 a restore
+                    # would leave the live vault.db group-writable — which the
+                    # trusted-location check then refuses on the next startup.
+                    # Windows has no fchmod and no real mode bits.
+                    if hasattr(os, "fchmod"):
+                        os.fchmod(staged_fd.fileno(), 0o600)
                     staged_fd.flush()
                     os.fsync(staged_fd.fileno())
                 os.replace(staged_db_path, live_db_path)

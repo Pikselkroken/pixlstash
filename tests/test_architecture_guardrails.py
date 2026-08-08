@@ -761,7 +761,7 @@ def built_app():
     try:
         yield server.api
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 

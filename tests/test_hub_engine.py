@@ -7,6 +7,7 @@ the claim the hub schema's shape exists to support.
 """
 
 import os
+import re
 import sqlite3
 import stat
 import threading
@@ -18,11 +19,14 @@ from pixlstash.auth import AuthService
 from pixlstash.db_models import User
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.db import HubPermissionError
+from pixlstash.hub.db import HubPermissionError, check_file_mode
 from pixlstash.hub.engine import HubEngine
+from pixlstash import trusted_sqlite
 from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
     TrustedSQLiteLocationError,
+    _reject_symlinked_path,
+    _validate_file,
 )
 
 
@@ -236,6 +240,49 @@ class TestHubFileSecurity:
             f"{failures[:3]}"
         )
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_lost_creation_race_is_logged_and_the_winner_still_opens(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Losing the create race to a legitimate file is loud, not silent.
+
+        The file appears between the ``lexists`` probe and the ``O_EXCL``
+        create. A self-owned 0600 winner must still open (the positive
+        direction), and the lost race must leave a warning in the log rather
+        than an ``except: pass``.
+        """
+        path = tmp_path / "hub.db"
+        os.close(os.open(path, os.O_RDWR | os.O_CREAT, 0o600))
+        monkeypatch.setattr(os.path, "lexists", lambda _p: False)
+
+        with caplog.at_level("WARNING", logger="pixlstash.trusted_sqlite"):
+            guard = TrustedSQLiteLocation.open(
+                str(path), private=True, create=True, trusted_root=str(tmp_path)
+            )
+        guard.close()
+
+        assert any(
+            "Lost the creation race" in record.message for record in caplog.records
+        )
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_hostile_file_that_wins_the_creation_race_is_still_refused(
+        self, tmp_path, monkeypatch
+    ):
+        """The logged race branch must fall through to validation, not accept.
+
+        A loose-mode file that won the race is exactly what the old silent
+        ``pass`` could have hidden; ``_validate_file`` must still refuse it.
+        """
+        path = tmp_path / "hub.db"
+        os.close(os.open(path, os.O_RDWR | os.O_CREAT, 0o644))
+        monkeypatch.setattr(os.path, "lexists", lambda _p: False)
+
+        with pytest.raises(TrustedSQLiteLocationError, match="mode 600"):
+            TrustedSQLiteLocation.open(
+                str(path), private=True, create=True, trusted_root=str(tmp_path)
+            )
+
     def test_path_replacement_during_sqlite_open_is_refused_before_schema_writes(
         self, tmp_path, monkeypatch
     ):
@@ -326,7 +373,9 @@ class TestHubFileSecurity:
         directory = tmp_path / "hub"
         directory.mkdir(mode=0o700)
         path = str(directory / "hub.db")
-        guard = TrustedSQLiteLocation.open(path, private=True, create=True)
+        guard = TrustedSQLiteLocation.open(
+            path, private=True, create=True, trusted_root=str(directory)
+        )
         try:
             guard.verify_after_open()  # clean while the directory is private
 
@@ -336,6 +385,442 @@ class TestHubFileSecurity:
         finally:
             os.chmod(directory, 0o700)
             guard.close()
+
+
+class TestTrustedPathSymlinkCheck:
+    """What "the caller's path goes through a symlink" is allowed to mean.
+
+    The check used to be ``os.path.abspath(p) != os.path.realpath(p)``. On
+    POSIX those differ only where a symlink was resolved, so it read correctly
+    here — and wrongly on Windows, where ``realpath`` also expands 8.3 short
+    names. ``C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\...`` was rejected as
+    "contains a symlink", taking down every Windows test that opens a hub.
+
+    Both directions, because the refusal is a security control: a genuinely
+    symlinked path must still be refused, and a path that merely canonicalises
+    to a different string must not be.
+    """
+
+    def test_a_symlinked_ancestor_is_still_refused(self, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir(mode=0o700)
+        link = tmp_path / "via-link"
+        link.symlink_to(real, target_is_directory=True)
+
+        with pytest.raises(TrustedSQLiteLocationError, match="symlink"):
+            TrustedSQLiteLocation.open(
+                str(link / "hub.db"), private=True, create=True, trusted_root=str(link)
+            )
+
+    def test_a_symlinked_file_is_still_refused(self, tmp_path):
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        target = directory / "real.db"
+        target.touch(mode=0o600)
+        link = directory / "hub.db"
+        link.symlink_to(target)
+
+        with pytest.raises(TrustedSQLiteLocationError, match="symlink"):
+            TrustedSQLiteLocation.open(
+                str(link), private=True, trusted_root=str(directory)
+            )
+
+    def test_a_windows_vault_outside_the_config_directory_is_allowed(
+        self, tmp_path, monkeypatch
+    ):
+        """The vault's own call shape: not a credential store, so not gated.
+
+        ``vault.py`` opens with ``private=False`` and no ``trusted_root``.
+        Under the old blanket refusal that raised for *every* path on Windows,
+        so no Windows install could open its library (W4). Pin the fix: a
+        non-private open works anywhere the namespace checks allow.
+        """
+        directory = tmp_path / "library"
+        directory.mkdir(mode=0o700)
+        monkeypatch.setattr(os, "name", "nt")
+
+        guard = TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+        guard.close()
+
+    def test_a_windows_hub_at_an_electron_style_path_opens_with_its_own_root(
+        self, tmp_path, monkeypatch
+    ):
+        """The W6/W7/W18 outage regression.
+
+        The desktop shell derives the hub path from ``--server-config`` under
+        ``%APPDATA%\\pixlstash-desktop`` — never inside
+        ``user_config_dir("pixlstash")`` — so the old DACL predicate refused
+        every desktop install and the server could not start on Windows. A
+        private open with ``trusted_root`` set to the hub's own parent must
+        succeed regardless of where that parent is.
+        """
+        appdata = tmp_path / "AppData" / "Roaming" / "pixlstash-desktop"
+        appdata.mkdir(parents=True, mode=0o700)
+        monkeypatch.setattr(os, "name", "nt")
+
+        guard = TrustedSQLiteLocation.open(
+            str(appdata / "hub.db"),
+            private=True,
+            create=True,
+            trusted_root=str(appdata),
+        )
+        guard.close()
+
+    def test_a_private_open_without_a_trusted_root_cannot_be_forgotten(self, tmp_path):
+        """W15: forgetting the argument fails the first test run, loudly.
+
+        Every one of W4-W7 was a caller silently opting out of a keyword. The
+        mandatory ``trusted_root`` turns that omission into an immediate
+        ``TypeError`` instead of a production refusal months later.
+        """
+        with pytest.raises(TypeError, match="trusted_root"):
+            TrustedSQLiteLocation.open(
+                str(tmp_path / "hub.db"), private=True, create=True
+            )
+
+    def test_a_private_file_outside_its_trusted_root_is_refused(self, tmp_path):
+        """The containment tautology holds in both directions.
+
+        ``trusted_root`` is derived from the hub path's own parent, so in
+        correct code the check always passes; a caller wiring it to the wrong
+        directory is the only way to get here, and that is a bug worth failing
+        closed on.
+        """
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir(mode=0o700)
+
+        with pytest.raises(TrustedSQLiteLocationError, match="trusted root"):
+            TrustedSQLiteLocation.open(
+                str(directory / "hub.db"),
+                private=True,
+                create=True,
+                trusted_root=str(elsewhere),
+            )
+
+    def test_a_windows_junction_is_refused_like_a_symlink(self, tmp_path, monkeypatch):
+        """The regression an independent review caught in this very check.
+
+        ``os.path.islink`` is False for a directory junction, so swapping the
+        old ``abspath != realpath`` comparison for an islink walk quietly
+        stopped refusing them. That is the wrong way round: a symlink on
+        Windows needs ``SeCreateSymbolicLinkPrivilege``, a junction needs only
+        write access to the directory, so the check was refusing the redirect
+        an attacker cannot make and accepting the one they can.
+
+        No junction can exist on Linux, so the reparse tag is simulated. A real
+        ``mklink /J`` test belongs on the Windows lane; this at least fails on
+        the Linux lane if the branch is deleted.
+        """
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        target = str(directory / "hub.db")
+        mount_point_tag = 0xA0000003  # IO_REPARSE_TAG_MOUNT_POINT
+
+        real_lstat = os.lstat
+
+        class _JunctionStat:
+            def __init__(self, info):
+                self._info = info
+                self.st_reparse_tag = mount_point_tag
+
+            def __getattr__(self, name):
+                return getattr(self._info, name)
+
+        monkeypatch.setattr(os, "name", "nt")
+        # raising=False: the constant is Windows-only, so it does not exist to
+        # be replaced on the machine running this test.
+        monkeypatch.setattr(
+            stat, "IO_REPARSE_TAG_MOUNT_POINT", mount_point_tag, raising=False
+        )
+        monkeypatch.setattr(
+            os,
+            "lstat",
+            lambda p, *a, **k: (
+                _JunctionStat(real_lstat(p, *a, **k))
+                if str(p) == str(directory)
+                else real_lstat(p, *a, **k)
+            ),
+        )
+
+        with pytest.raises(TrustedSQLiteLocationError, match="junction"):
+            _reject_symlinked_path(target)
+
+    def test_the_verdict_never_consults_realpath(self, tmp_path, monkeypatch):
+        """No 8.3 name exists on Linux, so assert the cause, not the symptom.
+
+        What made the old check wrong on Windows is that it asked ``realpath``
+        a question realpath does not answer: "did this path cross a symlink?"
+        Nothing on POSIX can produce a short name to reproduce that with, so
+        this pins the property instead — the decision does not depend on the
+        canonical spelling at all. ``realpath`` is made to explode; a path with
+        no symlink in it must still be accepted.
+        """
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+
+        def explode(*_args, **_kwargs):
+            raise AssertionError("the symlink verdict must not consult realpath")
+
+        monkeypatch.setattr(os.path, "realpath", explode)
+
+        _reject_symlinked_path(str(directory / "hub.db"))
+
+
+class TestWindowsHasNoModeBits:
+    """POSIX permission assertions must not run where they cannot hold.
+
+    Windows synthesises ``st_mode`` from the read-only attribute alone, so an
+    ordinary file reads 0o666 and no chmod can make it 0o600. Asserting the
+    mode there refuses *every* hub, including one this process created moments
+    earlier — which is how both Windows shards failed with "SQLite credential
+    file ... must be mode 600" on a freshly created file.
+
+    Both directions, because these are credential-file checks: they must go on
+    holding on POSIX, where the bits are real.
+    """
+
+    def test_validate_file_accepts_the_synthetic_windows_mode(
+        self, tmp_path, monkeypatch
+    ):
+        path = tmp_path / "hub.db"
+        path.touch()
+        os.chmod(path, 0o666)
+        monkeypatch.setattr(os, "name", "nt")
+
+        _validate_file(str(path), private=True)
+
+    def test_validate_file_still_refuses_that_mode_on_posix(self, tmp_path):
+        path = tmp_path / "hub.db"
+        path.touch()
+        os.chmod(path, 0o666)
+
+        with pytest.raises(TrustedSQLiteLocationError, match="mode 600"):
+            _validate_file(str(path), private=True)
+
+    def test_check_file_mode_is_a_no_op_on_windows(self, tmp_path, monkeypatch):
+        path = tmp_path / "hub.db"
+        path.touch()
+        os.chmod(path, 0o666)
+        monkeypatch.setattr(os, "name", "nt")
+
+        check_file_mode(str(path), repair=False)
+
+    def test_check_file_mode_still_reports_a_loose_hub_on_posix(self, tmp_path):
+        path = tmp_path / "hub.db"
+        path.touch()
+        os.chmod(path, 0o666)
+
+        with pytest.raises(HubPermissionError):
+            check_file_mode(str(path), repair=False)
+
+
+class TestHostileSidecarRefusal:
+    """W8: a pre-positioned ``-wal``/``-shm``/``-journal`` must be refused.
+
+    One tolerance, pinned by ``test_a_sidecar_that_vanishes_mid_validation…``:
+    a sidecar that disappears between the existence probe and its ``lstat`` is
+    a concurrent opener's transient journal, not an attack, and must not
+    refuse the open (it failed 1-in-20 four-opener races in CI before the
+    tolerance existed). A hostile sidecar that still exists is refused
+    exactly as the rest of this class asserts.
+
+    An attacker with directory write never touches ``hub.db``: they write
+    ``hub.db-wal``. SQLite replays that WAL on open and it overrides arbitrary
+    pages of the main database. The main file's ``(st_dev, st_ino)`` is
+    unchanged, no symlink is involved, and ``S_ISREG`` is true on both files,
+    so the identity and redirection checks all pass. The only refusal is the
+    sidecar loop in :meth:`TrustedSQLiteLocation.open`, which runs
+    ``_validate_file`` on every existing sidecar.
+
+    Two traps these tests are built to avoid, per the signed plan:
+
+    * The refusal must come from ``TrustedSQLiteLocation.open()``, BEFORE any
+      ``sqlite3.connect``: ``HubDatabase`` calls ``verify_after_open()`` only
+      *after* connecting, when SQLite has already replayed the hostile WAL.
+    * The directory must be self-owned and 0700, and the hostility must live
+      in the sidecar's own attributes. A loose *directory* is refused by
+      ``_validate_namespace`` first, so the naive test goes green off the
+      wrong control and proves nothing about the sidecar check. For the same
+      reason the foreign-uid case fakes the sidecar's ``st_uid`` rather than
+      monkeypatching ``os.geteuid``: a faked geteuid flips the directory- and
+      main-file ownership checks first, and the test would keep passing with
+      the sidecar loop deleted.
+
+    RESIDUE: Windows, where this attack matters most, is NOT covered here
+    and cannot be: ``_validate_file`` returns unconditionally on ``nt``
+    because ``st_mode``/``st_uid`` are synthesised there (W2), so under the
+    suite's ``nt`` simulation there is no sidecar check to exercise or to
+    break. The last test below asserts that acceptance so the gap stays
+    visible. Closing it requires the native DACL verifier (plan item 3c,
+    ctypes ``GetNamedSecurityInfoW``); tracked in the W17 accepted-risk
+    record, owner lindkvis, revisit 2026-11-08.
+    """
+
+    @staticmethod
+    def _hub_with_sidecar(tmp_path, suffix, mode):
+        """A migrated hub in a self-owned 0700 directory, plus one sidecar."""
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        path = str(directory / "hub.db")
+        HubDatabase(path).close()
+        # Drop whatever sidecars SQLite left behind so the one under test is
+        # the only one present.
+        for leftover in trusted_sqlite._SIDECAR_SUFFIXES:
+            if os.path.lexists(path + leftover):
+                os.remove(path + leftover)
+        sidecar = path + suffix
+        with open(sidecar, "wb") as handle:
+            handle.write(b"hostile frames")
+        os.chmod(sidecar, mode)
+        return path, sidecar
+
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_a_loose_mode_sidecar_is_refused_by_the_guard(self, tmp_path, suffix):
+        """Mode 0o666 on the sidecar alone must refuse the open.
+
+        The error must name the sidecar: a refusal naming the directory or the
+        main file would mean a different control fired and this attack is
+        still uncovered.
+        """
+        path, sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o666)
+
+        with pytest.raises(TrustedSQLiteLocationError, match=re.escape(sidecar)):
+            TrustedSQLiteLocation.open(
+                path, private=True, trusted_root=os.path.dirname(path)
+            )
+
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_the_refusal_happens_before_sqlite_connects(
+        self, tmp_path, monkeypatch, suffix
+    ):
+        """SQLite must never see the path: replay happens inside connect().
+
+        Asserting that ``verify_after_open`` raises would be theatre; by then
+        the hostile WAL is already in the database. Zero connect calls is the
+        property that matters.
+        """
+        path, _sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o666)
+        real_connect = sqlite3.connect
+        connects = []
+
+        def spying_connect(database, *args, **kwargs):
+            connects.append(str(database))
+            return real_connect(database, *args, **kwargs)
+
+        monkeypatch.setattr(sqlite3, "connect", spying_connect)
+
+        with pytest.raises(HubPermissionError):
+            HubDatabase(path)
+
+        assert connects == []
+
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_a_foreign_owned_sidecar_is_refused(self, tmp_path, monkeypatch, suffix):
+        """A 0600 sidecar owned by someone else must still be refused.
+
+        The foreign uid is faked on the sidecar's ``lstat`` result (the
+        attacker's artifact), not via ``os.geteuid``, for the reason in the
+        class docstring.
+        """
+        path, sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o600)
+        real_lstat = os.lstat
+
+        class _ForeignOwnerStat:
+            def __init__(self, info):
+                self._info = info
+                self.st_uid = info.st_uid + 1
+
+            def __getattr__(self, name):
+                return getattr(self._info, name)
+
+        monkeypatch.setattr(
+            os,
+            "lstat",
+            lambda p, *a, **k: (
+                _ForeignOwnerStat(real_lstat(p, *a, **k))
+                if str(p) == sidecar
+                else real_lstat(p, *a, **k)
+            ),
+        )
+
+        with pytest.raises(TrustedSQLiteLocationError, match="not this user"):
+            TrustedSQLiteLocation.open(
+                path, private=True, trusted_root=os.path.dirname(path)
+            )
+
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_a_self_owned_0600_sidecar_still_opens(self, tmp_path, suffix):
+        """The other direction: refusing our own sidecars breaks every WAL DB."""
+        path, _sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o600)
+
+        TrustedSQLiteLocation.open(
+            path, private=True, trusted_root=os.path.dirname(path)
+        ).close()
+
+    def test_sqlites_own_live_sidecars_still_open_end_to_end(self, tmp_path):
+        """With a live WAL connection holding real ``-wal``/``-shm`` files, a
+        guard open and a full second HubDatabase open must both succeed."""
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        path = str(directory / "hub.db")
+        first = HubDatabase(path)
+        try:
+            assert os.path.exists(path + "-wal")
+
+            TrustedSQLiteLocation.open(
+                path, private=True, trusted_root=os.path.dirname(path)
+            ).close()
+            HubDatabase(path).close()
+        finally:
+            first.close()
+
+    def test_windows_accepts_the_sidecar_it_cannot_judge(self, tmp_path, monkeypatch):
+        """On ``nt`` a hostile-looking sidecar is ACCEPTED, asserted rather than hidden.
+
+        ``st_mode`` there is synthesised (0o666 for any writable file) and
+        ``st_uid`` is meaningless, so ``_validate_file`` returns before either
+        check (W2). This pins the residue described in the class docstring: if
+        someone adds a real Windows sidecar check (plan item 3c), this test
+        fails and gets replaced by real coverage.
+        """
+        sidecar = tmp_path / "hub.db-wal"
+        sidecar.write_bytes(b"hostile frames")
+        os.chmod(sidecar, 0o666)
+        monkeypatch.setattr(os, "name", "nt")
+
+        _validate_file(str(sidecar), private=True)
+
+    def test_a_sidecar_that_vanishes_mid_validation_does_not_refuse_the_open(
+        self, tmp_path, monkeypatch
+    ):
+        """The 1-in-20 CI race, made deterministic.
+
+        A concurrent opener's SQLite creates and deletes a transient
+        ``-journal`` during first migration. When it vanished between the
+        ``lexists`` probe and ``_validate_file``'s ``lstat``, the resulting
+        FileNotFoundError was wrapped as "Could not inspect" and the healthy
+        opener was refused — concurrency mistaken for tampering, the same
+        class the creation-race test pins. Simulated here by making the probe
+        claim the journal exists when it does not.
+        """
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        path = str(directory / "hub.db")
+        journal = path + "-journal"
+        real_lexists = os.path.lexists
+
+        monkeypatch.setattr(
+            os.path,
+            "lexists",
+            lambda p: True if str(p) == journal else real_lexists(p),
+        )
+
+        guard = TrustedSQLiteLocation.open(
+            path, private=True, create=True, trusted_root=str(directory)
+        )
+        guard.close()
 
 
 class TestAuthServiceOnTheHub:

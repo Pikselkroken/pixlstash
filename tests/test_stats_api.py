@@ -76,7 +76,7 @@ def test_stats_basic_counts():
         assert data["smart_score_distribution"] == []
         assert data["resolution_distribution"] == []
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -102,7 +102,7 @@ def test_stats_tag_filter_reduces_total():
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -133,7 +133,7 @@ def test_stats_score_filter():
         assert resp.status_code == 200
         assert resp.json()["total"] == 2
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -163,7 +163,7 @@ def test_stats_include_picture():
         assert isinstance(data["resolution_distribution"], list)
         assert len(data["resolution_distribution"]) > 0
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -189,7 +189,7 @@ def test_stats_include_cooc():
         assert set(pair["tags"]) == {"cooc_a", "cooc_b"}
         assert pair["count"] == 1
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -211,7 +211,7 @@ def test_stats_include_conf():
         assert isinstance(data["regular_tags"], list)
         assert "conf_tag" in data["regular_tags"]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -242,6 +242,6 @@ def test_stats_cache_expires_after_ttl(monkeypatch):
             "Stats should be recomputed after TTL expires"
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

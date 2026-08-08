@@ -39,7 +39,7 @@ def test_create_character():
         assert char["name"] == "Alice"
         assert char["id"] is not None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -55,7 +55,7 @@ def test_get_character_by_id():
         assert resp.json()["id"] == char_id
         assert resp.json()["name"] == "Bob"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -81,7 +81,7 @@ def test_patch_character_name_and_description():
         assert resp.status_code == 200
         assert resp.json()["name"] == "Charles"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -101,7 +101,7 @@ def test_delete_character_returns_success():
         if resp.status_code == 200:
             assert resp.json() is None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -116,7 +116,7 @@ def test_character_reference_pictures_empty_without_faces():
         assert resp.status_code == 200
         assert resp.json()["reference_picture_ids"] == []
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -127,7 +127,7 @@ def test_delete_nonexistent_character_returns_404():
         resp = client.delete("/characters/99999")
         assert resp.status_code == 404
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -153,7 +153,7 @@ def test_get_characters_filtered_by_numeric_project_id():
         assert "InProject" in names
         assert "NotInProject" not in names
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -179,7 +179,7 @@ def test_get_characters_filtered_by_unassigned():
         assert "Unassigned" in names
         assert "Assigned" not in names
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -190,7 +190,7 @@ def test_get_characters_invalid_project_id_returns_400():
         resp = client.get("/characters?project_id=not-a-number")
         assert resp.status_code == 400
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -259,7 +259,7 @@ def test_character_scoped_token_may_not_filter_by_project():
         assert resp.status_code == 200, resp.text
         assert char_id in [c["id"] for c in resp.json()]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -335,7 +335,7 @@ def test_moving_character_to_new_project_disassociates_pictures_from_old():
         assert pic_id in _project_picture_ids(client, project_b)
         assert pic_id not in _project_picture_ids(client, project_a)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -383,7 +383,7 @@ def test_moving_character_keeps_pictures_shared_with_another_character_in_old_pr
         assert pic_id in _project_picture_ids(client, project_b)
         assert pic_id in _project_picture_ids(client, project_a)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -408,6 +408,6 @@ def test_batch_character_membership_returns_assignments():
         assert data["character_assignments"] == {str(char_id): [pic_id]}
         assert data["pictures_with_faces"] == [pic_id]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

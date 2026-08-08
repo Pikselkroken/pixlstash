@@ -171,6 +171,14 @@ def check_file_mode(path: str, *, repair: bool) -> None:
     Raises:
         HubPermissionError: ``repair`` is False and the mode is too permissive.
     """
+    if os.name == "nt":
+        # Windows has no mode bits to check: `st_mode` is synthesised from the
+        # read-only attribute and reads 0o666 for an ordinary file, so this
+        # would refuse every hub, including one this process just created 0600.
+        # Access there is governed by the file's ACL, which Python cannot read
+        # portably; `TrustedSQLiteLocation` trusts the hub at the root its own
+        # configuration placed it (see that module's docstring, W17 record).
+        return
     try:
         mode = stat.S_IMODE(os.lstat(path).st_mode)
     except FileNotFoundError:
@@ -240,10 +248,17 @@ class HubDatabase:
             guard = TrustedSQLiteLocation.open(
                 self._path,
                 private=True,
-                allow_windows_app_config=True,
+                trusted_root=os.path.dirname(self._path),
             )
         except TrustedSQLiteLocationError as exc:
             raise HubPermissionError(str(exc)) from exc
+        # The guard fd must outlive the connection. POSIX advisory locks are
+        # per-process, per-inode: closing ANY fd this process holds on the hub
+        # file releases every fcntl lock the process has on it — including the
+        # ones SQLite took for self._conn (sqlite.org/howtocorrupt.html §2.2).
+        # The hub is explicitly multi-process (server + CLI), so a lock-stripped
+        # connection lets another process treat the hub as unused and delete its
+        # live -wal/-shm on close. Retained as self._guard, closed in close().
         try:
             self._conn = sqlite3.connect(
                 guard.path,
@@ -253,24 +268,25 @@ class HubDatabase:
             )
             self._conn.row_factory = sqlite3.Row
             guard.verify_after_open()
+
+            if created:
+                logger.info("Created hub database at %s", self._path)
+
+            self._configure()
+            apply_migrations(self._conn)
         except TrustedSQLiteLocationError as exc:
             connection = getattr(self, "_conn", None)
             if connection is not None:
                 connection.close()
+            guard.close()
             raise HubPermissionError(str(exc)) from exc
         except Exception:
             connection = getattr(self, "_conn", None)
             if connection is not None:
                 connection.close()
-            raise
-        finally:
             guard.close()
-
-        if created:
-            logger.info("Created hub database at %s", self._path)
-
-        self._configure()
-        apply_migrations(self._conn)
+            raise
+        self._guard = guard
 
     @property
     def path(self) -> str:
@@ -317,6 +333,17 @@ class HubDatabase:
             self._conn.close()
         except sqlite3.Error as exc:
             logger.warning("Error closing hub database %s: %s", self._path, exc)
+        # Guard fd released only after the connection: closing it earlier drops
+        # the process's POSIX locks on the hub file (see __init__).
+        guard = getattr(self, "_guard", None)
+        if guard is not None:
+            try:
+                guard.close()
+            except OSError as exc:
+                logger.warning(
+                    "Error closing hub location guard %s: %s", self._path, exc
+                )
+            self._guard = None
 
     def __enter__(self) -> "HubDatabase":
         return self

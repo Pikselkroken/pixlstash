@@ -193,7 +193,7 @@ def test_character_thumbnail_revalidates_instead_of_going_stale():
         assert conditional.status_code == 304
         assert conditional.content == b""
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -221,6 +221,6 @@ def test_picture_set_thumbnail_revalidates_instead_of_going_stale():
         assert conditional.status_code == 304
         assert conditional.content == b""
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

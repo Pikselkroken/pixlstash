@@ -149,9 +149,22 @@ class TestPinnedRoutes:
             vault_reads = []
             real_read = server.vault.db.run_immediate_read_task
 
-            def observed_read(*args, **kwargs):
-                vault_reads.append(True)
-                return real_read(*args, **kwargs)
+            # Record WHAT was read, not merely that something was. The vault
+            # has other readers: the WorkPlanner thread probes it for pending
+            # work every few seconds (QualityTask.count_missing_quality,
+            # MissingLikenessFinder._likeness_state, and siblings), and those
+            # probes have nothing to do with this request. A bare
+            # "nothing was read" assertion therefore fails on any machine slow
+            # enough for one to land inside the request — which is what CI is:
+            # this call took 0.63 s there and collected 15 unrelated reads.
+            #
+            # The claim under test is the one in the name: the guest lookup
+            # never ran. `_lookup_by_token` is the same sentinel
+            # test_writer_waits_for_request_paused_in_guest_lookup keys on, and
+            # that test waits for it, so a rename cannot quietly defang this.
+            def observed_read(callback, *args, **kwargs):
+                vault_reads.append(getattr(callback, "__name__", repr(callback)))
+                return real_read(callback, *args, **kwargs)
 
             monkeypatch.setattr(
                 server.vault.db, "run_immediate_read_task", observed_read
@@ -162,7 +175,9 @@ class TestPinnedRoutes:
                 cookies={"guest_session": "plausible-cookie"},
             )
             assert response.status_code == 403
-            assert vault_reads == []
+            assert "_lookup_by_token" not in vault_reads, (
+                f"the guest vault lookup ran before the pin refused: {vault_reads}"
+            )
 
     def test_writer_waits_for_request_paused_in_guest_lookup(
         self, server, tmp_path, monkeypatch

@@ -153,7 +153,7 @@ def test_query_count_does_not_grow_with_the_number_of_sets():
             f"{large.count} for 10. The per-set loop is back."
         )
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -175,7 +175,7 @@ def test_counts_and_previews_are_unchanged():
             # first three members, in that order.
             assert row["top_picture_ids"] == member_ids[:3]
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -214,7 +214,7 @@ def test_hidden_tags_are_excluded_from_counts_and_previews():
             assert row["top_picture_ids"] == visible[:3]
             assert not set(row["top_picture_ids"]) & hidden
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -248,6 +248,6 @@ def test_set_thumbnail_applies_the_same_hidden_tag_rule():
             "condition is excluding too much"
         )
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()

@@ -157,7 +157,7 @@ def test_smart_score_consistency():
         assert score_all_p1 > score_all_p2
 
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 

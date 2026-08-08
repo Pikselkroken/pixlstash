@@ -96,7 +96,15 @@ def _open_guarded_source(
     path: str, *, label: str, private: bool
 ) -> tuple[sqlite3.Connection, TrustedSQLiteLocation]:
     try:
-        guard = TrustedSQLiteLocation.open(path, private=private)
+        # `private=True` means the hub. Its trusted_root is the hub path's own
+        # parent — tautological containment that exists only so a private open
+        # cannot forget to declare it (see trusted_sqlite's "Windows, and what
+        # this cannot check").
+        guard = TrustedSQLiteLocation.open(
+            path,
+            private=private,
+            trusted_root=os.path.dirname(path) if private else None,
+        )
     except TrustedSQLiteLocationError as exc:
         raise BackupError(f"Could not securely open {label} {path}: {exc}") from exc
     try:

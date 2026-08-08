@@ -66,7 +66,7 @@ def test_ingest_lists_and_upserts_runs():
         assert run140["verdict"] == "improved"
         assert abs(run140["anomaly_macro_f1"] - 0.705) < 1e-6
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -77,6 +77,6 @@ def test_ingest_requires_run():
         resp = client.post("/tagger-runs", json={"payload": {"verdict": "improved"}})
         assert resp.status_code == 400
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

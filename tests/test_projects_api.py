@@ -57,7 +57,7 @@ def test_create_and_get_project():
         assert resp.json()["id"] == project_id
         assert resp.json()["name"] == "MyProject"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -73,7 +73,7 @@ def test_list_projects():
         assert isinstance(projects, list)
         assert any(p["name"] == "ListProject" for p in projects)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -92,7 +92,7 @@ def test_update_project():
         assert resp.status_code == 200
         assert resp.json()["name"] == "UpdatedName"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -119,7 +119,7 @@ def test_delete_project_pictures_survive():
         resp = client.get(f"/pictures/{pic_id}/metadata")
         assert resp.status_code == 200
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -142,7 +142,7 @@ def test_assign_pictures_to_project():
         assert resp.status_code == 200
         assert resp.json()["image_count"] >= 1
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -162,7 +162,7 @@ def test_project_export_is_valid_zip():
             names = zf.namelist()
         assert any("project.json" in n for n in names)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -193,7 +193,7 @@ def test_project_attachment_upload_list_delete():
         assert resp.status_code == 200
         assert not any(a["id"] == att_id for a in resp.json())
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -208,7 +208,7 @@ def test_project_get_by_name():
         assert resp.status_code == 200
         assert resp.json()["id"] == project_id
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -220,6 +220,6 @@ def test_project_duplicate_name_rejected():
         resp = client.post("/projects", json={"name": "DupProject"})
         assert resp.status_code == 409
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

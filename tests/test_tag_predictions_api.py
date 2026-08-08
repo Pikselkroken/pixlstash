@@ -66,7 +66,7 @@ def test_get_tag_predictions_empty():
         assert resp.status_code == 200
         assert resp.json() == []
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -93,7 +93,7 @@ def test_confirm_prediction_adds_tag():
             p["tag"] == "sunny" and p["status"] == "CONFIRMED" for p in confirmed
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -118,7 +118,7 @@ def test_reject_prediction_does_not_add_tag():
         rejected = resp.json()
         assert any(p["tag"] == "rainy" and p["status"] == "REJECTED" for p in rejected)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -136,7 +136,7 @@ def test_delete_tag_predictions():
         assert resp.status_code == 200
         assert resp.json() == []
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -149,7 +149,7 @@ def test_confirm_nonexistent_prediction_returns_404():
         resp = client.post(f"/pictures/{pic_id}/tag_predictions/nonexistenttag/confirm")
         assert resp.status_code == 404
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -175,7 +175,7 @@ def test_label_thresholds_uses_saved_offset_by_default(monkeypatch):
         assert rows["cat"]["effective_threshold"] == 0.5
         assert rows["dog"]["effective_threshold"] == 0.3
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -206,6 +206,6 @@ def test_label_thresholds_offset_query_overrides_saved(monkeypatch):
         resp = client.get("/tagger/label-thresholds", params={"offset": 5})
         assert resp.status_code == 422
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

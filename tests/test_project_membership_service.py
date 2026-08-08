@@ -60,7 +60,7 @@ def server():
     try:
         yield srv
     finally:
-        srv.vault.close()
+        srv.close()
         temp_dir.cleanup()
         gc.collect()
 

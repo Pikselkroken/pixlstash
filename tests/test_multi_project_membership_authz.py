@@ -106,7 +106,13 @@ def env():
 
         files = [("file", (n, d, c)) for n, d, c in _good_picture_files()[:2]]
         assert len(files) >= 2, "need >=2 test pictures"
-        st = upload_pictures_and_wait(client, files, timeout_s=30)
+        # 120 s, not 30: this is the first import after a cold Server boot in
+        # this file, and on the shared Windows CI runner that start-up cost
+        # (ONNX session init, thumbnailing) blew a 30 s wall-clock bound while
+        # the import itself was healthy. Same reasoning as the recorded
+        # test_florence skip: a tight wall-clock bound on contended CI hardware
+        # is a flake generator, not a signal.
+        st = upload_pictures_and_wait(client, files, timeout_s=120)
         assert st["status"] == "completed", st
         pic_ids = [p["id"] for p in client.get(f"{API}/pictures").json()]
         assert len(pic_ids) >= 2

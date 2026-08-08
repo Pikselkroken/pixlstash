@@ -243,7 +243,7 @@ def env():
             "picture_ids": picture_ids,
         }
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 

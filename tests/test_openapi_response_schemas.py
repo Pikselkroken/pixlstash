@@ -34,7 +34,7 @@ def _build_schema():
     try:
         return server.api.openapi()
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 

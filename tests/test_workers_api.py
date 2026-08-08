@@ -41,7 +41,7 @@ def test_workers_progress_has_expected_keys():
         assert "ram_used_gb" in process
         assert "ram_total_gb" in process
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -68,7 +68,7 @@ def test_an_active_dedup_scan_never_reports_terminal_task_progress(monkeypatch):
         assert snapshot["total"] == 6
         assert snapshot["remaining"] == 1
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -81,6 +81,6 @@ def test_version_endpoint_returns_200():
         data = resp.json()
         assert "version" in data
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

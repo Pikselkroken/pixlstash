@@ -22,6 +22,8 @@ from pixlstash.hub.bootstrap import (
 )
 from pixlstash.hub.db import HubDatabase, HubPermissionError
 from pixlstash.hub.registry import LibraryRegistry, read_vault_uuid
+from pixlstash.trusted_sqlite import TrustedSQLiteLocation, TrustedSQLiteLocationError
+from pixlstash.vault import Vault
 
 
 def make_vault(folder, *, username="owner", password_hash="a-real-hash", tokens=1):
@@ -252,6 +254,99 @@ class TestFreshInstall:
         finally:
             os.umask(0o022)
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_fresh_image_root_and_vault_db_are_private_under_a_group_umask(
+        self, tmp_path
+    ):
+        """A fresh unregistered vault must be private under umask 002.
+
+        Two creations under one umask: ``Vault.__init__`` makes the image_root
+        (0775 with the default makedirs mode), and — via the unguarded
+        no-hub branch — a ``VaultDatabase`` whose file SQLite would otherwise
+        create at 0664. Both must come out owner-only.
+        """
+        old_umask = os.umask(0o002)
+        try:
+            image_root = tmp_path / "fresh-root"
+            with Vault(str(image_root), disable_background_workers=True):
+                pass
+        finally:
+            os.umask(old_umask)
+
+        assert stat.S_IMODE(os.lstat(image_root).st_mode) == 0o700
+        assert stat.S_IMODE(os.lstat(image_root / "vault.db").st_mode) == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_an_existing_loose_image_root_keeps_its_mode(self, tmp_path):
+        """Creation-only: the user's own shared folder is never tightened.
+
+        A deliberately group-accessible image_root (shared with a media server
+        or sync agent) must keep its mode across ``Vault.__init__``; only
+        directories the vault actually creates are 0700.
+        """
+        image_root = tmp_path / "shared-root"
+        image_root.mkdir()
+        os.chmod(image_root, 0o775)
+
+        with Vault(str(image_root), disable_background_workers=True):
+            pass
+
+        assert stat.S_IMODE(os.lstat(image_root).st_mode) == 0o775
+        # The database inside it is still ours alone.
+        assert stat.S_IMODE(os.lstat(image_root / "vault.db").st_mode) == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_deep_fresh_image_root_is_private_at_every_created_component(
+        self, tmp_path
+    ):
+        """W21: ``makedirs(mode=)`` reaches only the leaf since Python 3.7.
+
+        A two-level-deep new image_root under umask 002 used to leave the
+        intermediate at 0775, and ``_validate_namespace`` then refused the
+        namespace the app itself had just created. Every created component
+        must be 0700 and the guarded open must accept the result.
+        """
+        old_umask = os.umask(0o002)
+        try:
+            os.chmod(tmp_path, 0o700)
+            image_root = tmp_path / "deep" / "nested"
+            with Vault(str(image_root), disable_background_workers=True):
+                pass
+        finally:
+            os.umask(old_umask)
+
+        for directory in (image_root.parent, image_root):
+            mode = stat.S_IMODE(os.lstat(directory).st_mode)
+            assert mode == 0o700, f"{directory} is {oct(mode)}, expected 0o700"
+        TrustedSQLiteLocation.open(str(image_root / "vault.db")).close()
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_loose_existing_ancestor_is_kept_and_still_refused(self, tmp_path):
+        """Creation only: the fix never chmods a directory the owner already had.
+
+        The loose ancestor keeps its 0775 (owner's folder, owner's business),
+        and the guarded open goes on refusing the namespace — that refusal is
+        pre-existing behaviour, asserted here so the fix cannot drift into
+        repairing directories it did not create.
+        """
+        os.chmod(tmp_path, 0o700)
+        loose = tmp_path / "loose"
+        loose.mkdir()
+        os.chmod(loose, 0o775)
+
+        old_umask = os.umask(0o002)
+        try:
+            image_root = loose / "new-library"
+            with Vault(str(image_root), disable_background_workers=True):
+                pass
+        finally:
+            os.umask(old_umask)
+
+        assert stat.S_IMODE(os.lstat(loose).st_mode) == 0o775
+        assert stat.S_IMODE(os.lstat(image_root).st_mode) == 0o700
+        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
+            TrustedSQLiteLocation.open(str(image_root / "vault.db"))
+
     def test_existing_loose_hub_directory_is_reported_not_silently_repaired(
         self, tmp_path
     ):
@@ -263,7 +358,13 @@ class TestFreshInstall:
         """
         os.chmod(tmp_path, 0o700)
         parent = tmp_path / "loose"
-        parent.mkdir(mode=0o775)
+        parent.mkdir()
+        # chmod, not mkdir(mode=): the mode argument is masked by the process
+        # umask, so 0o775 lands as 0o755 wherever the umask is 022 — which is
+        # the GitHub runner default. The directory then is not group-writable,
+        # nothing is loose, and the test failed with "DID NOT RAISE" for the
+        # one reason that is not a defect in the code under test.
+        os.chmod(parent, 0o775)
 
         with pytest.raises(HubPermissionError, match="group/world-writable"):
             HubDatabase(str(parent / "hub.db"))
@@ -1091,6 +1192,51 @@ def _assert_portable_identity_absent(path, marker):
 
 
 class TestPortableIdentityScrub:
+    def test_every_fsynced_fd_is_opened_with_write_access(self, tmp_path, monkeypatch):
+        """Windows refuses to fsync a read-only handle (EBADF).
+
+        CommitFileBuffers requires write access, so an ``O_RDONLY`` fd that is
+        later fsynced works on Linux and fails on Windows — which is how the
+        read-only opens in this module took down every test in backend-windows
+        shard 2, through ``finalize_library_connection`` on every registered
+        vault open. Linux cannot reproduce the EBADF, but it can assert the
+        invariant that prevents it: any fd this module fsyncs must have been
+        opened with write access. (Directory fds are exempt; those helpers
+        already return early on ``nt``.)
+        """
+        from pixlstash.services import portable_identity
+
+        marker = "FSYNC-FLAGS-PROBE"
+        path = tmp_path / "vault.db"
+        connection = _make_portable_identity_db(path, marker)
+
+        readonly_fds = set()
+        real_open = os.open
+
+        def observing_open(target, flags, *args, **kwargs):
+            fd = real_open(target, flags, *args, **kwargs)
+            if not os.path.isdir(target) and (flags & os.O_ACCMODE) == os.O_RDONLY:
+                readonly_fds.add(fd)
+            return fd
+
+        fsynced_readonly = []
+        real_fsync = os.fsync
+
+        def observing_fsync(fd):
+            if fd in readonly_fds:
+                fsynced_readonly.append(fd)
+            return real_fsync(fd)
+
+        monkeypatch.setattr(os, "open", observing_open)
+        monkeypatch.setattr(os, "fsync", observing_fsync)
+
+        portable_identity.sanitize_vault_connection(connection, str(path))
+        connection.close()
+
+        assert fsynced_readonly == [], "fsync on a read-only fd raises EBADF on Windows"
+        # The scrub itself must still have done its job (the other direction).
+        _assert_portable_identity_absent(path, marker)
+
     def test_live_scrub_erases_rows_wal_and_plaintext_markers(self, tmp_path):
         from pixlstash.services.portable_identity import sanitize_vault_connection
 

@@ -46,7 +46,12 @@ def _fsync_directory(path: str) -> None:
 
 
 def _fsync_file_and_parent(path: str) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    # O_RDWR, not O_RDONLY: Windows refuses to fsync a read-only handle with
+    # EBADF, since CommitFileBuffers requires write access. Same rule as the
+    # restore swap's "rb+" open (full_restore._swap_database). This helper runs
+    # on every registered-library open, so the read-only form took down all of
+    # backend-windows shard 2.
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags)
     try:
         info = os.fstat(fd)
@@ -62,7 +67,8 @@ def _privatize_regular_file(
     path: str, expected: os.stat_result | None = None
 ) -> os.stat_result:
     """Open without following links, validate ownership, and force mode 0600."""
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    # O_RDWR for the same Windows fsync rule as _fsync_file_and_parent above.
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags)
     except OSError as exc:
