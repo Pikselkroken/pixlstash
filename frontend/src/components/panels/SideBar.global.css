@@ -51,11 +51,9 @@
   justify-content: center;
   width: var(--gutter-glyph);
   height: var(--gutter-glyph);
-  /* The advance a glyph adds must equal exactly one --indent-step, or glyph
-     columns miss by a few px per level and the tree looks hand-placed. The
-     rows carrying glyphs gap at --space-2, so 16 + 4 + 4 = 24 = --indent-step.
-     That is what makes a child's chevron land under its parent's icon, and the
-     child's icon under its parent's label. */
+  /* Plain separation between the glyph and what follows it. This does NOT have
+     to equal --indent-step: tuning the two to each other is what produced a
+     24px step and names starting at 91px. See visual-language.md §5.1. */
   margin-right: var(--space-2);
 }
 

@@ -472,19 +472,41 @@ Never add the border on select, and never "compensate" for it with padding. Addi
 3px of border and 8px of padding on `.active` moves the label 3px right; that is a
 bug that has shipped here twice, once under a comment asserting it does not happen.
 
-**Why these three widths.** `--gutter-glyph` is 16px because the sidebar already
-forced every chevron and row icon to 16px with `!important`. `--indent-step` is
-`--gutter-glyph + --space-3` = 24px, and equals `--space-6`, so it is on-grid by
-construction. `--entity-thumb` is 24px, promoted from the sidebar's own
-`--sidebar-thumb-size`. Nothing here was invented.
+**Rank is carried by type; depth is carried by indent.** Two rows at different
+ranks must differ in *type* even when they also differ in indent, so neither
+signal is load-bearing on its own. This is not decoration. When a project row and
+the section captions nested under it were set identically (both `--text-2xs`,
+semibold, uppercase), indentation had to signal both containment *and* rank, and
+the only way to make rank legible was a bigger step. Three levels of that pushed
+entity names to 91px in a 240px rail. One ramp step of contrast between project
+and caption is what makes a 16px indent enough.
 
-**One glyph advances the row by exactly one step.** This is the part that is easy
-to get subtly wrong: a 16px glyph in a row that gaps at 4px advances the label by
-20px, not 24, so glyph columns drift 4px per level and the tree reads as
-hand-placed. The glyph slot therefore carries its own `margin-right: --space-2` on
-top of the row gap, making the advance 16 + 4 + 4 = 24. With that, a child's
-chevron lands under its parent's icon and the child's icon under its parent's
-label. If you change a row's `gap`, re-check this sum.
+**The indent step is set by legibility, not by glyph arithmetic.** `--indent-step`
+is 16px because that is the smallest on-grid step that still reads as nesting at
+this density. It is deliberately *not* derived from the glyph column. An earlier
+version set it to `--gutter-glyph + --space-3` = 24px so that one chevron would
+advance exactly one level, and tuned a margin onto the glyph slot to make the sum
+come out. That bought a child's chevron landing precisely under its parent's
+label, which nobody notices, and charged 24px per level for it. Do not tune the
+step and the glyph advance to each other; they answer different questions.
+
+**Why the other two widths.** `--gutter-glyph` is 16px because the sidebar already
+forced every chevron and row icon to 16px with `!important`. `--entity-thumb` is
+24px, promoted from the sidebar's own `--sidebar-thumb-size`.
+
+**Children indent past their parent's glyph, not past its row.** A disclosure
+group's children step in once from the group's own glyph column, so a child's mark
+lands under its parent's label. That is what every file tree does. Do not flatten
+it to save width; take the width out of the step size instead.
+
+**A caption with nothing under it is not a disclosure.** Rendering a disclosure
+affordance for an empty group is wrong whether the chevron is visible or hidden,
+and reserved-but-blank is the worst of the three because the empty box reads as a
+missing glyph. Make the row inert instead: `aria-disabled`, no hover response,
+label at `--opacity-disabled`. The dimmed label is what explains the blank slot.
+Keep the slot reserved so the caption does not shift when the first child
+arrives, and **keep the group's own add action at full strength and operable**,
+because it is the only way out of the empty state.
 
 **Scoped CSS does not cross a component boundary.** A row rendered by a child
 component gets none of the parent's scoped rules, so a recursive tree component must

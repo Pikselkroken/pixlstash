@@ -839,6 +839,19 @@ async function browseFolderPath(path, prefetchChildren = false) {
   }
 }
 
+/* Whether a project's People / Sets caption has anything under it.
+   One helper per caption rather than the test inlined twice, because the
+   chevron's visibility and the row's inert state must never disagree: a live
+   caption with no chevron, or a dimmed caption you can still collapse, are both
+   worse than either state on its own. */
+function projectHasPeople(projectId) {
+  return sortedCharacters.value.some((c) => entityBelongsToProject(c, projectId));
+}
+
+function projectHasSets(projectId) {
+  return nonReferenceSets.value.some((s) => entityBelongsToProject(s, projectId));
+}
+
 /* Whether a reference-folder row can disclose children, i.e. whether its
    chevron is drawn. The slot is reserved either way (`.sidebar-row-glyph`), so
    this only decides visibility and never the row's left edge. Not browsable in
@@ -5767,15 +5780,18 @@ defineExpose({
                     onProjectDrop(p.id, $event);
                   "
                 >
+                  <v-icon
+                    class="sidebar-row-glyph sidebar-project-tree-chevron"
+                    size="14"
+                    @click.stop="toggleProjectExpanded(p.id)"
+                    >{{
+                      expandedProjectIds.has(p.id)
+                        ? "mdi-chevron-down"
+                        : "mdi-chevron-right"
+                    }}</v-icon
+                  >
                   <span class="sidebar-project-tree-name-group">
                     <span class="sidebar-project-tree-label">{{ p.name }}</span>
-                    <v-icon
-                      class="sidebar-project-tree-expand-indicator"
-                      :class="{ expanded: expandedProjectIds.has(p.id) }"
-                      size="14"
-                      @click.stop="toggleProjectExpanded(p.id)"
-                      >mdi-chevron-down</v-icon
-                    >
                   </span>
                   <v-icon
                     v-if="sharedProjectIds.has(p.id)"
@@ -5828,15 +5844,20 @@ defineExpose({
                   >
                     <div
                       class="sidebar-project-tree-subheader"
-                      @click.stop="toggleProjectTreePeople(p.id)"
+                      :class="{
+                        'sidebar-project-tree-subheader--empty':
+                          !projectHasPeople(p.id),
+                      }"
+                      :aria-disabled="!projectHasPeople(p.id) || undefined"
+                      @click.stop="
+                        projectHasPeople(p.id) && toggleProjectTreePeople(p.id)
+                      "
                     >
                       <v-icon
                         size="14"
                         class="sidebar-row-glyph sidebar-project-tree-sub-chevron"
                         :class="{
-                          'sidebar-row-glyph--empty': !sortedCharacters.some(
-                            (c) => entityBelongsToProject(c, p.id),
-                          ),
+                          'sidebar-row-glyph--empty': !projectHasPeople(p.id),
                         }"
                         >{{
                           projectTreePeopleCollapsed.has(p.id)
@@ -6045,15 +6066,20 @@ defineExpose({
                   >
                     <div
                       class="sidebar-project-tree-subheader"
-                      @click.stop="toggleProjectTreeSets(p.id)"
+                      :class="{
+                        'sidebar-project-tree-subheader--empty':
+                          !projectHasSets(p.id),
+                      }"
+                      :aria-disabled="!projectHasSets(p.id) || undefined"
+                      @click.stop="
+                        projectHasSets(p.id) && toggleProjectTreeSets(p.id)
+                      "
                     >
                       <v-icon
                         size="14"
                         class="sidebar-row-glyph sidebar-project-tree-sub-chevron"
                         :class="{
-                          'sidebar-row-glyph--empty': !nonReferenceSets.some(
-                            (s) => entityBelongsToProject(s, p.id),
-                          ),
+                          'sidebar-row-glyph--empty': !projectHasSets(p.id),
                         }"
                         >{{
                           projectTreeSetsCollapsed.has(p.id)

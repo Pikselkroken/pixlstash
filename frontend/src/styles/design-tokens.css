@@ -48,9 +48,12 @@
      value: each is measured off a size the sidebar already forced.
      --------------------------------------------------------------------------- */
   --gutter-glyph: 16px; /* the de-facto glyph box: chevrons and row icons */
-  --indent-step: 24px;  /* --gutter-glyph + --space-3, so a child's glyph lands
-                           under its parent's label. Equals --space-6, so
-                           on-grid by construction. */
+  --indent-step: 16px;  /* the smallest on-grid step that still reads as nesting
+                           at sidebar density. Set by legibility, NOT by glyph
+                           arithmetic: a step tuned to make a chevron advance
+                           exactly one level cost 24px per level and pushed
+                           names off the end of a 240px rail. Rank is carried
+                           by type, depth by this. */
   --entity-thumb: 24px; /* identity slot for a row carrying a picture; the
                            sidebar overrides it from its thumbnail slider. */
 

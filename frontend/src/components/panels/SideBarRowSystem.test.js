@@ -34,10 +34,14 @@ function ruleBodies(css, selector) {
     .split("}")
     .filter((r) => {
       const [sel] = r.split("{");
+      // Collapse whitespace: prettier wraps long descendant selectors across
+      // lines, and a matcher that depends on where it wrapped is a test that
+      // breaks on reformatting rather than on a defect.
+      const want = selector.replace(/\s+/g, " ").trim();
       return sel
         .split(",")
-        .map((s) => s.trim())
-        .includes(selector);
+        .map((s) => s.replace(/\s+/g, " ").trim())
+        .includes(want);
     })
     .map((r) => r.split("{")[1])
     .filter(Boolean);
@@ -152,12 +156,45 @@ describe("optional glyphs keep their box", () => {
     expect(body).not.toContain("display");
   });
 
-  it("advances the row by exactly one indent step", () => {
-    // 16px glyph + 4px own margin + 4px row gap = 24px = --indent-step. Drop the
-    // margin and glyph columns drift 4px per level.
+  it("keeps a fixed width so an absent glyph still holds its column", () => {
     const body = ruleBody(globalCss, ".sidebar-row-glyph");
     expect(body).toContain("width: var(--gutter-glyph)");
-    expect(body).toContain("margin-right: var(--space-2)");
+  });
+
+  it("an empty caption goes inert but keeps its add action operable", () => {
+    // The way out of an empty group is its `+`. Fading or disabling the whole
+    // row would take that with it and strand the user.
+    const body = ruleBody(
+      scopedCss,
+      ".sidebar-project-tree-subheader--empty .sidebar-project-tree-subheader-label",
+    );
+    expect(body, "the label, not the row, carries the fade").toContain(
+      "opacity: var(--opacity-disabled",
+    );
+
+    const sideBar = read("./SideBar.vue");
+    // The chevron's visibility and the row's inert state read the SAME helper,
+    // so they cannot disagree.
+    for (const group of ["projectHasPeople", "projectHasSets"]) {
+      expect(sideBar).toContain(`'sidebar-row-glyph--empty': !${group}(p.id)`);
+      expect(sideBar).toContain(
+        `:aria-disabled="!${group}(p.id) || undefined"`,
+      );
+    }
+  });
+
+  it("rank is carried by type, not indent alone", () => {
+    // A project and the captions nested under it must differ in type. When they
+    // did not, indent had to signal rank as well as depth, which is what forced
+    // a 24px step and pushed names to 91px in a 240px rail.
+    const project = ruleBody(scopedCss, ".sidebar-project-tree-label");
+    const caption = ruleBody(
+      scopedCss,
+      ".sidebar-project-tree-subheader-label",
+    );
+    expect(project).toContain("font-size: var(--text-xs)");
+    expect(caption).toContain("font-size: var(--text-2xs)");
+    expect(caption).toContain("0.7");
   });
 
   it("leaves no v-show or display:none on a reserved glyph", () => {
