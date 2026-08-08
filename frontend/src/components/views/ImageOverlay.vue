@@ -805,6 +805,7 @@ import {
   MediaFormat,
   mediaMimeType,
   safeDownloadName,
+  setInternalDragPayload,
 } from "../../utils/media.js";
 import { API_BASE_URL, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
@@ -2531,10 +2532,7 @@ function handleMediaDragStart(event) {
     // open image be dropped onto a sidebar character/set/project to assign it,
     // and stops the window-level handler from mistaking the drag for an
     // external file import. See isInternalImageDrag().
-    dt.setData(
-      "application/json",
-      JSON.stringify({ type: "image-ids", imageIds: [id] }),
-    );
+    setInternalDragPayload(dt, { type: "image-ids", imageIds: [id] });
     // Deterministic drag-out to the OS file manager. The browser's native
     // <img>/<video> drag only yields a real file for some formats (and never
     // for a <video>), which is why drag-out worked for some files and not

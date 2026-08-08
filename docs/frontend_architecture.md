@@ -409,6 +409,28 @@ The tab/category switch is **stateless** (see Key Design Principles). Concretely
   pictures on a global view → switch to the Projects/People/Sets tab → drag the
   selection onto a project or character to add them, with the global view still
   intact underneath.
+- **A drop target judges the payload KIND during dragover, from `types` alone.**
+  The JSON body is protected while a drag is in flight (`getData()` returns `""`
+  in Chrome and Firefox), so the kind travels as the *key*: every internal drag
+  writes `application/json` **plus** a marker type —
+  `application/x-pixlstash-pictures` or `application/x-pixlstash-faces`
+  (`utils/media.js`: `setInternalDragPayload`, `isPictureDrag`, `isFaceDrag`).
+  A new payload kind adds a marker; it does not add a field to the body.
+  Two rules follow, and both were once broken (issue #757):
+  - **Never `@dragover.prevent` on a drop target.** The modifier calls
+    `preventDefault()` before the handler body and regardless of what it
+    decides, which accepts every drag on the page. `preventDefault()` belongs
+    inside the handler, only for the kinds that row takes — `SideBar.acceptDrop`
+    returns `accept` / `reject` / `ignore` (`ignore` = an external file drag the
+    window-level importer still owns, so the row stays unpainted rather than
+    promising a refusal it will not perform).
+  - **A drop handler keys off `data.type`, never off the presence of
+    `imageIds`.** A face payload carries `imageIds` too (the pictures the faces
+    were found in), which is how face drags used to file themselves into sets.
+    `readDraggedImageIds` returns nothing unless the payload is `image-ids`.
+  A refused row shows the `.not-droppable` state (hatch + `mdi-cancel` glyph +
+  `--opacity-disabled`, never colour alone), so rejection is visible during the
+  drag instead of arriving as a toast afterwards.
 - **Anti-pattern (do not reintroduce):** a tab/mode `watch` that emits
   `select-*`, pushes a route, or resets a filter. That recouples the sidebar to
   the view and breaks the drag-to-assign flow. Keep navigation in entry-click
@@ -630,8 +652,12 @@ Both people modes take the opt-in `allowCreate` prop (default false; set by `Ima
 #### `StarRatingOverlay.vue` (133 lines)
 5-star score widget. Props: `score`, `readonly`. Emits: `set-score`. Used in `ImageOverlay` and `ImageGrid` cells.
 
-#### `ProgressOverlay.vue` (160 lines)
-Task progress overlay. Props: `status`, `progress`, `message`, `abortable`. Emits: `abort`. Terminal statuses: `completed`, `failed`, `cancelled`.
+#### `ProgressOverlay.vue`
+Task progress overlay, shared by export, plugin runs and smart-score sorts (all three mounted in `ImageGrid`). Props: `visible`, `status`, `message`, `percent`, `count`, `total`, `abortLabel`, `anchor`, `indeterminate`. Emits: `abort`. Terminal statuses: `completed`, `failed`, `cancelled`.
+
+**Multi-root by design (#758).** The card is behind `v-if="visible"`, but the `role="status"` live region is a second root *outside* it: a live region inserted at the same moment as its first text is not reliably announced, so hosting it inside the `v-if` loses the run's opening line. Consequence for callers: attribute fallthrough (`class`, `style`, `ref`) does not apply — pass anything positional through props or wrap the component.
+
+The rest of the accessibility contract: the bar is a real `role="progressbar"` with `aria-valuemin`/`aria-valuemax` and an `aria-valuenow` deliberately omitted while `indeterminate` (same call as `DedupScanBanner`); the card carries `aria-busy` until a terminal status; the live region's text is rounded to 10% steps so a per-item export announces ~10 times rather than thousands; failure adds an `mdi-alert-circle` glyph and the word "Failed" so it does not ride on the red card alone (WCAG 1.4.1); and the indeterminate animation parks at its start offset under `prefers-reduced-motion`.
 
 #### `PluginParametersUI.vue` (336 lines)
 Dynamic form renderer for **image plugin** JSON schemas. Props: `schema`, `modelValue`. Emits: `update:modelValue`. Uses `reactive` form values synced bidirectionally with props. **Not reused for tagger plugins** — those use `TaggerParametersUI.vue`.

@@ -47,7 +47,12 @@ import {
 import { setPicturesProject } from "../../api/pictures";
 import { getSharedResourceIds, revokeTokensByResource } from "../../api/users";
 import { listSortMechanisms } from "../../api/session";
-import { extractSupportedImportFilesFromDataTransfer } from "../../utils/media.js";
+import {
+  extractSupportedImportFilesFromDataTransfer,
+  isFaceDrag,
+  isFileDrag,
+  isPictureDrag,
+} from "../../utils/media.js";
 import {
   characterCountUpdates,
   projectCountUpdates,
@@ -2436,14 +2441,18 @@ function showNotice(
   }, duration);
 }
 
-function dragOverSetItem(setId) {
+function dragOverSetItem(setId, event) {
   // Suppress the image-drop highlight while an entity is being dragged between
   // projects — that drag is not an image assignment.
   if (draggingEntityKind.value) return;
+  const verdict = acceptDrop(event, ["pictures", "files"]);
+  if (verdict === "ignore") return;
+  dropRejected.value = verdict === "reject";
   dragOverSet.value = setId;
 }
 
-function dragLeaveSetItem() {
+function dragLeaveSetItem(event) {
+  if (event && !leftDropRow(event)) return;
   dragOverSet.value = null;
 }
 
@@ -2906,18 +2915,9 @@ async function handleDropOnSet(setId, event) {
     imageImporterRef.value?.startImport(files, options);
     return;
   }
-  // Get the dragged image IDs from the drag event
-  let draggedIds = [];
-  try {
-    const data = JSON.parse(event.dataTransfer.getData("application/json"));
-    if (data.imageIds && Array.isArray(data.imageIds)) {
-      draggedIds = data.imageIds;
-    }
-  } catch (e) {
-    console.error("Could not parse drag data:", e);
-    return;
-  }
-
+  // Get the dragged image IDs from the drag event. A face drag is not a
+  // picture drag, and readDraggedImageIds() returns nothing for one.
+  const draggedIds = readDraggedImageIds(event);
   if (draggedIds.length === 0) {
     return;
   }
@@ -2948,29 +2948,37 @@ async function handleDropOnSet(setId, event) {
   }
 }
 
-function handleDragOverCharacter(id) {
+function handleDragOverCharacter(id, event) {
   // Suppress the image-drop highlight while an entity is being dragged between
   // projects — that drag is not an image assignment.
   if (draggingEntityKind.value) return;
+  const verdict = acceptDrop(event, ["pictures", "faces", "files"]);
+  if (verdict === "ignore") return;
+  dropRejected.value = verdict === "reject";
   dragOverCharacter.value = id;
 }
 
-function handleDragLeaveCharacter() {
+function handleDragLeaveCharacter(event) {
+  if (event && !leftDropRow(event)) return;
   dragOverCharacter.value = null;
 }
 
 // --- Project drop target (assign dragged pictures to a specific project) ---
 const dragOverProjectId = ref(null);
 
-function handleDragOverProject(id) {
+function handleDragOverProject(id, event) {
   // Suppress the picture-drop highlight while an entity (character/set) is
   // being dragged between projects — that drag is handled by the project
   // header's entity-move zone (onProjectHeaderDrop), not by a picture assign.
   if (draggingEntityKind.value) return;
+  const verdict = acceptDrop(event, ["pictures"]);
+  if (verdict === "ignore") return;
+  dropRejected.value = verdict === "reject";
   dragOverProjectId.value = id;
 }
 
-function handleDragLeaveProject() {
+function handleDragLeaveProject(event) {
+  if (event && !leftDropRow(event)) return;
   dragOverProjectId.value = null;
 }
 
@@ -2983,6 +2991,9 @@ function readDraggedImageIds(event) {
     const data = JSON.parse(
       event?.dataTransfer?.getData("application/json") || "{}",
     );
+    // A face drag carries imageIds too (the pictures the faces were found in),
+    // so the payload kind, not the presence of imageIds, decides.
+    if (data.type !== "image-ids") return [];
     return Array.isArray(data.imageIds) ? data.imageIds.filter(Boolean) : [];
   } catch (e) {
     console.error("Could not parse drag data:", e);
@@ -2990,16 +3001,58 @@ function readDraggedImageIds(event) {
   }
 }
 
+// Marks the currently hovered row as one that will not take this payload, so
+// the row can say no during the drag instead of after it (see .not-droppable).
+const dropRejected = ref(false);
+
+/**
+ * Decide whether a row takes this drag, and accept it if so.
+ *
+ * `@dragover.prevent` in the template cannot do this: the modifier calls
+ * preventDefault() before the handler runs, which accepts every payload on the
+ * page. preventDefault() therefore belongs here, only for the kinds listed.
+ *
+ * @param {DragEvent} event
+ * @param {string[]} kinds - any of "pictures", "faces", "files".
+ * @returns {"accept"|"reject"|"ignore"} - "ignore" means the drag is not ours
+ *   to judge (an external file drag the window-level importer still handles),
+ *   so the row stays unpainted rather than claiming it will refuse the drop.
+ */
+function acceptDrop(event, kinds) {
+  const dt = event?.dataTransfer;
+  const accepted =
+    (kinds.includes("pictures") && isPictureDrag(dt)) ||
+    (kinds.includes("faces") && isFaceDrag(dt)) ||
+    (kinds.includes("files") && isFileDrag(dt));
+  if (accepted) {
+    event.preventDefault();
+    if (dt) dt.dropEffect = "move";
+    return "accept";
+  }
+  return isInternalImageDrag(event) ? "reject" : "ignore";
+}
+
+// dragleave also fires when the pointer crosses from a row into one of its own
+// children, which flickers the highlight off; only a leave that lands outside
+// the row is a real leave.
+function leftDropRow(event) {
+  const row = event?.currentTarget;
+  if (!row?.contains) return true;
+  return !row.contains(event.relatedTarget);
+}
+
 function handleReferenceFolderDragOver(folderId, scopePath, event) {
-  if (draggingEntityKind.value || !isInternalImageDrag(event)) return;
-  event.preventDefault();
-  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  if (draggingEntityKind.value) return;
+  const verdict = acceptDrop(event, ["pictures"]);
+  if (verdict === "ignore") return;
+  dropRejected.value = verdict === "reject";
   dragOverReferenceTargetKey.value = scopePath
     ? `path-${scopePath}`
     : `rf-${folderId}`;
 }
 
-function handleReferenceFolderDragLeave(folderId, scopePath) {
+function handleReferenceFolderDragLeave(folderId, scopePath, event) {
+  if (event && !leftDropRow(event)) return;
   const key = scopePath ? `path-${scopePath}` : `rf-${folderId}`;
   if (dragOverReferenceTargetKey.value === key) {
     dragOverReferenceTargetKey.value = null;
@@ -3057,14 +3110,7 @@ async function onProjectDrop(projectId, event) {
   if (draggingEntityKind.value) return;
   if (projectId == null) return;
   // Internal grid drag carries the selected image ids as application/json.
-  let imageIds = [];
-  try {
-    const data = JSON.parse(event.dataTransfer.getData("application/json"));
-    if (Array.isArray(data.imageIds)) imageIds = data.imageIds;
-  } catch (e) {
-    console.error("Could not parse drag data for project drop:", e);
-    return;
-  }
+  const imageIds = readDraggedImageIds(event);
   if (!imageIds.length) return;
   try {
     // Picture↔Project is many-to-many (PictureProjectMember); membership is
@@ -4997,7 +5043,12 @@ defineExpose({
                 class="sidebar-folder-row sidebar-folder-root-row"
                 :class="{
                   active: selectedFolderKey === 'rf-' + rf.id,
-                  droppable: dragOverReferenceTargetKey === 'rf-' + rf.id,
+                  droppable:
+                    dragOverReferenceTargetKey === 'rf-' + rf.id &&
+                    !dropRejected,
+                  'not-droppable':
+                    dragOverReferenceTargetKey === 'rf-' + rf.id &&
+                    dropRejected,
                 }"
                 :title="
                   inDocker
@@ -5010,7 +5061,8 @@ defineExpose({
                   handleReferenceFolderDragOver(rf.id, null, $event)
                 "
                 @dragleave="
-                  !inDocker && handleReferenceFolderDragLeave(rf.id, null)
+                  !inDocker &&
+                  handleReferenceFolderDragLeave(rf.id, null, $event)
                 "
                 @drop.prevent="
                   !inDocker && handleReferenceFolderDrop(rf.id, null, $event)
@@ -5149,6 +5201,7 @@ defineExpose({
                       :folder-browse-cache="folderBrowseCache"
                       :expanded-folder-ids="expandedFolderIds"
                       :drop-target-key="dragOverReferenceTargetKey"
+                      :drop-rejected="dropRejected"
                       @select="handleFolderNodeSelect"
                       @toggle="handleFolderNodeToggle"
                       @drag-over="
@@ -5156,8 +5209,8 @@ defineExpose({
                           handleReferenceFolderDragOver(rfId, path, event)
                       "
                       @drag-leave="
-                        ({ rfId, path }) =>
-                          handleReferenceFolderDragLeave(rfId, path)
+                        ({ rfId, path, event }) =>
+                          handleReferenceFolderDragLeave(rfId, path, event)
                       "
                       @drop="
                         ({ rfId, path, event }) =>
@@ -5462,7 +5515,10 @@ defineExpose({
                             ? selectedCharacterIdSet.has(char.id)
                             : selectionStore.selectedCharacter === char.id) &&
                           selectionOwnsHighlight,
-                        droppable: dragOverCharacter === char.id,
+                        droppable:
+                          dragOverCharacter === char.id && !dropRejected,
+                        'not-droppable':
+                          dragOverCharacter === char.id && dropRejected,
                       },
                     ]"
                     :ref="(el) => registerCharacterRef(char.id, el)"
@@ -5473,8 +5529,8 @@ defineExpose({
                     @contextmenu.prevent="
                       openSidebarCtxMenu('character', char, $event)
                     "
-                    @dragover.prevent="handleDragOverCharacter(char.id)"
-                    @dragleave="handleDragLeaveCharacter"
+                    @dragover="handleDragOverCharacter(char.id, $event)"
+                    @dragleave="handleDragLeaveCharacter($event)"
                     @drop.prevent="
                       handleDropOnCharacter({
                         characterId: char.id,
@@ -5609,7 +5665,9 @@ defineExpose({
                         active:
                           selectedSetIdSet.has(pset.id) &&
                           selectionOwnsHighlight,
-                        droppable: dragOverSet === pset.id,
+                        droppable: dragOverSet === pset.id && !dropRejected,
+                        'not-droppable':
+                          dragOverSet === pset.id && dropRejected,
                       },
                     ]"
                     :ref="(el) => registerSetRef(pset.id, el)"
@@ -5620,8 +5678,8 @@ defineExpose({
                     @contextmenu.prevent="
                       openSidebarCtxMenu('set', pset, $event)
                     "
-                    @dragover.prevent="dragOverSetItem(pset.id)"
-                    @dragleave="dragLeaveSetItem"
+                    @dragover="dragOverSetItem(pset.id, $event)"
+                    @dragleave="dragLeaveSetItem($event)"
                     @drop.prevent="handleDropOnSet(pset.id, $event)"
                   >
                     <span class="sidebar-list-icon">
@@ -5741,7 +5799,9 @@ defineExpose({
                         selectionStore.selectedCharacter === ALL_PICTURES_ID &&
                         selectedSetIdSet.size === 0 &&
                         selectionOwnsHighlight,
-                      droppable: dragOverProjectId === p.id,
+                      droppable: dragOverProjectId === p.id && !dropRejected,
+                      'not-droppable':
+                        dragOverProjectId === p.id && dropRejected,
                       'project-move-target': moveDragOverProjectId === p.id,
                     },
                   ]"
@@ -5750,12 +5810,12 @@ defineExpose({
                   @contextmenu.prevent="
                     openSidebarCtxMenu('project', p, $event)
                   "
-                  @dragover.prevent="
-                    handleDragOverProject(p.id);
+                  @dragover="
+                    handleDragOverProject(p.id, $event);
                     onProjectHeaderDragOver(p.id, $event);
                   "
                   @dragleave="
-                    handleDragLeaveProject();
+                    handleDragLeaveProject($event);
                     onProjectHeaderDragLeave();
                   "
                   @drop.prevent="
@@ -5946,7 +6006,10 @@ defineExpose({
                                 : selectionStore.selectedCharacter ===
                                   char.id) &&
                               selectionOwnsHighlight,
-                            droppable: dragOverCharacter === char.id,
+                            droppable:
+                              dragOverCharacter === char.id && !dropRejected,
+                            'not-droppable':
+                              dragOverCharacter === char.id && dropRejected,
                           },
                         ]"
                         :draggable="!isReadOnly"
@@ -5965,8 +6028,8 @@ defineExpose({
                         @contextmenu.prevent="
                           openSidebarCtxMenu('character', char, $event)
                         "
-                        @dragover.prevent="handleDragOverCharacter(char.id)"
-                        @dragleave="handleDragLeaveCharacter"
+                        @dragover="handleDragOverCharacter(char.id, $event)"
+                        @dragleave="handleDragLeaveCharacter($event)"
                         @drop.prevent="
                           handleDropOnCharacter({
                             characterId: char.id,
@@ -6160,7 +6223,9 @@ defineExpose({
                             active:
                               selectedSetIdSet.has(pset.id) &&
                               selectionOwnsHighlight,
-                            droppable: dragOverSet === pset.id,
+                            droppable: dragOverSet === pset.id && !dropRejected,
+                            'not-droppable':
+                              dragOverSet === pset.id && dropRejected,
                           },
                         ]"
                         :draggable="!isReadOnly"
@@ -6173,8 +6238,8 @@ defineExpose({
                         @contextmenu.prevent="
                           openSidebarCtxMenu('set', pset, $event)
                         "
-                        @dragover.prevent="dragOverSetItem(pset.id)"
-                        @dragleave="dragLeaveSetItem"
+                        @dragover="dragOverSetItem(pset.id, $event)"
+                        @dragleave="dragLeaveSetItem($event)"
                         @drop.prevent="handleDropOnSet(pset.id, $event)"
                       >
                         <span class="sidebar-list-icon">
