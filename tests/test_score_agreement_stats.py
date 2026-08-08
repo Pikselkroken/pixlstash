@@ -225,7 +225,7 @@ def test_agreement_places_pictures_in_the_right_cells():
         assert agreement["rated"] == 2
         assert agreement["total"] == 2
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -242,7 +242,7 @@ def test_bucket_boundaries_match_the_smart_score_histogram():
         assert _cell(agreement, 3, "2-3") == 1
         assert _cell(agreement, 3, "1-2") == 0
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -266,7 +266,7 @@ def test_score_zero_and_null_are_both_unrated():
         assert agreement["pearson"] is None
         assert agreement["spearman"] is None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -288,7 +288,7 @@ def test_rated_but_unscored_counts_as_rated_yet_is_not_plotted():
         assert agreement["pairs"] == 0
         assert all(cell["count"] == 0 for cell in agreement["cells"])
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -309,7 +309,7 @@ def test_tau_b_is_suppressed_below_the_minimum_pair_count():
         assert agreement["pearson"] is None
         assert agreement["spearman"] is None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -346,7 +346,7 @@ def test_matrix_ignores_the_score_filter_it_sets_itself():
         assert score_dist["1"] == 0
         assert score_dist["5"] == 1
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -365,7 +365,7 @@ def test_matrix_ignores_the_smart_score_bucket_filter_it_sets_itself():
         assert _cell(filtered, 1, "1-2") == 1
         assert _cell(filtered, 5, "4-5") == 1
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -389,7 +389,7 @@ def test_matrix_still_honours_other_filters():
         assert _cell(agreement, 1, "1-2") == 0, "the untagged picture is out of scope"
         assert agreement["total"] == 1
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -404,6 +404,6 @@ def test_agreement_is_absent_without_the_picture_include():
         assert resp.status_code == 200
         assert resp.json()["score_agreement"] == {}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

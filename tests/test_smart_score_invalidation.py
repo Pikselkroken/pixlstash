@@ -196,7 +196,7 @@ def test_adding_penalised_tag_invalidates_and_requeues():
         assert _get_smart_score(server, pic_id) is None
         assert pic_id in _find_missing_ids(server)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -213,7 +213,7 @@ def test_adding_content_tag_does_not_invalidate():
         assert _get_smart_score(server, pic_id) == 0.5
         assert pic_id not in _find_missing_ids(server)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -237,7 +237,7 @@ def test_removing_penalised_tag_invalidates():
 
         assert _get_smart_score(server, pic_id) is None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -261,7 +261,7 @@ def test_removing_content_tag_does_not_invalidate():
 
         assert _get_smart_score(server, pic_id) == 0.5
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -281,7 +281,7 @@ def test_confirm_penalised_prediction_invalidates():
         assert _get_smart_score(server, pic_id) is None
         assert pic_id in _find_missing_ids(server)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -336,7 +336,7 @@ def test_confirm_registers_origin_stamped_rescore_refresh():
         ]
         assert edited not in server.vault.interactive_rescore_registry.snapshot()
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -353,7 +353,7 @@ def test_reject_penalised_prediction_invalidates():
 
         assert _get_smart_score(server, pic_id) is None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -370,7 +370,7 @@ def test_confirm_content_prediction_does_not_invalidate():
 
         assert _get_smart_score(server, pic_id) == 0.5
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -397,7 +397,7 @@ def test_delete_anomaly_prediction_invalidates():
         assert _get_smart_score(server, pic_id) is None
         assert pic_id in _find_missing_ids(server)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -419,7 +419,7 @@ def test_delete_content_prediction_does_not_invalidate():
         assert _get_smart_score(server, pic_id) == 0.5
         assert pic_id not in _find_missing_ids(server)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -493,7 +493,7 @@ def test_bulk_tagger_rewrite_invalidates_batch_in_one_statement():
         assert len(smart_score_updates) == 1, smart_score_updates
         assert "IN (" in smart_score_updates[0].replace("\n", " ")
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -543,7 +543,7 @@ def test_sub_threshold_model_prediction_is_not_scored():
         )
         assert raw[pic_id]["watermark"] == pytest.approx(0.4)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -566,7 +566,7 @@ def test_above_threshold_model_prediction_is_scored():
             > 0.0
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -591,7 +591,7 @@ def test_human_positive_below_threshold_still_counts():
             > 0.0
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -619,7 +619,7 @@ def test_human_negative_suppresses_even_above_threshold():
             == 0.0
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -663,7 +663,7 @@ def test_unapplied_model_prediction_is_not_scored():
             > 0.0
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -691,7 +691,7 @@ def test_unapplied_prediction_is_dropped_from_the_ungated_signature_too():
         after = server.vault.db.run_task(lambda s: anomaly_state_signature(s, [pic_id]))
         assert before[pic_id] != after[pic_id]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -728,7 +728,7 @@ def test_tagger_rewrite_dropping_anomaly_tag_invalidates_cached_score():
         assert _get_smart_score(server, pic_id) is None
         assert pic_id in _find_missing_ids(server)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -749,7 +749,7 @@ def test_tagger_rewrite_without_anomaly_change_keeps_cached_score():
         assert _get_smart_score(server, pic_id) == 0.5
         assert pic_id not in _find_missing_ids(server)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -826,7 +826,7 @@ def test_penalised_tag_config_change_invalidates_only_matching_pictures():
         assert carrier_tag in missing and carrier_pred in missing
         assert bystander not in missing
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -844,7 +844,7 @@ def test_no_weight_change_invalidates_nothing():
         assert cleared == 0
         assert _get_smart_score(server, pic_id) == 0.5
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -871,7 +871,7 @@ def test_patch_config_invalidates_only_pictures_with_the_changed_tag():
         assert _get_smart_score(server, carrier) is None
         assert _get_smart_score(server, bystander) == 0.5
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -927,7 +927,7 @@ def test_invalidate_all_anomaly_scores_clears_only_anomaly_bearing_pictures():
         assert anomaly in missing
         assert content_only not in missing and clean not in missing
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -955,7 +955,7 @@ def test_threshold_offset_change_invalidates_anomaly_scores_via_patch():
         assert _get_smart_score(server, content_only) == 0.5
         assert anomaly in _find_missing_ids(server)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -979,7 +979,7 @@ def test_identical_threshold_offset_save_is_a_noop():
         assert _get_smart_score(server, pic_id) == 0.5
         assert pic_id not in _find_missing_ids(server)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1064,7 +1064,7 @@ def test_background_task_scores_and_honours_the_users_penalised_tags():
             "the hardcoded defaults"
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1108,7 +1108,7 @@ def test_persist_leaves_row_null_when_anomaly_state_changed_mid_scoring():
         assert _get_smart_score(server, pic_id) is None
         assert pic_id in _find_missing_ids(server)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1131,7 +1131,7 @@ def test_persist_writes_score_when_anomaly_state_unchanged():
         assert _get_smart_score(server, pic_id) == 0.5
         assert pic_id not in _find_missing_ids(server)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1223,7 +1223,7 @@ def test_interactive_edit_refreshes_card_without_waiting_for_backfill_drain():
         # The registry self-evicts on consume.
         assert edited not in server.vault.interactive_rescore_registry.snapshot()
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1258,7 +1258,7 @@ def test_full_backfill_emits_once_at_drain_not_per_batch():
         )
         assert events == [{"picture_ids": batch2, "fields": ["smart_score"]}]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1324,7 +1324,7 @@ def test_own_origin_edit_does_not_also_pill_on_drain():
             if "origin_client_id" not in e and edited in e["picture_ids"]
         ]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1375,7 +1375,7 @@ def test_drain_still_fires_for_unregistered_ids_alongside_own_origin():
         bulk = [e for e in events if "origin_client_id" not in e]
         assert bulk == [{"picture_ids": [background], "fields": ["smart_score"]}]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1416,7 +1416,7 @@ def test_cas_skipped_id_is_not_announced_and_stays_registered():
             == "tab-x"
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1474,7 +1474,7 @@ def test_over_cap_demoted_id_falls_back_to_bulk_drain_emit():
         bulk = [e for e in events if "origin_client_id" not in e]
         assert bulk == [{"picture_ids": [demoted], "fields": ["smart_score"]}]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1538,7 +1538,7 @@ def test_persist_writes_batch_as_single_bulk_statement():
         ]
         assert len(score_updates) == 1, score_updates
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1569,7 +1569,7 @@ def test_persist_preserves_metadata_hash():
         h1 = server.vault.db.run_task(lambda s: s.get(Picture, pic_id).metadata_hash)
         assert h1 == h0
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1597,7 +1597,7 @@ def test_persist_excludes_picture_deleted_mid_flight():
         assert persisted == [pic_id]
         assert _get_smart_score(server, pic_id) == 0.5
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
 
 
@@ -1658,5 +1658,5 @@ def test_penalised_tag_change_invalidates_atomically_no_second_task():
         assert DBPriority.LOW not in route_tasks
         assert route_tasks.count(DBPriority.IMMEDIATE) == 1
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()

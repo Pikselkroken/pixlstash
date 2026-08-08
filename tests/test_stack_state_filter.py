@@ -164,7 +164,7 @@ def test_stack_state_stacked_narrows_the_stream():
             ids["member"],
         }
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -179,7 +179,7 @@ def test_stack_state_unstacked_narrows_the_stream():
             ids["settled"],
         }
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -229,7 +229,7 @@ def test_a_stack_whose_only_sibling_is_scrapheaped_is_not_stacked():
         survivor = next(p for p in resp.json()["pictures"] if p["id"] == ids["leader"])
         assert (survivor.get("stack_count") or 0) < 2
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -249,7 +249,7 @@ def test_a_stack_with_two_live_members_is_still_stacked():
             client, "&stack_state=unstacked"
         )
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -265,7 +265,7 @@ def test_stack_state_unresolved_returns_only_undecided_group_members():
         # Nor is a picture the detector never grouped.
         assert ids["leader"] not in got
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -283,7 +283,7 @@ def test_stack_state_absent_returns_everything():
         assert _stream_ids(client) == collapsed
         assert _stream_ids_uncollapsed(client) == set(ids.values())
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -302,7 +302,7 @@ def test_stack_state_counts_match_the_stream():
             assert _count(client, params) == len(_stream_ids(client, params)), state
         assert _count(client) == len(_stream_ids(client))
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -323,6 +323,6 @@ def test_unrecognised_stack_state_does_not_empty_the_grid():
         # must behave as the absence of the parameter if it ever is.
         assert _stream_ids(client, "&stack_state=all") == unfiltered
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()

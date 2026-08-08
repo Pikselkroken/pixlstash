@@ -98,7 +98,7 @@ def env():
 
         yield server, client, anon, picture_ids, scoped_token
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 

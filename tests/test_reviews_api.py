@@ -42,7 +42,7 @@ def _setup():
 
 
 def _teardown(temp_dir, server):
-    server.vault.close()
+    server.close()
     temp_dir.cleanup()
     gc.collect()
 

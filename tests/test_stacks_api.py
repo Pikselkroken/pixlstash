@@ -61,7 +61,7 @@ def test_create_stack_and_list_members():
         data = resp.json()
         assert set(data["picture_ids"]) == {pic_id1, pic_id2}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -82,7 +82,7 @@ def test_get_stack_pictures_in_order():
         assert isinstance(pics, list)
         assert len(pics) == 2
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -106,7 +106,7 @@ def test_stack_member_reorder():
         assert ordered_ids.index(pic_id1) == 1
         assert ordered_ids.index(pic_id2) == 0
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -132,7 +132,7 @@ def test_remove_last_member_auto_deletes_stack():
         resp = client.get(f"/stacks/{stack_id}")
         assert resp.status_code == 404
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -143,7 +143,7 @@ def test_stack_not_found_returns_404():
         resp = client.get("/stacks/99999")
         assert resp.status_code == 404
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -248,7 +248,7 @@ def test_removing_a_member_clears_its_stack_position():
         assert state[picture_ids[0]] == (stack_id, 0)
         assert state[picture_ids[1]] == (stack_id, 1)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -268,7 +268,7 @@ def test_scrapheaped_member_does_not_keep_a_one_live_member_stack_alive():
         )
         assert client.get(f"/stacks/{stack_id}").status_code == 404
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -310,6 +310,6 @@ def test_removing_a_member_records_the_scrapheaped_members_so_undo_restores_them
             "including the members that are in the Scrapheap"
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

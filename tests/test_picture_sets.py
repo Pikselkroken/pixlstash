@@ -63,7 +63,7 @@ def test_create_and_list_picture_set():
         sets = resp.json()
         assert any(s["id"] == set_id for s in sets)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -84,7 +84,7 @@ def test_get_picture_set_metadata_and_members():
         assert resp.status_code == 200
         assert resp.json()["picture_ids"] == []
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -156,7 +156,7 @@ def test_add_and_remove_picture_from_set():
         resp = client.get(f"/picture_sets/{set_id}/members")
         assert pic_id not in resp.json()["picture_ids"]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -182,7 +182,7 @@ def test_update_and_delete_picture_set():
         resp = client.get(f"/picture_sets/{set_id}?info=true")
         assert resp.status_code == 404
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -261,7 +261,7 @@ def test_reassigning_set_project_reconciles_member_picture_memberships():
         assert metadata_resp.status_code == 200
         assert metadata_resp.json().get("project_id") == project_id
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -321,7 +321,7 @@ def test_moving_set_to_new_project_disassociates_pictures_from_old():
         assert pic_id in _project_picture_ids(client, project_b)
         assert pic_id not in _project_picture_ids(client, project_a)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -360,7 +360,7 @@ def test_moving_set_keeps_pictures_anchored_by_another_set_in_old_project():
         assert pic_id in _project_picture_ids(client, project_b)
         assert pic_id in _project_picture_ids(client, project_a)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -388,7 +388,7 @@ def test_reference_picture_set_created_with_character():
             f"Expected 1 reference set for character, found {len(ref_sets)}"
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -416,7 +416,7 @@ def test_reference_picture_set_unique_per_character():
         assert len(ref_a) == 1, "Reference set for CharA missing or duplicated"
         assert len(ref_b) == 1, "Reference set for CharB missing or duplicated"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -449,7 +449,7 @@ def test_no_duplicate_reference_picture_sets():
         ]
         assert len(ref_sets) >= 1, "No reference picture set found for character name"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -524,7 +524,7 @@ def test_set_view_represents_a_stack_by_its_in_set_member():
         assert leader in all_ids
         assert member not in all_ids
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -590,6 +590,6 @@ def test_members_endpoint_expands_stack_siblings():
         expanded_ids = set(members_expanded_resp.json()["picture_ids"])
         assert pic_a in expanded_ids and pic_b in expanded_ids
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()

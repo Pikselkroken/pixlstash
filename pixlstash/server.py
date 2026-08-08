@@ -620,6 +620,18 @@ class Server(
                 library_switch._clear_generation_retained_state(image_root)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def close(self) -> None:
+        """Close the vault AND the hub.
+
+        The one supported teardown outside a ``with`` block. Closing only the
+        vault (``server.vault.close()``) leaks the hub's SQLite connection —
+        harmless on POSIX, where an open file can still be unlinked, but fatal
+        on Windows, where TemporaryDirectory cleanup then fails with a sharing
+        violation on ``hub.db``. That leak was every remaining failure in
+        backend-windows shard 2 once the earlier startup defects were fixed.
+        """
         if getattr(self, "vault", None) is not None:
             logger.info("Closing the vault and cleaning up resources")
             self._close_active_vault()

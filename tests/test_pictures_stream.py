@@ -150,7 +150,7 @@ def test_stream_completes_for_small_batch_smaller_than_total():
         # 25 rows at batch_limit=10 -> 3 calls (10, 10, 5 with done=True on 3rd).
         assert calls == 3
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -167,7 +167,7 @@ def test_stream_done_when_total_below_batch_limit():
         assert body["next_offset"] == 5
         _ = ids
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -199,7 +199,7 @@ def test_small_character_stream_emits_its_partial_final_batch(total):
         assert body["next_offset"] == total
         assert sorted(picture["id"] for picture in body["pictures"]) == sorted(ids)
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -245,7 +245,7 @@ def test_small_character_grid_reads_bypass_a_long_writer_slice():
         release_writer.set()
         if writer_future is not None:
             writer_future.result(timeout=2)
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -289,7 +289,7 @@ def test_stream_continues_when_hidden_tag_post_filter_shrinks_batches():
             f"expected 4 stream calls (40 visible rows / batch_limit 10); got {calls}"
         )
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -305,7 +305,7 @@ def test_stream_done_includes_partial_final_batch_smaller_than_limit():
         # 12 rows / batch_limit 10 -> 2 calls (10 + 2 with done=True).
         assert calls == 2
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -319,7 +319,7 @@ def test_count_endpoint_returns_total():
         body = resp.json()
         assert body["count"] == len(ids)
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -342,7 +342,7 @@ def test_count_endpoint_excludes_hidden_tagged_pictures_when_filter_enabled():
         assert body["count"] >= filtered_count
         assert body["count"] <= len(ids)
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()
 
@@ -377,6 +377,6 @@ def test_pictures_endpoint_paginates_correctly():
         # 55 pictures / limit 10 → 6 calls (pages of 10,10,10,10,10,5).
         assert calls == 6, f"Expected 6 pages for 55 pictures at limit=10; got {calls}"
     finally:
-        server.vault.close()
+        server.close()
         tmp.cleanup()
         gc.collect()

@@ -173,7 +173,7 @@ def test_large_lock_lookups_survive_sqlite_variable_ceiling():
         assert set(detail) == set(picture_ids[:3])
         assert {item["id"] for item in detail[picture_ids[1]]} == {set_id}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -196,7 +196,7 @@ def test_large_project_and_stack_routes_survive_sqlite_variable_ceiling():
         assert stack_response.status_code == 200, stack_response.text
         assert set(stack_response.json()["picture_ids"]) == set(picture_ids)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -268,7 +268,7 @@ def test_lock_flag_roundtrips_and_serializes():
         _set_locked(client, set_id, False)
         assert client.get(f"/picture_sets/{set_id}?info=true").json()["locked"] is False
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -320,7 +320,7 @@ def test_locked_set_rejects_field_edits_and_delete():
         delete_resp = client.delete(f"/picture_sets/{set_id}")
         assert delete_resp.status_code == 200, delete_resp.text
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -359,7 +359,7 @@ def test_locked_set_rejects_membership_mutations():
             client.post(f"/picture_sets/{set_id}/members/{pics[1]}").status_code == 200
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -426,7 +426,7 @@ def test_cross_set_picture_label_freeze_and_membership_allowed():
         delete_resp = client.delete(f"/pictures/{pic}")
         assert delete_resp.status_code == 200, delete_resp.text
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -458,7 +458,7 @@ def test_stack_sibling_in_locked_set_blocks_label_edit():
             resp = client.delete(f"/pictures/{target}")
             assert resp.status_code == 423, (target, resp.text)
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -494,7 +494,7 @@ def test_bulk_delete_skips_locked_and_reports():
         meta = client.get(f"/pictures/{locked_pic}/metadata").json()
         assert meta["id"] == locked_pic
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -535,7 +535,7 @@ def test_locked_members_endpoint_and_metadata():
         assert free_meta["locked_by_sets"] == []
         assert free_meta["locked"] is False
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -605,7 +605,7 @@ def test_metadata_hides_locked_set_names_from_out_of_scope_token():
             "an in-scope locked set must still be named"
         )
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -632,7 +632,7 @@ def test_review_creation_blocked_on_locked_set():
         )
         assert resp.status_code == 423, resp.text
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -695,7 +695,7 @@ def test_review_decisions_blocked_on_locked_suspect():
         _set_locked(client, set_id, False)
         assert client.post(f"/tag_suggestions/{sid}/accept").status_code == 200
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -766,7 +766,7 @@ def test_scan_excludes_locked_pictures_from_suspects_only():
         assert pic_free in suspect_ids
         assert pic_locked not in suspect_ids
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -798,7 +798,7 @@ def test_reset_tags_and_description_blocked_on_locked_pic():
         _set_locked(client, set_id, False)
         assert client.post(f"/pictures/{pic}/reset_tags").status_code == 200
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -823,7 +823,7 @@ def test_fix_twin_blocked_when_twin_locked():
         _set_locked(client, locked_set, False)
         assert client.post(f"/tag_suggestions/{sid}/fix-twin").status_code == 200
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -844,7 +844,7 @@ def test_swap_blocked_when_suspect_locked():
 
         assert client.post(f"/tag_suggestions/{sid}/swap").status_code == 423
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -865,7 +865,7 @@ def test_reopen_blocked_on_locked_suspect():
 
         assert client.post(f"/tag_suggestions/{sid}/reopen").status_code == 423
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -892,7 +892,7 @@ def test_bulk_accept_skips_locked_rows_and_reports():
         assert locked_pic in resp.json()["skipped_locked"]
         assert free_pic not in resp.json()["skipped_locked"]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -922,7 +922,7 @@ def test_bulk_reopen_skips_locked_rows_and_reports():
         assert locked_pic in body["skipped_locked"]
         assert body["count"] == 1  # only the free row reopened
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -973,7 +973,7 @@ def test_reference_folder_metadata_import_skips_locked():
         tags = {t["tag"] for t in client.get(f"/pictures/{pic}/tags").json()["tags"]}
         assert tags == {"frozen-keep"}, tags
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1020,7 +1020,7 @@ def test_tagger_preserves_locked_confirmed_tags():
         assert locked_tags == {"original"}, locked_tags
         assert free_tags == {"tagger-new"}, free_tags
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1065,7 +1065,7 @@ def test_character_reassignment_preserves_locked_pic_description():
         )
         assert desc == "keepme-frozen"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1130,7 +1130,7 @@ def test_description_regeneration_skips_locked_pic():
         assert descs[0] == "frozen-desc"  # locked: untouched
         assert descs[1] == "regenerated-caption"  # free: regenerated
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1168,7 +1168,7 @@ def test_legacy_suggestion_queue_withholds_locked_pending_rows():
         ).json()
         assert [r["id"] for r in decided] == [decided_id]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1260,7 +1260,7 @@ def test_finders_exclude_stack_sibling_of_locked_member():
             # The over-blocking case: an unrelated picture is still queued.
             assert free_pic in selected, name
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1313,7 +1313,7 @@ def test_stacking_refused_when_it_would_grow_a_locked_set():
         )
         assert stacks == [None, None]
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1343,7 +1343,7 @@ def test_stacking_still_works_when_no_locked_set_would_grow():
         assert resp.status_code == 200, resp.text
         assert _set_member_ids(server, locked_id) == {both_a, both_b}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1368,7 +1368,7 @@ def test_comfyui_output_propagation_skips_locked_set():
         assert _set_member_ids(server, locked_id) == {source_pic}
         assert _set_member_ids(server, open_id) == {source_pic, output_pic}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1390,7 +1390,7 @@ def test_comfyui_view_context_assignment_skips_locked_set():
         _assign_pictures_to_view_context(server, [output_pic], open_id, None, None)
         assert _set_member_ids(server, open_id) == {output_pic}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1413,7 +1413,7 @@ def test_image_plugin_output_propagation_skips_locked_set():
         assert _set_member_ids(server, locked_id) == {source_pic}
         assert _set_member_ids(server, open_id) == {source_pic, output_pic}
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1493,7 +1493,7 @@ def test_locked_set_refuses_every_route_that_detaches_a_stack_member():
         assert _stack_of(server, frozen) == stack_id
         assert _stack_of(server, sibling) == stack_id
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1526,7 +1526,7 @@ def test_unlocked_stacks_still_split_unstack_and_lose_members():
         assert _stack_of(server, pics[4]) is None
         assert _stack_of(server, pics[5]) is None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1589,7 +1589,7 @@ def test_detaching_cannot_be_used_to_escape_a_locked_set():
         )
         assert _stack_of(server, sibling) is None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1689,7 +1689,7 @@ def test_a_scrapheaped_locked_member_still_freezes_its_stack_against_detach():
         assert _stack_of(server, live_a) is None
         assert _stack_of(server, frozen) is None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
@@ -1718,6 +1718,6 @@ def test_a_scrapheaped_member_of_an_unlocked_set_never_freezes_the_stack():
         # The dissolve takes the scrapheaped row with it too.
         assert _stack_of(server, heaped) is None
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
