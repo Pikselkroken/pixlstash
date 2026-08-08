@@ -235,6 +235,53 @@ def test_full_restore_reverts_mutation(server):
     )
 
 
+def test_the_location_guard_is_released_before_the_restore_swap(server, monkeypatch):
+    """No open guard fd may survive to the ``os.replace`` of ``vault.db``.
+
+    Windows refuses to replace a file the process holds an open handle on
+    (WinError 5), so the guard retained for POSIX lock-lifetime (the WAL
+    split-brain fix) must be released inside the swap's exclusive section,
+    strictly after ``engine.dispose()``. Linux performs that replace happily
+    with the fd open, which is exactly why this regression reached CI: no
+    Linux test could fail on it. This pins the invariant Linux CAN see —
+    at the moment of the replace, the guard is gone.
+    """
+    _create_file(server, "guarded.jpg")
+    _add_picture(server, filename="guarded.jpg", description="x")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    live_db = server.vault.db._db_path
+    # This fixture's vault takes the unregistered branch (vault.py, no
+    # hub-registered library), which carries NO guard — leaving the test
+    # vacuously green with or without the release (the revert-check caught
+    # that). Arm the guard exactly as a registered-library open does, so the
+    # invariant is exercised against the state the corruption fix created.
+    if server.vault.db._location_guard is None:
+        server.vault.db._location_guard = TrustedSQLiteLocation.open(live_db)
+    assert server.vault.db._location_guard is not None
+
+    guard_state_at_replace = []
+    real_replace = os.replace
+
+    def observing_replace(src, dst, *args, **kwargs):
+        if str(dst) == str(live_db):
+            guard_state_at_replace.append(
+                getattr(server.vault.db, "_location_guard", None)
+            )
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", observing_replace)
+
+    report = server.vault.restore_service.restore_full(cp.id)
+
+    assert not report.errors, f"Restore errors: {report.errors}"
+    assert guard_state_at_replace, "the swap never replaced the live database"
+    assert guard_state_at_replace == [None], (
+        "an open location-guard fd survived to os.replace; "
+        "that is WinError 5 on Windows"
+    )
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
 def test_full_restore_leaves_live_db_owner_only_under_group_umask(server):
     """A successful restore must not loosen the live database's mode.
