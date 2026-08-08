@@ -239,6 +239,45 @@ class TestHubFileSecurity:
             f"{failures[:3]}"
         )
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_lost_creation_race_is_logged_and_the_winner_still_opens(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Losing the create race to a legitimate file is loud, not silent.
+
+        The file appears between the ``lexists`` probe and the ``O_EXCL``
+        create. A self-owned 0600 winner must still open (the positive
+        direction), and the lost race must leave a warning in the log rather
+        than an ``except: pass``.
+        """
+        path = tmp_path / "hub.db"
+        os.close(os.open(path, os.O_RDWR | os.O_CREAT, 0o600))
+        monkeypatch.setattr(os.path, "lexists", lambda _p: False)
+
+        with caplog.at_level("WARNING", logger="pixlstash.trusted_sqlite"):
+            guard = TrustedSQLiteLocation.open(str(path), private=True, create=True)
+        guard.close()
+
+        assert any(
+            "Lost the creation race" in record.message for record in caplog.records
+        )
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_hostile_file_that_wins_the_creation_race_is_still_refused(
+        self, tmp_path, monkeypatch
+    ):
+        """The logged race branch must fall through to validation, not accept.
+
+        A loose-mode file that won the race is exactly what the old silent
+        ``pass`` could have hidden; ``_validate_file`` must still refuse it.
+        """
+        path = tmp_path / "hub.db"
+        os.close(os.open(path, os.O_RDWR | os.O_CREAT, 0o644))
+        monkeypatch.setattr(os.path, "lexists", lambda _p: False)
+
+        with pytest.raises(TrustedSQLiteLocationError, match="mode 600"):
+            TrustedSQLiteLocation.open(str(path), private=True, create=True)
+
     def test_path_replacement_during_sqlite_open_is_refused_before_schema_writes(
         self, tmp_path, monkeypatch
     ):

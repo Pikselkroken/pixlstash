@@ -275,6 +275,25 @@ class TestAttachAndList:
         names = [library.name for library in registry.list_libraries()]
         assert names[0] == "alpha"
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_create_makes_the_vault_db_owner_only_under_a_group_umask(
+        self, registry, tmp_path
+    ):
+        """``registry.create`` is the second unguarded ``VaultDatabase`` site.
+
+        Left to SQLite, the fresh ``vault.db`` would be 0664 under the
+        Debian/Ubuntu umask 002; the pre-create inside ``VaultDatabase`` must
+        cover this call site too, not only ``Vault.__init__``.
+        """
+        old_umask = os.umask(0o002)
+        try:
+            library = registry.create(str(tmp_path / "brand-new"))
+        finally:
+            os.umask(old_umask)
+
+        vault_db = os.path.join(library.path, "vault.db")
+        assert stat.S_IMODE(os.lstat(vault_db).st_mode) == 0o600
+
     def test_unreachable_library_is_listed_and_flagged(self, registry, tmp_path):
         folder = make_vault_folder(tmp_path, "removable")
         library = registry.attach(folder)

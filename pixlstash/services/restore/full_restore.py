@@ -1069,6 +1069,13 @@ class FullRestoreMixin:
                 # read-only handle ("rb") with EBADF, since CommitFileBuffers
                 # requires write access.
                 with open(staged_db_path, "rb+") as staged_fd:
+                    # VACUUM INTO created the snapshot at 0644 & ~umask and
+                    # copy2 preserved that mode, so under umask 002 a restore
+                    # would leave the live vault.db group-writable — which the
+                    # trusted-location check then refuses on the next startup.
+                    # Windows has no fchmod and no real mode bits.
+                    if hasattr(os, "fchmod"):
+                        os.fchmod(staged_fd.fileno(), 0o600)
                     staged_fd.flush()
                     os.fsync(staged_fd.fileno())
                 os.replace(staged_db_path, live_db_path)

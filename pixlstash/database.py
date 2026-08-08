@@ -852,6 +852,16 @@ class VaultDatabase:
         db_exists = os.path.exists(self._db_path)
         logger.debug(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
 
+        if not db_exists:
+            # Pre-create the database file 0600. Left to SQLite, a missing
+            # database is created at 0644 & ~umask — group/world-readable
+            # under the Debian/Ubuntu default umask 002. Doing it here covers
+            # every construction site, guarded or not. Without O_EXCL a lost
+            # race simply opens the other creator's file; the mode argument is
+            # ignored for an existing file.
+            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+            os.close(os.open(self._db_path, flags, 0o600))
+
         self._engine = create_configured_engine(self._db_path)
 
         try:

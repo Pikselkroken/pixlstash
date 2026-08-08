@@ -22,6 +22,7 @@ from pixlstash.hub.bootstrap import (
 )
 from pixlstash.hub.db import HubDatabase, HubPermissionError
 from pixlstash.hub.registry import LibraryRegistry, read_vault_uuid
+from pixlstash.vault import Vault
 
 
 def make_vault(folder, *, username="owner", password_hash="a-real-hash", tokens=1):
@@ -251,6 +252,47 @@ class TestFreshInstall:
             hub.close()
         finally:
             os.umask(0o022)
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_fresh_image_root_and_vault_db_are_private_under_a_group_umask(
+        self, tmp_path
+    ):
+        """A fresh unregistered vault must be private under umask 002.
+
+        Two creations under one umask: ``Vault.__init__`` makes the image_root
+        (0775 with the default makedirs mode), and — via the unguarded
+        no-hub branch — a ``VaultDatabase`` whose file SQLite would otherwise
+        create at 0664. Both must come out owner-only.
+        """
+        old_umask = os.umask(0o002)
+        try:
+            image_root = tmp_path / "fresh-root"
+            with Vault(str(image_root), disable_background_workers=True):
+                pass
+        finally:
+            os.umask(old_umask)
+
+        assert stat.S_IMODE(os.lstat(image_root).st_mode) == 0o700
+        assert stat.S_IMODE(os.lstat(image_root / "vault.db").st_mode) == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_an_existing_loose_image_root_keeps_its_mode(self, tmp_path):
+        """Creation-only: the user's own shared folder is never tightened.
+
+        A deliberately group-accessible image_root (shared with a media server
+        or sync agent) must keep its mode across ``Vault.__init__``; only
+        directories the vault actually creates are 0700.
+        """
+        image_root = tmp_path / "shared-root"
+        image_root.mkdir()
+        os.chmod(image_root, 0o775)
+
+        with Vault(str(image_root), disable_background_workers=True):
+            pass
+
+        assert stat.S_IMODE(os.lstat(image_root).st_mode) == 0o775
+        # The database inside it is still ours alone.
+        assert stat.S_IMODE(os.lstat(image_root / "vault.db").st_mode) == 0o600
 
     def test_existing_loose_hub_directory_is_reported_not_silently_repaired(
         self, tmp_path

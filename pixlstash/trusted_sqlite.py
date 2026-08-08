@@ -89,6 +89,10 @@ from dataclasses import dataclass
 
 from platformdirs import user_config_dir
 
+from pixlstash.pixl_logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class TrustedSQLiteLocationError(RuntimeError):
     """A SQLite main file or its namespace cannot be trusted."""
@@ -307,7 +311,16 @@ class TrustedSQLiteLocation:
             try:
                 created_fd = os.open(canonical, flags, 0o600)
             except FileExistsError:
-                pass
+                # Another process — or an attacker — created the file between
+                # the lexists check and this open. Not fatal by itself: the
+                # _validate_file call below decides whether the file that won
+                # the race is acceptable. Logged so a hostile win is visible.
+                logger.warning(
+                    "Lost the creation race for SQLite file %s; validating the "
+                    "existing file instead of the one this process would have "
+                    "created.",
+                    canonical,
+                )
             except OSError as exc:
                 raise TrustedSQLiteLocationError(
                     f"Could not securely create SQLite file {canonical}: {exc}"

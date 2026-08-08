@@ -104,7 +104,11 @@ class Vault:
         logger.debug(f"Image root: {self.image_root}")
         assert self.image_root is not None, "image_root cannot be None"
         logger.debug(f"Using image_root: {self.image_root}")
-        os.makedirs(self.image_root, exist_ok=True)
+        # Mode applies on creation only: makedirs never touches an existing
+        # directory, and it must not — the user may deliberately share their
+        # image folder with a media server or sync agent. (On POSIX the mode
+        # covers only the leaf; pre-existing parents keep their modes.)
+        os.makedirs(self.image_root, mode=0o700, exist_ok=True)
         assert os.path.exists(self.image_root), (
             f"Image root path does not exist: {self.image_root}"
         )

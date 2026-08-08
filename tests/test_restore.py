@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import sqlite3
+import stat
 import threading
 from datetime import datetime, timedelta, timezone
 import shutil
@@ -36,6 +37,7 @@ from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.tag import Tag
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
+from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.services import scrapheap_service
 from pixlstash.utils.snapshot_compression import (
@@ -231,6 +233,38 @@ def test_full_restore_reverts_mutation(server):
     assert restored_pic.description == "before", (
         f"Expected description 'before' after restore, got '{restored_pic.description}'"
     )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+def test_full_restore_leaves_live_db_owner_only_under_group_umask(server):
+    """A successful restore must not loosen the live database's mode.
+
+    ``VACUUM INTO`` creates the snapshot at 0644 & ~umask and ``copy2``
+    preserves that mode, so under the Debian/Ubuntu umask 002 the swapped-in
+    ``vault.db`` used to come out group-writable — and the trusted-location
+    check then refused it at the next startup, bricking the library.
+    """
+    _create_file(server, "perm.jpg")
+    pic = _add_picture(server, filename="perm.jpg")
+
+    old_umask = os.umask(0o002)
+    try:
+        cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+        report = server.vault.restore_service.restore_full(cp.id)
+    finally:
+        os.umask(old_umask)
+
+    assert not report.errors, f"Restore errors: {report.errors}"
+    live_db = os.path.join(server.vault.image_root, "vault.db")
+    assert stat.S_IMODE(os.lstat(live_db).st_mode) == 0o600
+
+    # Reopens cleanly: this guard is the exact check that refuses a
+    # group-writable vault.db at the next startup.
+    guard = TrustedSQLiteLocation.open(live_db)
+    guard.close()
+
+    # And the re-created engine still serves reads.
+    assert _get_picture(server, pic.id) is not None
 
 
 # ---------------------------------------------------------------------------
