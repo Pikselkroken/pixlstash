@@ -543,7 +543,9 @@
       role="alert"
     >
       <v-icon size="48">mdi-alert-circle-outline</v-icon>
-      <h3>{{ store.scan.status === "failed" ? "Scan failed" : "Scan incomplete" }}</h3>
+      <h3>
+        {{ store.scan.status === "failed" ? "Scan failed" : "Scan incomplete" }}
+      </h3>
       <p>
         Some duplicate comparisons were not completed, so this queue cannot be
         marked clear. Review any available groups and run the scan again.
@@ -1051,7 +1053,8 @@ function onToggleExpansion(group, stackId) {
  */
 function onExpansionKey(group) {
   if (store.showingDecided) {
-    announcement.value = "Every picture in this decided group is already shown.";
+    announcement.value =
+      "Every picture in this decided group is already shown.";
     return;
   }
   const result = toggleExpansionForGroup(group);
@@ -1217,7 +1220,7 @@ function onMixedRowFocus(index, event) {
 /** Open Compare on a mixed row, focusing it first so the two cannot disagree. */
 function onCompareMixed(index) {
   setMixedFocus(index);
-  compareOpen.value = true;
+  openCompare();
 }
 
 /**
@@ -1647,12 +1650,35 @@ watch(
 /** Open Compare on a row, focusing it first so the two can never disagree. */
 function onCompare(index) {
   store.setFocus(index);
+  openCompare();
+}
+
+/**
+ * The control that opened Compare, so focus can go back to it.
+ *
+ * WCAG 2.4.3 expects focus to return to the invoking control, not to the
+ * container. Returning it to `rootEl` dumped a keyboard user at the top of the
+ * queue and made them walk back to the row they were judging.
+ */
+const compareInvoker = ref(null);
+
+function openCompare() {
+  compareInvoker.value =
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
   compareOpen.value = true;
 }
 
 function closeCompare() {
   compareOpen.value = false;
-  rootEl.value?.focus?.();
+  const invoker = compareInvoker.value;
+  compareInvoker.value = null;
+  // The invoker can be gone: deciding from inside the dialog removes its row.
+  // Falling back to the container beats dropping focus onto <body>, which
+  // strands the keyboard entirely.
+  if (invoker?.isConnected) invoker.focus();
+  else rootEl.value?.focus?.();
 }
 
 /**
@@ -2523,7 +2549,7 @@ const handleKeydown = createDedupKeyHandler({
   store,
   isCompareOpen: () => compareOpen.value,
   openCompare: () => {
-    if (store.focusedGroup) compareOpen.value = true;
+    if (store.focusedGroup) openCompare();
   },
   closeCompare,
   undo: () => operationStore.undo(),
@@ -2559,6 +2585,8 @@ const handleKeydown = createDedupKeyHandler({
     flip: (delta) => compareRef.value?.flipZoom?.(delta),
     to: (index) => compareRef.value?.zoomTo?.(index),
     togglePixels: () => compareRef.value?.toggleZoomPixels?.(),
+    step: (direction) => compareRef.value?.stepZoom?.(direction),
+    pan: (dx, dy) => Boolean(compareRef.value?.panZoom?.(dx, dy)),
   },
 });
 
@@ -2626,7 +2654,7 @@ const handleMixedKeydown = createDedupKeyHandler({
   store: mixedKeyStore,
   isCompareOpen: () => compareOpen.value,
   openCompare: () => {
-    if (mixedFocusedRow.value) compareOpen.value = true;
+    if (mixedFocusedRow.value) openCompare();
   },
   closeCompare,
   undo: () => operationStore.undo(),
@@ -2650,6 +2678,8 @@ const handleMixedKeydown = createDedupKeyHandler({
     flip: (delta) => compareRef.value?.flipZoom?.(delta),
     to: (index) => compareRef.value?.zoomTo?.(index),
     togglePixels: () => compareRef.value?.toggleZoomPixels?.(),
+    step: (direction) => compareRef.value?.stepZoom?.(direction),
+    pan: (dx, dy) => Boolean(compareRef.value?.panZoom?.(dx, dy)),
   },
   unitsOf: mixedUnitsFor,
   signatureOf: (row) => row?.stack_id,
