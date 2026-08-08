@@ -1245,6 +1245,31 @@ Snapshot `.sqlite` files are opened through `services/restore/schema_upgrade.sna
 
 **Known edge, unreachable today.** `wal=False` means "do not *set* WAL", not "force a single file". `journal_mode` is a persistent header property, so against a database file whose header **already** says WAL, a `wal=False` engine reports `wal` and creates a `-wal` sidecar, which is exactly the outcome the flag exists to prevent. No path reaches it: every snapshot is produced by `VACUUM INTO` from the live WAL vault, and `VACUUM INTO` emits a `delete`-mode file. **Do not "fix" this by having the connect listener run `PRAGMA journal_mode=DELETE`.** SQLite refuses to leave WAL while another connection holds the file, so the second pooled connection raises "database is locked", and the pragma is a *write*: it would fail, or mutate the file, on read-only preview opens, which are eight of the nine snapshot engines. If a WAL-header snapshot ever becomes reachable, convert the **file** once at materialisation time (`wal_checkpoint(TRUNCATE)` + `journal_mode=DELETE` on a single exclusive connection, which is what `_upgrade_snapshot_schema` and `preview._fill_snapshot_hashes_at` already do), never per connection.
 
+#### Trusted SQLite locations, and the accepted Windows residue (W17)
+
+Every credential-bearing SQLite open goes through `trusted_sqlite.py`, whose
+module docstring is the design record: which actor each check is for, why the
+earlier DACL refusal was removed (it stopped the server starting on Windows,
+W6/W7/W18), and what a `private=True` open verifies instead.
+
+**Accepted risk W17.** Python exposes neither owner SID nor directory DACL
+portably, so the POSIX `mode & 0o022` test — "another principal cannot write
+this directory" — has no Windows implementation. On Windows a library on a
+network share, removable media, or a deliberately loosened folder is therefore
+not protected against another local principal substituting `vault.db` or
+pre-positioning a sidecar before startup. What still runs there: redirect
+rejection (symlink **and** junction), the regular-file requirement on the target
+and every sidecar, and the `(st_dev, st_ino)` identity match across the open.
+The vault is authorization-bearing (`authz/membership.py` answers scope
+questions out of it), so this is not reads-only; the blast radius is stated in
+full in the module docstring.
+
+Owner: lindkvis. Revisit 2026-11-08, together with the native ACL verifier
+(`win32security.GetNamedSecurityInfo`, or ctypes against advapi32) that is the
+route back to tightening this. Recorded here rather than in a review document
+because `docs/reviews/` is gitignored: an accepted risk nobody else can read is
+not a record.
+
 ### Vector storage
 
 - Embeddings (`image_embedding`, `text_embedding`, `Face.features`) are stored as `BLOB` columns.
