@@ -70,6 +70,27 @@ _MARKER_RE = re.compile(
 
 KIND_UNKNOWN = "unknown"
 
+# What the file is, as opposed to which algorithm an adapter uses.
+FILE_ADAPTER = "adapter"
+FILE_CHECKPOINT = "checkpoint"
+FILE_UNKNOWN = "unknown"
+
+# Parameter count above which a marker-free file is a base checkpoint rather
+# than an adapter we failed to recognise.
+#
+# Adapters are low-rank deltas and checkpoints are whole models, so the two
+# separate by about an order of magnitude: a rank-32 adapter runs to tens of
+# millions of parameters, while SDXL is ~2.6 B and Flux ~12 B. The threshold
+# sits well above the largest plausible adapter (a high-rank adapter on a large
+# base can reach the low hundreds of millions) and well below the smallest
+# plausible checkpoint, so the band between them returns FILE_UNKNOWN rather
+# than guessing. The caller resolves that band with the folder's declared kind,
+# which is a user-visible and user-correctable prior rather than a heuristic.
+#
+# Parameter count, not file size: size is confounded in both directions, since
+# quantisation shrinks a checkpoint and a high rank inflates an adapter.
+_CHECKPOINT_MIN_PARAMS = 1_000_000_000
+
 
 @dataclass(frozen=True)
 class AdapterInfo:
@@ -81,7 +102,18 @@ class AdapterInfo:
     differently, since the first is a prompt to fill something in.
 
     Attributes:
-        kind: Adapter algorithm from tensor names, or ``"unknown"``.
+        kind: Adapter algorithm from tensor names, or ``"unknown"``. Only
+            meaningful when ``is_adapter`` is true.
+        is_adapter: Whether adapter tensor markers were found. This is *proven*
+            from names the file cannot strip without breaking, so an
+            unrecognised LyCORIS variant reads as "an adapter whose kind we do
+            not know" rather than being mistaken for a checkpoint.
+        file_kind: What the file is: ``"adapter"``, ``"checkpoint"`` or
+            ``"unknown"``. Never guesses checkpoint from the absence of
+            markers alone; see :func:`classify_model_file`.
+        param_count: Total parameters, summed from the tensor shapes already in
+            the header. Exact and free, unlike file size which quantisation and
+            rank both confound.
         tensor_count: Number of tensors, excluding the metadata entry.
         base_model: Trainer-reported base model. **Free text** (``zimage``,
             ``krea2``, ``minimax_h3`` seen in the wild), not a closed set.
@@ -96,6 +128,9 @@ class AdapterInfo:
 
     kind: str
     tensor_count: int
+    is_adapter: bool = False
+    file_kind: str = FILE_UNKNOWN
+    param_count: int = 0
     base_model: Optional[str] = None
     trigger_words: list[str] = field(default_factory=list)
     display_name: Optional[str] = None
@@ -199,6 +234,86 @@ def detect_adapter_kind(tensor_names) -> str:
         if found.intersection(markers):
             return kind
     return KIND_UNKNOWN
+
+
+def has_adapter_markers(tensor_names) -> bool:
+    """Return whether *tensor_names* contain any known adapter marker.
+
+    Separate from :func:`detect_adapter_kind` on purpose. That function answers
+    "which algorithm", and returns ``"unknown"`` both for a file with no markers
+    at all and for one whose markers we do not recognise. Those are different
+    facts and the shelf needs them apart: the first may be a checkpoint, the
+    second is definitely an adapter.
+
+    Args:
+        tensor_names: Iterable of tensor keys from the header.
+
+    Returns:
+        True when at least one tensor name carries an adapter marker.
+    """
+    for name in tensor_names:
+        if isinstance(name, str) and _MARKER_RE.search(name):
+            return True
+    return False
+
+
+def count_parameters(header: dict) -> int:
+    """Return the total parameter count implied by a safetensors *header*.
+
+    Each tensor entry carries its ``shape``, so the count is exact and costs no
+    extra I/O: the header has already been read. Entries whose shape is missing
+    or malformed contribute nothing rather than raising, because this runs in
+    the import path and a file we cannot measure is still a file the user wants.
+
+    Args:
+        header: Parsed safetensors header.
+
+    Returns:
+        Sum over tensors of the product of each shape, or 0 when nothing is
+        measurable. A scalar tensor (empty shape) counts as one parameter.
+    """
+    total = 0
+    for key, entry in header.items():
+        if key == "__metadata__" or not isinstance(entry, dict):
+            continue
+        shape = entry.get("shape")
+        if not isinstance(shape, list):
+            continue
+        count = 1
+        for dim in shape:
+            if not isinstance(dim, int) or isinstance(dim, bool) or dim < 0:
+                count = 0
+                break
+            count *= dim
+        total += count
+    return total
+
+
+def classify_model_file(tensor_names, param_count: int) -> str:
+    """Return what a file *is*, given its tensor names and parameter count.
+
+    The rule is deliberately asymmetric. Adapter is asserted on **positive**
+    evidence (markers the file cannot strip). Checkpoint is also asserted on
+    positive evidence (a parameter count no adapter reaches). Everything else
+    is ``"unknown"``, which the shelf shows as unknown and lets the user
+    correct.
+
+    ``unknown`` must never be rendered or stored as checkpoint. A marker-free
+    file is only a checkpoint when it is big enough to be one; otherwise it is
+    most likely an adapter format we have not met yet.
+
+    Args:
+        tensor_names: Iterable of tensor keys from the header.
+        param_count: Total parameters, from :func:`count_parameters`.
+
+    Returns:
+        ``"adapter"``, ``"checkpoint"`` or ``"unknown"``.
+    """
+    if has_adapter_markers(tensor_names):
+        return FILE_ADAPTER
+    if param_count >= _CHECKPOINT_MIN_PARAMS:
+        return FILE_CHECKPOINT
+    return FILE_UNKNOWN
 
 
 def _trigger_words_from_tag_frequency(raw) -> list[str]:
@@ -309,9 +424,14 @@ def describe_adapter(path: str) -> Optional[AdapterInfo]:
     # carrying only that is "no metadata" as far as the shelf is concerned.
     informative = {key for key in metadata if key != "format"}
 
+    param_count = count_parameters(header)
+
     return AdapterInfo(
         kind=detect_adapter_kind(tensor_names),
         tensor_count=len(tensor_names),
+        is_adapter=has_adapter_markers(tensor_names),
+        file_kind=classify_model_file(tensor_names, param_count),
+        param_count=param_count,
         base_model=str(base_model) if base_model else None,
         trigger_words=_trigger_words_from_tag_frequency(
             metadata.get("ss_tag_frequency")
