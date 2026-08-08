@@ -69,7 +69,6 @@ vi.mock("../../utils/apiClient", () => ({
   onSessionReset: () => () => {},
 }));
 
-
 const SETS = [
   { id: 7, name: "Portraits", picture_count: 12 },
   { id: 8, name: "Landscapes", picture_count: 3 },
@@ -308,7 +307,10 @@ describe("pinned New person row", () => {
     const pinned = pinnedCreateButton(wrapper);
     expect(pinned.exists()).toBe(true);
     expect(pinned.text()).toContain("New person…");
-    expect(pinned.attributes("role")).toBe("menuitem");
+    // An action, not one of the listbox's options — so it carries no role and
+    // sits outside the listbox element.
+    expect(pinned.attributes("role")).toBeUndefined();
+    expect(pinned.element.closest("[role=listbox]")).toBe(null);
     expect(pinned.attributes("disabled")).toBeUndefined();
     // The regular character rows are still there.
     const names = wrapper
@@ -360,7 +362,8 @@ describe("no-match empty state", () => {
     const row = wrapper.find(".ate-list .ate-item--create");
     expect(row.exists()).toBe(true);
     expect(row.text()).toContain('Create "Zed"…');
-    expect(row.attributes("role")).toBe("menuitem");
+    expect(row.attributes("role")).toBeUndefined();
+    expect(row.element.closest("[role=listbox]")).toBe(null);
     await row.trigger("click");
     expect(wrapper.emitted("create")).toEqual([["Zed"]]);
   });
@@ -466,9 +469,9 @@ describe("face mode", () => {
       "false",
     ]);
     expect(rows.map((r) => r.attributes("role"))).toEqual([
-      "menuitemradio",
-      "menuitemradio",
-      "menuitemradio",
+      "option",
+      "option",
+      "option",
     ]);
     // The checked-olive class belongs to the multi-picture mode, not here: the
     // radio shape carries the state so the highlight colour stays unique to
@@ -602,6 +605,37 @@ describe("floatMenu", () => {
     host.remove();
   });
 
+  it("keeps its keyboard once teleported, where no host can help it", async () => {
+    // The floatMenu case is why navigation lives in the control: the panel is in
+    // <body>, so a host keydown listener never sees these keys. Escape must also
+    // stop here rather than bubbling on to the lightbox's window handler, which
+    // would close the whole overlay behind the menu.
+    const { wrapper, host } = await mountInScroller({ floatMenu: true });
+    const menu = document.querySelector(".ate-menu");
+    const onWindow = vi.fn();
+    window.addEventListener("keydown", onWindow);
+
+    const search = menu.querySelector("input");
+    search.focus();
+    search.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    await nextTick();
+    expect(document.activeElement).toBe(menu.querySelector(".ate-item"));
+
+    document.activeElement.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await nextTick();
+    expect(menu.classList.contains("open")).toBe(false);
+    expect(document.activeElement).toBe(wrapper.find(".ate-btn").element);
+    expect(onWindow).not.toHaveBeenCalled();
+
+    window.removeEventListener("keydown", onWindow);
+    wrapper.unmount();
+    host.remove();
+  });
+
   it("closes on an outside click with the node teleported", async () => {
     // The containment checks in handleOutsideClick must still hold once the
     // menu lives in <body>: menuRef.contains() is what keeps a click INSIDE
@@ -623,5 +657,206 @@ describe("floatMenu", () => {
     expect(menu.classList.contains("open")).toBe(false);
     wrapper.unmount();
     host.remove();
+  });
+});
+
+// ── #759: keyboard operation and ARIA structure ─────────────────────────────
+//
+// The control was pointer-only in practice: `role="menu"` wrapped a text input,
+// bulk membership had no ARIA state outside face mode, closing dropped focus on
+// <body>, and the grid host's roving focus never reached the trigger. These
+// cases pin the contract the control now owns itself — hosts only have to let
+// it through, which ImageGridContextMenu.test.js covers on its side.
+
+describe("keyboard operation and ARIA structure", () => {
+  let mounted = null;
+
+  beforeEach(() => {
+    listPictureSets.mockResolvedValue(SETS);
+    // "10" is in set 7 and "11" is not, so set 7 is the partial (mixed) case.
+    getPictureSetMembership.mockResolvedValue({ 7: ["10"] });
+  });
+
+  afterEach(() => {
+    mounted?.unmount();
+    mounted = null;
+  });
+
+  /** Mounted into the document, because every case here asserts on focus. */
+  async function openSet(props = {}) {
+    mounted = mount(AddToEntityControl, {
+      props: {
+        type: "set",
+        backendUrl: "http://x",
+        pictureIds: ["10", "11"],
+        ...props,
+      },
+      attachTo: document.body,
+      global: { plugins: [pinia], stubs: { "v-icon": true } },
+    });
+    await mounted.find(".ate-btn").trigger("click");
+    await flushPromises();
+    await nextTick();
+    return mounted;
+  }
+
+  const rows = (wrapper) => wrapper.findAll(".ate-item");
+  const searchBox = (wrapper) => wrapper.find(".ate-search input");
+  const press = (wrapper, target, key) =>
+    wrapper.find(target).trigger("keydown", { key });
+
+  it("exposes a labelled search box and a listbox instead of a menu", async () => {
+    const wrapper = await openSet();
+    expect(wrapper.find('[role="menu"]').exists()).toBe(false);
+    expect(searchBox(wrapper).attributes("aria-label")).toBe("Search sets");
+
+    const listbox = wrapper.find('[role="listbox"]');
+    expect(listbox.attributes("aria-label")).toBe("Sets");
+    expect(listbox.attributes("aria-multiselectable")).toBe("true");
+    // Status text is announced rather than silently repainted.
+    expect(wrapper.find(".ate-status").exists()).toBe(false);
+    await wrapper.findAll(".ate-item")[1].trigger("click");
+    await flushPromises();
+    const status = wrapper.find(".ate-status");
+    expect(status.attributes("role")).toBe("status");
+    expect(status.attributes("aria-live")).toBe("polite");
+    // The trigger points at that listbox, and offers a listbox rather than the
+    // menu it used to claim.
+    const trigger = wrapper.find(".ate-btn");
+    expect(trigger.attributes("aria-haspopup")).toBe("listbox");
+    expect(trigger.attributes("aria-controls")).toBe(listbox.attributes("id"));
+    // Every row is an option of that listbox — nothing is left loose.
+    expect(listbox.findAll(".ate-item")).toHaveLength(rows(wrapper).length);
+  });
+
+  it("reports partial bulk membership as aria-checked=mixed", async () => {
+    const wrapper = await openSet();
+    expect(rows(wrapper).map((r) => r.attributes("aria-checked"))).toEqual([
+      "mixed",
+      "false",
+    ]);
+
+    // A full membership is plain checked, not mixed.
+    getPictureSetMembership.mockResolvedValue({ 7: ["10", "11"] });
+    mounted.unmount();
+    mounted = null;
+    const full = await openSet();
+    expect(rows(full)[0].attributes("aria-checked")).toBe("true");
+  });
+
+  it("walks the search box and rows with the arrow keys, without wrapping", async () => {
+    const wrapper = await openSet();
+    const [portraits, landscapes] = rows(wrapper).map((r) => r.element);
+    expect(document.activeElement).toBe(searchBox(wrapper).element);
+
+    await press(wrapper, ".ate-search input", "ArrowDown");
+    expect(document.activeElement).toBe(portraits);
+    await press(wrapper, ".ate-item", "ArrowDown");
+    expect(document.activeElement).toBe(landscapes);
+
+    // No wrap at the end...
+    await wrapper
+      .findAll(".ate-item")[1]
+      .trigger("keydown", { key: "ArrowDown" });
+    expect(document.activeElement).toBe(landscapes);
+    // ...and ArrowUp off the first row lands back in the search box, which is
+    // how a keyboard user gets back to filtering.
+    await wrapper
+      .findAll(".ate-item")[1]
+      .trigger("keydown", { key: "ArrowUp" });
+    await wrapper.find(".ate-item").trigger("keydown", { key: "ArrowUp" });
+    expect(document.activeElement).toBe(searchBox(wrapper).element);
+  });
+
+  it("jumps to the first and last row with Home and End, but not while typing", async () => {
+    const wrapper = await openSet();
+    const [portraits, landscapes] = rows(wrapper).map((r) => r.element);
+
+    // In the search box these stay text-editing keys.
+    await press(wrapper, ".ate-search input", "End");
+    expect(document.activeElement).toBe(searchBox(wrapper).element);
+
+    await press(wrapper, ".ate-search input", "ArrowDown");
+    await press(wrapper, ".ate-item", "End");
+    expect(document.activeElement).toBe(landscapes);
+    await wrapper.findAll(".ate-item")[1].trigger("keydown", { key: "Home" });
+    expect(document.activeElement).toBe(portraits);
+  });
+
+  it("closes on Escape and hands focus back to the trigger", async () => {
+    const wrapper = await openSet();
+    await press(wrapper, ".ate-search input", "Escape");
+    expect(wrapper.find(".ate-menu").classes()).not.toContain("open");
+    expect(document.activeElement).toBe(wrapper.find(".ate-btn").element);
+  });
+
+  it("closes a flyout on ArrowLeft and hands focus back to the trigger", async () => {
+    const wrapper = await openSet({ placement: "right" });
+    // Deliberate activation of a flyout puts the caret in its search box.
+    expect(document.activeElement).toBe(searchBox(wrapper).element);
+
+    await press(wrapper, ".ate-search input", "ArrowDown");
+    await press(wrapper, ".ate-item", "ArrowLeft");
+    expect(wrapper.find(".ate-menu").classes()).not.toContain("open");
+    expect(document.activeElement).toBe(wrapper.find(".ate-btn").element);
+  });
+
+  it("returns focus to the trigger after a row assignment closes the menu", async () => {
+    listCharacters.mockResolvedValue(PEOPLE);
+    mounted = mount(AddToEntityControl, {
+      props: {
+        type: "face",
+        backendUrl: "http://x",
+        faceId: 3,
+        assignedCharacterId: null,
+      },
+      attachTo: document.body,
+      global: { plugins: [pinia], stubs: { "v-icon": true } },
+    });
+    await mounted.find(".ate-btn").trigger("click");
+    await flushPromises();
+    // Rows are [Unassigned, Alice, Bob]; picking Alice assigns and closes.
+    await mounted.findAll(".ate-item")[1].trigger("click");
+    await nextTick();
+    expect(mounted.emitted("assign")).toBeTruthy();
+    expect(document.activeElement).toBe(mounted.find(".ate-btn").element);
+  });
+
+  it("does not claim multi-select for the single-valued modes", async () => {
+    // A picture has exactly one project, so that listbox is not multiselectable.
+    const wrapper = await openSet({ type: "project" });
+    expect(
+      wrapper.find('[role="listbox"]').attributes("aria-multiselectable"),
+    ).toBeUndefined();
+  });
+
+  it("leaves Enter to the row's native activation", async () => {
+    // Rows are real <button>s: Enter and Space activate them for free, and the
+    // keyboard handler must not swallow the keystroke on its way there.
+    const wrapper = await openSet();
+    const row = wrapper.findAll(".ate-item")[1];
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    row.element.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("leaves focus alone when the menu closes without holding it", async () => {
+    const wrapper = await openSet();
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+
+    document.body.dispatchEvent(
+      new MouseEvent("pointerdown", { bubbles: true }),
+    );
+    await nextTick();
+    expect(wrapper.find(".ate-menu").classes()).not.toContain("open");
+    // The click-outside target keeps the focus it just took.
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
   });
 });
