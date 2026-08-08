@@ -409,6 +409,28 @@ The tab/category switch is **stateless** (see Key Design Principles). Concretely
   pictures on a global view → switch to the Projects/People/Sets tab → drag the
   selection onto a project or character to add them, with the global view still
   intact underneath.
+- **A drop target judges the payload KIND during dragover, from `types` alone.**
+  The JSON body is protected while a drag is in flight (`getData()` returns `""`
+  in Chrome and Firefox), so the kind travels as the *key*: every internal drag
+  writes `application/json` **plus** a marker type —
+  `application/x-pixlstash-pictures` or `application/x-pixlstash-faces`
+  (`utils/media.js`: `setInternalDragPayload`, `isPictureDrag`, `isFaceDrag`).
+  A new payload kind adds a marker; it does not add a field to the body.
+  Two rules follow, and both were once broken (issue #757):
+  - **Never `@dragover.prevent` on a drop target.** The modifier calls
+    `preventDefault()` before the handler body and regardless of what it
+    decides, which accepts every drag on the page. `preventDefault()` belongs
+    inside the handler, only for the kinds that row takes — `SideBar.acceptDrop`
+    returns `accept` / `reject` / `ignore` (`ignore` = an external file drag the
+    window-level importer still owns, so the row stays unpainted rather than
+    promising a refusal it will not perform).
+  - **A drop handler keys off `data.type`, never off the presence of
+    `imageIds`.** A face payload carries `imageIds` too (the pictures the faces
+    were found in), which is how face drags used to file themselves into sets.
+    `readDraggedImageIds` returns nothing unless the payload is `image-ids`.
+  A refused row shows the `.not-droppable` state (hatch + `mdi-cancel` glyph +
+  `--opacity-disabled`, never colour alone), so rejection is visible during the
+  drag instead of arriving as a toast afterwards.
 - **Anti-pattern (do not reintroduce):** a tab/mode `watch` that emits
   `select-*`, pushes a route, or resets a filter. That recouples the sidebar to
   the view and breaks the drag-to-assign flow. Keep navigation in entry-click

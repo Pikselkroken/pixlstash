@@ -288,6 +288,61 @@ export function isInternalImageDrag(dataTransfer) {
   return types.includes('application/json');
 }
 
+/**
+ * Marker types that carry the *kind* of an internal drag payload.
+ *
+ * Every internal payload travels as `application/json`, whose body is protected
+ * during `dragover` (getData() returns "" in Chrome and Firefox); only `types`
+ * is readable. The discriminator therefore has to be the key, not a field in
+ * the body, or a drop target cannot tell a picture drag from a face drag until
+ * the drop has already happened.
+ */
+export const PICTURE_DRAG_MIME = 'application/x-pixlstash-pictures';
+export const FACE_DRAG_MIME = 'application/x-pixlstash-faces';
+
+/**
+ * Payload `type` to its marker. A kind absent from this map gets no marker, so
+ * no drop target accepts it — an unmapped payload must fail closed rather than
+ * inherit the picture marker and be filed as a picture drag (issue #757 again,
+ * one payload kind later).
+ */
+const DRAG_MARKERS = {
+  'image-ids': PICTURE_DRAG_MIME,
+  'face-bbox': FACE_DRAG_MIME,
+};
+
+/**
+ * Write an internal drag payload: the JSON body every drop handler reads, plus
+ * the marker type its kind is recognised by during dragover.
+ */
+export function setInternalDragPayload(dataTransfer, payload) {
+  if (!dataTransfer || !payload) return;
+  dataTransfer.setData('application/json', JSON.stringify(payload));
+  const marker = DRAG_MARKERS[payload.type];
+  if (!marker) {
+    console.error(
+      `Internal drag payload type "${payload.type}" has no marker in ` +
+        'DRAG_MARKERS, so no drop target will accept it. Add one.',
+    );
+    return;
+  }
+  dataTransfer.setData(marker, payload.type);
+}
+
+/** True when the drag carries pictures (grid thumbnails, the open overlay). */
+export function isPictureDrag(dataTransfer) {
+  if (!dataTransfer) return false;
+  const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
+  return types.includes(PICTURE_DRAG_MIME);
+}
+
+/** True when the drag carries face bounding boxes. */
+export function isFaceDrag(dataTransfer) {
+  if (!dataTransfer) return false;
+  const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
+  return types.includes(FACE_DRAG_MIME);
+}
+
 export function isVideo(img) {
   if (!img) return false;
   const format = MediaFormat(img);

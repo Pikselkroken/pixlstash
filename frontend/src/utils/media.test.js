@@ -1,5 +1,14 @@
-import { describe, it, expect } from 'vitest'
-import { buildMediaUrl, isFileDrag, isInternalImageDrag } from './media.js'
+import { describe, it, expect, vi } from 'vitest'
+import {
+  buildMediaUrl,
+  isFaceDrag,
+  isFileDrag,
+  isInternalImageDrag,
+  isPictureDrag,
+  setInternalDragPayload,
+  FACE_DRAG_MIME,
+  PICTURE_DRAG_MIME,
+} from './media.js'
 
 // Minimal DataTransfer stand-in: only `types` (array) and `files` (array-like)
 // are read by the drag predicates.
@@ -41,6 +50,78 @@ describe('isFileDrag', () => {
   it('is false for an internal-only drag', () => {
     expect(isFileDrag(dt({ types: ['application/json'] }))).toBe(false)
   })
+})
+
+// A drop target may only read `types` during dragover, so the payload kind has
+// to be a key. Before this, a face drag and a picture drag were indistinguishable
+// until the drop had already happened (issue #757).
+describe('internal drag payload markers', () => {
+  function writer() {
+    const store = {}
+    return {
+      store,
+      dataTransfer: {
+        setData: (type, value) => {
+          store[type] = value
+        },
+        get types() {
+          return Object.keys(store)
+        },
+      },
+    }
+  }
+
+  it('marks a picture payload so dragover can recognise it', () => {
+    const { store, dataTransfer } = writer()
+    setInternalDragPayload(dataTransfer, { type: 'image-ids', imageIds: [1] })
+
+    expect(JSON.parse(store['application/json'])).toEqual({
+      type: 'image-ids',
+      imageIds: [1],
+    })
+    expect(isPictureDrag(dataTransfer)).toBe(true)
+    expect(isFaceDrag(dataTransfer)).toBe(false)
+    expect(isInternalImageDrag(dataTransfer)).toBe(true)
+  })
+
+  it('marks a face payload distinctly, despite it carrying imageIds too', () => {
+    const { dataTransfer } = writer()
+    setInternalDragPayload(dataTransfer, {
+      type: 'face-bbox',
+      faceIds: [9],
+      imageIds: [1],
+    })
+
+    expect(isFaceDrag(dataTransfer)).toBe(true)
+    expect(isPictureDrag(dataTransfer)).toBe(false)
+    expect(isInternalImageDrag(dataTransfer)).toBe(true)
+  })
+
+  it('reports neither kind for an external file drag', () => {
+    expect(isPictureDrag(dt({ types: ['Files'] }))).toBe(false)
+    expect(isFaceDrag(dt({ types: ['Files'] }))).toBe(false)
+    expect(isPictureDrag(null)).toBe(false)
+    expect(isFaceDrag(null)).toBe(false)
+  })
+
+  it('keeps the two marker types apart', () => {
+    expect(PICTURE_DRAG_MIME).not.toBe(FACE_DRAG_MIME)
+  })
+
+  it('leaves an unmapped payload kind unmarked rather than calling it a picture',
+     () => {
+       const {store, dataTransfer} = writer()
+       const complained =
+           vi.spyOn(console, 'error').mockImplementation(() => {})
+
+       setInternalDragPayload(dataTransfer, {type: 'something-new', ids: [1]})
+
+       expect(JSON.parse(store['application/json']).type).toBe('something-new')
+       expect(isPictureDrag(dataTransfer)).toBe(false)
+       expect(isFaceDrag(dataTransfer)).toBe(false)
+       expect(complained).toHaveBeenCalled()
+       complained.mockRestore()
+     })
 })
 
 describe('buildMediaUrl', () => {
