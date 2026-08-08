@@ -1,5 +1,27 @@
 # Copilot and Claude Instructions for PixlStash
 
+## Never edit the shared checkout
+
+Several agent sessions run against this repository at once. They collide: a
+session that starts work on `develop` can find itself on someone else's branch
+mid-task, holding someone else's uncommitted files, with its own branch renamed
+out from under it. Nothing warns you, and the first symptom is usually a commit
+that picks up the wrong files.
+
+**Any session that will edit a file starts with `EnterWorktree`.** Then set the
+real base, because the tool branches from `origin/main` by default:
+
+```
+git fetch origin && git checkout -B <branch> origin/<base>
+```
+
+Commit and push from the worktree, open the PR, then `ExitWorktree` with
+`remove`. Never `git add`, `git commit`, or `git checkout` in the shared
+checkout, and never stage a file you did not write in this session: stage by
+name, not `git add -A`.
+
+Sessions that only read (questions, reviewing pushed code) can stay put.
+
 ## Patch Reliability Policy
 
 - **Read before you edit.** Read enough surrounding context (at least 50 lines before and after the target) to understand structure, logic, and dependencies before generating a patch. If placement is ambiguous, read more until it is certain.
