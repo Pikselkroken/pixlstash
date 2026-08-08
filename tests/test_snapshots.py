@@ -105,7 +105,12 @@ def test_new_snapshot_contains_no_portable_identity_and_is_private(server):
     try:
         snapshot = server.vault.snapshot_service.create_snapshot("MANUAL")
         archive = os.path.join(server.vault.image_root, snapshot.relative_path)
-        assert os.stat(archive).st_mode & 0o777 == 0o600
+        if os.name != "nt":
+            # Windows synthesises st_mode from the read-only attribute (0o666
+            # for any writable file), so no chmod can ever make this hold
+            # there; access is the directory ACL's job. The identity
+            # assertions below are the test's point and run everywhere.
+            assert os.stat(archive).st_mode & 0o777 == 0o600
         with _open_snapshot(server, snapshot) as connection:
             for table in ("user", "usertoken", "guest_session", "guest_score"):
                 assert connection.execute(
