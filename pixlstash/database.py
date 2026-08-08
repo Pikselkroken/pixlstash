@@ -864,6 +864,19 @@ class VaultDatabase:
 
         self._engine = create_configured_engine(self._db_path)
 
+        # The guard holds a raw fd on vault.db. POSIX advisory locks are
+        # per-process, per-inode: closing ANY fd a process has on a file
+        # releases EVERY fcntl lock that process holds on it — including the
+        # ones SQLite took for the engine's live connections
+        # (sqlite.org/howtocorrupt.html §2.2). Closing the guard here, while
+        # pooled connections were open, therefore stripped the server of its
+        # kernel locks on the vault; a second process (CLI, the e2e dedup
+        # seeder, another instance) closing its own connection then saw the
+        # database as unused, checkpointed, and DELETED the live -wal/-shm,
+        # split-braining every open connection ("disk I/O error", "database
+        # disk image is malformed"). The guard must outlive the engine: it is
+        # retained and closed in close(), after dispose().
+        self._location_guard = location_guard
         try:
             with self._engine.connect() as initial_connection:
                 if location_guard is not None:
@@ -877,10 +890,10 @@ class VaultDatabase:
         except Exception:
             self._engine.dispose()
             self._engine = None
-            raise
-        finally:
+            # All connections are gone, so closing the guard fd is safe now.
             if location_guard is not None:
                 location_guard.close()
+            raise
 
         # Write queue and worker
         self._task_queue = queue.PriorityQueue()
@@ -944,6 +957,19 @@ class VaultDatabase:
                     logger.warning(
                         f"VaultDatabase: Exception during engine dispose: {e}"
                     )
+
+            # Only after every SQLite connection is disposed may the guard fd
+            # be closed: closing it earlier releases the process's POSIX locks
+            # on the vault file out from under the live connections (see the
+            # comment in __init__).
+            if getattr(self, "_location_guard", None) is not None:
+                try:
+                    self._location_guard.close()
+                except OSError as e:
+                    logger.warning(
+                        f"VaultDatabase: Exception closing location guard: {e}"
+                    )
+                self._location_guard = None
 
         gc.collect()
         logger.info("VaultDatabase.close called, resources released.")

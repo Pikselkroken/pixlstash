@@ -252,6 +252,13 @@ class HubDatabase:
             )
         except TrustedSQLiteLocationError as exc:
             raise HubPermissionError(str(exc)) from exc
+        # The guard fd must outlive the connection. POSIX advisory locks are
+        # per-process, per-inode: closing ANY fd this process holds on the hub
+        # file releases every fcntl lock the process has on it — including the
+        # ones SQLite took for self._conn (sqlite.org/howtocorrupt.html §2.2).
+        # The hub is explicitly multi-process (server + CLI), so a lock-stripped
+        # connection lets another process treat the hub as unused and delete its
+        # live -wal/-shm on close. Retained as self._guard, closed in close().
         try:
             self._conn = sqlite3.connect(
                 guard.path,
@@ -261,24 +268,25 @@ class HubDatabase:
             )
             self._conn.row_factory = sqlite3.Row
             guard.verify_after_open()
+
+            if created:
+                logger.info("Created hub database at %s", self._path)
+
+            self._configure()
+            apply_migrations(self._conn)
         except TrustedSQLiteLocationError as exc:
             connection = getattr(self, "_conn", None)
             if connection is not None:
                 connection.close()
+            guard.close()
             raise HubPermissionError(str(exc)) from exc
         except Exception:
             connection = getattr(self, "_conn", None)
             if connection is not None:
                 connection.close()
-            raise
-        finally:
             guard.close()
-
-        if created:
-            logger.info("Created hub database at %s", self._path)
-
-        self._configure()
-        apply_migrations(self._conn)
+            raise
+        self._guard = guard
 
     @property
     def path(self) -> str:
@@ -325,6 +333,17 @@ class HubDatabase:
             self._conn.close()
         except sqlite3.Error as exc:
             logger.warning("Error closing hub database %s: %s", self._path, exc)
+        # Guard fd released only after the connection: closing it earlier drops
+        # the process's POSIX locks on the hub file (see __init__).
+        guard = getattr(self, "_guard", None)
+        if guard is not None:
+            try:
+                guard.close()
+            except OSError as exc:
+                logger.warning(
+                    "Error closing hub location guard %s: %s", self._path, exc
+                )
+            self._guard = None
 
     def __enter__(self) -> "HubDatabase":
         return self
