@@ -26,6 +26,31 @@ the threat model reads as free protection and is not: the parent-directory
 timestamp comparison bought same-uid swap detection nobody needed and refused
 roughly a fifth of concurrent opens, because SQLite creating our own WAL is
 indistinguishable from tampering when you are watching a directory's mtime.
+
+**Windows, and what this cannot check.** Python exposes neither owner SID nor
+directory DACL portably, so the "another principal cannot write this directory"
+test — POSIX's ``mode & 0o022`` — has no Windows implementation. It was
+substituted with a blanket refusal for anything outside the app config
+directory, and applied to every caller. That made ``Vault.__init__`` raise for
+every path on Windows: the product could not open its library at all, so the
+"control" protected nobody and stopped everybody.
+
+The refusal is therefore scoped to ``private=True`` — the hub, which holds the
+password hash and every token hash and lives in the config directory anyway.
+
+*Accepted risk, for the vault.* On Windows a library on a network share,
+removable media, or a folder someone deliberately loosened is not protected
+against another local principal substituting ``vault.db`` or pre-positioning a
+sidecar **before** startup. Default ACLs already exclude other standard users
+from a user profile, and those three cases are the ones named above as this
+lane's real concerns. Blast radius is picture metadata and file paths, not
+credentials: attacker-controlled paths flowing into export/thumbnail/restore,
+which amplifies reads of files the victim can already read. Compensating
+controls that DO run on Windows: symlink/reparse rejection on every component,
+the regular-file requirement including sidecars, ``O_NOFOLLOW`` plus an
+identity match across the open, and ``verify_after_open``. Revisit when a
+native ACL verifier exists (``win32security.GetNamedSecurityInfo``, or ctypes
+against advapi32), which is the route back to tightening this.
 """
 
 from __future__ import annotations
@@ -182,11 +207,18 @@ class TrustedSQLiteLocation:
         # A canonical path is used for SQLite, but accepting a symlink in the
         # caller-provided path would make the visible target mutable.
         _reject_symlinked_path(absolute)
-        if os.name == "nt":
+        if os.name == "nt" and private:
             # Python exposes neither owner SID nor directory DACL portably.
-            # Until a native ACL verifier is available, fail closed for custom
-            # locations. The one supported exception is PixlStash's own
-            # per-user configuration directory, created by the application.
+            # Until a native ACL verifier is available, fail closed for a
+            # CREDENTIAL store: the hub holds the password hash and every token
+            # hash, and it lives in PixlStash's own per-user configuration
+            # directory, so requiring that location costs nothing.
+            #
+            # Non-credential opens (the vault: picture metadata, in a folder the
+            # user chose) deliberately do NOT fail closed here. See "Windows,
+            # and what this cannot check" in the module docstring — applying
+            # this to the vault made `Vault.__init__` raise for every path on
+            # Windows, which is not a control, it is an outage.
             app_config = os.path.realpath(user_config_dir("pixlstash"))
             try:
                 in_app_config = (
@@ -197,7 +229,7 @@ class TrustedSQLiteLocation:
             if not (allow_windows_app_config and in_app_config):
                 raise TrustedSQLiteLocationError(
                     "Cannot verify the Windows DACL for this custom SQLite "
-                    "location; refusing a security-sensitive open."
+                    "credential location; refusing a security-sensitive open."
                 )
         _validate_namespace(canonical)
         if create and not os.path.lexists(canonical):

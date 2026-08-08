@@ -375,6 +375,28 @@ class TestTrustedPathSymlinkCheck:
         with pytest.raises(TrustedSQLiteLocationError, match="symlink"):
             TrustedSQLiteLocation.open(str(link), private=True)
 
+    def test_a_windows_vault_outside_the_config_directory_is_allowed(
+        self, tmp_path, monkeypatch
+    ):
+        """The vault's own call shape: not a credential store, so not gated.
+
+        ``vault.py`` opens with ``private=False`` and the default
+        ``allow_windows_app_config=False``. Under the old blanket refusal that
+        combination raised for *every* path on Windows — including inside the
+        config directory, since the flag alone decided — so no Windows install
+        could open its library. Both directions matter here more than usual:
+        the test below must keep failing closed for the credential store.
+        """
+        directory = tmp_path / "library"
+        directory.mkdir(mode=0o700)
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setattr(
+            trusted_sqlite, "user_config_dir", lambda *_a, **_k: str(tmp_path / "conf")
+        )
+
+        guard = TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+        guard.close()
+
     def test_a_windows_location_outside_the_config_directory_is_refused(
         self, tmp_path, monkeypatch
     ):
