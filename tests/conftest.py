@@ -5,12 +5,15 @@ Pytest configuration and fixtures for test suite.
 import gc
 import json
 import math
+import os
 import socket
 import statistics
+import tempfile
 import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+import pytest
 from _pytest.config.exceptions import UsageError
 from fastapi.testclient import TestClient
 from pixlstash.server import Server
@@ -43,6 +46,36 @@ _TEST_DURATIONS_PATH = Path(__file__).resolve().parent / "ci_test_durations.json
 # 648 tests on one shard against ~153 on each of the others. The load was
 # balanced and the count was absurd, and the count is not free either.
 _PER_TEST_OVERHEAD_SECONDS = 0.005
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _windows_temp_is_a_trusted_hub_location():
+    """Let Windows tests open a hub from a temporary directory.
+
+    ``TrustedSQLiteLocation`` cannot verify a Windows DACL from Python, so it
+    fails closed for every location outside PixlStash's own per-user config
+    directory (``trusted_sqlite.py``, the ``os.name == "nt"`` branch). That is
+    the right production policy and this does not change it — but it means no
+    test that builds a ``Server`` under ``tmp_path`` can open its hub on
+    Windows, which is every such test.
+
+    So for the duration of a Windows test session, the system temp directory is
+    the config directory. Nothing here runs on POSIX, where the real ownership
+    and mode checks are exercised as written, and nothing production reads this.
+    """
+    if os.name != "nt":
+        yield
+        return
+
+    from pixlstash import trusted_sqlite
+
+    temp_root = os.path.realpath(tempfile.gettempdir())
+    original = trusted_sqlite.user_config_dir
+    trusted_sqlite.user_config_dir = lambda *_args, **_kwargs: temp_root
+    try:
+        yield
+    finally:
+        trusted_sqlite.user_config_dir = original
 
 
 def _normalize_test_path(path: str):

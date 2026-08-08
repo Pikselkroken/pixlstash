@@ -80,6 +80,35 @@ def _require_owned_directory(path: str, *, immediate: bool) -> os.stat_result:
     return info
 
 
+def _reject_symlinked_path(path: str) -> None:
+    """Refuse a caller-supplied path that reaches its target via a symlink.
+
+    Deliberately not ``os.path.abspath(p) != os.path.realpath(p)``. That
+    comparison holds on POSIX, where ``realpath`` differs from ``abspath`` only
+    where a symlink was resolved, but it is wrong on Windows: ``realpath`` also
+    expands 8.3 short names and normalises case, so ``C:\\Users\\RUNNER~1\\...``
+    — the form ``%TEMP%`` takes on a GitHub runner — was reported as "contains a
+    symlink" when it contains none. That misdiagnosis took down every Windows
+    test that opens a hub.
+
+    Testing each component is the property that was actually meant, and it
+    names the offending component instead of leaving the caller to infer it.
+    A component that does not exist yet is not a symlink; ``create=True`` opens
+    rely on that.
+    """
+    current = path
+    while True:
+        if os.path.islink(current):
+            raise TrustedSQLiteLocationError(
+                f"SQLite path {path} reaches its target through a symlink at "
+                f"{current}; refusing to open it."
+            )
+        parent = os.path.dirname(current)
+        if parent == current:
+            return
+        current = parent
+
+
 def _validate_namespace(canonical_path: str) -> None:
     parent = os.path.dirname(canonical_path)
     current = parent
@@ -143,10 +172,7 @@ class TrustedSQLiteLocation:
         canonical = os.path.realpath(absolute)
         # A canonical path is used for SQLite, but accepting a symlink in the
         # caller-provided path would make the visible target mutable.
-        if absolute != canonical:
-            raise TrustedSQLiteLocationError(
-                f"SQLite path {absolute} contains a symlink; refusing to open it."
-            )
+        _reject_symlinked_path(absolute)
         if os.name == "nt":
             # Python exposes neither owner SID nor directory DACL portably.
             # Until a native ACL verifier is available, fail closed for custom

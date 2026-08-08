@@ -23,6 +23,7 @@ from pixlstash.hub.engine import HubEngine
 from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
     TrustedSQLiteLocationError,
+    _reject_symlinked_path,
 )
 
 
@@ -336,6 +337,61 @@ class TestHubFileSecurity:
         finally:
             os.chmod(directory, 0o700)
             guard.close()
+
+
+class TestTrustedPathSymlinkCheck:
+    """What "the caller's path goes through a symlink" is allowed to mean.
+
+    The check used to be ``os.path.abspath(p) != os.path.realpath(p)``. On
+    POSIX those differ only where a symlink was resolved, so it read correctly
+    here — and wrongly on Windows, where ``realpath`` also expands 8.3 short
+    names. ``C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\...`` was rejected as
+    "contains a symlink", taking down every Windows test that opens a hub.
+
+    Both directions, because the refusal is a security control: a genuinely
+    symlinked path must still be refused, and a path that merely canonicalises
+    to a different string must not be.
+    """
+
+    def test_a_symlinked_ancestor_is_still_refused(self, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir(mode=0o700)
+        link = tmp_path / "via-link"
+        link.symlink_to(real, target_is_directory=True)
+
+        with pytest.raises(TrustedSQLiteLocationError, match="symlink"):
+            TrustedSQLiteLocation.open(str(link / "hub.db"), private=True, create=True)
+
+    def test_a_symlinked_file_is_still_refused(self, tmp_path):
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        target = directory / "real.db"
+        target.touch(mode=0o600)
+        link = directory / "hub.db"
+        link.symlink_to(target)
+
+        with pytest.raises(TrustedSQLiteLocationError, match="symlink"):
+            TrustedSQLiteLocation.open(str(link), private=True)
+
+    def test_the_verdict_never_consults_realpath(self, tmp_path, monkeypatch):
+        """No 8.3 name exists on Linux, so assert the cause, not the symptom.
+
+        What made the old check wrong on Windows is that it asked ``realpath``
+        a question realpath does not answer: "did this path cross a symlink?"
+        Nothing on POSIX can produce a short name to reproduce that with, so
+        this pins the property instead — the decision does not depend on the
+        canonical spelling at all. ``realpath`` is made to explode; a path with
+        no symlink in it must still be accepted.
+        """
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+
+        def explode(*_args, **_kwargs):
+            raise AssertionError("the symlink verdict must not consult realpath")
+
+        monkeypatch.setattr(os.path, "realpath", explode)
+
+        _reject_symlinked_path(str(directory / "hub.db"))
 
 
 class TestAuthServiceOnTheHub:
