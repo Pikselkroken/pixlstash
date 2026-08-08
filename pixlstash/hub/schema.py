@@ -256,6 +256,129 @@ _V1_LIBRARY_INDEXES = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Model shelf (v1.10.0). These live in the HUB, not in a vault, because what
+# they record is a fact about this machine rather than about a library: a folder
+# of LoRAs is on this disk, and re-registering the same folder in every library
+# would be absurd. The only vault-side table is ``adapter_attachment``, which
+# says "this library's character uses that adapter" and is keyed by sha256
+# because no foreign key can span the two databases.
+#
+# Hand-written DDL against stdlib sqlite3, like everything else here. The hub is
+# deliberately not SQLModel: a SQLModel table would be created inside every
+# vault as well.
+# ---------------------------------------------------------------------------
+
+# AUTOINCREMENT, not a bare INTEGER PRIMARY KEY, for the same reason
+# ``library.id`` uses it: SQLite hands a deleted row's id to the next insert, and
+# a recycled folder id would silently re-point every ``adapter_file`` row at a
+# different folder.
+_V2_MODEL_FOLDER = """
+CREATE TABLE IF NOT EXISTS model_folder (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    path                 TEXT NOT NULL UNIQUE,
+    kind                 TEXT NOT NULL,
+    owner                TEXT,
+    movable              TEXT NOT NULL,
+    host_path            TEXT,
+    delete_after_import  INTEGER,
+    last_checked         TEXT,
+    created_at           TEXT
+)
+"""
+
+# `base_model` is free text on purpose. It comes from whatever the trainer wrote
+# and an enum would reject every model that ships after this release.
+_V2_ADAPTER = """
+CREATE TABLE IF NOT EXISTS adapter (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    sha256                TEXT UNIQUE NOT NULL,
+    kind                  TEXT NOT NULL,
+    display_name          TEXT,
+    filename              TEXT,
+    base_model            TEXT,
+    trigger_words         TEXT,
+    provenance            TEXT NOT NULL,
+    training_run_id       INTEGER,
+    lineage_id            INTEGER,
+    training_step         INTEGER,
+    safetensors_metadata  TEXT,
+    file_size             INTEGER,
+    stack_id              INTEGER REFERENCES adapter_stack(id),
+    stack_position        INTEGER,
+    run_key               TEXT,
+    created_at            TEXT
+)
+"""
+
+# One adapter, many paths. That is what a duplicate after an interrupted move
+# is, and what the same file copied into two registered folders is.
+#
+# This table is also the tombstone. Removing a folder drops its ``adapter_file``
+# rows and KEEPS the ``adapter`` row with its name, triggers and attachments, so
+# re-adding the folder re-links by sha256 with the user's curation intact. That
+# is what lets folder removal skip a confirmation prompt: nothing a user typed
+# is destroyed by it.
+_V2_ADAPTER_FILE = """
+CREATE TABLE IF NOT EXISTS adapter_file (
+    adapter_sha256   TEXT NOT NULL,
+    model_folder_id  INTEGER NOT NULL REFERENCES model_folder(id),
+    relpath          TEXT NOT NULL,
+    state            TEXT NOT NULL,
+    seen_at          TEXT,
+    PRIMARY KEY (model_folder_id, relpath)
+)
+"""
+
+# ``sha256`` is nullable here and NOT NULL on ``adapter``: a checkpoint may be
+# many gigabytes and is registered in place long before anything hashes it.
+_V2_CHECKPOINT = """
+CREATE TABLE IF NOT EXISTS checkpoint (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    sha256             TEXT UNIQUE,
+    filename           TEXT NOT NULL,
+    local_path         TEXT,
+    base_model_family  TEXT,
+    file_size          INTEGER,
+    hashed_at          TEXT,
+    created_at         TEXT
+)
+"""
+
+# One subject, many runs, many steps per run. Mirrors PictureStack exactly
+# (id, name, created_at, updated_at) so the shelf can reuse the picture-stack
+# presentation rather than invent a second stacking idiom.
+_V2_ADAPTER_STACK = """
+CREATE TABLE IF NOT EXISTS adapter_stack (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT,
+    created_at  TEXT,
+    updated_at  TEXT
+)
+"""
+
+_V2_MODEL_SHELF_INDEXES = (
+    # The scanner's hot path: "which files does this adapter have, and where".
+    "CREATE INDEX IF NOT EXISTS ix_adapter_file_sha ON adapter_file(adapter_sha256)",
+    # Folder removal and rescan both work folder-at-a-time.
+    "CREATE INDEX IF NOT EXISTS ix_adapter_file_folder "
+    "ON adapter_file(model_folder_id)",
+    # Expanding one stack in the shelf, in cover-first order.
+    "CREATE INDEX IF NOT EXISTS ix_adapter_stack_member "
+    "ON adapter(stack_id, stack_position)",
+)
+
+_V2_MODEL_SHELF_TABLES = (
+    # adapter_stack first: `adapter.stack_id` references it.
+    _V2_ADAPTER_STACK,
+    _V2_MODEL_FOLDER,
+    _V2_ADAPTER,
+    _V2_ADAPTER_FILE,
+    _V2_CHECKPOINT,
+    *_V2_MODEL_SHELF_INDEXES,
+)
+
+
 # Ordered schema steps. Append only: a released version's statement list is
 # never edited, exactly as for an applied Alembic migration. ``library`` is
 # created before ``user_token`` because the latter references it.
@@ -314,6 +437,16 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         "source_path TEXT NOT NULL, payload_digest TEXT NOT NULL, "
         "state TEXT NOT NULL CHECK(state IN ('pending','copied','complete')))"
     )
+    # Model shelf (v1.10.0). Amending v2 rather than adding a v3 is deliberate.
+    # apply_migrations re-runs this function for any hub already at v2 (see the
+    # tail of that function), so an existing developer or dev-build hub picks
+    # these up on its next open. A v3 would be actively worse: a build shipped
+    # before this change has CURRENT_SCHEMA_VERSION = 2, so it would refuse a v3
+    # hub with HubSchemaTooNewError and lock that user out of a downgrade.
+    # CREATE TABLE IF NOT EXISTS throughout, so re-running is a no-op.
+    for statement in _V2_MODEL_SHELF_TABLES:
+        conn.execute(statement)
+
     # Rows from the earliest feature-lane v1 may predate the column entirely.
     # Backfill in Python so every library gets a distinct cryptographic value;
     # SQLite has no suitable random-hex default for ALTER TABLE.
