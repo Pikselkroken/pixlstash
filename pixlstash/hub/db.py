@@ -176,8 +176,8 @@ def check_file_mode(path: str, *, repair: bool) -> None:
         # read-only attribute and reads 0o666 for an ordinary file, so this
         # would refuse every hub, including one this process just created 0600.
         # Access there is governed by the file's ACL, which Python cannot read
-        # portably — the reason `TrustedSQLiteLocation` refuses any hub outside
-        # the per-user config directory on Windows in the first place.
+        # portably; `TrustedSQLiteLocation` trusts the hub at the root its own
+        # configuration placed it (see that module's docstring, W17 record).
         return
     try:
         mode = stat.S_IMODE(os.lstat(path).st_mode)
@@ -248,7 +248,7 @@ class HubDatabase:
             guard = TrustedSQLiteLocation.open(
                 self._path,
                 private=True,
-                allow_windows_app_config=True,
+                trusted_root=os.path.dirname(self._path),
             )
         except TrustedSQLiteLocationError as exc:
             raise HubPermissionError(str(exc)) from exc

@@ -46,14 +46,22 @@ indistinguishable from tampering when you are watching a directory's mtime.
 
 **Windows, and what this cannot check.** Python exposes neither owner SID nor
 directory DACL portably, so the "another principal cannot write this directory"
-test — POSIX's ``mode & 0o022`` — has no Windows implementation. It was
-substituted with a blanket refusal for anything outside the app config
-directory, and applied to every caller. That made ``Vault.__init__`` raise for
-every path on Windows: the product could not open its library at all, so the
-"control" protected nobody and stopped everybody.
+test — POSIX's ``mode & 0o022`` — has no Windows implementation. An earlier
+revision substituted a blanket refusal of any ``private=True`` open outside
+``user_config_dir("pixlstash")``. That predicate was false for every desktop
+install — the Electron shell derives the hub path from its own config under
+``%APPDATA%\\pixlstash-desktop`` while ``user_config_dir`` resolves under
+``%LOCALAPPDATA%`` — so the server never started on Windows (W6/W7/W18). The
+DACL refusal is gone.
 
-The refusal is therefore scoped to ``private=True`` — the hub, which holds the
-password hash and every token hash and lives in the config directory anyway.
+A ``private=True`` open now requires a mandatory, no-default ``trusted_root``:
+the parent directory the caller derived the hub path from. The only check is
+containment — the canonical file must be inside that root. In correct code the
+containment is tautologically true; the parameter exists so that *forgetting*
+it fails at the first test run instead of silently opting out in production
+(the root cause of W4-W7). It does not second-guess where the owner put the
+hub: the hub is trusted at the root its own configuration placed it, with no
+DACL verification until the native verifier (3c) exists.
 
 *Accepted risk, for the vault.* On Windows a library on a network share,
 removable media, or a folder someone deliberately loosened is not protected
@@ -103,8 +111,6 @@ from __future__ import annotations
 import os
 import stat
 from dataclasses import dataclass
-
-from platformdirs import user_config_dir
 
 from pixlstash.pixl_logging import get_logger
 
@@ -256,8 +262,8 @@ def _validate_file(path: str, *, private: bool) -> os.stat_result:
         # file, so every check below would refuse every file — which is what
         # made both Windows shards fail with "must be mode 600" on a hub this
         # process had just created. The ownership check above is already
-        # POSIX-only for the same reason, and the DACL that does carry the
-        # answer is why `open()` fails closed outside the config directory.
+        # POSIX-only for the same reason; the DACL that does carry the answer
+        # is unreadable from portable Python (module docstring, W17 record).
         return info
     if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
         raise TrustedSQLiteLocationError(
@@ -291,36 +297,37 @@ class TrustedSQLiteLocation:
         *,
         private: bool = False,
         create: bool = False,
-        allow_windows_app_config: bool = False,
+        trusted_root: str | None = None,
     ) -> "TrustedSQLiteLocation":
+        if private and trusted_root is None:
+            raise TypeError(
+                "private=True requires trusted_root=: pass the directory the "
+                "credential store's path was derived from (its own parent). "
+                "See 'Windows, and what this cannot check' in the module "
+                "docstring."
+            )
         absolute = os.path.abspath(os.path.expanduser(path))
         canonical = os.path.realpath(absolute)
         # A canonical path is used for SQLite, but accepting a symlink in the
         # caller-provided path would make the visible target mutable.
         _reject_symlinked_path(absolute)
-        if os.name == "nt" and private:
-            # Python exposes neither owner SID nor directory DACL portably.
-            # Until a native ACL verifier is available, fail closed for a
-            # CREDENTIAL store: the hub holds the password hash and every token
-            # hash, and it lives in PixlStash's own per-user configuration
-            # directory, so requiring that location costs nothing.
-            #
-            # Non-credential opens (the vault: picture metadata, in a folder the
-            # user chose) deliberately do NOT fail closed here. See "Windows,
-            # and what this cannot check" in the module docstring — applying
-            # this to the vault made `Vault.__init__` raise for every path on
-            # Windows, which is not a control, it is an outage.
-            app_config = os.path.realpath(user_config_dir("pixlstash"))
+        if private:
+            # Containment in the root the caller derived the path from. In
+            # correct code this is tautologically true; it exists so a caller
+            # cannot silently opt out of declaring where the credential store
+            # is trusted (the module docstring's W4-W7 root cause). It is not
+            # a policy on where the owner may put the hub.
+            root = os.path.realpath(os.path.abspath(os.path.expanduser(trusted_root)))
             try:
-                in_app_config = (
-                    os.path.commonpath((canonical, app_config)) == app_config
-                )
+                contained = os.path.commonpath((canonical, root)) == root
             except ValueError:
-                in_app_config = False
-            if not (allow_windows_app_config and in_app_config):
+                # Different drives (or mixed absolute/relative on Windows)
+                # share no common path, so the file is not inside the root.
+                contained = False
+            if not contained:
                 raise TrustedSQLiteLocationError(
-                    "Cannot verify the Windows DACL for this custom SQLite "
-                    "credential location; refusing a security-sensitive open."
+                    f"SQLite credential file {canonical} is outside its "
+                    f"trusted root {root}; refusing a security-sensitive open."
                 )
         _validate_namespace(canonical)
         if create and not os.path.lexists(canonical):

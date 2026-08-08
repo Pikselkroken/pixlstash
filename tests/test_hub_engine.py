@@ -256,7 +256,9 @@ class TestHubFileSecurity:
         monkeypatch.setattr(os.path, "lexists", lambda _p: False)
 
         with caplog.at_level("WARNING", logger="pixlstash.trusted_sqlite"):
-            guard = TrustedSQLiteLocation.open(str(path), private=True, create=True)
+            guard = TrustedSQLiteLocation.open(
+                str(path), private=True, create=True, trusted_root=str(tmp_path)
+            )
         guard.close()
 
         assert any(
@@ -277,7 +279,9 @@ class TestHubFileSecurity:
         monkeypatch.setattr(os.path, "lexists", lambda _p: False)
 
         with pytest.raises(TrustedSQLiteLocationError, match="mode 600"):
-            TrustedSQLiteLocation.open(str(path), private=True, create=True)
+            TrustedSQLiteLocation.open(
+                str(path), private=True, create=True, trusted_root=str(tmp_path)
+            )
 
     def test_path_replacement_during_sqlite_open_is_refused_before_schema_writes(
         self, tmp_path, monkeypatch
@@ -369,7 +373,9 @@ class TestHubFileSecurity:
         directory = tmp_path / "hub"
         directory.mkdir(mode=0o700)
         path = str(directory / "hub.db")
-        guard = TrustedSQLiteLocation.open(path, private=True, create=True)
+        guard = TrustedSQLiteLocation.open(
+            path, private=True, create=True, trusted_root=str(directory)
+        )
         try:
             guard.verify_after_open()  # clean while the directory is private
 
@@ -402,7 +408,9 @@ class TestTrustedPathSymlinkCheck:
         link.symlink_to(real, target_is_directory=True)
 
         with pytest.raises(TrustedSQLiteLocationError, match="symlink"):
-            TrustedSQLiteLocation.open(str(link / "hub.db"), private=True, create=True)
+            TrustedSQLiteLocation.open(
+                str(link / "hub.db"), private=True, create=True, trusted_root=str(link)
+            )
 
     def test_a_symlinked_file_is_still_refused(self, tmp_path):
         directory = tmp_path / "hub"
@@ -413,78 +421,83 @@ class TestTrustedPathSymlinkCheck:
         link.symlink_to(target)
 
         with pytest.raises(TrustedSQLiteLocationError, match="symlink"):
-            TrustedSQLiteLocation.open(str(link), private=True)
+            TrustedSQLiteLocation.open(
+                str(link), private=True, trusted_root=str(directory)
+            )
 
     def test_a_windows_vault_outside_the_config_directory_is_allowed(
         self, tmp_path, monkeypatch
     ):
         """The vault's own call shape: not a credential store, so not gated.
 
-        ``vault.py`` opens with ``private=False`` and the default
-        ``allow_windows_app_config=False``. Under the old blanket refusal that
-        combination raised for *every* path on Windows — including inside the
-        config directory, since the flag alone decided — so no Windows install
-        could open its library. Both directions matter here more than usual:
-        the test below must keep failing closed for the credential store.
+        ``vault.py`` opens with ``private=False`` and no ``trusted_root``.
+        Under the old blanket refusal that raised for *every* path on Windows,
+        so no Windows install could open its library (W4). Pin the fix: a
+        non-private open works anywhere the namespace checks allow.
         """
         directory = tmp_path / "library"
         directory.mkdir(mode=0o700)
         monkeypatch.setattr(os, "name", "nt")
-        monkeypatch.setattr(
-            trusted_sqlite, "user_config_dir", lambda *_a, **_k: str(tmp_path / "conf")
-        )
 
         guard = TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
         guard.close()
 
-    def test_a_windows_location_outside_the_config_directory_is_refused(
+    def test_a_windows_hub_at_an_electron_style_path_opens_with_its_own_root(
         self, tmp_path, monkeypatch
     ):
-        """The Windows fail-closed policy had no test at all.
+        """The W6/W7/W18 outage regression.
 
-        It matters more now: the session fixture in conftest points
-        ``user_config_dir`` at the system temp directory so Windows tests can
-        open a hub under ``tmp_path``. That is test scaffolding, and scaffolding
-        that widens a security boundary needs the boundary asserted somewhere or
-        it can be widened further by accident.
+        The desktop shell derives the hub path from ``--server-config`` under
+        ``%APPDATA%\\pixlstash-desktop`` — never inside
+        ``user_config_dir("pixlstash")`` — so the old DACL predicate refused
+        every desktop install and the server could not start on Windows. A
+        private open with ``trusted_root`` set to the hub's own parent must
+        succeed regardless of where that parent is.
+        """
+        appdata = tmp_path / "AppData" / "Roaming" / "pixlstash-desktop"
+        appdata.mkdir(parents=True, mode=0o700)
+        monkeypatch.setattr(os, "name", "nt")
 
-        ``os.name`` is patched rather than skipping off Windows, the same way
-        the fchmod test simulates its platform: a policy asserted only on the
-        lane that already fails is a policy nobody sees.
+        guard = TrustedSQLiteLocation.open(
+            str(appdata / "hub.db"),
+            private=True,
+            create=True,
+            trusted_root=str(appdata),
+        )
+        guard.close()
+
+    def test_a_private_open_without_a_trusted_root_cannot_be_forgotten(self, tmp_path):
+        """W15: forgetting the argument fails the first test run, loudly.
+
+        Every one of W4-W7 was a caller silently opting out of a keyword. The
+        mandatory ``trusted_root`` turns that omission into an immediate
+        ``TypeError`` instead of a production refusal months later.
+        """
+        with pytest.raises(TypeError, match="trusted_root"):
+            TrustedSQLiteLocation.open(
+                str(tmp_path / "hub.db"), private=True, create=True
+            )
+
+    def test_a_private_file_outside_its_trusted_root_is_refused(self, tmp_path):
+        """The containment tautology holds in both directions.
+
+        ``trusted_root`` is derived from the hub path's own parent, so in
+        correct code the check always passes; a caller wiring it to the wrong
+        directory is the only way to get here, and that is a bug worth failing
+        closed on.
         """
         directory = tmp_path / "hub"
         directory.mkdir(mode=0o700)
-        monkeypatch.setattr(os, "name", "nt")
-        monkeypatch.setattr(
-            trusted_sqlite, "user_config_dir", lambda *_a, **_k: str(tmp_path / "conf")
-        )
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir(mode=0o700)
 
-        with pytest.raises(TrustedSQLiteLocationError, match="DACL"):
+        with pytest.raises(TrustedSQLiteLocationError, match="trusted root"):
             TrustedSQLiteLocation.open(
                 str(directory / "hub.db"),
                 private=True,
                 create=True,
-                allow_windows_app_config=True,
+                trusted_root=str(elsewhere),
             )
-
-    def test_a_windows_location_inside_the_config_directory_is_allowed(
-        self, tmp_path, monkeypatch
-    ):
-        """The other direction: over-blocking would lock every Windows user out."""
-        config = tmp_path / "conf"
-        config.mkdir(mode=0o700)
-        monkeypatch.setattr(os, "name", "nt")
-        monkeypatch.setattr(
-            trusted_sqlite, "user_config_dir", lambda *_a, **_k: str(config)
-        )
-
-        guard = TrustedSQLiteLocation.open(
-            str(config / "hub.db"),
-            private=True,
-            create=True,
-            allow_windows_app_config=True,
-        )
-        guard.close()
 
     def test_a_windows_junction_is_refused_like_a_symlink(self, tmp_path, monkeypatch):
         """The regression an independent review caught in this very check.
@@ -667,7 +680,9 @@ class TestHostileSidecarRefusal:
         path, sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o666)
 
         with pytest.raises(TrustedSQLiteLocationError, match=re.escape(sidecar)):
-            TrustedSQLiteLocation.open(path, private=True)
+            TrustedSQLiteLocation.open(
+                path, private=True, trusted_root=os.path.dirname(path)
+            )
 
     @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
     def test_the_refusal_happens_before_sqlite_connects(
@@ -724,14 +739,18 @@ class TestHostileSidecarRefusal:
         )
 
         with pytest.raises(TrustedSQLiteLocationError, match="not this user"):
-            TrustedSQLiteLocation.open(path, private=True)
+            TrustedSQLiteLocation.open(
+                path, private=True, trusted_root=os.path.dirname(path)
+            )
 
     @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
     def test_a_self_owned_0600_sidecar_still_opens(self, tmp_path, suffix):
         """The other direction: refusing our own sidecars breaks every WAL DB."""
         path, _sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o600)
 
-        TrustedSQLiteLocation.open(path, private=True).close()
+        TrustedSQLiteLocation.open(
+            path, private=True, trusted_root=os.path.dirname(path)
+        ).close()
 
     def test_sqlites_own_live_sidecars_still_open_end_to_end(self, tmp_path):
         """With a live WAL connection holding real ``-wal``/``-shm`` files, a
@@ -743,7 +762,9 @@ class TestHostileSidecarRefusal:
         try:
             assert os.path.exists(path + "-wal")
 
-            TrustedSQLiteLocation.open(path, private=True).close()
+            TrustedSQLiteLocation.open(
+                path, private=True, trusted_root=os.path.dirname(path)
+            ).close()
             HubDatabase(path).close()
         finally:
             first.close()
