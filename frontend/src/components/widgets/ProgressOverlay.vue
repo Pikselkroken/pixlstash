@@ -119,13 +119,20 @@ const clampedPercent = computed(() => {
  * tick once per item, and a live region repeating "41 of 12000" on every tick
  * buries the start, the finish and the failure it exists to announce. Rounding
  * to tens announces roughly ten times over a run instead.
+ *
+ * A terminal status is read out even once the card is hidden. Callers routinely
+ * settle the status and drop `visible` in the same tick (the export's two cancel
+ * paths do), so gating the terminal branches on `visible` would end those runs
+ * in silence, which is the exact failure this region exists to prevent. The
+ * stale text only sits in the DOM; a live region announces a change, not a
+ * presence, so nothing is re-read until the next run moves it.
  */
 const announcement = computed(() => {
-  if (!props.visible) return "";
   const label = props.message || "Progress";
   if (props.status === "failed") return `${label}: failed.`;
   if (props.status === "cancelled") return `${label}: cancelled.`;
   if (props.status === "completed") return `${label}: complete.`;
+  if (!props.visible) return "";
   if (props.indeterminate) return `${label}: working.`;
   return `${label}: ${Math.floor(clampedPercent.value / 10) * 10}% complete.`;
 });

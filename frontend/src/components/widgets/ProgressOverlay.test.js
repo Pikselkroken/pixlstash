@@ -94,6 +94,27 @@ describe("ProgressOverlay accessibility", () => {
     expect(live(w)).toBe("Exporting: cancelled.");
   });
 
+  it("still announces a terminal status when the card is hidden in the same tick", async () => {
+    // Both export cancel paths set status and visible=false together. Gating
+    // the terminal branches on `visible` would end those runs in silence.
+    const w = mountOverlay({ percent: 40 });
+    expect(live(w)).toBe("Exporting: 40% complete.");
+    await w.setProps({ status: "cancelled", visible: false });
+    expect(card(w).exists()).toBe(false);
+    expect(live(w)).toBe("Exporting: cancelled.");
+    await w.setProps({ status: "completed" });
+    expect(live(w)).toBe("Exporting: complete.");
+  });
+
+  it("goes quiet once a hidden overlay is reset to a non-terminal status", async () => {
+    // The reset must clear the region, or the next run's first line would be
+    // identical to the last one and a live region never re-reads unchanged text.
+    const w = mountOverlay({ status: "completed", visible: false });
+    expect(live(w)).toBe("Exporting: complete.");
+    await w.setProps({ status: "idle" });
+    expect(live(w)).toBe("");
+  });
+
   it("carries failure in a glyph and a word, not only the red card", () => {
     const w = mountOverlay({ status: "failed" });
     expect(card(w).classes()).toContain("progress-overlay--error");
