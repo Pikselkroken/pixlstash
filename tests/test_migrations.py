@@ -4,10 +4,13 @@ and on an upgrade from the pre-snapshots (v1.4.1) schema with real data."""
 import contextlib
 import hashlib
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+
+from sqlmodel import text
 
 
 _MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "..", "pixlstash")
@@ -1090,3 +1093,59 @@ def test_alembic_0094_adds_telemetry_consent_columns_defaulting_off():
             )
         finally:
             conn.close()
+
+
+_E2E_FIXTURE = os.path.join(_PROJECT_ROOT, "test-data", "images", "vault.db")
+
+
+def test_a_populated_library_upgrades_through_the_picture_table_rebuild():
+    """A vault with rows must survive migration 0080's rebuild of ``picture``.
+
+    ``op.batch_alter_table`` is the only way SQLite can drop a column: it
+    copies the table, ``DROP``s the original and renames. The vault engine runs
+    with ``PRAGMA foreign_keys=ON`` (``database.init_database``), so that
+    ``DROP`` raises "FOREIGN KEY constraint failed" as soon as any row
+    references the table — which is every real library, and the committed e2e
+    fixture. It brought the whole `e2e` lane down: the server could not boot.
+
+    A fresh database has nothing referencing ``picture``, so `upgrade head` on
+    an empty file passes either way; only a populated upgrade catches this.
+    The fixture is used because it is the artefact that actually failed, and
+    the e2e job already treats its absence as a coverage failure.
+
+    Goes through ``VaultDatabase`` deliberately: the standalone
+    ``PIXLSTASH_DB_URL`` path builds its engine from ``alembic.ini`` with no
+    connect listener, so FK enforcement is off there and the defect is
+    invisible.
+    """
+    from pixlstash.database import VaultDatabase
+
+    assert os.path.isfile(_E2E_FIXTURE), (
+        f"committed e2e fixture missing at {_E2E_FIXTURE}"
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        shutil.copyfile(_E2E_FIXTURE, db_path)
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            before = conn.execute("SELECT COUNT(*) FROM picture").fetchone()[0]
+        assert before > 0, "fixture must carry pictures for this to mean anything"
+
+        db = VaultDatabase(db_path)
+        try:
+            with contextlib.closing(sqlite3.connect(db_path)) as conn:
+                after = conn.execute("SELECT COUNT(*) FROM picture").fetchone()[0]
+                # The rebuild copies rows; losing them would be the other
+                # failure mode of suspending enforcement around it.
+                assert after == before
+                violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+                assert violations == []
+
+            # Enforcement must be back on for the connection the app then uses;
+            # a suspension that leaked would disable it for the whole session.
+            enabled = db.run_immediate_read_task(
+                lambda session: session.exec(text("PRAGMA foreign_keys")).one()[0]
+            )
+            assert enabled == 1
+        finally:
+            db.close()
