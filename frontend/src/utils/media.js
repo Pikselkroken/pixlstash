@@ -301,14 +301,31 @@ export const PICTURE_DRAG_MIME = 'application/x-pixlstash-pictures';
 export const FACE_DRAG_MIME = 'application/x-pixlstash-faces';
 
 /**
+ * Payload `type` to its marker. A kind absent from this map gets no marker, so
+ * no drop target accepts it — an unmapped payload must fail closed rather than
+ * inherit the picture marker and be filed as a picture drag (issue #757 again,
+ * one payload kind later).
+ */
+const DRAG_MARKERS = {
+  'image-ids': PICTURE_DRAG_MIME,
+  'face-bbox': FACE_DRAG_MIME,
+};
+
+/**
  * Write an internal drag payload: the JSON body every drop handler reads, plus
  * the marker type its kind is recognised by during dragover.
  */
 export function setInternalDragPayload(dataTransfer, payload) {
   if (!dataTransfer || !payload) return;
-  const marker =
-      payload.type === 'face-bbox' ? FACE_DRAG_MIME : PICTURE_DRAG_MIME;
   dataTransfer.setData('application/json', JSON.stringify(payload));
+  const marker = DRAG_MARKERS[payload.type];
+  if (!marker) {
+    console.error(
+      `Internal drag payload type "${payload.type}" has no marker in ` +
+        'DRAG_MARKERS, so no drop target will accept it. Add one.',
+    );
+    return;
+  }
   dataTransfer.setData(marker, payload.type);
 }
 

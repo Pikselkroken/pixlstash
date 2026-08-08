@@ -51,6 +51,7 @@ import {
   extractSupportedImportFilesFromDataTransfer,
   isFaceDrag,
   isFileDrag,
+  isInternalImageDrag,
   isPictureDrag,
 } from "../../utils/media.js";
 import {
@@ -2982,10 +2983,6 @@ function handleDragLeaveProject(event) {
   dragOverProjectId.value = null;
 }
 
-function isInternalImageDrag(event) {
-  return event?.dataTransfer?.types?.includes("application/json");
-}
-
 function readDraggedImageIds(event) {
   try {
     const data = JSON.parse(
@@ -3029,7 +3026,7 @@ function acceptDrop(event, kinds) {
     if (dt) dt.dropEffect = "move";
     return "accept";
   }
-  return isInternalImageDrag(event) ? "reject" : "ignore";
+  return isInternalImageDrag(dt) ? "reject" : "ignore";
 }
 
 // dragleave also fires when the pointer crosses from a row into one of its own

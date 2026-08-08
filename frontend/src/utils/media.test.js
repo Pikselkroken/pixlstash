@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   buildMediaUrl,
   isFaceDrag,
@@ -53,7 +53,7 @@ describe('isFileDrag', () => {
 })
 
 // A drop target may only read `types` during dragover, so the payload kind has
-// to be a key. Before this, a face drag and a picture drag were indistinguisable
+// to be a key. Before this, a face drag and a picture drag were indistinguishable
 // until the drop had already happened (issue #757).
 describe('internal drag payload markers', () => {
   function writer() {
@@ -107,6 +107,21 @@ describe('internal drag payload markers', () => {
   it('keeps the two marker types apart', () => {
     expect(PICTURE_DRAG_MIME).not.toBe(FACE_DRAG_MIME)
   })
+
+  it('leaves an unmapped payload kind unmarked rather than calling it a picture',
+     () => {
+       const {store, dataTransfer} = writer()
+       const complained =
+           vi.spyOn(console, 'error').mockImplementation(() => {})
+
+       setInternalDragPayload(dataTransfer, {type: 'something-new', ids: [1]})
+
+       expect(JSON.parse(store['application/json']).type).toBe('something-new')
+       expect(isPictureDrag(dataTransfer)).toBe(false)
+       expect(isFaceDrag(dataTransfer)).toBe(false)
+       expect(complained).toHaveBeenCalled()
+       complained.mockRestore()
+     })
 })
 
 describe('buildMediaUrl', () => {
