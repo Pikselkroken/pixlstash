@@ -434,6 +434,63 @@ header 36px) so the custom title bar and controls fit — see the overrides in
 onto `--bar-height` is an open reconciliation item; it moves pixels, so it needs
 UI/UX sign-off — see §13.)
 
+### 5.1 The row grid (how a list row shares a left edge)
+
+The claim above — *columns of controls share a left edge* — is the one §5 made and
+never enforced. A list row is **four columns**, and the first two are reserved:
+
+```
+[disclosure gutter] [identity mark] [label 1fr] [actions auto]
+   --gutter-glyph      --entity-thumb
+```
+
+**Columns 1 and 2 are never conditional.** A row with no chevron reserves the
+gutter anyway; a row with no thumbnail reserves the identity column anyway. That is
+the whole mechanism: a character with a face photo and one without share a left edge
+because neither column ever collapses. Optional glyphs go `visibility: hidden`, never
+`display: none`, and never `v-if`.
+
+**Depth is a number, not a class.** A row carries `--depth: 0 | 1 | 2` and the grid
+multiplies it:
+
+```css
+padding-inline-start: calc(var(--space-3) + var(--depth, 0) * var(--indent-step));
+```
+
+No per-level classes, no `!important` override, no nested wrapper adding padding and
+a margin and a border that sum to an off-grid step.
+
+**The selection rail is always present and always transparent.** Only its colour
+changes on `.active`:
+
+```css
+border-left: 3px solid transparent;   /* base — always */
+.active { border-left-color: var(--active-bar); }
+```
+
+Never add the border on select, and never "compensate" for it with padding. Adding
+3px of border and 8px of padding on `.active` moves the label 3px right; that is a
+bug that has shipped here twice, once under a comment asserting it does not happen.
+
+**Why these three widths.** `--gutter-glyph` is 16px because the sidebar already
+forced every chevron and row icon to 16px with `!important`. `--indent-step` is
+`--gutter-glyph + --space-3` = 24px, and equals `--space-6`, so it is on-grid by
+construction. `--entity-thumb` is 24px, promoted from the sidebar's own
+`--sidebar-thumb-size`. Nothing here was invented.
+
+**One glyph advances the row by exactly one step.** This is the part that is easy
+to get subtly wrong: a 16px glyph in a row that gaps at 4px advances the label by
+20px, not 24, so glyph columns drift 4px per level and the tree reads as
+hand-placed. The glyph slot therefore carries its own `margin-right: --space-2` on
+top of the row gap, making the advance 16 + 4 + 4 = 24. With that, a child's
+chevron lands under its parent's icon and the child's icon under its parent's
+label. If you change a row's `gap`, re-check this sum.
+
+**Scoped CSS does not cross a component boundary.** A row rendered by a child
+component gets none of the parent's scoped rules, so a recursive tree component must
+consume these tokens itself rather than keep a private copy. Two copies of a row
+style drift, and the copy is where the rail bug survives.
+
 ---
 
 ## 6. Radius

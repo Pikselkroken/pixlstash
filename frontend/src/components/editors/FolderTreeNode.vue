@@ -9,9 +9,6 @@ const props = defineProps({
   folderBrowseCache: { type: Object, required: true },
   expandedFolderIds: { type: Object, required: true }, // Set
   dropTargetKey: { type: String, default: null },
-  // True when the hovered row is the drop target but will not take the payload
-  // being dragged (a face drag over a reference folder, say).
-  dropRejected: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
@@ -55,12 +52,17 @@ function childImageCount() {
       class="sidebar-folder-row sidebar-folder-child-row"
       :class="{
         active: selectedFolderKey === 'path-' + entry.path,
-        droppable: dropTargetKey === 'path-' + entry.path && !dropRejected,
-        'not-droppable': dropTargetKey === 'path-' + entry.path && dropRejected,
+        droppable: dropTargetKey === 'path-' + entry.path,
       }"
+      :style="{ '--depth': depth }"
       :title="`${entry.path} - drop dragged reference images here to move them`"
       @contextmenu.prevent="
-        emit('context', { rfId, path: entry.path, label: entry.name, event: $event })
+        emit('context', {
+          rfId,
+          path: entry.path,
+          label: entry.name,
+          event: $event,
+        })
       "
       @dragover="emit('drag-over', { rfId, path: entry.path, event: $event })"
       @dragleave="emit('drag-leave', { rfId, path: entry.path, event: $event })"
@@ -75,13 +77,15 @@ function childImageCount() {
     >
       <v-icon
         size="12"
-        class="sidebar-folder-chevron"
-        :style="{ visibility: hasChildren() ? 'visible' : 'hidden' }"
+        class="sidebar-row-glyph sidebar-folder-chevron"
+        :class="{ 'sidebar-row-glyph--empty': !hasChildren() }"
         @click.stop="emit('toggle', entry.path)"
       >
         {{ isExpanded() ? "mdi-chevron-down" : "mdi-chevron-right" }}
       </v-icon>
-      <v-icon size="16" class="sidebar-folder-icon">mdi-folder-outline</v-icon>
+      <v-icon size="16" class="sidebar-row-glyph sidebar-folder-icon"
+        >mdi-folder-outline</v-icon
+      >
       <span class="sidebar-folder-label">{{ entry.name }}</span>
       <span
         v-if="folderBrowseCache[entry.path]?.loading || childImageCount() > 0"
@@ -110,7 +114,6 @@ function childImageCount() {
           :folder-browse-cache="folderBrowseCache"
           :expanded-folder-ids="expandedFolderIds"
           :drop-target-key="dropTargetKey"
-          :drop-rejected="dropRejected"
           @select="(key, payload) => emit('select', key, payload)"
           @toggle="(path) => emit('toggle', path)"
           @drag-over="(payload) => emit('drag-over', payload)"
@@ -129,111 +132,13 @@ function childImageCount() {
   </div>
 </template>
 
+<!-- The row itself is styled by the unscoped row system in SideBar.global.css.
+     This component used to carry its own copy of .sidebar-folder-row and
+     friends, which had drifted to an 8px inset instead of the sidebar's and
+     was missing the base selection rail, so selecting a nested folder shifted
+     its label 3px right. Do not re-add a local copy; see visual-language.md
+     §5.1. Only rules with no counterpart in the shared system stay here. -->
 <style scoped>
-.sidebar-folder-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  cursor: pointer;
-  font-size: var(--text-sm);
-  color: rgb(var(--v-theme-sidebar-text));
-  user-select: none;
-}
-
-.sidebar-folder-row:hover {
-  background: rgba(var(--v-theme-accent), 0.1);
-}
-
-.sidebar-folder-row.active {
-  background: rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
-  border-left: 3px solid rgb(var(--v-theme-primary));
-}
-
-.sidebar-folder-row.active:hover {
-  background: linear-gradient(rgba(var(--v-theme-accent), 0.08), rgba(var(--v-theme-accent), 0.08)), rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-primary));
-}
-
-.sidebar-folder-children {
-  padding-left: var(--space-2);
-  border-left: 1px dashed rgba(var(--v-theme-border), 0.35);
-  margin-left: var(--space-1);
-}
-
-.sidebar-folder-label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.sidebar-folder-chevron,
-.sidebar-folder-icon {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
-.sidebar-folder-status-badge {
-  flex-shrink: 0;
-  margin-left: var(--space-1);
-  opacity: 0.75;
-}
-
-.sidebar-folder-count-badge {
-  flex-shrink: 0;
-  margin-left: var(--space-2);
-  min-width: 22px;
-  text-align: right;
-  font-size: var(--text-2xs);
-  font-variant-numeric: tabular-nums;
-  color: rgb(var(--v-theme-sidebar-text));
-}
-
-.sidebar-folder-row.active .sidebar-folder-count-badge {
-  color: rgba(var(--v-theme-on-primary), 0.9);
-}
-
-.sidebar-folder-row.droppable {
-  filter: brightness(1.2);
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-}
-
-/* Rejected drop target — same state as SideBar.css `.not-droppable`, repeated
-   here because this component's styles are scoped. */
-.sidebar-folder-row.not-droppable {
-  position: relative;
-  background: repeating-linear-gradient(
-    45deg,
-    transparent 0 var(--space-2),
-    rgba(var(--v-theme-border), 0.45) var(--space-2) var(--space-3)
-  );
-  outline: 1px dashed rgba(var(--v-theme-border), 0.7);
-  outline-offset: -1px;
-  border-radius: var(--radius-sm);
-  cursor: no-drop;
-}
-
-.sidebar-folder-row.not-droppable > * {
-  opacity: var(--opacity-disabled);
-}
-
-.sidebar-folder-row.not-droppable::after {
-  content: "\F073A"; /* mdi-cancel */
-  font-family: "Material Design Icons";
-  font-size: var(--text-sm);
-  line-height: 1;
-  position: absolute;
-  top: 50%;
-  right: var(--space-3);
-  transform: translateY(-50%);
-  color: rgb(var(--v-theme-sidebar-text));
-  pointer-events: none;
-}
-
 .sidebar-folder-status--active {
   color: rgb(var(--v-theme-sidebar-text));
   cursor: pointer;
