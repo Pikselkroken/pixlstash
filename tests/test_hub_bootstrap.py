@@ -263,7 +263,13 @@ class TestFreshInstall:
         """
         os.chmod(tmp_path, 0o700)
         parent = tmp_path / "loose"
-        parent.mkdir(mode=0o775)
+        parent.mkdir()
+        # chmod, not mkdir(mode=): the mode argument is masked by the process
+        # umask, so 0o775 lands as 0o755 wherever the umask is 022 — which is
+        # the GitHub runner default. The directory then is not group-writable,
+        # nothing is loose, and the test failed with "DID NOT RAISE" for the
+        # one reason that is not a defect in the code under test.
+        os.chmod(parent, 0o775)
 
         with pytest.raises(HubPermissionError, match="group/world-writable"):
             HubDatabase(str(parent / "hub.db"))
