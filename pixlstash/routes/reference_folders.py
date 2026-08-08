@@ -1356,6 +1356,7 @@ def create_router(server) -> APIRouter:
                             SIDECAR_TYPE_TAGS,
                             rf.tags_suffix,
                             pic.tags_file,
+                            image_root=server.vault.image_root,
                         )
                         mtime = (
                             write_sidecar(target, ", ".join(tags))
@@ -1375,6 +1376,7 @@ def create_router(server) -> APIRouter:
                             SIDECAR_TYPE_DESCRIPTION,
                             rf.description_suffix,
                             pic.description_file,
+                            image_root=server.vault.image_root,
                         )
                         mtime = (
                             write_sidecar(target, description)

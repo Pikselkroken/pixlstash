@@ -27,6 +27,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.db_models.picture import Picture
 from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.path_utils import is_allowed_picture_path, path_is_within
 
 logger = get_logger(__name__)
 
@@ -139,16 +140,39 @@ class ImageUtils:
         """
         Resolve a stored picture path to an absolute file path.
 
-        If file_path is already absolute it is returned unchanged.
-        If file_path is relative it is joined with image_root.
+        A relative ``file_path`` is joined with ``image_root``; an absolute one
+        is returned as-is.  Either way the result is contained: a stored path
+        that escapes the legitimate roots (the image root plus the configured
+        reference folders, see ``is_allowed_picture_path``) is refused with a
+        logged warning and ``None`` — the same value callers already handle for
+        an empty path — so a hostile database row is skipped, never followed to
+        the filesystem.  Without an ``image_root`` there is no root set to
+        contain against and the legacy passthrough behaviour is kept.
         """
         if not file_path:
             return None
         if os.path.isabs(file_path):
-            return file_path
+            if not image_root or is_allowed_picture_path(image_root, file_path):
+                return file_path
+            logger.warning(
+                "Refusing stored picture path outside the library roots: "
+                "%s (image_root=%s)",
+                file_path,
+                image_root,
+            )
+            return None
         if not image_root:
             return file_path
-        return os.path.join(image_root, file_path)
+        joined = os.path.join(image_root, file_path)
+        if not path_is_within(joined, image_root):
+            logger.warning(
+                "Refusing stored picture path that escapes the image root: "
+                "%s (image_root=%s)",
+                file_path,
+                image_root,
+            )
+            return None
+        return joined
 
     @staticmethod
     def get_thumbnail_path(

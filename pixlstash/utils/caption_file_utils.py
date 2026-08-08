@@ -20,6 +20,7 @@ import tempfile
 from collections import Counter
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.path_utils import is_allowed_picture_path
 
 logger = get_logger(__name__)
 
@@ -183,19 +184,52 @@ def writeback_path(
     sidecar_type: str,
     configured_suffix: str | None,
     existing_path: str | None,
+    *,
+    image_root: str | None = None,
 ) -> str | None:
     """Return the path to write a sidecar of *sidecar_type* to.
 
     Prefers an already-resolved *existing_path*; otherwise builds one from the
     *configured_suffix* (or the module default for the type).
 
-    Returns ``None`` when the folder's configured suffix is not a usable
-    filename fragment, so a folder configured before the rule was enforced on
-    every write path skips its write-back (logged) instead of raising through
-    the caller and wedging a scan or returning a 500. Callers must handle it.
+    Both inputs that can carry a hostile database value are contained here,
+    at the single chokepoint every sidecar write-back goes through:
+
+    - When *image_root* is given and *image_path* is absolute, it must lie
+      under the library's legitimate roots (image root + reference folders,
+      see ``is_allowed_picture_path``) — a picture row with a fabricated
+      ``file_path`` must not direct a file write elsewhere.
+    - *existing_path* (typically the ``tags_file`` / ``description_file``
+      column, also a database value) is only honoured when it is exactly the
+      image stem plus a safe suffix; anything else is ignored (logged) and the
+      standard suffix-derived path is used instead.
+
+    Returns ``None`` when the write-back must be skipped entirely (contained
+    image path, unusable configured suffix), logged rather than raised so an
+    unattended scan is never wedged. Callers must handle it.
     """
+    if image_root and os.path.isabs(image_path):
+        if not is_allowed_picture_path(image_root, image_path):
+            logger.warning(
+                "Skipping %s sidecar write-back: image path %s is outside "
+                "the library roots (image_root=%s)",
+                sidecar_type,
+                image_path,
+                image_root,
+            )
+            return None
     if existing_path:
-        return existing_path
+        stem = os.path.splitext(image_path)[0]
+        tail = existing_path[len(stem) :] if existing_path.startswith(stem) else ""
+        if tail and is_safe_sidecar_suffix(tail):
+            return existing_path
+        logger.warning(
+            "Ignoring recorded %s sidecar path %r for %s: not the image "
+            "stem plus a safe suffix; using the configured suffix instead",
+            sidecar_type,
+            existing_path,
+            image_path,
+        )
     suffix = configured_suffix or (
         DEFAULT_TAGS_SUFFIX
         if sidecar_type == SIDECAR_TYPE_TAGS

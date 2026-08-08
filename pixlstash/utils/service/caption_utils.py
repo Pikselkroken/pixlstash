@@ -223,7 +223,11 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
             # existing one (so clearing tags empties it).
             if existing or current_tags:
                 target = writeback_path(
-                    image_path, SIDECAR_TYPE_TAGS, rf.tags_suffix, existing
+                    image_path,
+                    SIDECAR_TYPE_TAGS,
+                    rf.tags_suffix,
+                    existing,
+                    image_root=server.vault.image_root,
                 )
                 new_mtime = (
                     write_sidecar(target, ", ".join(current_tags))
@@ -252,6 +256,7 @@ def sync_picture_sidecar(server, pic_id: int) -> list[dict]:
                     SIDECAR_TYPE_DESCRIPTION,
                     rf.description_suffix,
                     existing,
+                    image_root=server.vault.image_root,
                 )
                 new_mtime = (
                     write_sidecar(target, description) if target is not None else None

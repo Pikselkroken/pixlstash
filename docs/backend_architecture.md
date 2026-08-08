@@ -1128,6 +1128,36 @@ The fix is an additive column, `public_id`: 128 bits of randomness as lowercase 
 - File-based **SQLite** at `{image_root}/vault.db`
 - All writes are serialised through `VaultDatabase`'s task queue (single writer); reads run in parallel.
 
+### Stored path containment (#776)
+
+Paths stored in the database (`Picture.file_path`, sidecar columns,
+`Snapshot.relative_path`) are treated as untrusted — a substituted `vault.db`
+or a restored archive can carry arbitrary values — and are contained before
+they reach the filesystem:
+
+- **`ImageUtils.resolve_picture_path` is the chokepoint for picture paths.**
+  The legitimate root set is `image_root` **plus every configured reference
+  folder** (host-side and path-mapped forms). Each `Vault` registers a lazy
+  provider for its reference-folder roots via
+  `path_utils.register_reference_roots_provider` (cached; refreshed once on a
+  containment miss, so a just-added folder is honoured immediately). A path
+  outside the set resolves to `None` with a logged warning — the value callers
+  already handle for an empty path — so unattended tasks skip the row instead
+  of crashing. Containing against `image_root` alone would refuse real
+  reference-folder libraries; never do that.
+- **Snapshot file paths** (`relative_path` / manifest / hashes) go through
+  `resolve_path_within(vault_root, …)` at every read/delete site (retention
+  prune, snapshot delete, restore, identity scrub); `os.path.join` silently
+  discards the base for an absolute component and must not be used there.
+- **Sidecar write-backs** funnel through `caption_file_utils.writeback_path`,
+  which refuses an image path outside the root set and only honours a recorded
+  `tags_file`/`description_file` value that is exactly the image stem plus a
+  safe suffix.
+
+Both directions are asserted in `tests/test_path_containment.py`: escape is
+refused at each sink, and in-root plus reference-folder pictures keep working
+(over-blocking is its own regression).
+
 ### Hub and library identity
 
 `hub.db` sits beside `server-config.json`, outside every image library. It owns

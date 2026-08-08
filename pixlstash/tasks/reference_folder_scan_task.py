@@ -498,7 +498,9 @@ class ReferenceFolderScanTask(BaseTask):
 
         # Export: create the file from the database when there is content to write.
         if sync and export_content:
-            target = writeback_path(file_path, sidecar_type, suffix, None)
+            target = writeback_path(
+                file_path, sidecar_type, suffix, None, image_root=self._db.image_root
+            )
             if target is None:
                 return
             new_mtime = write_sidecar(target, export_content)

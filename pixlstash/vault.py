@@ -53,6 +53,10 @@ from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore import RestoreService
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
+from pixlstash.utils.path_utils import (
+    register_reference_roots_provider,
+    unregister_reference_roots_provider,
+)
 
 
 logger = get_logger(__name__)
@@ -145,6 +149,13 @@ class Vault:
         else:
             self.db = VaultDatabase(self._db_path)
         self.set_description(description or "")
+
+        # Containment root set for stored picture paths: resolve_picture_path
+        # refuses any absolute Picture.file_path that is not under image_root
+        # or a configured reference folder. The folder list lives in this
+        # vault's DB, so register a provider for it (queried lazily, cached,
+        # refreshed once on a containment miss). Unregistered in stop().
+        register_reference_roots_provider(self.image_root, self._reference_folder_roots)
 
         self.snapshot_service = SnapshotService(self)
         self.restore_service = RestoreService(self)
@@ -432,6 +443,34 @@ class Vault:
                     exc,
                 )
 
+    def _reference_folder_roots(self) -> list[str]:
+        """Return the reference-folder roots pictures may legitimately live under.
+
+        Each folder contributes its stored (host-side) path and, when a path
+        mapper is configured, its mapped (container-side) form — stored
+        ``Picture.file_path`` values are written under the mapped form in
+        Docker deployments, while the ``reference_folder`` row keeps the host
+        form.
+        """
+        from pixlstash.db_models.reference_folder import ReferenceFolder
+
+        def fetch(session: Session) -> list[str]:
+            return [
+                row.folder
+                for row in session.exec(select(ReferenceFolder)).all()
+                if row.folder
+            ]
+
+        folders = self.db.run_immediate_read_task(fetch)
+        roots: list[str] = []
+        for folder in folders:
+            roots.append(folder)
+            if self._path_mapper is not None:
+                mapped = self._path_mapper.resolve(folder)
+                if mapped != folder:
+                    roots.append(mapped)
+        return roots
+
     def watch_reference_folder(self, folder_id: int, folder_path: str) -> None:
         """Start watching *folder_path* for reference folder *folder_id*.
 
@@ -528,6 +567,9 @@ class Vault:
         Safe to call multiple times; subsequent calls after the first are no-ops.
         Called automatically by ``close()``.
         """
+        unregister_reference_roots_provider(
+            self.image_root, self._reference_folder_roots
+        )
         with self._changed_tags_notify_lock:
             timer = self._changed_tags_flush_timer
             self._changed_tags_flush_timer = None
