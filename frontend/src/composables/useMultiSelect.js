@@ -1,4 +1,9 @@
 import { ref, watch } from "vue";
+import {
+  FACE_DRAG_MIME,
+  PICTURE_DRAG_MIME,
+  setInternalDragPayload,
+} from "../utils/media.js";
 
 /**
  * Manages multi-image selection, touch selection mode, and face bbox selection.
@@ -148,18 +153,23 @@ export function useMultiSelect() {
       existingData[type] = event.dataTransfer.getData(type);
     }
 
-    // Set the application/json data
-    const dragDataStr = JSON.stringify({
+    // Set the application/json data plus the face marker type
+    setInternalDragPayload(event.dataTransfer, {
       type: "face-bbox",
       faceIds: facesToDrag.map((f) => f.faceId),
       imageIds: Array.from(new Set(facesToDrag.map((f) => f.imageId))),
       faces: facesToDrag,
     });
-    event.dataTransfer.setData("application/json", dragDataStr);
 
-    // Restore other data types
+    // Restore other data types. The payload keys are deliberately not restored:
+    // this drag is faces, and a leftover picture marker would make it read as
+    // both to the sidebar drop targets.
     for (const [type, data] of Object.entries(existingData)) {
-      if (type !== "application/json") {
+      if (
+        type !== "application/json" &&
+        type !== PICTURE_DRAG_MIME &&
+        type !== FACE_DRAG_MIME
+      ) {
         event.dataTransfer.setData(type, data);
       }
     }

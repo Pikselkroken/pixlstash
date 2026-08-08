@@ -9,6 +9,9 @@ const props = defineProps({
   folderBrowseCache: { type: Object, required: true },
   expandedFolderIds: { type: Object, required: true }, // Set
   dropTargetKey: { type: String, default: null },
+  // True when the hovered row is the drop target but will not take the payload
+  // being dragged (a face drag over a reference folder, say).
+  dropRejected: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
@@ -52,7 +55,8 @@ function childImageCount() {
       class="sidebar-folder-row sidebar-folder-child-row"
       :class="{
         active: selectedFolderKey === 'path-' + entry.path,
-        droppable: dropTargetKey === 'path-' + entry.path,
+        droppable: dropTargetKey === 'path-' + entry.path && !dropRejected,
+        'not-droppable': dropTargetKey === 'path-' + entry.path && dropRejected,
       }"
       :title="`${entry.path} - drop dragged reference images here to move them`"
       @contextmenu.prevent="
@@ -106,6 +110,7 @@ function childImageCount() {
           :folder-browse-cache="folderBrowseCache"
           :expanded-folder-ids="expandedFolderIds"
           :drop-target-key="dropTargetKey"
+          :drop-rejected="dropRejected"
           @select="(key, payload) => emit('select', key, payload)"
           @toggle="(path) => emit('toggle', path)"
           @drag-over="(payload) => emit('drag-over', payload)"
@@ -195,6 +200,38 @@ function childImageCount() {
   filter: brightness(1.2);
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
+}
+
+/* Rejected drop target — same state as SideBar.css `.not-droppable`, repeated
+   here because this component's styles are scoped. */
+.sidebar-folder-row.not-droppable {
+  position: relative;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent 0 var(--space-2),
+    rgba(var(--v-theme-border), 0.45) var(--space-2) var(--space-3)
+  );
+  outline: 1px dashed rgba(var(--v-theme-border), 0.7);
+  outline-offset: -1px;
+  border-radius: var(--radius-sm);
+  cursor: no-drop;
+}
+
+.sidebar-folder-row.not-droppable > * {
+  opacity: var(--opacity-disabled);
+}
+
+.sidebar-folder-row.not-droppable::after {
+  content: "\F073A"; /* mdi-cancel */
+  font-family: "Material Design Icons";
+  font-size: var(--text-sm);
+  line-height: 1;
+  position: absolute;
+  top: 50%;
+  right: var(--space-3);
+  transform: translateY(-50%);
+  color: rgb(var(--v-theme-sidebar-text));
+  pointer-events: none;
 }
 
 .sidebar-folder-status--active {
