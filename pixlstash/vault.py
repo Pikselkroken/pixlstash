@@ -432,6 +432,49 @@ class Vault:
                     exc,
                 )
 
+    def reference_folder_roots(self) -> tuple[str, ...]:
+        """Return the roots pictures may legitimately live under besides image_root.
+
+        Each configured reference folder contributes its stored (host-side)
+        path and, when a path mapper is configured, its mapped
+        (container-side) form: stored ``Picture.file_path`` values are written
+        under the mapped form in Docker deployments, while the
+        ``reference_folder`` row keeps the host form.
+
+        Returns:
+            The root directories, empty when the folder list cannot be read
+            (logged) so a caller containing a destructive operation refuses
+            rather than guesses.
+        """
+        from pixlstash.db_models.reference_folder import ReferenceFolder
+
+        def fetch(session: Session) -> list[str]:
+            return [
+                row.folder
+                for row in session.exec(select(ReferenceFolder)).all()
+                if row.folder
+            ]
+
+        try:
+            folders = self.db.run_immediate_read_task(fetch)
+        except Exception as exc:
+            logger.warning(
+                "Could not read the reference folders of %s; treating the set "
+                "as empty, so paths outside the image root will be refused: %s",
+                self.image_root,
+                exc,
+            )
+            return ()
+
+        roots: list[str] = []
+        for folder in folders:
+            roots.append(folder)
+            if self._path_mapper is not None:
+                mapped = self._path_mapper.resolve(folder)
+                if mapped != folder:
+                    roots.append(mapped)
+        return tuple(roots)
+
     def watch_reference_folder(self, folder_id: int, folder_path: str) -> None:
         """Start watching *folder_path* for reference folder *folder_id*.
 

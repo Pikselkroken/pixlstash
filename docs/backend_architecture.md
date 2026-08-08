@@ -1128,6 +1128,41 @@ The fix is an additive column, `public_id`: 128 bits of randomness as lowercase 
 - File-based **SQLite** at `{image_root}/vault.db`
 - All writes are serialised through `VaultDatabase`'s task queue (single writer); reads run in parallel.
 
+### Stored path containment (#776)
+
+`Snapshot.relative_path` and `Picture.file_path` are database values, so a
+faulty import, a bug, or a restored archive can put a path in them that points
+outside the library. They are contained **before a destructive operation**,
+never on the read path:
+
+- **Snapshot file paths** (`relative_path` / manifest / hashes) go through
+  `resolve_path_within(vault_root, …)` at every read/delete site (retention
+  prune, snapshot delete, restore, identity scrub). `os.path.join` silently
+  discards the base when a component is absolute and must not be used there.
+- **The scrapheap purge delete** (`remove_picture_files`) is the one unattended
+  `os.remove` that follows `Picture.file_path` wherever it points, so it checks
+  the resolved path against `image_root` **plus the configured reference-folder
+  roots** (`Vault.reference_folder_roots()`, host-side and path-mapped forms).
+  Containing against `image_root` alone would strand every reference-folder
+  library's files; never do that. A refused path is reported as unconfirmed, so
+  the deletion ledger is corrected to `file_removed=False` and restore can
+  still resurrect the row.
+- **Sidecar write-backs** funnel through `caption_file_utils.writeback_path`,
+  which only honours a recorded `tags_file`/`description_file` value that is
+  exactly the image stem plus a safe suffix, so a fabricated column cannot
+  redirect a write.
+
+**Reads are deliberately not contained.** `resolve_picture_path` does not
+police where a picture lives. Whoever can write the vault DB can read those
+files directly, so refusing to serve them buys little, while a false refusal
+(an orphaned reference-folder row, a moved mount, a path-mapper form) presents
+to a desktop user as their pictures failing to load. Over-blocking a delete
+strands a file and is recoverable; over-blocking a read breaks the library.
+
+Both directions are asserted in `tests/test_path_containment.py`: escape is
+refused at each sink, and in-root plus reference-folder files are still deleted
+(over-blocking is its own regression).
+
 ### Hub and library identity
 
 `hub.db` sits beside `server-config.json`, outside every image library. It owns

@@ -357,6 +357,7 @@ jobs:
           tests/test_multi_project_membership_authz.py
           tests/test_openapi_response_schemas.py
           tests/test_operation_log.py
+          tests/test_path_containment.py
           tests/test_pending_score_invalidation.py
           tests/test_picture_is_video.py
           tests/test_picture_mutation_scope.py
