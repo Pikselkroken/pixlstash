@@ -478,8 +478,21 @@ signal is load-bearing on its own. This is not decoration. When a project row an
 the section captions nested under it were set identically (both `--text-2xs`,
 semibold, uppercase), indentation had to signal both containment *and* rank, and
 the only way to make rank legible was a bigger step. Three levels of that pushed
-entity names to 91px in a 240px rail. One ramp step of contrast between project
-and caption is what makes a 16px indent enough.
+entity names to 91px in a 240px rail. Two ramp steps of size between project and
+caption is what makes a 16px indent enough.
+
+**Rank is size, weight and tracking. It is never opacity.** A structural label
+must not be dimmer than the content it heads. Dimming the section captions to 0.7
+made them the quietest thing in the column, sitting between a full-strength
+project above and full-strength entity names below, which reads as a hole rather
+than a hierarchy. Chrome recedes by being *smaller*, not by fading.
+
+**A row's caret takes its row's colour and never its own opacity.** When only the
+caption was dimmed, its caret was not, so the caret outshone the label it
+belonged to while the project's caret sat far below its own. Tying a caret to a
+fraction of its label does not fix it either: 0.7 of a 0.7 label is 0.49, which
+measures 2.95:1 against the light sidebar and misses the 3:1 that a disclosure
+glyph owes as a meaningful graphical object (WCAG 1.4.11). Leave both alone.
 
 **The indent step is set by legibility, not by glyph arithmetic.** `--indent-step`
 is 16px because that is the smallest on-grid step that still reads as nesting at
