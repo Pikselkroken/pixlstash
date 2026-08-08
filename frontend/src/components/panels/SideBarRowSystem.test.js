@@ -192,57 +192,26 @@ describe("optional glyphs keep their box", () => {
       scopedCss,
       ".sidebar-project-tree-subheader-label",
     );
-    expect(project).toContain("font-size: var(--text-xs)");
+    expect(project).toContain("font-size: var(--text-sm)");
     expect(caption).toContain("font-size: var(--text-2xs)");
-    // Across every rule for the selector, not just the last: these row types
-    // are each declared in several places.
-    const declares = (sel, decl) =>
-      ruleBodies(scopedCss, sel).some((b) => b.includes(decl));
-    expect(
-      declares(".sidebar-project-tree-row", "--row-emphasis: 1"),
-      "the project row must declare full emphasis",
-    ).toBe(true);
-    expect(
-      declares(".sidebar-project-tree-subheader", "--row-emphasis: 0.7"),
-      "the caption row must declare reduced emphasis",
-    ).toBe(true);
   });
 
-  it("a caret carries the same emphasis as its own label", () => {
-    // Both halves of this drifted: the project caret sat at 0.5 under a
-    // full-strength label, the caption caret at full strength over a 0.7 label.
-    // One rule feeds both, so they cannot diverge again. Parity rather than a
-    // fraction, because 0.7 x 0.7 = 0.49 measures 2.95:1 in light and fails the
-    // 3:1 floor a disclosure glyph owes under WCAG 1.4.11.
-    const shared = code(scopedCss)
-      .split("}")
-      .find(
-        (r) =>
-          r.includes("opacity: var(--row-emphasis") &&
-          r.split("{")[0].includes("chevron"),
-      );
-    expect(shared, "label and caret must share one emphasis rule").toBeTruthy();
-    const selectors = shared
-      .split("{")[0]
-      .split(",")
-      .map((s) => s.trim());
-    for (const part of [
+  it("no structural label or caret in the project tree is dimmed", () => {
+    // Three separate defects came out of dimming things in this column:
+    //   - caption at 0.7 became quieter than the names it heads, inverting the
+    //     hierarchy;
+    //   - its caret was not dimmed with it, so the caret outshone its label,
+    //     while the project's caret at 0.5 was far dimmer than its own;
+    //   - a caret at 0.7 of a 0.7 label measures 2.95:1 in light, under the
+    //     3:1 a disclosure glyph owes as a graphical object (WCAG 1.4.11).
+    // Rank is size, weight, tracking and indent. Not opacity.
+    for (const sel of [
       ".sidebar-project-tree-label",
       ".sidebar-project-tree-chevron",
       ".sidebar-project-tree-subheader-label",
       ".sidebar-project-tree-sub-chevron",
     ]) {
-      expect(selectors).toContain(part);
-    }
-  });
-
-  it("no caret sets a standalone opacity that could diverge", () => {
-    for (const sel of [
-      ".sidebar-project-tree-chevron",
-      ".sidebar-project-tree-sub-chevron",
-    ]) {
       for (const body of ruleBodies(scopedCss, sel)) {
-        if (body.includes("--row-emphasis")) continue;
         expect(body, `${sel} must not carry its own opacity`).not.toMatch(
           /opacity\s*:/,
         );

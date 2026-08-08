@@ -325,35 +325,21 @@
 }
 
 /* ---------------------------------------------------------------------------
-   ROW EMPHASIS. A row's disclosure caret carries the SAME emphasis as that
-   row's label. One number per row type, and both the label and the caret read
-   it, so a caret can never end up brighter or dimmer than the text it belongs
-   to. That drifted twice: the project caret sat at 0.5 against a full-strength
-   label, and the caption caret inherited full strength against a 0.7 label.
+   NOTHING IN THIS COLUMN IS DIMMED. Rank comes from size, weight, tracking and
+   indent; every structural label and every caret sits at the row's own colour.
 
-   Same, not a fraction of it. Caret at 0.7 x a 0.7 label is 0.49, which
-   measures 2.95:1 in the light theme and fails the 3:1 floor a disclosure
-   glyph owes as a meaningful graphical object (WCAG 1.4.11). At parity both
-   land clear: 13.45:1 / 9.73:1 at 1.0 and 5.41:1 / 5.55:1 at 0.7,
-   light / dark.
+   Two failed attempts are why this is spelled out. Dimming the caption to 0.7
+   made it the quietest thing in the column, between a full-strength project
+   above and full-strength names below: a header must never be quieter than the
+   rows it heads, or the hierarchy inverts. And when only the caption was
+   dimmed, its caret was not, so the caret read brighter than its own label
+   while the project's read much dimmer than its own.
 
-   `opacity`, not `color`, on purpose: an explicit colour here would stop the
-   label following `--active-text` when its row is selected.
+   The rule that survives both: a caret takes its row's colour and never carries
+   its own opacity. `SideBarRowSystem.test.js` enforces it. This also keeps a
+   selected project following `--active-text`, which an explicit colour here
+   would break.
    --------------------------------------------------------------------------- */
-.sidebar-project-tree-row {
-  --row-emphasis: 1;
-}
-
-.sidebar-project-tree-subheader {
-  --row-emphasis: 0.7;
-}
-
-.sidebar-project-tree-label,
-.sidebar-project-tree-chevron,
-.sidebar-project-tree-subheader-label,
-.sidebar-project-tree-sub-chevron {
-  opacity: var(--row-emphasis, 1);
-}
 
 .sidebar-project-tree-name-group {
   flex: 1;
@@ -364,16 +350,18 @@
   overflow: hidden;
 }
 
-/* One ramp step above the section captions nested under it, at full strength.
-   Rank is carried by TYPE, depth by indent. When a project and a section caption
-   are set identically, indentation has to signal both, which is what forced the
-   step up to 24px and pushed names off the end of the rail. */
+/* Two ramp steps above the section captions nested under it. Rank is carried by
+   TYPE, depth by indent. When a project and a section caption were set
+   identically, indentation had to signal both, which is what forced the step up
+   to 24px and pushed names off the end of the rail. The separation is size and
+   tracking rather than emphasis, because the only thing below a caption is
+   content, and dimming a header under its own content inverts the hierarchy. */
 .sidebar-project-tree-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -436,8 +424,8 @@
   color: inherit;
 }
 
-/* A caption for the list beneath it, one rank below the project. Its emphasis
-   comes from --row-emphasis above, shared with its caret. */
+/* A caption for the list beneath it, one rank below the project. Subordinate by
+   size and tracking, never by being dimmer than the rows it heads. */
 .sidebar-project-tree-subheader-label {
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
