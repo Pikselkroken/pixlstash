@@ -21,9 +21,10 @@ import sqlite3
 import uuid as uuid_module
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
-from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.db import HubDatabase, _mkdir_private
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -371,7 +372,11 @@ class LibraryRegistry:
                 "to register it."
             )
 
-        os.makedirs(resolved, mode=0o700, exist_ok=True)
+        # Every MISSING component 0700, not only the leaf (W21: makedirs'
+        # mode stops at the leaf, so a deep new path left 0775 intermediates
+        # under umask 002 and the guarded open refused them). Existing
+        # directories keep their modes.
+        _mkdir_private(Path(resolved))
         if os.name != "nt":
             os.chmod(resolved, 0o700)
 

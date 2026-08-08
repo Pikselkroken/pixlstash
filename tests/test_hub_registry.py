@@ -26,6 +26,7 @@ from pixlstash.hub.registry import (
 )
 from pixlstash.hub.schema import CURRENT_SCHEMA_VERSION, read_schema_version
 from pixlstash.cli import main as cli_main
+from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 
 
 def make_vault_folder(root, name="library", *, with_credentials=False):
@@ -293,6 +294,28 @@ class TestAttachAndList:
 
         vault_db = os.path.join(library.path, "vault.db")
         assert stat.S_IMODE(os.lstat(vault_db).st_mode) == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_create_makes_every_missing_component_private_under_a_group_umask(
+        self, registry, tmp_path
+    ):
+        """W21 at the registry's own makedirs: intermediates too, not the leaf.
+
+        ``pixlstash libraries create <deep new path>`` on stock Ubuntu (umask
+        002) left the intermediate at 0775 and yielded a library the guarded
+        open refused.
+        """
+        old_umask = os.umask(0o002)
+        try:
+            os.chmod(tmp_path, 0o700)
+            library = registry.create(str(tmp_path / "deep" / "brand-new"))
+        finally:
+            os.umask(old_umask)
+
+        for directory in (tmp_path / "deep", tmp_path / "deep" / "brand-new"):
+            mode = stat.S_IMODE(os.lstat(directory).st_mode)
+            assert mode == 0o700, f"{directory} is {oct(mode)}, expected 0o700"
+        TrustedSQLiteLocation.open(os.path.join(library.path, "vault.db")).close()
 
     def test_unreachable_library_is_listed_and_flagged(self, registry, tmp_path):
         folder = make_vault_folder(tmp_path, "removable")

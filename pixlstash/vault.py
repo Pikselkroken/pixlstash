@@ -8,6 +8,7 @@ import time
 import threading
 import numpy as np
 
+from pathlib import Path
 from typing import Optional
 from concurrent.futures import Future
 
@@ -28,6 +29,7 @@ from .db_models import (
     TAG_SENTINEL_ESCAPE_CHAR,
 )
 from .pixl_logging import get_logger
+from pixlstash.hub.db import _mkdir_private
 from pixlstash.inference.engine import InferenceEngine
 from .utils.image_processing.image_utils import ImageUtils
 from .tasks.face_extraction_task import FaceExtractionTask
@@ -104,11 +106,13 @@ class Vault:
         logger.debug(f"Image root: {self.image_root}")
         assert self.image_root is not None, "image_root cannot be None"
         logger.debug(f"Using image_root: {self.image_root}")
-        # Mode applies on creation only: makedirs never touches an existing
-        # directory, and it must not — the user may deliberately share their
-        # image folder with a media server or sync agent. (On POSIX the mode
-        # covers only the leaf; pre-existing parents keep their modes.)
-        os.makedirs(self.image_root, mode=0o700, exist_ok=True)
+        # Creation only: existing directories keep their modes, whatever they
+        # are — the user may deliberately share their image folder with a media
+        # server or sync agent. Not makedirs(mode=0o700): since Python 3.7 that
+        # mode reaches only the LEAF, so intermediates of a deep new image_root
+        # came out 0775 under Ubuntu's umask 002 and the guarded open then
+        # refused the namespace the app itself had just created (W21).
+        _mkdir_private(Path(self.image_root))
         assert os.path.exists(self.image_root), (
             f"Image root path does not exist: {self.image_root}"
         )

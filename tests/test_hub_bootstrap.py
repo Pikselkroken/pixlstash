@@ -22,6 +22,7 @@ from pixlstash.hub.bootstrap import (
 )
 from pixlstash.hub.db import HubDatabase, HubPermissionError
 from pixlstash.hub.registry import LibraryRegistry, read_vault_uuid
+from pixlstash.trusted_sqlite import TrustedSQLiteLocation, TrustedSQLiteLocationError
 from pixlstash.vault import Vault
 
 
@@ -293,6 +294,58 @@ class TestFreshInstall:
         assert stat.S_IMODE(os.lstat(image_root).st_mode) == 0o775
         # The database inside it is still ours alone.
         assert stat.S_IMODE(os.lstat(image_root / "vault.db").st_mode) == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_deep_fresh_image_root_is_private_at_every_created_component(
+        self, tmp_path
+    ):
+        """W21: ``makedirs(mode=)`` reaches only the leaf since Python 3.7.
+
+        A two-level-deep new image_root under umask 002 used to leave the
+        intermediate at 0775, and ``_validate_namespace`` then refused the
+        namespace the app itself had just created. Every created component
+        must be 0700 and the guarded open must accept the result.
+        """
+        old_umask = os.umask(0o002)
+        try:
+            os.chmod(tmp_path, 0o700)
+            image_root = tmp_path / "deep" / "nested"
+            with Vault(str(image_root), disable_background_workers=True):
+                pass
+        finally:
+            os.umask(old_umask)
+
+        for directory in (image_root.parent, image_root):
+            mode = stat.S_IMODE(os.lstat(directory).st_mode)
+            assert mode == 0o700, f"{directory} is {oct(mode)}, expected 0o700"
+        TrustedSQLiteLocation.open(str(image_root / "vault.db")).close()
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_loose_existing_ancestor_is_kept_and_still_refused(self, tmp_path):
+        """Creation only: the fix never chmods a directory the owner already had.
+
+        The loose ancestor keeps its 0775 (owner's folder, owner's business),
+        and the guarded open goes on refusing the namespace — that refusal is
+        pre-existing behaviour, asserted here so the fix cannot drift into
+        repairing directories it did not create.
+        """
+        os.chmod(tmp_path, 0o700)
+        loose = tmp_path / "loose"
+        loose.mkdir()
+        os.chmod(loose, 0o775)
+
+        old_umask = os.umask(0o002)
+        try:
+            image_root = loose / "new-library"
+            with Vault(str(image_root), disable_background_workers=True):
+                pass
+        finally:
+            os.umask(old_umask)
+
+        assert stat.S_IMODE(os.lstat(loose).st_mode) == 0o775
+        assert stat.S_IMODE(os.lstat(image_root).st_mode) == 0o700
+        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
+            TrustedSQLiteLocation.open(str(image_root / "vault.db"))
 
     def test_existing_loose_hub_directory_is_reported_not_silently_repaired(
         self, tmp_path
