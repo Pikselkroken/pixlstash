@@ -105,7 +105,11 @@ def _prepare_hub_file(path: str, *, repair: bool) -> tuple[bool, tuple[int, int]
             raise HubPermissionError(
                 f"New hub file {path} is not owned by the current user."
             )
-        os.fchmod(fd, HUB_FILE_MODE)
+        # POSIX-only, like the getuid check above and the O_NOFOLLOW flag:
+        # Windows has no fchmod, and its ACLs do not carry these bits anyway.
+        # The mode passed to os.open() already applied where it means anything.
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, HUB_FILE_MODE)
     finally:
         os.close(fd)
     return True, (info.st_dev, info.st_ino)

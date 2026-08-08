@@ -157,6 +157,23 @@ class TestHubFileSecurity:
         assert seen_modes
         assert seen_modes[0] == 0o600
 
+    def test_the_hub_opens_on_a_platform_without_fchmod(self, tmp_path, monkeypatch):
+        """Windows has no ``os.fchmod``, and every backend test opens a hub.
+
+        The unguarded call made `AttributeError: module 'os' has no attribute
+        'fchmod'` the failure of every test in both Windows CI shards. Linux is
+        the only place this can be caught before Windows CI runs, so the
+        platform difference is simulated rather than waited for.
+        """
+        monkeypatch.delattr(os, "fchmod", raising=False)
+        path = str(tmp_path / "hub.db")
+
+        HubDatabase(path).close()
+
+        # Where the bits mean something they must still be exactly 0600: the
+        # mode handed to os.open() carries them when fchmod cannot.
+        assert stat.S_IMODE(os.lstat(path).st_mode) == 0o600
+
     def test_a_symlink_hub_is_refused_without_touching_its_target(self, tmp_path):
         target = tmp_path / "target.db"
         target.write_bytes(b"do not open")
