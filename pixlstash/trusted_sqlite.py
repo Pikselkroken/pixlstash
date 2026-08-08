@@ -280,6 +280,35 @@ def _validate_file(path: str, *, private: bool) -> os.stat_result:
     return info
 
 
+def _validate_sidecars(canonical: str, *, private: bool) -> None:
+    """Validate every existing ``-wal``/``-shm``/``-journal`` beside *canonical*.
+
+    A sidecar that VANISHES between the existence probe and the ``lstat`` is
+    tolerated: a concurrent opener's SQLite creates and deletes a transient
+    ``-journal`` during first migration (before WAL is set), and refusing that
+    made 1-in-20 four-opener races fail with "Could not inspect ... -journal:
+    No such file or directory" — the same concurrent-open-mistaken-for-tampering
+    class the creation-race test exists to catch. A vanished file has no
+    attributes to be hostile with; a hostile sidecar that still exists is
+    refused exactly as before.
+    """
+    for suffix in _SIDECAR_SUFFIXES:
+        sidecar = canonical + suffix
+        if not os.path.lexists(sidecar):
+            continue
+        try:
+            _validate_file(sidecar, private=private)
+        except TrustedSQLiteLocationError as exc:
+            if isinstance(exc.__cause__, FileNotFoundError):
+                logger.info(
+                    "Sidecar %s vanished during validation; a concurrent "
+                    "opener's transient journal, not tampering.",
+                    sidecar,
+                )
+                continue
+            raise
+
+
 @dataclass
 class TrustedSQLiteLocation:
     """A guarded canonical SQLite path whose surrounding namespace is trusted."""
@@ -353,10 +382,7 @@ class TrustedSQLiteLocation:
                 os.close(created_fd)
         parent_identity = _identity(os.lstat(os.path.dirname(canonical)))
         expected = _validate_file(canonical, private=private)
-        for suffix in _SIDECAR_SUFFIXES:
-            sidecar = canonical + suffix
-            if os.path.lexists(sidecar):
-                _validate_file(sidecar, private=private)
+        _validate_sidecars(canonical, private=private)
 
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -406,10 +432,7 @@ class TrustedSQLiteLocation:
         # The sidecars SQLite just created are new entries in a directory we
         # have re-verified as unwritable by anyone else. Validate them directly
         # anyway: this is the check that actually catches a hostile sidecar.
-        for suffix in _SIDECAR_SUFFIXES:
-            sidecar = self.path + suffix
-            if os.path.lexists(sidecar):
-                _validate_file(sidecar, private=self.private)
+        _validate_sidecars(self.path, private=self.private)
 
     def close(self) -> None:
         if self.fd >= 0:

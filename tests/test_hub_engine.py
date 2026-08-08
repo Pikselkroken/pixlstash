@@ -619,6 +619,13 @@ class TestWindowsHasNoModeBits:
 class TestHostileSidecarRefusal:
     """W8: a pre-positioned ``-wal``/``-shm``/``-journal`` must be refused.
 
+    One tolerance, pinned by ``test_a_sidecar_that_vanishes_mid_validation…``:
+    a sidecar that disappears between the existence probe and its ``lstat`` is
+    a concurrent opener's transient journal, not an attack, and must not
+    refuse the open (it failed 1-in-20 four-opener races in CI before the
+    tolerance existed). A hostile sidecar that still exists is refused
+    exactly as the rest of this class asserts.
+
     An attacker with directory write never touches ``hub.db``: they write
     ``hub.db-wal``. SQLite replays that WAL on open and it overrides arbitrary
     pages of the main database. The main file's ``(st_dev, st_ino)`` is
@@ -784,6 +791,36 @@ class TestHostileSidecarRefusal:
         monkeypatch.setattr(os, "name", "nt")
 
         _validate_file(str(sidecar), private=True)
+
+    def test_a_sidecar_that_vanishes_mid_validation_does_not_refuse_the_open(
+        self, tmp_path, monkeypatch
+    ):
+        """The 1-in-20 CI race, made deterministic.
+
+        A concurrent opener's SQLite creates and deletes a transient
+        ``-journal`` during first migration. When it vanished between the
+        ``lexists`` probe and ``_validate_file``'s ``lstat``, the resulting
+        FileNotFoundError was wrapped as "Could not inspect" and the healthy
+        opener was refused — concurrency mistaken for tampering, the same
+        class the creation-race test pins. Simulated here by making the probe
+        claim the journal exists when it does not.
+        """
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        path = str(directory / "hub.db")
+        journal = path + "-journal"
+        real_lexists = os.path.lexists
+
+        monkeypatch.setattr(
+            os.path,
+            "lexists",
+            lambda p: True if str(p) == journal else real_lexists(p),
+        )
+
+        guard = TrustedSQLiteLocation.open(
+            path, private=True, create=True, trusted_root=str(directory)
+        )
+        guard.close()
 
 
 class TestAuthServiceOnTheHub:
