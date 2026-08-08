@@ -1192,6 +1192,51 @@ def _assert_portable_identity_absent(path, marker):
 
 
 class TestPortableIdentityScrub:
+    def test_every_fsynced_fd_is_opened_with_write_access(self, tmp_path, monkeypatch):
+        """Windows refuses to fsync a read-only handle (EBADF).
+
+        CommitFileBuffers requires write access, so an ``O_RDONLY`` fd that is
+        later fsynced works on Linux and fails on Windows — which is how the
+        read-only opens in this module took down every test in backend-windows
+        shard 2, through ``finalize_library_connection`` on every registered
+        vault open. Linux cannot reproduce the EBADF, but it can assert the
+        invariant that prevents it: any fd this module fsyncs must have been
+        opened with write access. (Directory fds are exempt; those helpers
+        already return early on ``nt``.)
+        """
+        from pixlstash.services import portable_identity
+
+        marker = "FSYNC-FLAGS-PROBE"
+        path = tmp_path / "vault.db"
+        connection = _make_portable_identity_db(path, marker)
+
+        readonly_fds = set()
+        real_open = os.open
+
+        def observing_open(target, flags, *args, **kwargs):
+            fd = real_open(target, flags, *args, **kwargs)
+            if not os.path.isdir(target) and (flags & os.O_ACCMODE) == os.O_RDONLY:
+                readonly_fds.add(fd)
+            return fd
+
+        fsynced_readonly = []
+        real_fsync = os.fsync
+
+        def observing_fsync(fd):
+            if fd in readonly_fds:
+                fsynced_readonly.append(fd)
+            return real_fsync(fd)
+
+        monkeypatch.setattr(os, "open", observing_open)
+        monkeypatch.setattr(os, "fsync", observing_fsync)
+
+        portable_identity.sanitize_vault_connection(connection, str(path))
+        connection.close()
+
+        assert fsynced_readonly == [], "fsync on a read-only fd raises EBADF on Windows"
+        # The scrub itself must still have done its job (the other direction).
+        _assert_portable_identity_absent(path, marker)
+
     def test_live_scrub_erases_rows_wal_and_plaintext_markers(self, tmp_path):
         from pixlstash.services.portable_identity import sanitize_vault_connection
 
