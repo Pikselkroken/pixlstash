@@ -297,6 +297,9 @@
   border-radius: var(--radius-sm);
 }
 
+/* Still used by the two Folders-tab section bands, whose caret sits at the far
+   right AFTER the actions. That is a self-consistent band pattern, unlike the
+   project row's old mid-row caret, so it is left alone. */
 .sidebar-project-tree-expand-indicator {
   flex-shrink: 0;
   opacity: 0.5;
@@ -315,6 +318,19 @@
   opacity: 0.9;
 }
 
+/* The project's disclosure, in the leading glyph column like every other
+   collapsible row here. It swaps glyph rather than rotating one, so a single
+   mechanism expresses disclosure across the sidebar. */
+.sidebar-project-tree-chevron {
+  opacity: 0.5;
+  color: inherit;
+  transition: opacity 0.12s;
+}
+
+.sidebar-project-tree-row:hover .sidebar-project-tree-chevron {
+  opacity: 0.9;
+}
+
 
 .sidebar-project-tree-name-group {
   flex: 1;
@@ -325,15 +341,20 @@
   overflow: hidden;
 }
 
+/* One ramp step above the section captions nested under it, at full strength.
+   Rank is carried by TYPE, depth by indent. When a project and a section caption
+   are set identically, indentation has to signal both, which is what forced the
+   step up to 24px and pushed names off the end of the rail. */
 .sidebar-project-tree-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  color: rgb(var(--v-theme-sidebar-text));
 }
 
 .sidebar-project-tree-actions {
@@ -393,13 +414,33 @@
   color: inherit;
 }
 
+/* A caption for the list beneath it, one rank below the project. Held at 0.7 so
+   the rank difference survives even where the indent is only one 16px step. */
 .sidebar-project-tree-subheader-label {
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: inherit;
+  color: rgba(var(--v-theme-sidebar-text), 0.7);
   flex: 1;
+}
+
+/* A caption with nothing under it is not a disclosure. The row goes inert and
+   dims, which is what explains the empty chevron slot; the slot itself stays
+   reserved so the caption does not shift when the first entity arrives. The
+   `+` action deliberately does NOT inherit the fade and stays operable: it is
+   the only way out of the empty state. */
+.sidebar-project-tree-subheader--empty {
+  cursor: default;
+}
+
+.sidebar-project-tree-subheader--empty:hover {
+  background: transparent;
+}
+
+.sidebar-project-tree-subheader--empty
+  .sidebar-project-tree-subheader-label {
+  opacity: var(--opacity-disabled, 0.38);
 }
 
 /* Child items sit one step under their sub-section header, which is itself one
