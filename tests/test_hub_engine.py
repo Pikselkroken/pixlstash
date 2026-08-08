@@ -20,6 +20,7 @@ from pixlstash.db_models.user_token import UserToken
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.db import HubPermissionError
 from pixlstash.hub.engine import HubEngine
+from pixlstash import trusted_sqlite
 from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
     TrustedSQLiteLocationError,
@@ -372,6 +373,55 @@ class TestTrustedPathSymlinkCheck:
 
         with pytest.raises(TrustedSQLiteLocationError, match="symlink"):
             TrustedSQLiteLocation.open(str(link), private=True)
+
+    def test_a_windows_location_outside_the_config_directory_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        """The Windows fail-closed policy had no test at all.
+
+        It matters more now: the session fixture in conftest points
+        ``user_config_dir`` at the system temp directory so Windows tests can
+        open a hub under ``tmp_path``. That is test scaffolding, and scaffolding
+        that widens a security boundary needs the boundary asserted somewhere or
+        it can be widened further by accident.
+
+        ``os.name`` is patched rather than skipping off Windows, the same way
+        the fchmod test simulates its platform: a policy asserted only on the
+        lane that already fails is a policy nobody sees.
+        """
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setattr(
+            trusted_sqlite, "user_config_dir", lambda *_a, **_k: str(tmp_path / "conf")
+        )
+
+        with pytest.raises(TrustedSQLiteLocationError, match="DACL"):
+            TrustedSQLiteLocation.open(
+                str(directory / "hub.db"),
+                private=True,
+                create=True,
+                allow_windows_app_config=True,
+            )
+
+    def test_a_windows_location_inside_the_config_directory_is_allowed(
+        self, tmp_path, monkeypatch
+    ):
+        """The other direction: over-blocking would lock every Windows user out."""
+        config = tmp_path / "conf"
+        config.mkdir(mode=0o700)
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setattr(
+            trusted_sqlite, "user_config_dir", lambda *_a, **_k: str(config)
+        )
+
+        guard = TrustedSQLiteLocation.open(
+            str(config / "hub.db"),
+            private=True,
+            create=True,
+            allow_windows_app_config=True,
+        )
+        guard.close()
 
     def test_the_verdict_never_consults_realpath(self, tmp_path, monkeypatch):
         """No 8.3 name exists on Linux, so assert the cause, not the symptom.
