@@ -4,18 +4,41 @@
     class="progress-overlay"
     :class="[
       `progress-overlay--${anchor}`,
-      { 'progress-overlay--error': status === 'failed' },
+      { 'progress-overlay--error': hasFailed },
     ]"
+    :aria-busy="isRunning || undefined"
   >
-    <div class="progress-overlay__title">{{ message }}</div>
-    <div class="progress-overlay__bar">
+    <div class="progress-overlay__title">
+      <!-- A glyph and a word, so failure is not carried by the red card alone.
+           Same rule DedupWhyPills states: colour may reinforce a state, never
+           be the only thing encoding it. -->
+      <v-icon v-if="hasFailed" class="progress-overlay__state-ico" size="16"
+        >mdi-alert-circle</v-icon
+      >
+      <span>
+        <span v-if="stateWord" class="progress-overlay__state-word"
+          >{{ stateWord }}. </span
+        >{{ message }}
+      </span>
+    </div>
+    <div
+      class="progress-overlay__bar"
+      role="progressbar"
+      :aria-label="message || 'Progress'"
+      :aria-valuenow="indeterminate ? null : Math.round(percent)"
+      aria-valuemin="0"
+      aria-valuemax="100"
+    >
       <div
         class="progress-overlay__fill"
         :class="{ 'progress-overlay__fill--indeterminate': indeterminate }"
         :style="{ width: `${percent}%` }"
       ></div>
     </div>
-    <div v-if="total != null" class="progress-overlay__meta">
+    <!-- aria-hidden: the same numbers reach a screen reader through the
+         progressbar's aria-valuenow and the announcement below. Left visible
+         to assistive tech they would be read again on every tick. -->
+    <div v-if="total != null" class="progress-overlay__meta" aria-hidden="true">
       {{ count }} / {{ total }}
     </div>
     <button
@@ -26,6 +49,13 @@
     >
       {{ abortLabel }}
     </button>
+    <span
+      class="visually-hidden"
+      :role="hasFailed ? 'alert' : 'status'"
+      aria-live="polite"
+      aria-atomic="true"
+      >{{ announcement }}</span
+    >
   </div>
 </template>
 
@@ -67,6 +97,36 @@ const emit = defineEmits(["abort"]);
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
+const hasFailed = computed(() => props.status === "failed");
+const isRunning = computed(() => props.visible && !isTerminal.value);
+
+/** The word shown beside the glyph for a state colour alone must not carry. */
+const STATE_WORDS = {
+  failed: "Failed",
+  cancelled: "Cancelled",
+  completed: "Done",
+};
+const stateWord = computed(() => STATE_WORDS[props.status] ?? "");
+
+/**
+ * What a screen reader hears. Deliberately coarse.
+ *
+ * The live region is `aria-atomic`, so it re-reads in full every time its text
+ * changes. Announcing each percent would make a multi-GB move unusable: the
+ * reader would talk continuously and drown out everything else on the page.
+ * Quartiles give the "periodic progress" the issue asks for while leaving the
+ * exact figure available on demand through the progressbar's `aria-valuenow`.
+ */
+const announcement = computed(() => {
+  if (!props.visible) return "";
+  const subject = props.message || "Progress";
+  if (isTerminal.value) {
+    return `${subject}. ${STATE_WORDS[props.status] ?? props.status}.`;
+  }
+  if (props.indeterminate) return `${subject}. Working.`;
+  const quartile = Math.floor((props.percent || 0) / 25) * 25;
+  return `${subject}. ${quartile} percent.`;
+});
 </script>
 
 <style scoped>
@@ -96,9 +156,21 @@ const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
 }
 
 .progress-overlay__title {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
   font-size: var(--text-sm);
   margin-bottom: var(--space-2);
   white-space: pre-line;
+}
+
+.progress-overlay__state-ico {
+  flex: none;
+  margin-top: 1px;
+}
+
+.progress-overlay__state-word {
+  font-weight: var(--weight-semibold);
 }
 
 .progress-overlay__bar {
@@ -131,6 +203,22 @@ const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
   }
   100% {
     transform: translateX(220%);
+  }
+}
+
+/* A sliding bar is exactly the kind of continuous motion that triggers
+   vestibular symptoms, and this one can run for the whole length of a
+   multi-GB move. Hold it still and let it fill the track instead, so "busy"
+   is still visible without animating. */
+@media (prefers-reduced-motion: reduce) {
+  .progress-overlay__fill {
+    transition: none;
+  }
+
+  .progress-overlay__fill--indeterminate {
+    width: 100% !important;
+    animation: none;
+    opacity: 0.55;
   }
 }
 
