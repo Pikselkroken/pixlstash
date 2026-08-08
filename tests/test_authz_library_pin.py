@@ -163,7 +163,12 @@ class TestPinnedRoutes:
             # test_writer_waits_for_request_paused_in_guest_lookup keys on, and
             # that test waits for it, so a rename cannot quietly defang this.
             def observed_read(callback, *args, **kwargs):
-                vault_reads.append(getattr(callback, "__name__", repr(callback)))
+                vault_reads.append(
+                    (
+                        getattr(callback, "__module__", ""),
+                        getattr(callback, "__name__", repr(callback)),
+                    )
+                )
                 return real_read(callback, *args, **kwargs)
 
             monkeypatch.setattr(
@@ -175,8 +180,14 @@ class TestPinnedRoutes:
                 cookies={"guest_session": "plausible-cookie"},
             )
             assert response.status_code == 403
-            assert "_lookup_by_token" not in vault_reads, (
-                f"the guest vault lookup ran before the pin refused: {vault_reads}"
+            # Every read the authentication path makes, not just the guest
+            # lookup: naming one callable would still pass if the pin were
+            # moved behind some *other* vault read in the same module. The
+            # background probes stay excluded because they come from
+            # ``pixlstash.tasks``, so this cannot go timing-dependent again.
+            auth_reads = [read for read in vault_reads if read[0] == "pixlstash.auth"]
+            assert auth_reads == [], (
+                f"authentication read the vault before the pin refused: {vault_reads}"
             )
 
     def test_writer_waits_for_request_paused_in_guest_lookup(

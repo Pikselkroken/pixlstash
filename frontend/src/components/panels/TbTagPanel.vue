@@ -193,9 +193,18 @@
           class="tag-menu-input"
           placeholder="Tag name..."
           autocomplete="off"
+          aria-label="New tag"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls="tb-tag-suggestions"
+          :aria-expanded="suggestionsOpen ? 'true' : 'false'"
+          :aria-activedescendant="activeSuggestionId"
           @keydown.enter.prevent="applyTag"
           @keydown="handleTagKey"
         />
+        <p class="visually-hidden" role="status" aria-live="polite">
+          {{ suggestionStatus }}
+        </p>
         <div class="plugin-menu-actions">
           <button
             class="stack-btn"
@@ -206,8 +215,10 @@
             {{ tagLoading ? "Applying..." : "Apply to All" }}
           </button>
         </div>
-        <div v-if="tagError" class="plugin-menu-error">{{ tagError }}</div>
-        <div v-if="tagSuccess" class="plugin-menu-success">
+        <div v-if="tagError" class="plugin-menu-error" role="alert">
+          {{ tagError }}
+        </div>
+        <div v-if="tagSuccess" class="plugin-menu-success" role="status">
           {{ tagSuccess }}
         </div>
         <div v-if="!isReadOnly" class="tag-autogen-section">
@@ -283,27 +294,32 @@
   <!-- Autocomplete dropdown (teleported to body) -->
   <Teleport to="body">
     <div
-      v-if="tagSuggestions.length && tagInputRect"
+      v-if="suggestionsOpen && tagInputRect"
+      id="tb-tag-suggestions"
       class="sb-tag-autocomplete-dropdown"
+      role="listbox"
+      aria-label="Tag suggestions"
       :style="{
         top: `${tagInputRect.bottom + 4}px`,
         left: `${tagInputRect.left}px`,
         width: `${tagInputRect.width}px`,
       }"
     >
-      <button
+      <div
         v-for="(item, i) in tagSuggestions"
+        :id="`tb-tag-suggestion-${i}`"
         :key="item.tag"
         :class="[
           'sb-tag-autocomplete-item',
           { 'sb-tag-autocomplete-item--active': i === tagSuggestionIndex },
         ]"
-        type="button"
-        @click="selectTagSuggestion(item)"
+        role="option"
+        :aria-selected="i === tagSuggestionIndex"
+        @mousedown.prevent="selectTagSuggestion(item)"
       >
         {{ item.tag }}
         <span v-if="i === 0" class="sb-tag-autocomplete-tab-hint">TAB</span>
-      </button>
+      </div>
     </div>
   </Teleport>
 </template>
@@ -397,6 +413,11 @@ const tagSuccess = ref("");
 const allTagsSB = ref([]);
 let allTagsFetchedAt = 0;
 const tagSuggestionIndex = ref(-1);
+// The input value the suggestion list was last dismissed for. Comparing against
+// the live value means typing re-opens the list without a second watcher, and
+// completing the field from a suggestion leaves it dismissed even though the
+// startsWith filter still matches the completed tag.
+const dismissedFor = ref(null);
 const tagInputRect = ref(null);
 const tagActionLoading = ref([]);
 const fetchedTagData = ref([]);
@@ -774,14 +795,31 @@ const tagSuggestions = computed(() => {
     .slice(0, 8);
 });
 
+const suggestionsOpen = computed(
+  () =>
+    tagSuggestions.value.length > 0 && dismissedFor.value !== tagInput.value,
+);
+
+const activeSuggestionId = computed(() =>
+  suggestionsOpen.value && tagSuggestionIndex.value >= 0
+    ? `tb-tag-suggestion-${tagSuggestionIndex.value}`
+    : null,
+);
+
+const suggestionStatus = computed(() => {
+  if (!suggestionsOpen.value) return "";
+  const n = tagSuggestions.value.length;
+  return `${n} tag suggestion${n !== 1 ? "s" : ""}. Arrow keys to browse, Tab to complete, Enter to apply.`;
+});
+
 watch(tagInput, () => {
   tagSuggestionIndex.value = -1;
 });
 
 watch(
-  () => [tagInput.value, tagSuggestions.value.length],
+  () => [tagInput.value, suggestionsOpen.value],
   () => {
-    if (tagInput.value && tagSuggestions.value.length) {
+    if (tagInput.value && suggestionsOpen.value) {
       nextTick(() => {
         tagInputRect.value = tagInputRef.value
           ? tagInputRef.value.getBoundingClientRect()
@@ -801,6 +839,7 @@ watch(
       tagError.value = "";
       tagSuccess.value = "";
       tagSuggestionIndex.value = -1;
+      dismissedFor.value = null;
       fetchedTagData.value = [];
       fetchedPredictionData.value = [];
       tagDataCapped.value = false;
@@ -879,39 +918,57 @@ async function fetchTagsSB() {
   }
 }
 
-function selectTagSuggestion(item) {
+/** Complete the field from a suggestion and dismiss the list. Does not commit. */
+function fillFromSuggestion(item) {
   tagInput.value = typeof item === "string" ? item : item.tag;
   tagSuggestionIndex.value = -1;
+  dismissedFor.value = tagInput.value;
+}
+
+/** Clicking a suggestion is an explicit choice, so it fills and commits. */
+function selectTagSuggestion(item) {
+  fillFromSuggestion(item);
   nextTick(() => applyTag());
 }
 
 function handleTagKey(event) {
   if (event.key === "ArrowDown") {
-    if (tagSuggestions.value.length) {
-      event.preventDefault();
-      tagSuggestionIndex.value = Math.min(
-        tagSuggestionIndex.value + 1,
-        tagSuggestions.value.length - 1,
-      );
+    if (!tagSuggestions.value.length) return;
+    event.preventDefault();
+    if (!suggestionsOpen.value) {
+      // Re-open a dismissed list rather than moving inside a hidden one.
+      dismissedFor.value = null;
+      tagSuggestionIndex.value = 0;
+      return;
     }
+    tagSuggestionIndex.value = Math.min(
+      tagSuggestionIndex.value + 1,
+      tagSuggestions.value.length - 1,
+    );
   } else if (event.key === "ArrowUp") {
-    if (tagSuggestions.value.length) {
-      event.preventDefault();
-      tagSuggestionIndex.value = Math.max(tagSuggestionIndex.value - 1, -1);
-    }
+    if (!suggestionsOpen.value) return;
+    event.preventDefault();
+    tagSuggestionIndex.value = Math.max(tagSuggestionIndex.value - 1, -1);
   } else if (event.key === "Tab") {
-    if (tagSuggestions.value.length) {
-      event.preventDefault();
-      const idx = tagSuggestionIndex.value >= 0 ? tagSuggestionIndex.value : 0;
-      selectTagSuggestion(tagSuggestions.value[idx]);
-    }
+    // Tab completes the field, it never writes to the selection. With the list
+    // dismissed it falls through so focus leaves the field (WCAG 2.1.2).
+    if (!suggestionsOpen.value) return;
+    event.preventDefault();
+    const idx = tagSuggestionIndex.value >= 0 ? tagSuggestionIndex.value : 0;
+    fillFromSuggestion(tagSuggestions.value[idx]);
   } else if (event.key === "Escape") {
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") {
       event.stopImmediatePropagation();
     }
-    emit("close");
+    // First Escape dismisses the suggestions, a second one closes the panel.
+    if (suggestionsOpen.value) {
+      dismissedFor.value = tagInput.value;
+      tagSuggestionIndex.value = -1;
+    } else {
+      emit("close");
+    }
   }
 }
 
@@ -920,11 +977,7 @@ async function applyTag() {
     tagSuggestionIndex.value >= 0 &&
     tagSuggestions.value.length > tagSuggestionIndex.value
   ) {
-    const item = tagSuggestions.value[tagSuggestionIndex.value];
-    tagInput.value = typeof item === "string" ? item : item.tag;
-    tagSuggestionIndex.value = -1;
-    nextTick(() => applyTag());
-    return;
+    fillFromSuggestion(tagSuggestions.value[tagSuggestionIndex.value]);
   }
   const tag = tagInput.value.trim();
   if (!tag) return;
@@ -1335,6 +1388,7 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 .sb-tag-autocomplete-item {
   display: block;
   width: 100%;
+  cursor: pointer;
   text-align: left;
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);

@@ -18,7 +18,8 @@
       type="button"
       :disabled="disabled"
       :aria-expanded="menuOpen"
-      aria-haspopup="true"
+      aria-haspopup="listbox"
+      :aria-controls="listboxId"
       :aria-label="config.ariaLabel"
       @click.stop="toggleMenu"
     >
@@ -33,7 +34,6 @@
       <div
         ref="menuRef"
         class="ate-menu"
-        role="menu"
         :style="menuStyle"
         :class="{
           open: menuOpen,
@@ -41,6 +41,7 @@
           'force-dark': forceDark,
           'ate-menu--floating': floatMenu,
         }"
+        @keydown="onMenuKeydown"
       >
         <div class="ate-search">
           <v-icon size="14">mdi-magnify</v-icon>
@@ -48,8 +49,8 @@
             ref="searchInputRef"
             v-model="searchQuery"
             type="text"
+            :aria-label="config.searchLabel"
             :placeholder="config.searchPlaceholder"
-            @keydown.escape.stop.prevent="closeMenu"
             @keydown.enter.prevent="onSearchEnter"
           />
         </div>
@@ -71,7 +72,6 @@
               { 'ate-item--disabled': createDisabled },
             ]"
             type="button"
-            role="menuitem"
             :disabled="createDisabled"
             @click.stop="requestCreate"
           >
@@ -81,40 +81,53 @@
           <div v-else-if="filteredItems.length === 0" class="ate-empty">
             {{ config.emptyText }}
           </div>
-          <button
-            v-for="item in filteredItems"
-            :key="item.key"
-            :class="[
-              'ate-item',
-              {
-                'ate-item--disabled': isItemDisabled(item),
-                'ate-item--checked':
-                  !isFace && getItemState(item) === 'checked',
-              },
-            ]"
-            type="button"
-            :role="isFace ? 'menuitemradio' : 'menuitem'"
-            :aria-checked="isFace ? isFaceItemSelected(item) : undefined"
-            :disabled="isItemDisabled(item)"
-            :title="isItemLocked(item) ? 'This set is locked' : undefined"
-            @click.stop="toggleItem(item)"
+          <!-- Only the entity rows are the listbox. The loading / empty / create
+               states above are not options and must stay outside it, or a screen
+               reader counts them as choosable entries. -->
+          <div
+            :id="listboxId"
+            role="listbox"
+            :aria-label="config.listLabel"
+            :aria-multiselectable="isMultiSelect ? 'true' : undefined"
           >
-            <v-icon size="16" class="ate-item-check">
-              {{ getItemGlyph(item) }}
-            </v-icon>
-            <span class="ate-item-name">{{ item.name }}</span>
-            <span v-if="isSet" class="ate-item-meta">
-              <v-icon v-if="isItemLocked(item)" size="14" class="ate-item-lock"
-                >mdi-lock-outline</v-icon
-              >
-              <span
-                v-else-if="isLastUsedItem(item)"
-                class="ate-item-shortcut"
-                title="Press A to add to this set"
-                >A</span
-              >
-            </span>
-          </button>
+            <button
+              v-for="item in filteredItems"
+              :key="item.key"
+              :class="[
+                'ate-item',
+                {
+                  'ate-item--disabled': isItemDisabled(item),
+                  'ate-item--checked':
+                    !isFace && getItemState(item) === 'checked',
+                },
+              ]"
+              type="button"
+              role="option"
+              :aria-checked="getAriaChecked(item)"
+              :disabled="isItemDisabled(item)"
+              :title="isItemLocked(item) ? 'This set is locked' : undefined"
+              @click.stop="toggleItem(item)"
+            >
+              <v-icon size="16" class="ate-item-check">
+                {{ getItemGlyph(item) }}
+              </v-icon>
+              <span class="ate-item-name">{{ item.name }}</span>
+              <span v-if="isSet" class="ate-item-meta">
+                <v-icon
+                  v-if="isItemLocked(item)"
+                  size="14"
+                  class="ate-item-lock"
+                  >mdi-lock-outline</v-icon
+                >
+                <span
+                  v-else-if="isLastUsedItem(item)"
+                  class="ate-item-shortcut"
+                  title="Press A to add to this set"
+                  >A</span
+                >
+              </span>
+            </button>
+          </div>
         </div>
 
         <!-- Pinned create affordance (character only, allowCreate hosts
@@ -129,7 +142,6 @@
               { 'ate-item--disabled': createDisabled },
             ]"
             type="button"
-            role="menuitem"
             :disabled="createDisabled"
             @click.stop="requestCreate"
           >
@@ -138,7 +150,12 @@
           </button>
         </div>
 
-        <div v-if="statusMessage" class="ate-status">
+        <div
+          v-if="statusMessage"
+          class="ate-status"
+          role="status"
+          aria-live="polite"
+        >
           {{ statusMessage }}
         </div>
       </div>
@@ -156,7 +173,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import {
   getPictureSetMembership,
   addPictureToSet,
@@ -240,13 +257,22 @@ const isCharacter = computed(() => props.type === "character");
 const isFace = computed(() => props.type === "face");
 // Both people modes list characters and can offer the create row.
 const listsPeople = computed(() => isCharacter.value || isFace.value);
+// A picture can be in many sets and carry many characters, but it has exactly
+// one project and a face has exactly one person — so only the first two are a
+// multi-selectable listbox.
+const isMultiSelect = computed(() => isSet.value || isCharacter.value);
 
+// `searchLabel` and `listLabel` are the accessible names for the search box and
+// the option list. They are separate from the placeholder because a placeholder
+// is not a label: it disappears as soon as the user types.
 const config = computed(() => {
   if (isSet.value) {
     return {
       icon: "mdi-folder-plus",
       ariaLabel: "Set",
       searchPlaceholder: "Search sets...",
+      searchLabel: "Search sets",
+      listLabel: "Sets",
       loadingText: "Loading sets...",
       emptyText: "No sets found",
     };
@@ -256,6 +282,8 @@ const config = computed(() => {
       icon: "mdi-briefcase-edit-outline",
       ariaLabel: "Set project",
       searchPlaceholder: "Search projects...",
+      searchLabel: "Search projects",
+      listLabel: "Projects",
       loadingText: "Loading projects...",
       emptyText: "No projects found",
     };
@@ -265,6 +293,8 @@ const config = computed(() => {
       icon: "mdi-account-outline",
       ariaLabel: "Assign this face to a person",
       searchPlaceholder: "Search people...",
+      searchLabel: "Search people",
+      listLabel: "People",
       loadingText: "Loading people...",
       emptyText: "No people found",
     };
@@ -273,6 +303,8 @@ const config = computed(() => {
     icon: "mdi-account-plus",
     ariaLabel: "Set character",
     searchPlaceholder: "Search characters...",
+    searchLabel: "Search characters",
+    listLabel: "Characters",
     loadingText: "Loading characters...",
     emptyText: "No characters found",
   };
@@ -295,6 +327,9 @@ const menuOpen = ref(false);
 const searchQuery = ref("");
 const statusMessage = ref("");
 const membersById = ref({}); // key: item.key → Set<string> of picture IDs
+// The trigger's aria-controls target. Several of these controls sit in one menu,
+// so the id has to be per-instance.
+const listboxId = useId();
 // Membership is a live per-selection read, so until it lands we know which
 // entities exist but not which ones this selection is already in. Toggling is
 // held back until then; the list itself renders immediately.
@@ -491,6 +526,17 @@ function getItemGlyph(item) {
   return "mdi-checkbox-blank-outline";
 }
 
+// The option's ARIA state. Face mode is single-select, so it is a plain
+// true/false; every other mode is a bulk membership over the selection, and a
+// partially-assigned entity is exactly what aria-checked="mixed" is for.
+function getAriaChecked(item) {
+  if (isFace.value) return isFaceItemSelected(item) ? "true" : "false";
+  const state = getItemState(item);
+  if (state === "checked") return "true";
+  if (state === "partial") return "mixed";
+  return "false";
+}
+
 function getItemState(item) {
   const ids = normalisedPictureIds.value;
   if (!ids.length) return "unchecked";
@@ -566,6 +612,10 @@ function toggleMenu() {
     } else if (!menuOpen.value) {
       flyoutClickedOpen.value = true;
       openMenu();
+      // Deliberate activation (click, Enter, Space) puts the caret in the search
+      // box, same as the default placement. Hover-open goes through
+      // onFlyoutMouseenter instead and never moves focus.
+      nextTick(() => searchInputRef.value?.focus());
       document.addEventListener("pointerdown", handleOutsideClick, true);
     }
     return;
@@ -595,6 +645,11 @@ function openMenu() {
 }
 
 function closeMenu() {
+  // Whoever was driving the menu from the keyboard is about to lose their focus
+  // holder, so hand it back to the trigger instead of dropping it on <body>.
+  // Guarded on focus actually being inside: a hover-out or a click elsewhere
+  // must not yank focus away from wherever the user just went.
+  const returnFocus = menuRef.value?.contains(document.activeElement) ?? false;
   menuOpen.value = false;
   searchQuery.value = "";
   window.removeEventListener("resize", sizeMenu);
@@ -604,9 +659,70 @@ function closeMenu() {
     flyoutClickedOpen.value = false;
   }
   if (props.placement !== "right") {
-    searchInputRef.value?.blur();
     document.removeEventListener("pointerdown", handleOutsideClick, true);
   }
+  if (returnFocus) focusTrigger();
+}
+
+// --- Keyboard ownership ---
+// Navigation lives here rather than in each host's roving-focus query: with
+// `floatMenu` the menu is teleported to <body>, so a host keydown listener never
+// sees these keys at all. Order is [search box, ...enabled rows]; no wrapping, so
+// ArrowUp off the first row lands back in the search box.
+function navigableItems() {
+  const menu = menuRef.value;
+  if (!menu) return [];
+  const rows = Array.from(menu.querySelectorAll(".ate-item:not([disabled])"));
+  const input = searchInputRef.value;
+  return input ? [input, ...rows] : rows;
+}
+
+function onMenuKeydown(event) {
+  if (!menuOpen.value) return;
+  const key = event.key;
+  const inSearch = event.target === searchInputRef.value;
+
+  if (key === "Escape") {
+    // The first Escape dismisses this list only. Hosts that also watch Escape
+    // (the grid context menu) exempt events originating inside `.ate-menu`, so
+    // the menu behind us survives and takes the second press.
+    event.preventDefault();
+    event.stopPropagation();
+    closeMenu();
+    return;
+  }
+
+  // "Back" in the flyout idiom. Inside the search box only at caret start, so
+  // it stays a text-editing key while there is text to move through.
+  if (key === "ArrowLeft" && props.placement === "right") {
+    if (
+      inSearch &&
+      !(event.target.selectionStart === 0 && event.target.selectionEnd === 0)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    closeMenu();
+    return;
+  }
+
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(key)) return;
+  // Home/End keep their text-editing meaning while the caret is in the search box.
+  if (inSearch && (key === "Home" || key === "End")) return;
+  const items = navigableItems();
+  if (!items.length) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const rows = items.filter((el) => el !== searchInputRef.value);
+  const current = items.indexOf(document.activeElement);
+  let target;
+  if (key === "Home") target = rows[0];
+  else if (key === "End") target = rows[rows.length - 1];
+  else if (key === "ArrowDown")
+    target = items[Math.min(current + 1, items.length - 1)];
+  else target = items[Math.max(current - 1, 0)];
+  target?.focus();
 }
 
 function onFlyoutMouseenter() {
