@@ -96,7 +96,14 @@ def _open_guarded_source(
     path: str, *, label: str, private: bool
 ) -> tuple[sqlite3.Connection, TrustedSQLiteLocation]:
     try:
-        guard = TrustedSQLiteLocation.open(path, private=private)
+        # `private=True` means the hub, which on Windows must live in the app
+        # config directory — where `default_hub_path()` puts it. Without this
+        # flag the gate refuses every path, so `pixlstash backup` could not run
+        # on Windows even against the correct hub. Same omission as the vault's
+        # (see trusted_sqlite's "Windows, and what this cannot check").
+        guard = TrustedSQLiteLocation.open(
+            path, private=private, allow_windows_app_config=private
+        )
     except TrustedSQLiteLocationError as exc:
         raise BackupError(f"Could not securely open {label} {path}: {exc}") from exc
     try:

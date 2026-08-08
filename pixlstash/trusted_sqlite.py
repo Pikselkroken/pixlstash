@@ -43,14 +43,42 @@ removable media, or a folder someone deliberately loosened is not protected
 against another local principal substituting ``vault.db`` or pre-positioning a
 sidecar **before** startup. Default ACLs already exclude other standard users
 from a user profile, and those three cases are the ones named above as this
-lane's real concerns. Blast radius is picture metadata and file paths, not
-credentials: attacker-controlled paths flowing into export/thumbnail/restore,
-which amplifies reads of files the victim can already read. Compensating
-controls that DO run on Windows: symlink/reparse rejection on every component,
-the regular-file requirement including sidecars, ``O_NOFOLLOW`` plus an
-identity match across the open, and ``verify_after_open``. Revisit when a
-native ACL verifier exists (``win32security.GetNamedSecurityInfo``, or ctypes
-against advapi32), which is the route back to tightening this.
+lane's real concerns.
+
+**Blast radius, stated accurately** (an independent review corrected an earlier
+version of this note that claimed it was reads only):
+
+* The vault is **authorization-bearing**. ``authz/membership.py`` answers
+  "is this picture in that project?" out of the vault, so a substituted vault
+  is a substituted ACL: a scoped share token can be widened to the whole
+  library. The hub authenticates; the vault authorises.
+* ``Picture.file_path`` is attacker-chosen after a substitution, and an
+  absolute path is currently returned verbatim by
+  ``image_utils.resolve_picture_path``. That reaches unattended file **deletes**
+  (snapshot GFS retention, scrapheap purge), sidecar **writes** whose name and
+  suffix come from the row, and file **reads** served over HTTP including the
+  share route. Containing that resolver shrinks this risk on **every** platform
+  and is tracked separately — it is the fix that actually matters.
+* Live credentials are not here: the password hash and token hashes are in the
+  hub. The vault does hold ``guest_session.cookie_token`` and dormant
+  ``user``/``usertoken`` tables the baseline still creates.
+
+*Compensating controls that genuinely run on Windows* — the list is shorter
+than it looks, because ``O_NOFOLLOW`` does not exist there and
+``_require_owned_directory`` returns early on ``nt``, making the ancestor walk
+an existence check rather than a trust check:
+
+1. symlink **and junction** rejection on every component (``_is_redirect``);
+2. the regular-file requirement, on the target and on every sidecar;
+3. the ``(st_dev, st_ino)`` identity match across the open, plus
+   ``verify_after_open``.
+
+Revisit when a native ACL verifier exists (``win32security.GetNamedSecurityInfo``
+or ctypes against advapi32), which is the route back to tightening this.
+
+TODO(owner): this risk has no named owner or revisit date. The reviewer
+declined to accept it on the author's behalf; both must be filled in before
+this is treated as accepted rather than merely documented.
 """
 
 from __future__ import annotations
@@ -105,6 +133,43 @@ def _require_owned_directory(path: str, *, immediate: bool) -> os.stat_result:
     return info
 
 
+def _is_redirect(path: str) -> bool:
+    """True when *path* is a symlink, or a Windows junction.
+
+    ``os.path.islink`` is not sufficient on Windows: it returns **False** for a
+    directory junction, while ``os.path.realpath`` resolves one. Checking only
+    ``islink`` there would refuse the *privileged* redirect and accept the
+    unprivileged one — creating a symlink needs
+    ``SeCreateSymbolicLinkPrivilege`` (admin or Developer Mode), creating a
+    junction needs nothing but write access to the directory (``mklink /J``).
+    That is the redirection primitive an unprivileged local account actually
+    has, so it is the one that matters most here.
+
+    ``os.path.isjunction`` would say this in one call but is 3.12+, and the
+    floor is 3.11 (``pyproject.toml``), so read the reparse tag. The constants
+    and ``st_reparse_tag`` are Windows-only, hence ``getattr``: the tests
+    simulate ``nt`` while running on Linux, where neither exists.
+    """
+    if os.path.islink(path):
+        return True
+    if os.name != "nt":
+        return False
+    tags = {
+        tag
+        for tag in (
+            getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None),
+            getattr(stat, "IO_REPARSE_TAG_SYMLINK", None),
+        )
+        if tag is not None
+    }
+    try:
+        return getattr(os.lstat(path), "st_reparse_tag", None) in tags
+    except OSError:
+        # A component that does not exist yet cannot redirect anywhere;
+        # `create=True` opens depend on this.
+        return False
+
+
 def _reject_symlinked_path(path: str) -> None:
     """Refuse a caller-supplied path that reaches its target via a symlink.
 
@@ -120,13 +185,18 @@ def _reject_symlinked_path(path: str) -> None:
     names the offending component instead of leaving the caller to infer it.
     A component that does not exist yet is not a symlink; ``create=True`` opens
     rely on that.
+
+    The old comparison did catch one thing a bare ``islink`` walk does not: a
+    Windows **junction**, which ``realpath`` resolves and ``islink`` reports as
+    False. Dropping that would have been a straight downgrade, since a junction
+    is the redirect an unprivileged account can create — see ``_is_redirect``.
     """
     current = path
     while True:
-        if os.path.islink(current):
+        if _is_redirect(current):
             raise TrustedSQLiteLocationError(
-                f"SQLite path {path} reaches its target through a symlink at "
-                f"{current}; refusing to open it."
+                f"SQLite path {path} reaches its target through a symlink or "
+                f"junction at {current}; refusing to open it."
             )
         parent = os.path.dirname(current)
         if parent == current:

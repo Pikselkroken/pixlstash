@@ -446,6 +446,54 @@ class TestTrustedPathSymlinkCheck:
         )
         guard.close()
 
+    def test_a_windows_junction_is_refused_like_a_symlink(self, tmp_path, monkeypatch):
+        """The regression an independent review caught in this very check.
+
+        ``os.path.islink`` is False for a directory junction, so swapping the
+        old ``abspath != realpath`` comparison for an islink walk quietly
+        stopped refusing them. That is the wrong way round: a symlink on
+        Windows needs ``SeCreateSymbolicLinkPrivilege``, a junction needs only
+        write access to the directory, so the check was refusing the redirect
+        an attacker cannot make and accepting the one they can.
+
+        No junction can exist on Linux, so the reparse tag is simulated. A real
+        ``mklink /J`` test belongs on the Windows lane; this at least fails on
+        the Linux lane if the branch is deleted.
+        """
+        directory = tmp_path / "hub"
+        directory.mkdir(mode=0o700)
+        target = str(directory / "hub.db")
+        mount_point_tag = 0xA0000003  # IO_REPARSE_TAG_MOUNT_POINT
+
+        real_lstat = os.lstat
+
+        class _JunctionStat:
+            def __init__(self, info):
+                self._info = info
+                self.st_reparse_tag = mount_point_tag
+
+            def __getattr__(self, name):
+                return getattr(self._info, name)
+
+        monkeypatch.setattr(os, "name", "nt")
+        # raising=False: the constant is Windows-only, so it does not exist to
+        # be replaced on the machine running this test.
+        monkeypatch.setattr(
+            stat, "IO_REPARSE_TAG_MOUNT_POINT", mount_point_tag, raising=False
+        )
+        monkeypatch.setattr(
+            os,
+            "lstat",
+            lambda p, *a, **k: (
+                _JunctionStat(real_lstat(p, *a, **k))
+                if str(p) == str(directory)
+                else real_lstat(p, *a, **k)
+            ),
+        )
+
+        with pytest.raises(TrustedSQLiteLocationError, match="junction"):
+            _reject_symlinked_path(target)
+
     def test_the_verdict_never_consults_realpath(self, tmp_path, monkeypatch):
         """No 8.3 name exists on Linux, so assert the cause, not the symptom.
 
