@@ -134,7 +134,16 @@ def _validate_file(path: str, *, private: bool) -> os.stat_result:
         raise TrustedSQLiteLocationError(
             f"SQLite file {path} is a {kind}; refusing to open it."
         )
-    if os.name != "nt" and hasattr(os, "geteuid") and info.st_uid != os.geteuid():
+    if os.name == "nt":
+        # Windows carries ACLs, not mode bits. `st_mode` there is synthesised
+        # from the read-only attribute alone and reads 0o666 for an ordinary
+        # file, so every check below would refuse every file — which is what
+        # made both Windows shards fail with "must be mode 600" on a hub this
+        # process had just created. The ownership check above is already
+        # POSIX-only for the same reason, and the DACL that does carry the
+        # answer is why `open()` fails closed outside the config directory.
+        return info
+    if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
         raise TrustedSQLiteLocationError(
             f"SQLite file {path} is owned by uid {info.st_uid}, not this user."
         )

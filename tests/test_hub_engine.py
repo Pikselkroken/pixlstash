@@ -18,13 +18,14 @@ from pixlstash.auth import AuthService
 from pixlstash.db_models import User
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.db import HubPermissionError
+from pixlstash.hub.db import HubPermissionError, check_file_mode
 from pixlstash.hub.engine import HubEngine
 from pixlstash import trusted_sqlite
 from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
     TrustedSQLiteLocationError,
     _reject_symlinked_path,
+    _validate_file,
 )
 
 
@@ -442,6 +443,54 @@ class TestTrustedPathSymlinkCheck:
         monkeypatch.setattr(os.path, "realpath", explode)
 
         _reject_symlinked_path(str(directory / "hub.db"))
+
+
+class TestWindowsHasNoModeBits:
+    """POSIX permission assertions must not run where they cannot hold.
+
+    Windows synthesises ``st_mode`` from the read-only attribute alone, so an
+    ordinary file reads 0o666 and no chmod can make it 0o600. Asserting the
+    mode there refuses *every* hub, including one this process created moments
+    earlier — which is how both Windows shards failed with "SQLite credential
+    file ... must be mode 600" on a freshly created file.
+
+    Both directions, because these are credential-file checks: they must go on
+    holding on POSIX, where the bits are real.
+    """
+
+    def test_validate_file_accepts_the_synthetic_windows_mode(
+        self, tmp_path, monkeypatch
+    ):
+        path = tmp_path / "hub.db"
+        path.touch()
+        os.chmod(path, 0o666)
+        monkeypatch.setattr(os, "name", "nt")
+
+        _validate_file(str(path), private=True)
+
+    def test_validate_file_still_refuses_that_mode_on_posix(self, tmp_path):
+        path = tmp_path / "hub.db"
+        path.touch()
+        os.chmod(path, 0o666)
+
+        with pytest.raises(TrustedSQLiteLocationError, match="mode 600"):
+            _validate_file(str(path), private=True)
+
+    def test_check_file_mode_is_a_no_op_on_windows(self, tmp_path, monkeypatch):
+        path = tmp_path / "hub.db"
+        path.touch()
+        os.chmod(path, 0o666)
+        monkeypatch.setattr(os, "name", "nt")
+
+        check_file_mode(str(path), repair=False)
+
+    def test_check_file_mode_still_reports_a_loose_hub_on_posix(self, tmp_path):
+        path = tmp_path / "hub.db"
+        path.touch()
+        os.chmod(path, 0o666)
+
+        with pytest.raises(HubPermissionError):
+            check_file_mode(str(path), repair=False)
 
 
 class TestAuthServiceOnTheHub:

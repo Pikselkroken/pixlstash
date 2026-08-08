@@ -171,6 +171,14 @@ def check_file_mode(path: str, *, repair: bool) -> None:
     Raises:
         HubPermissionError: ``repair`` is False and the mode is too permissive.
     """
+    if os.name == "nt":
+        # Windows has no mode bits to check: `st_mode` is synthesised from the
+        # read-only attribute and reads 0o666 for an ordinary file, so this
+        # would refuse every hub, including one this process just created 0600.
+        # Access there is governed by the file's ACL, which Python cannot read
+        # portably — the reason `TrustedSQLiteLocation` refuses any hub outside
+        # the per-user config directory on Windows in the first place.
+        return
     try:
         mode = stat.S_IMODE(os.lstat(path).st_mode)
     except FileNotFoundError:
