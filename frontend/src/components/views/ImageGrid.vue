@@ -1180,7 +1180,11 @@ import ShareDialog from "../io/ShareDialog.vue";
 import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
 import DeleteForeverDialog from "../widgets/DeleteForeverDialog.vue";
 import KeepCoverOnlyDialog from "../widgets/KeepCoverOnlyDialog.vue";
-import { appendShareToken, isReadOnly } from "../../utils/apiClient";
+import {
+  API_BASE_URL,
+  appendShareToken,
+  isReadOnly,
+} from "../../utils/apiClient";
 import {
   getPictureMetadata,
   getThumbnails,
@@ -1325,7 +1329,10 @@ const emit = defineEmits([
 
 // Props
 const props = defineProps({
-  backendUrl: String,
+  // Defaulted, not threaded from App.vue. Without the default this is
+  // `undefined` and every URL built from it reads "undefined/pictures/…",
+  // which is every thumbnail in the grid.
+  backendUrl: { type: String, default: () => API_BASE_URL },
   activeCategoryLabel: { type: String, default: "Category" },
 });
 

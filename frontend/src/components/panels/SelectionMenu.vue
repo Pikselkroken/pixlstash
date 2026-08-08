@@ -359,7 +359,6 @@ const props = defineProps({
   open: Boolean,
   selectedCount: Number,
   selectedImageIds: { type: Array, default: () => [] },
-  backendUrl: String,
   isReadOnly: Boolean,
   isScrapheapView: Boolean,
   groupingLockReason: { type: String, default: null },
