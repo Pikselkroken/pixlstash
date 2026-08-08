@@ -4,11 +4,23 @@
     class="progress-overlay"
     :class="[
       `progress-overlay--${anchor}`,
-      { 'progress-overlay--error': status === 'failed' },
+      { 'progress-overlay--error': isFailed },
     ]"
+    :aria-busy="!isTerminal"
   >
+    <div v-if="isFailed" class="progress-overlay__failed">
+      <v-icon size="16">mdi-alert-circle</v-icon>
+      <span>Failed</span>
+    </div>
     <div class="progress-overlay__title">{{ message }}</div>
-    <div class="progress-overlay__bar">
+    <div
+      class="progress-overlay__bar"
+      role="progressbar"
+      :aria-label="message || 'Progress'"
+      :aria-valuenow="indeterminate ? null : Math.round(clampedPercent)"
+      aria-valuemin="0"
+      aria-valuemax="100"
+    >
       <div
         class="progress-overlay__fill"
         :class="{ 'progress-overlay__fill--indeterminate': indeterminate }"
@@ -27,13 +39,30 @@
       {{ abortLabel }}
     </button>
   </div>
+  <!-- Outside the `v-if` on purpose: a live region inserted at the same moment
+       as its first text is not reliably announced, so the run's opening line
+       would be the one that goes missing. -->
+  <p
+    class="visually-hidden"
+    role="status"
+    aria-live="polite"
+    aria-atomic="true"
+  >
+    {{ announcement }}
+  </p>
 </template>
 
 <script setup>
 /**
  * ProgressOverlay
  *
- * A shared progress bar overlay used for both export and plugin progress.
+ * A shared progress bar overlay used for export, plugin and smart-score progress.
+ *
+ * Accessibility: the bar is a real `role="progressbar"` (value omitted while
+ * indeterminate, per ARIA), the card carries `aria-busy` until it reaches a
+ * terminal status, and a visually-hidden live region announces start, coarse
+ * progress, completion and failure. Failure also gets a glyph and a word, not
+ * only the red card.
  *
  * Props:
  *   visible    - Whether the overlay is shown.
@@ -67,6 +96,39 @@ const emit = defineEmits(["abort"]);
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
+const isFailed = computed(() => props.status === "failed");
+
+/**
+ * The percentage both the bar and the live region are allowed to state.
+ *
+ * ARIA requires `aria-valuenow` to sit inside min/max, and a caller that hands
+ * over a NaN (a division by a total that has not arrived yet) must not make the
+ * overlay announce "NaN% complete". Every current caller already clamps, so
+ * this is the guard for the next one.
+ */
+const clampedPercent = computed(() => {
+  const raw = Number(props.percent);
+  if (!Number.isFinite(raw)) return 0;
+  return Math.min(100, Math.max(0, raw));
+});
+
+/**
+ * What the live region says.
+ *
+ * Deliberately coarse while running: the card's own percent and `count / total`
+ * tick once per item, and a live region repeating "41 of 12000" on every tick
+ * buries the start, the finish and the failure it exists to announce. Rounding
+ * to tens announces roughly ten times over a run instead.
+ */
+const announcement = computed(() => {
+  if (!props.visible) return "";
+  const label = props.message || "Progress";
+  if (props.status === "failed") return `${label}: failed.`;
+  if (props.status === "cancelled") return `${label}: cancelled.`;
+  if (props.status === "completed") return `${label}: complete.`;
+  if (props.indeterminate) return `${label}: working.`;
+  return `${label}: ${Math.floor(clampedPercent.value / 10) * 10}% complete.`;
+});
 </script>
 
 <style scoped>
@@ -93,6 +155,19 @@ const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
 
 .progress-overlay--error {
   background: rgba(var(--v-theme-error), 0.95);
+}
+
+/* Failure never rides on the red card alone (WCAG 1.4.1), the same rule
+   DedupWhyPills states: a glyph and the word carry it in monochrome too. */
+.progress-overlay__failed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .progress-overlay__title {
@@ -131,6 +206,19 @@ const isTerminal = computed(() => TERMINAL_STATUSES.has(props.status));
   }
   100% {
     transform: translateX(220%);
+  }
+}
+
+/* Not a no-op: the bar still has to read as "running, length unknown", so the
+   sliding fill parks at its start offset rather than disappearing. */
+@media (prefers-reduced-motion: reduce) {
+  .progress-overlay__fill {
+    transition: none;
+  }
+
+  .progress-overlay__fill--indeterminate {
+    animation: none;
+    transform: translateX(0);
   }
 }
 
