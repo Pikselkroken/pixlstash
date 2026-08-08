@@ -291,6 +291,12 @@ class TestHubFileSecurity:
         # Not raising is the documented outcome, not an oversight.
         HubDatabase(path).close()
 
+        # Assert the swap actually ran. Without this the test passes vacuously
+        # the moment the interception stops matching (a changed path, or
+        # HubDatabase no longer routing through sqlite3.connect), and would then
+        # assert nothing at all while still looking green.
+        assert swapped, "the swap never fired; this test proved nothing"
+
     def test_a_directory_that_turns_writable_after_open_is_refused(self, tmp_path):
         """The property that replaced the timestamp snapshot, asserted directly.
 
