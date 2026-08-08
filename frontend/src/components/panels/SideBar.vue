@@ -839,6 +839,18 @@ async function browseFolderPath(path, prefetchChildren = false) {
   }
 }
 
+/* Whether a reference-folder row can disclose children, i.e. whether its
+   chevron is drawn. The slot is reserved either way (`.sidebar-row-glyph`), so
+   this only decides visibility and never the row's left edge. Not browsable in
+   Docker, and not-yet-browsed counts as "can", so the affordance is there
+   before the first browse returns. */
+function referenceFolderCanDisclose(rf) {
+  if (inDocker.value) return false;
+  const cached = folderBrowseCache.value[rf.folder];
+  if (!cached || cached.loading) return true;
+  return (cached.entries?.length ?? 0) > 0;
+}
+
 function handleFolderNodeSelect(key, payload) {
   selectedFolderKey.value = key;
   const payloadId = Number(payload?.referenceFolderId);
@@ -5030,16 +5042,9 @@ defineExpose({
               >
                 <v-icon
                   size="12"
-                  class="sidebar-folder-chevron"
-                  :style="{
-                    visibility:
-                      !inDocker &&
-                      (!folderBrowseCache[rf.folder] ||
-                        folderBrowseCache[rf.folder].loading ||
-                        (folderBrowseCache[rf.folder]?.entries?.length ?? 0) >
-                          0)
-                        ? 'visible'
-                        : 'hidden',
+                  class="sidebar-row-glyph sidebar-folder-chevron"
+                  :class="{
+                    'sidebar-row-glyph--empty': !referenceFolderCanDisclose(rf),
                   }"
                   @click.stop="
                     if (!inDocker) {
@@ -5054,7 +5059,7 @@ defineExpose({
                       : "mdi-chevron-right"
                   }}
                 </v-icon>
-                <v-icon size="16" class="sidebar-folder-icon"
+                <v-icon size="16" class="sidebar-row-glyph sidebar-folder-icon"
                   >mdi-folder-network-outline</v-icon
                 >
                 <span class="sidebar-folder-label">{{
@@ -5229,12 +5234,11 @@ defineExpose({
               >
                 <v-icon
                   size="12"
-                  class="sidebar-folder-chevron"
-                  style="visibility: hidden"
+                  class="sidebar-row-glyph sidebar-row-glyph--empty sidebar-folder-chevron"
                 >
                   mdi-chevron-right
                 </v-icon>
-                <v-icon size="16" class="sidebar-folder-icon"
+                <v-icon size="16" class="sidebar-row-glyph sidebar-folder-icon"
                   >mdi-folder-download-outline</v-icon
                 >
                 <span class="sidebar-folder-label">
@@ -5827,13 +5831,13 @@ defineExpose({
                       @click.stop="toggleProjectTreePeople(p.id)"
                     >
                       <v-icon
-                        v-show="
-                          sortedCharacters.filter((c) =>
-                            entityBelongsToProject(c, p.id),
-                          ).length > 0
-                        "
                         size="14"
-                        class="sidebar-project-tree-sub-chevron"
+                        class="sidebar-row-glyph sidebar-project-tree-sub-chevron"
+                        :class="{
+                          'sidebar-row-glyph--empty': !sortedCharacters.some(
+                            (c) => entityBelongsToProject(c, p.id),
+                          ),
+                        }"
                         >{{
                           projectTreePeopleCollapsed.has(p.id)
                             ? "mdi-chevron-right"
@@ -6044,13 +6048,13 @@ defineExpose({
                       @click.stop="toggleProjectTreeSets(p.id)"
                     >
                       <v-icon
-                        v-show="
-                          nonReferenceSets.filter((s) =>
-                            entityBelongsToProject(s, p.id),
-                          ).length > 0
-                        "
                         size="14"
-                        class="sidebar-project-tree-sub-chevron"
+                        class="sidebar-row-glyph sidebar-project-tree-sub-chevron"
+                        :class="{
+                          'sidebar-row-glyph--empty': !nonReferenceSets.some(
+                            (s) => entityBelongsToProject(s, p.id),
+                          ),
+                        }"
                         >{{
                           projectTreeSetsCollapsed.has(p.id)
                             ? "mdi-chevron-right"
