@@ -101,9 +101,11 @@ an existence check rather than a trust check:
 Revisit when a native ACL verifier exists (``win32security.GetNamedSecurityInfo``
 or ctypes against advapi32), which is the route back to tightening this.
 
-Accepted-risk record (W17, docs/reviews/plan-windows-permissions.md): owner
-lindkvis, revisit 2026-11-08, together with the native ACL verifier (3c) that
-would close the Windows residue.
+Accepted-risk record (W17): owner lindkvis, revisit 2026-11-08, together with
+the native ACL verifier (3c) that would close the Windows residue. Recorded in
+``docs/backend_architecture.md`` §13 ("Trusted SQLite locations, and the
+accepted Windows residue") — not in ``docs/reviews/``, which is gitignored, so
+a record kept there would exist only on the machine that wrote it.
 """
 
 from __future__ import annotations
