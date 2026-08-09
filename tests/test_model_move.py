@@ -205,11 +205,9 @@ def test_crash_after_the_commit_and_before_the_unlink_leaves_a_duplicate(
     the dangling row the shelf must never produce.
     """
     monkeypatch.setattr(
-        ModelMover,
-        "_unlink_source",
-        staticmethod(
-            lambda *args: (_ for _ in ()).throw(Crash("killed after the commit"))
-        ),
+        mover_module,
+        "unlink_source",
+        lambda *args: (_ for _ in ()).throw(Crash("killed after the commit")),
     )
     mover = ModelMover(two_folders["hub"])
     plan = mover.plan(
@@ -236,10 +234,10 @@ def test_the_steps_happen_in_the_only_safe_order(
     they interrupt; this one observes the whole sequence."""
     events: list[str] = []
 
-    original_copy = mover_module._copy_and_digest
-    original_digest = mover_module._digest
+    original_copy = mover_module.copy_and_digest
+    original_digest = mover_module.file_digest
     original_repoint = ModelMover._repoint
-    original_unlink = ModelMover._unlink_source
+    original_unlink = mover_module.unlink_source
 
     def traced_copy(source, destination):
         events.append("copy")
@@ -257,10 +255,10 @@ def test_the_steps_happen_in_the_only_safe_order(
         events.append("unlink")
         return original_unlink(path)
 
-    monkeypatch.setattr(mover_module, "_copy_and_digest", traced_copy)
-    monkeypatch.setattr(mover_module, "_digest", traced_digest)
+    monkeypatch.setattr(mover_module, "copy_and_digest", traced_copy)
+    monkeypatch.setattr(mover_module, "file_digest", traced_digest)
     monkeypatch.setattr(ModelMover, "_repoint", traced_repoint)
-    monkeypatch.setattr(ModelMover, "_unlink_source", staticmethod(traced_unlink))
+    monkeypatch.setattr(mover_module, "unlink_source", traced_unlink)
 
     mover = ModelMover(two_folders["hub"])
     plan = mover.plan(
@@ -329,9 +327,8 @@ def test_a_copy_that_does_not_verify_leaves_the_original_alone(
 ):
     """A bad write must cost the copy, never the original. The failure is
     reported per file and the source is still exactly where the row says."""
-    monkeypatch.setattr(
-        mover_module, "_digest", lambda path: "0" * 64
-    )  # the destination reads back as something else entirely
+    # The destination reads back as something else entirely.
+    monkeypatch.setattr(mover_module, "file_digest", lambda path: "0" * 64)
     mover = ModelMover(two_folders["hub"])
     report = mover.execute(
         mover.plan(

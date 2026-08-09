@@ -175,7 +175,7 @@ def same_device(source_path: str, destination_dir: str) -> bool:
     return os.stat(source_path).st_dev == os.stat(destination_dir).st_dev
 
 
-def _copy_and_digest(source_path: str, destination_path: str) -> str:
+def copy_and_digest(source_path: str, destination_path: str) -> str:
     """Copy the file and return the SHA-256 of the bytes that were *read*.
 
     One pass. Hashing the source in a separate read would double the cost of a
@@ -196,12 +196,70 @@ def _copy_and_digest(source_path: str, destination_path: str) -> str:
     return digest.hexdigest()
 
 
-def _digest(path: str) -> str:
+def file_digest(path: str) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         while chunk := handle.read(_COPY_CHUNK_BYTES):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def unlink_source(source_path: str) -> None:
+    """The last step of a move or an import, and only ever the last step.
+
+    Its own function so the crash-window test has a seam to interrupt exactly
+    here — between a durable commit and the removal that commit authorises —
+    without patching ``os.unlink`` for the whole process.
+    """
+    os.unlink(source_path)
+
+
+def discard_partial(partial: str) -> None:
+    """Remove a copy that never verified. Never raises: the caller is already
+    reporting a failure and a cleanup error must not replace it."""
+    try:
+        os.unlink(partial)
+    except FileNotFoundError:
+        # The copy never got as far as creating it. Nothing to clean up.
+        logger.debug("No partial copy at %s to discard.", partial)
+    except OSError as exc:
+        logger.warning(
+            "Could not remove the partial copy %s: %s. It is inert — no row "
+            "names it and the scanner ignores it — but it is occupying disk.",
+            partial,
+            exc,
+        )
+
+
+def require_space(destination_path: str, bytes_to_copy: int) -> None:
+    """Check free space **before the first byte**, for the whole batch.
+
+    Per file would fill the disk and fail on file 1,500 of 1,806, having
+    already moved 1,499 — and there is no undo.
+    """
+    if bytes_to_copy <= 0:
+        return
+    try:
+        free = shutil.disk_usage(destination_path).free
+    except OSError as exc:
+        logger.error(
+            "Could not read free space on %s: %s. Refusing the move rather "
+            "than starting a copy that may not fit.",
+            destination_path,
+            exc,
+        )
+        raise MoveRefused(
+            f"Could not read free space on {destination_path}.",
+            status_code=507,
+        ) from exc
+    required = int(bytes_to_copy * _SPACE_HEADROOM)
+    if required > free:
+        raise MoveRefused(
+            f"Not enough space in {destination_path}: the move needs "
+            f"{required / 1024**3:.2f} GB including 10 % headroom and "
+            f"{free / 1024**3:.2f} GB is free. Nothing was moved.",
+            status_code=507,
+        )
 
 
 class ModelMover:
@@ -278,7 +336,7 @@ class ModelMover:
             moves.append(move)
 
         bytes_to_copy = sum(move.size for move in moves if not move.same_device)
-        self._require_space(destination_path, bytes_to_copy)
+        require_space(destination_path, bytes_to_copy)
         logger.info(
             "Planned a move of %d file(s) into %s: %d byte(s) to copy, %d rename(s).",
             len(moves),
@@ -338,6 +396,12 @@ class ModelMover:
         # Flattened to the basename: dropping a file onto a folder means "put it
         # in that folder", not "recreate three levels of somebody else's tree in
         # it". A collision is refused below, never silently overwritten.
+        #
+        # The containment that follows is therefore a sanitizer rather than the
+        # live guard — ``basename`` has already made an escape unreachable. The
+        # reachable containment on this path is the *source* one above, which
+        # governs the unlink and does have a test. This one stays because it
+        # becomes load-bearing the day the destination stops being flattened.
         destination_relpath = os.path.basename(relpath)
         try:
             resolved_destination = resolve_path_within(
@@ -409,37 +473,6 @@ class ModelMover:
             raise MoveRefused(
                 f"{destination_relpath} is registered to another model in the "
                 "destination folder. Rescan that folder first."
-            )
-
-    @staticmethod
-    def _require_space(destination_path: str, bytes_to_copy: int) -> None:
-        """Check free space **before the first byte**, for the whole batch.
-
-        Per file would fill the disk and fail on file 1,500 of 1,806, having
-        already moved 1,499 — and there is no undo.
-        """
-        if bytes_to_copy <= 0:
-            return
-        try:
-            free = shutil.disk_usage(destination_path).free
-        except OSError as exc:
-            logger.error(
-                "Could not read free space on %s: %s. Refusing the move rather "
-                "than starting a copy that may not fit.",
-                destination_path,
-                exc,
-            )
-            raise MoveRefused(
-                f"Could not read free space on {destination_path}.",
-                status_code=507,
-            ) from exc
-        required = int(bytes_to_copy * _SPACE_HEADROOM)
-        if required > free:
-            raise MoveRefused(
-                f"Not enough space in {destination_path}: the move needs "
-                f"{required / 1024**3:.2f} GB including 10 % headroom and "
-                f"{free / 1024**3:.2f} GB is free. Nothing was moved.",
-                status_code=507,
             )
 
     # -- execution --------------------------------------------------------
@@ -535,11 +568,11 @@ class ModelMover:
         """The invariant, in the only order that has no dangling-row window."""
         partial = move.destination_path + PARTIAL_SUFFIX
         try:
-            written = _copy_and_digest(move.source_path, partial)
+            written = copy_and_digest(move.source_path, partial)
             # Read the destination back. The source digest above proves what left;
             # only re-reading proves what arrived, which is the entire point of
             # verifying a copy rather than trusting the write.
-            arrived = _digest(partial)
+            arrived = file_digest(partial)
             if arrived != written:
                 raise OSError(
                     f"Copy of {move.source_path} verified as {arrived} but "
@@ -557,7 +590,7 @@ class ModelMover:
                 )
             os.replace(partial, move.destination_path)
         except OSError:
-            self._discard_partial(partial)
+            discard_partial(partial)
             raise
 
         # Durable before the unlink, and *only* then the unlink.
@@ -566,33 +599,8 @@ class ModelMover:
             return MoveOutcome(
                 move.source_folder_id, move.source_relpath, STATUS_COPIED
             )
-        self._unlink_source(move.source_path)
+        unlink_source(move.source_path)
         return MoveOutcome(move.source_folder_id, move.source_relpath, STATUS_MOVED)
-
-    @staticmethod
-    def _unlink_source(source_path: str) -> None:
-        """The last step, and only ever the last step.
-
-        Its own method so the crash-window test has a seam to interrupt exactly
-        here — between a durable commit and the removal it authorises — without
-        patching ``os.unlink`` for the whole process.
-        """
-        os.unlink(source_path)
-
-    @staticmethod
-    def _discard_partial(partial: str) -> None:
-        try:
-            os.unlink(partial)
-        except FileNotFoundError:
-            # The copy never got as far as creating it. Nothing to clean up.
-            logger.debug("No partial copy at %s to discard.", partial)
-        except OSError as exc:
-            logger.warning(
-                "Could not remove the partial copy %s: %s. It is inert — no row "
-                "names it and the scanner ignores it — but it is occupying disk.",
-                partial,
-                exc,
-            )
 
     def _repoint(
         self, move: PlannedMove, plan: MovePlan, *, delete_source: bool = True
