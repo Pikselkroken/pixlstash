@@ -640,6 +640,51 @@ def test_a_source_folder_is_never_written_into(hub, tmp_path):
         ModelMover(hub).plan([(source_id, "alice.safetensors")], output_id)
 
 
+@pytest.mark.parametrize("same_model", [False, True], ids=["other-model", "same-model"])
+def test_a_registered_destination_key_with_no_file_is_refused_at_plan_time(
+    two_folders, hub, same_model
+):
+    """A tombstone at the destination key refuses the batch before the first byte.
+
+    The `same-model` case is the one that was wrong: the check used to allow an
+    existing row whose ``model_id`` matched the file being moved, on the reading
+    that a row about the same content is harmless. ``model_file`` is keyed by
+    ``(model_folder_id, relpath)``, so it is not — ``_repoint``'s UPDATE walks
+    into ``UNIQUE`` at commit time, minutes in, instead of a clean 4xx before
+    anything is written. Widened to refuse any existing row, and pinned here in
+    both shapes because nothing else exercises this branch: deleting it left the
+    whole suite green.
+    """
+    model_id = two_folders["model_id"]
+    with hub.transaction() as conn:
+        if not same_model:
+            model_id = int(
+                conn.execute(
+                    "INSERT INTO model (file_kind, kind, sha256, filename, "
+                    "provenance, file_size, created_at) VALUES ('adapter', "
+                    "'lora', ?, 'alice.safetensors', 'external', 9, "
+                    "'2026-08-09T00:00:00+00:00')",
+                    ("c" * 64,),
+                ).lastrowid
+            )
+        # No file on disk: the row is a tombstone, so the ``os.path.exists``
+        # branch above it cannot be what refuses this.
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+            "seen_at) VALUES (?, ?, 'alice.safetensors', 'missing', "
+            "'2026-08-09T00:00:00+00:00')",
+            (model_id, two_folders["destination_id"]),
+        )
+
+    with pytest.raises(MoveRefused, match="is registered to model"):
+        ModelMover(hub).plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    assert os.path.exists(two_folders["source_path"])
+    assert not os.path.exists(two_folders["destination_path"])
+
+
 def test_a_file_already_in_the_destination_is_reported_skipped_not_dropped(
     two_folders,
 ):
