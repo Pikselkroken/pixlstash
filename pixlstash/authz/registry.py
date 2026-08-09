@@ -322,6 +322,21 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "reason above; do not re-derive it from the pivot."
         ),
     ),
+    # ── model_shelf.py (the model shelf's reads; shelf plan B5) ──────────────
+    # OWNER_ONLY on the DEFAULT library pin. ``library_independent`` is left at
+    # False on purpose even though ``model`` lives in the hub: these routes join
+    # hub content to the active vault's ``adapter_attachment`` rows, so they DO
+    # return library content and a token stamped for another library must not
+    # reach them. Scoped by omission, exactly as §16.1 intends.
+    #
+    # Accepted residual (shelf plan B5, stated in the PR): an owner token pinned
+    # to library A sees machine-level model filenames, including ones only ever
+    # used in library B. That is inherent to the hub holding models while tokens
+    # are pinned per library; there is no cross-principal leak in a single-owner
+    # product, and the attachment names stay per-vault.
+    ("GET", "/api/v1/adapters"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/adapters/{sha256}"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/checkpoints"): RoutePolicy(_OWNER),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
         _LOCAL,
