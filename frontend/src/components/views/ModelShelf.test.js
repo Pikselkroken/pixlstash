@@ -180,3 +180,17 @@ describe("keyboard", () => {
     expect(wrapper.find(".shelf").attributes("tabindex")).toBe("-1");
   });
 });
+
+describe("the shelf's own accessible name", () => {
+  it("carries a role that is allowed to have one", async () => {
+    // A bare div is role `generic`, which prohibits an accessible name, so
+    // both aria-label and aria-describedby are dropped and the whole
+    // #shelf-help paragraph is never announced.
+    const wrapper = await mountShelf([adapter()]);
+    const root = wrapper.find(".shelf");
+    expect(root.attributes("role")).toBe("region");
+    expect(root.attributes("aria-label")).toBe("Model shelf");
+    expect(root.attributes("aria-describedby")).toBe("shelf-help");
+    expect(wrapper.find("#shelf-help").exists()).toBe(true);
+  });
+});
