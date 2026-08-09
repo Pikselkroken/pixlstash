@@ -55,6 +55,22 @@
         </template>
         <ShelfShowPanel />
       </v-menu>
+
+      <!-- No count badge: `bar-filter-badge` counts a deviation from a default
+           the user set, and a folder count never returns to zero (the managed
+           store always exists), so a permanent number 8px from the Show
+           button's identical pill would mean something else entirely. -->
+      <button
+        ref="foldersBtnRef"
+        class="bar-btn bar-btn--boxed"
+        :class="{ 'bar-btn--open': foldersOpen }"
+        type="button"
+        title="Model folders"
+        aria-label="Model folders"
+        @click="openFolders"
+      >
+        <v-icon size="19">mdi-folder-multiple-outline</v-icon>
+      </button>
     </div>
 
     <div class="shelf-body">
@@ -76,8 +92,15 @@
         <p>No models found.</p>
         <p>
           PixlStash lists what it finds in the model folders registered on this
-          machine. Register one to fill the shelf.
+          machine. Add the folder where you keep them.
         </p>
+        <button
+          class="tbm-action"
+          type="button"
+          @click="openFolders($event)"
+        >
+          Add a model folder
+        </button>
       </div>
       <div v-else-if="!store.visibleRows.length" class="shelf-state">
         <p>No models match these filters.</p>
@@ -127,18 +150,44 @@
         </li>
       </ul>
     </div>
+
+    <ModelFoldersDialog :open="foldersOpen" @close="closeFolders" />
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from "vue";
 import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
+import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { formatModelSize } from "../../utils/modelShelf";
 
 const store = useModelShelfStore();
 const rootEl = ref(null);
 const showMenuOpen = ref(false);
+const foldersOpen = ref(false);
+const foldersBtnRef = ref(null);
+
+// Two controls open the same dialog, so which one gets focus back is a fact
+// about the press rather than about the dialog. Held raw: it is a DOM node, and
+// making it reactive would deep-track an element tree for nothing.
+const folderInvoker = shallowRef(null);
+
+function openFolders(event) {
+  folderInvoker.value =
+    event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  foldersOpen.value = true;
+}
+
+async function closeFolders() {
+  const returnTo = folderInvoker.value;
+  foldersOpen.value = false;
+  folderInvoker.value = null;
+  await nextTick();
+  // The empty-state button unmounts the moment the first folder is scanned in,
+  // so fall back to the toolbar control rather than dropping focus to <body>.
+  (returnTo?.isConnected ? returnTo : foldersBtnRef.value)?.focus();
+}
 
 // A closed vocabulary gets a glyph, an open one a word. `unknown` gets a plain
 // file rather than a question mark (an unclassified file is a fact about our

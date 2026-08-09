@@ -1,0 +1,199 @@
+// Folder registration, and the two states it has to render rather than hit.
+//
+// `LOCAL_OWNER_ONLY` means a remote owner reads the list and 403s on every
+// mutator, and the managed store answers 409 on DELETE because its state
+// refuses rather than because the caller may not. Both are designed states
+// here: a button that always fails on click is the failure this suite pins.
+
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { mount } from "@vue/test-utils";
+import { setActivePinia, createPinia } from "pinia";
+
+const listModelFolders = vi.fn();
+const forgetModelFolder = vi.fn();
+const rescanModelFolder = vi.fn();
+
+vi.mock("../../api/modelFolders", () => ({
+  MANAGED_KIND: "managed",
+  CREATABLE_KINDS: ["user", "source"],
+  listModelFolders: (...a) => listModelFolders(...a),
+  createModelFolder: vi.fn(),
+  forgetModelFolder: (...a) => forgetModelFolder(...a),
+  rescanModelFolder: (...a) => rescanModelFolder(...a),
+}));
+
+vi.mock("../../stores/useModelShelfStore", () => ({
+  useModelShelfStore: () => ({ fetchRows: vi.fn() }),
+}));
+
+import ModelFoldersDialog from "./ModelFoldersDialog.vue";
+import { useLibrariesStore } from "../../stores/useLibrariesStore";
+
+const globalOpts = {
+  global: {
+    stubs: {
+      "v-icon": true,
+      "v-tooltip": {
+        props: ["text"],
+        template: "<div><slot name='activator' :props='{}' /></div>",
+      },
+      // The dialog shell teleports; its chrome is AppDialog's own contract.
+      AppDialog: { template: "<div><slot name='header-right' /><slot /></div>" },
+      FolderBrowser: true,
+    },
+  },
+};
+
+function folder(overrides = {}) {
+  return {
+    id: 1,
+    path: "/home/g/loras",
+    kind: "user",
+    owner: null,
+    movable: "per_item",
+    host_path: null,
+    delete_after_import: false,
+    last_checked: null,
+    created_at: "2026-08-01T10:00:00",
+    file_count: 91,
+    ...overrides,
+  };
+}
+
+const MANAGED = folder({
+  id: 2,
+  path: "/var/pixlstash/models",
+  kind: "managed",
+  movable: "root_only",
+  file_count: 3,
+});
+
+async function open(rows, { canManage = true, inDocker = false } = {}) {
+  listModelFolders.mockResolvedValue(rows);
+  const wrapper = mount(ModelFoldersDialog, { props: { open: true }, ...globalOpts });
+  const libraries = useLibrariesStore();
+  libraries.canManage = canManage;
+  libraries.inDocker = inDocker;
+  await new Promise((r) => setTimeout(r, 0));
+  await wrapper.vm.$nextTick();
+  return wrapper;
+}
+
+beforeEach(() => {
+  setActivePinia(createPinia());
+  listModelFolders.mockReset().mockResolvedValue([]);
+  forgetModelFolder.mockReset().mockResolvedValue({ tombstoned_files: 0 });
+  rescanModelFolder.mockReset().mockResolvedValue({ status: "started" });
+});
+
+describe("the managed store", () => {
+  it("offers no forget affordance at all, not a disabled one", async () => {
+    // DELETE on it is a 409, so a button there could only ever fail. No button
+    // is a better answer than a button that is always wrong.
+    const wrapper = await open([MANAGED]);
+    const labels = wrapper
+      .findAll("button")
+      .map((b) => b.attributes("aria-label") || "");
+    expect(labels.some((l) => l.startsWith("Forget"))).toBe(false);
+    expect(labels.some((l) => l.startsWith("Move"))).toBe(true);
+  });
+
+  it("explains the missing control in the row, not in a tooltip", async () => {
+    // A reason that lives only in a tooltip is a reason the keyboard and the
+    // screen reader never reach.
+    const wrapper = await open([MANAGED]);
+    expect(wrapper.text()).toContain(
+      "PixlStash keeps its own models here, so this folder stays.",
+    );
+  });
+
+  it("keeps every row's action column at the same width", async () => {
+    // A slot that collapsed on one row would slide every other row's buttons
+    // sideways. Absent actions are hidden, never unrendered.
+    const wrapper = await open([folder(), MANAGED, folder({ id: 3, kind: "foreign" })]);
+    const counts = wrapper
+      .findAll(".mf-row__actions")
+      .map((group) => group.findAll("button").length);
+    expect(new Set(counts).size).toBe(1);
+  });
+});
+
+describe("relocation, which is not built yet", () => {
+  it("renders the control blocked and reachable, with its reason", async () => {
+    const wrapper = await open([MANAGED]);
+    const move = wrapper
+      .findAll("button")
+      .find((b) => (b.attributes("aria-label") || "").startsWith("Move"));
+    expect(move.attributes("aria-disabled")).toBe("true");
+    expect(move.attributes("disabled")).toBeUndefined();
+    const reason = wrapper.get(`#${move.attributes("aria-describedby")}`);
+    expect(reason.text()).toContain("not available in this release");
+  });
+});
+
+describe("a remote owner", () => {
+  it("sees the mutators, blocked, described, and still focusable", async () => {
+    // The read is owner-only and succeeds from anywhere; only the writes are
+    // §16.3. `aria-disabled`, never the attribute, or the reason it points at
+    // is unreachable by keyboard.
+    const wrapper = await open([folder()], { canManage: false });
+    const scan = wrapper
+      .findAll("button")
+      .find((b) => (b.attributes("aria-label") || "").startsWith("Scan"));
+    expect(scan.attributes("aria-disabled")).toBe("true");
+    expect(scan.attributes("aria-describedby")).toBe("mf-remote-note");
+    expect(wrapper.get("#mf-remote-note").text()).toContain(
+      "allow_remote_host_ops",
+    );
+  });
+
+  it("does not fire the request the server would refuse", async () => {
+    const wrapper = await open([folder()], { canManage: false });
+    const scan = wrapper
+      .findAll("button")
+      .find((b) => (b.attributes("aria-label") || "").startsWith("Scan"));
+    await scan.trigger("click");
+    expect(rescanModelFolder).not.toHaveBeenCalled();
+  });
+
+  it("still lets a local owner through", async () => {
+    // Over-blocking is its own regression, so the positive direction is pinned
+    // beside the negative one.
+    const wrapper = await open([folder()]);
+    const scan = wrapper
+      .findAll("button")
+      .find((b) => (b.attributes("aria-label") || "").startsWith("Scan"));
+    expect(scan.attributes("aria-disabled")).toBeUndefined();
+    await scan.trigger("click");
+    expect(rescanModelFolder).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("the help mark", () => {
+  it("keeps its box on a row that has nothing to explain", async () => {
+    // The owner's requirement: an available row and a blocked row have
+    // identical geometry, so the slot is reserved rather than conditional.
+    const wrapper = await open([folder()]);
+    const help = wrapper.get(".mf-row .helptip");
+    expect(help.classes()).toContain("helptip--empty");
+    expect(help.attributes("aria-label")).toBeUndefined();
+  });
+
+  it("names what it explains rather than saying 'Help'", async () => {
+    const wrapper = await open([folder()], { canManage: false });
+    const help = wrapper.get(".mf-row .helptip");
+    expect(help.classes()).not.toContain("helptip--empty");
+    expect(help.attributes("aria-label")).toContain("loras");
+  });
+});
+
+describe("Docker", () => {
+  it("blocks adding rather than letting the 400 happen", async () => {
+    // POST needs a host path PixlStash cannot ask for from inside a container.
+    const wrapper = await open([folder()], { inDocker: true });
+    const add = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Add folder"));
+    expect(add.attributes("aria-disabled")).toBe("true");
+  });
+});

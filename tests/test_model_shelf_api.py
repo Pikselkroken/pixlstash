@@ -1290,13 +1290,21 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
     calls: list[str] = []
     original = server.hub.fetchall
 
-    # The move worker is excluded by name. The server is shared, a move started
-    # by another test runs on its own thread, and letting its queries land in
-    # the tally would fail this assertion for a reason that has nothing to do
-    # with the list query. The request handler itself runs on Starlette's
-    # threadpool, so "only my thread" would count nothing at all.
+    # Background shelf workers are excluded by name. The server is shared, so a
+    # move or a folder rescan started by an earlier test runs on its own thread
+    # against this same hub, and letting its queries land in the tally fails
+    # this assertion for a reason that has nothing to do with the list query.
+    # The request handler itself runs on Starlette's threadpool, so "only my
+    # thread" would count nothing at all.
+    #
+    # `model-folder-rescan` was the miss: a rescan outlives the test that starts
+    # it, the scanner reads `server.hub` throughout, and the overlap depends on
+    # machine speed -- so this failed only under CI load, and only when the
+    # sharder happened to schedule a rescan test just before this one.
+    background_prefixes = ("model-move", "model-folder-rescan")
+
     def counting(sql, params=()):
-        if not threading.current_thread().name.startswith("model-move"):
+        if not threading.current_thread().name.startswith(background_prefixes):
             calls.append(sql)
         return original(sql, params)
 
