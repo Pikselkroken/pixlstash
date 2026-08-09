@@ -24,7 +24,7 @@
       <div
         class="progress-overlay__fill"
         :class="{ 'progress-overlay__fill--indeterminate': indeterminate }"
-        :style="{ width: `${percent}%` }"
+        :style="{ width: `${clampedPercent}%` }"
       ></div>
     </div>
     <div v-if="total != null" class="progress-overlay__meta">
