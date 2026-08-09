@@ -197,6 +197,34 @@ describe("the option vocabularies", () => {
     expect(store.baseModelOptions).toEqual(["flux.1-dev", "sdxl"]);
     expect(store.visibleRows.map((r) => r.id)).toEqual([1]);
   });
+
+  it("survives a refresh that fails", async () => {
+    // Clearing the rows on error emptied both vocabularies and unmounted the
+    // Show panel's nested checkboxes, which is the bug above reached down the
+    // error path. The error renders ahead of the list, so keeping them costs
+    // nothing on screen.
+    const store = useModelShelfStore();
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, kind: "lokr", base_model: "sdxl" }),
+    ]);
+    listCheckpoints.mockResolvedValue([
+      adapter({
+        id: 2,
+        file_kind: "checkpoint",
+        kind: null,
+        base_model: "flux.1-dev",
+      }),
+    ]);
+    await store.fetchRows();
+
+    listAdapters.mockRejectedValueOnce(new Error("the shelf is unreachable"));
+    await store.fetchRows();
+
+    expect(store.error).toBe("the shelf is unreachable");
+    expect(store.adapterKindOptions).toEqual(["lokr"]);
+    expect(store.baseModelOptions).toEqual(["flux.1-dev", "sdxl"]);
+    expect(store.rows.map((r) => r.id)).toEqual([1, 2]);
+  });
 });
 
 describe("the badge", () => {

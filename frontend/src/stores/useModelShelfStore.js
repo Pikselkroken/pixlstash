@@ -136,7 +136,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     } catch (err) {
       if (startedAt !== epoch) return;
       error.value = errorDetail(err) || err?.message || String(err);
-      rows.value = [];
+      // `rows` is left standing. Clearing it was consistent while a fetch
+      // replaced the whole array, but under the contract above it throws away
+      // blocks the failed request never asked for, which empties
+      // `adapterKindOptions` and `baseModelOptions` and unmounts the Show
+      // panel's nested checkboxes: the bug this store was just fixed for,
+      // reached down the error path instead. The error branch renders ahead of
+      // the row list, so nothing stale is shown, and the next successful fetch
+      // re-requests every ticked block anyway.
     } finally {
       if (startedAt === epoch) loading.value = false;
     }
