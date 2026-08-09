@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -343,15 +344,38 @@ class RunImporter:
                 checkpoint.filename, checkpoint.step, STATUS_FAILED, detail=str(exc)
             )
 
-        model_id = self._register(
-            target,
-            written,
-            checkpoint=checkpoint,
-            run=run,
-            stack_id=stack_id,
-            position=position,
-            destination_folder_id=destination_folder_id,
-        )
+        try:
+            model_id = self._register(
+                target,
+                written,
+                checkpoint=checkpoint,
+                run=run,
+                stack_id=stack_id,
+                position=position,
+                destination_folder_id=destination_folder_id,
+            )
+        except sqlite3.IntegrityError as exc:
+            # The destination key was registered between ``_resolve_targets``
+            # and this commit — a rescan, which is deliberately not under
+            # ``SHELF_IO_LOCK``. Fail closed, exactly as the mover does: the
+            # alternative repoints somebody else's location row at this file,
+            # which is a silent overwrite of bookkeeping rather than of bytes.
+            # Their row is left for the rescan that owns it; the copy discarded
+            # here is unambiguously ours, because the re-check above refused a
+            # target that already had anything at it.
+            logger.error(
+                "The destination key (folder %s, %r) was registered between the "
+                "check and the commit; discarding the copy at %s and failing "
+                "this file.",
+                destination_folder_id,
+                os.path.basename(target),
+                target,
+                exc_info=True,
+            )
+            discard_partial(target)
+            return ImportOutcome(
+                checkpoint.filename, checkpoint.step, STATUS_FAILED, detail=str(exc)
+            )
         if delete_source:
             unlink_source(checkpoint.path)
         return ImportOutcome(
@@ -427,12 +451,16 @@ class RunImporter:
                     "SELECT id FROM model WHERE sha256 = ?", (digest,)
                 ).fetchone()[0]
             )
+            # **No ``ON CONFLICT`` on the location row.** ``ON CONFLICT(sha256)``
+            # above is the content/location split doing its job — one model, two
+            # places. This one is not: the destination key is checked free in
+            # ``_resolve_targets``, so a conflict here can only mean a racing
+            # writer took it, and ``DO UPDATE`` would repoint *their* row at
+            # this file. Let the UNIQUE raise and let ``_import_one`` fail the
+            # file closed.
             conn.execute(
                 "INSERT INTO model_file (model_id, model_folder_id, relpath, "
-                "state, seen_at, file_mtime) VALUES (?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(model_folder_id, relpath) DO UPDATE SET "
-                "model_id = excluded.model_id, state = excluded.state, "
-                "seen_at = excluded.seen_at, file_mtime = excluded.file_mtime",
+                "state, seen_at, file_mtime) VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     model_id,
                     destination_folder_id,

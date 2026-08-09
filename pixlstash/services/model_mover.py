@@ -562,9 +562,9 @@ class ModelMover:
         Args:
             plan: The result of :meth:`plan`.
             delete_source: False leaves the original in place, which makes this
-                a register-a-second-copy rather than a move. The ai-toolkit
-                import uses it for a ``source`` folder with
-                ``delete_after_import`` off.
+                a register-a-second-copy rather than a move. No route passes it
+                today — the ai-toolkit import writes its own rows, because it
+                creates the ``model`` as well as the ``model_file``.
             should_cancel: Consulted **between** files. Cancelling stops the
                 queue and rolls nothing back: the files already moved are moved,
                 which is the ruling, and is also the only answer that does not
@@ -757,12 +757,15 @@ class ModelMover:
                     ),
                 )
             else:
+                # No ``ON CONFLICT``: the destination key was checked free
+                # twice, so a conflict here means a racing writer took it, and
+                # ``DO UPDATE`` would repoint *their* row at this file. The
+                # UNIQUE raises and ``_copy_verify_repoint_unlink`` discards the
+                # copy it just made — the same fail-closed answer the repointing
+                # branch above gets for free.
                 conn.execute(
                     "INSERT INTO model_file (model_id, model_folder_id, relpath, "
-                    "state, seen_at, file_mtime) VALUES (?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(model_folder_id, relpath) DO UPDATE SET "
-                    "model_id = excluded.model_id, state = excluded.state, "
-                    "seen_at = excluded.seen_at, file_mtime = excluded.file_mtime",
+                    "state, seen_at, file_mtime) VALUES (?, ?, ?, ?, ?, ?)",
                     (
                         move.model_id,
                         plan.destination_folder_id,

@@ -369,6 +369,69 @@ def test_a_file_that_lands_on_the_destination_name_mid_copy_is_not_overwritten(
     ] == [], "the discarded copy was left behind"
 
 
+def test_a_destination_row_registered_mid_copy_fails_the_file_and_leaves_it_alone(
+    shelf, monkeypatch
+):
+    """``ON CONFLICT(model_folder_id, relpath) DO UPDATE`` would repoint it.
+
+    ``_resolve_targets`` proves the destination key free at plan time and a
+    rescan is deliberately **not** under ``SHELF_IO_LOCK``, so it can take that
+    key while the copy runs. Updating the row would silently point somebody
+    else's location at this import's file — the bookkeeping version of the
+    overwrite the whole module refuses. Fail closed and leave their row for the
+    rescan that owns it, exactly as ``ModelMover`` does.
+    """
+    hub = shelf["hub"]
+    gatecrasher = {}
+    real_digest = importer_module.file_digest
+
+    def gatecrash_then_digest(path):
+        if not gatecrasher:
+            with hub.transaction() as conn:
+                gatecrasher["model_id"] = int(
+                    conn.execute(
+                        "INSERT INTO model (file_kind, kind, sha256, filename, "
+                        "provenance, file_size, created_at) VALUES ('adapter', "
+                        "'lora', ?, 'Clementine.safetensors', 'external', 10, "
+                        "'2026-08-09T00:00:00+00:00')",
+                        ("f" * 64,),
+                    ).lastrowid
+                )
+                conn.execute(
+                    "INSERT INTO model_file (model_id, model_folder_id, relpath, "
+                    "state, seen_at) VALUES (?, ?, 'Clementine.safetensors', "
+                    "'missing', '2026-08-09T00:00:00+00:00')",
+                    (gatecrasher["model_id"], shelf["destination_id"]),
+                )
+        return real_digest(path)
+
+    monkeypatch.setattr(importer_module, "file_digest", gatecrash_then_digest)
+
+    report = RunImporter(hub).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], steps=[None], delete_source=True
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_FAILED]
+    row = hub.fetchone(
+        "SELECT model_id, state FROM model_file WHERE model_folder_id = ? "
+        "AND relpath = 'Clementine.safetensors'",
+        (shelf["destination_id"],),
+    )
+    assert row["model_id"] == gatecrasher["model_id"], (
+        "the import repointed a location row it did not create"
+    )
+    assert row["state"] == "missing", "the racing writer's row was rewritten"
+    assert list(models(hub)) == ["Clementine.safetensors"], (
+        "the failed import left a content row behind"
+    )
+    assert os.path.exists(shelf["run_dir"] / "Clementine.safetensors"), (
+        "the run's file was unlinked despite the import failing"
+    )
+    assert not os.path.exists(shelf["destination_dir"] / "Clementine.safetensors"), (
+        "the copy this import made was left where no row names it"
+    )
+
+
 def test_a_symlink_at_a_destination_name_is_refused_not_written_through(shelf):
     """The importer's destination containment is **reachable** too.
 
