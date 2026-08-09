@@ -43,7 +43,7 @@ import pixlstash.routes.pictures._misc as misc_module
 from pixlstash.db_models import Picture, UserToken
 from pixlstash.routes.pictures import _helpers as helpers_module
 from pixlstash.server import Server
-from tests.authz_guard import no_spa_fallback  # noqa: F401
+from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 from tests.utils import upload_pictures_and_wait
 
 API = "/api/v1"
@@ -83,11 +83,15 @@ def _tables_to_wipe(server):
 
     Returned children-first (reverse dependency order), which together with
     restoring ``picture`` before the deletes keeps every foreign key satisfied
-    at all times: the only reference out of a preserved table into a wiped one
-    is ``picture.stack_id`` -> ``picturestack``, and the restore puts that back
-    to NULL first. No ``PRAGMA foreign_keys`` fiddling is needed, and none is
-    wanted — a failed delete with enforcement switched off stays off on the
-    pooled connection and silently weakens every later test.
+    at all times. ``Picture`` points out of the preserved set into the wiped one
+    three times — ``stack_id`` -> ``picturestack``, ``project_id`` -> ``project``
+    and ``reference_folder_id`` -> ``reference_folder`` — and the restore puts
+    all three back to their imported values (NULL, for this fixture) before the
+    referenced rows go. Foreign keys really are enforced here
+    (``pixlstash/database.py``), so a fixture that imported into a project or a
+    reference folder would need that restore, not a ``PRAGMA``: switching
+    enforcement off leaves it off on the pooled connection if a delete raises,
+    silently weakening every later test.
     """
     engine = server.vault.db._engine
     present = set(sa.inspect(engine).get_table_names())
@@ -458,6 +462,10 @@ def test_remove_tag_everywhere_scoped_token_blocked(env, scoped):
     server, client, picture_ids, _ = env
     anon, tok = scoped
     target = picture_ids[1]
+    # The READ-token write block runs in middleware, ahead of routing, so a
+    # renamed or deleted route answers 403 exactly like a live guarded one.
+    # No other assertion in this file proves this route exists.
+    assert_real_route(server.api, "POST", f"{API}/pictures/{target}/tags/remove_all")
     r = anon.post(
         f"{API}/pictures/{target}/tags/remove_all",
         json={"tag": "x"},
@@ -489,6 +497,11 @@ def test_delete_face_scoped_token_blocked(env, scoped):
     assert r.status_code == 200, r.text
     face_index = r.json().get("face_index", 0)
 
+    # Middleware answers 403 before routing, so the owner's POST above does not
+    # prove this different route still exists.
+    assert_real_route(
+        server.api, "DELETE", f"{API}/pictures/{target}/face/{face_index}"
+    )
     r = anon.delete(f"{API}/pictures/{target}/face/{face_index}", headers=_bearer(tok))
     assert r.status_code == 403, r.text
 
@@ -774,6 +787,10 @@ def test_assign_face_owner_not_blocked(env, monkeypatch):
 def test_comfyui_i2i_scoped_token_blocked(env, scoped):
     server, client, picture_ids, _ = env
     anon, tok = scoped
+    # The owner counterpart asserts 404, which a deleted route also returns, so
+    # neither test would notice this route disappearing. Middleware 403s ahead
+    # of routing, so this one would not notice either.
+    assert_real_route(server.api, "POST", f"{API}/comfyui/run_i2i")
     r = anon.post(
         f"{API}/comfyui/run_i2i",
         json={"workflow_name": "nonexistent", "picture_ids": [picture_ids[1]]},
@@ -799,6 +816,9 @@ def test_comfyui_i2i_owner_passes_scope_guard(env, monkeypatch):
 def test_comfyui_t2i_source_picture_scoped_token_blocked(env, scoped):
     server, client, picture_ids, _ = env
     anon, tok = scoped
+    # This route has no owner counterpart anywhere in the file, so nothing else
+    # would notice it being renamed away; middleware 403s before routing.
+    assert_real_route(server.api, "POST", f"{API}/comfyui/run_t2i")
     r = anon.post(
         f"{API}/comfyui/run_t2i",
         json={"workflow_name": "nonexistent", "source_picture_id": picture_ids[1]},
