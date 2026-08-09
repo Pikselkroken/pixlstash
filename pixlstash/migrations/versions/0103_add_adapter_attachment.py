@@ -50,12 +50,22 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(), nullable=True),
             sa.PrimaryKeyConstraint("adapter_sha256", "entity_type", "entity_id"),
         )
+
+    # Outside that branch, because a fresh database never enters it: the
+    # baseline's `SQLModel.metadata.create_all()` already built the table, so an
+    # index created only in there would exist on migrated databases and nowhere
+    # else. Guarded by name so both paths converge on the same two indexes.
+    existing_indexes = {
+        idx["name"] for idx in inspector.get_indexes("adapter_attachment")
+    }
+    if "ix_adapter_attachment_adapter_sha256" not in existing_indexes:
         op.create_index(
             "ix_adapter_attachment_adapter_sha256",
             "adapter_attachment",
             ["adapter_sha256"],
         )
-        # The shelf's other direction: "what does this character use".
+    # The shelf's other direction: "what does this character use".
+    if "ix_adapter_attachment_entity" not in existing_indexes:
         op.create_index(
             "ix_adapter_attachment_entity",
             "adapter_attachment",

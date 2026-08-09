@@ -9,6 +9,10 @@ const props = defineProps({
   folderBrowseCache: { type: Object, required: true },
   expandedFolderIds: { type: Object, required: true }, // Set
   dropTargetKey: { type: String, default: null },
+  // Whether the hovered row would REFUSE this payload. Without it the row lit
+  // up with the accept highlight for a drag that never had preventDefault()
+  // called on it, so releasing did nothing (#757 covered the root row only).
+  dropRejected: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
@@ -52,7 +56,9 @@ function childImageCount() {
       class="sidebar-folder-row sidebar-folder-child-row"
       :class="{
         active: selectedFolderKey === 'path-' + entry.path,
-        droppable: dropTargetKey === 'path-' + entry.path,
+        droppable: dropTargetKey === 'path-' + entry.path && !dropRejected,
+        'not-droppable':
+          dropTargetKey === 'path-' + entry.path && dropRejected,
       }"
       :style="{ '--depth': depth }"
       :title="`${entry.path} - drop dragged reference images here to move them`"
@@ -114,6 +120,7 @@ function childImageCount() {
           :folder-browse-cache="folderBrowseCache"
           :expanded-folder-ids="expandedFolderIds"
           :drop-target-key="dropTargetKey"
+          :drop-rejected="dropRejected"
           @select="(key, payload) => emit('select', key, payload)"
           @toggle="(path) => emit('toggle', path)"
           @drag-over="(payload) => emit('drag-over', payload)"

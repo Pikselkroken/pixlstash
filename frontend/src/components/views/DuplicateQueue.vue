@@ -2,6 +2,7 @@
   <div
     ref="rootEl"
     class="dq"
+    role="region"
     tabindex="-1"
     aria-label="Duplicate review queue"
     aria-describedby="dq-key-help"

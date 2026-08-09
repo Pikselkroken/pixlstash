@@ -1,7 +1,11 @@
 <template>
+  <!-- role="region" because a bare div is role `generic`, which prohibits an
+       accessible name: without it the aria-label is dropped and #shelf-help is
+       never announced, so the whole paragraph below is dead weight. -->
   <div
     ref="rootEl"
     class="shelf"
+    role="region"
     tabindex="-1"
     aria-label="Model shelf"
     aria-describedby="shelf-help"
@@ -152,7 +156,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, shallowRef } from "vue";
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from "vue";
 import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -242,13 +246,26 @@ function rowTitle(row) {
   return [row.filename, where].filter(Boolean).join("\n");
 }
 
-onMounted(async () => {
-  await store.fetchRows();
+onMounted(() => {
   // Tab out of the sidebar lands in the shelf, the same contract the duplicate
-  // queue has.
-  await nextTick();
+  // queue has. Synchronously, like DuplicateQueue: taking focus one round trip
+  // after mount would discard wherever the user had moved in the meantime.
   rootEl.value?.focus();
+  store.fetchRows();
 });
+
+// A credential change (logout, login, share token, restore) empties the store,
+// and an empty shelf reads as "this machine has no models". Refetching rather
+// than gating the empty state on `loaded`: the view is still on screen and its
+// job is to show the shelf, so a blank body would be a second wrong answer.
+// The store cannot do this itself: session-reset handlers run BEFORE the new
+// credential is installed, whereas this pre-flush watcher runs after.
+watch(
+  () => store.loaded,
+  (isLoaded) => {
+    if (!isLoaded) store.fetchRows();
+  },
+);
 </script>
 
 <style scoped>

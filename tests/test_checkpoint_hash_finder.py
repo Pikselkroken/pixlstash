@@ -315,6 +315,40 @@ class TestFinder:
         assert task.params["checkpoint_ids"] == [checkpoint_id]
         assert finder.find_task() is None
 
+    def test_a_batch_still_in_flight_is_not_handed_out_again(self, hub, tmp_path):
+        # WorkPlanner.on_task_complete decrements the inflight count under its
+        # lock and calls the finder's callback afterwards, so a find_task lands
+        # in between with _deferred still empty. Without the handed-out set that
+        # re-issues the identical batch, which for a checkpoint is a second
+        # multi-gigabyte read of a file that just failed to hash.
+        register(hub, write_model(tmp_path / "a.safetensors"))
+        finder = MissingCheckpointHashFinder(hub)
+
+        task = finder.find_task()
+        assert task is not None
+
+        assert finder.find_task() is None, (
+            "the finder re-issued a batch whose result had not come back yet"
+        )
+
+    def test_the_batch_is_released_once_its_result_is_in(self, hub, tmp_path):
+        # The positive control: holding rows back forever would strand a
+        # checkpoint whose hash simply has not been written yet, which is
+        # over-blocking and its own regression.
+        path = write_model(tmp_path / "a.safetensors")
+        checkpoint_id = register(hub, path)
+        finder = MissingCheckpointHashFinder(hub)
+
+        task = finder.find_task()
+        finder.on_task_complete(task, RuntimeError("hub went away"))
+        # The row is deferred by the failure, so clear that to isolate the
+        # release: what is under test is that _handed_out no longer holds it.
+        finder._deferred.clear()
+
+        again = finder.find_task()
+        assert again is not None
+        assert again.params["checkpoint_ids"] == [checkpoint_id]
+
     def test_a_failed_task_defers_its_whole_batch(self, hub, tmp_path):
         register(hub, write_model(tmp_path / "a.safetensors"))
         finder = MissingCheckpointHashFinder(hub)

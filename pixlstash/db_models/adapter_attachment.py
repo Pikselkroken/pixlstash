@@ -24,6 +24,7 @@ attachment needs to survive.
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import Index
 from sqlmodel import Field, SQLModel
 
 ENTITY_CHARACTER = "character"
@@ -46,9 +47,22 @@ class AdapterAttachment(SQLModel, table=True):
 
     __tablename__ = "adapter_attachment"
 
+    # Declared here rather than only in revision 0103, because that revision's
+    # CREATE INDEX sits inside its `if the table does not exist` branch, which a
+    # fresh database never enters: the baseline's `SQLModel.metadata.create_all()`
+    # has already built the table from this model. Without the declaration a
+    # fresh vault got no composite index at all, and `attached_hashes()` filters
+    # on `entity_type AND entity_id`, which is the query it exists for.
+    __table_args__ = (
+        Index("ix_adapter_attachment_entity", "entity_type", "entity_id"),
+    )
+
     adapter_sha256: str = Field(primary_key=True, index=True)
     entity_type: str = Field(primary_key=True)
     """``character`` or ``set``. See ENTITY_CHARACTER / ENTITY_SET."""
 
-    entity_id: int = Field(primary_key=True, index=True)
+    # No single-column index: every read of this column pairs it with
+    # `entity_type`, so the composite above already covers them and a second
+    # index would only be another write to maintain.
+    entity_id: int = Field(primary_key=True)
     created_at: Optional[datetime] = Field(default=None)

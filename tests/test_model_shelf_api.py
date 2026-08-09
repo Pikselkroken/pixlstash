@@ -45,6 +45,7 @@ from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models.adapter_attachment import AdapterAttachment
+from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.server import Server
 from pixlstash.services.model_mover import SHELF_IO_LOCK
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
@@ -638,6 +639,124 @@ def test_a_system_directory_is_refused(shelf_env):
     assert r.status_code == 400, r.text
 
 
+def test_a_symlink_into_a_system_directory_is_refused(shelf_env, tmp_path):
+    """The blocklist is a string comparison, so it has to run on the resolved
+    path: ``/home/u/models-link -> /etc`` passes the lexical check, and the scan
+    then walks /etc because ``os.walk`` follows the *top-level* link. ``GET
+    /adapters`` is reachable from any network location, so the walk's filenames
+    leave the host.
+    """
+    assert_real_route(shelf_env.server.api, "POST", f"{API}/model-folders")
+    link = tmp_path / "models-link"
+    try:
+        link.symlink_to("/etc", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": str(link)})
+    assert r.status_code == 400, r.text
+    # The refusal must be the blocklist's, not an incidental 4xx: a generic
+    # failure here would leave the bypass open the moment the incident changed.
+    assert "restricted system directory" in r.json()["detail"], r.text
+    registered = {
+        row["path"]
+        for row in shelf_env.owner.get(f"{API}/model-folders").json()["folders"]
+    }
+    assert registered == {"/models/loras"}, registered
+
+
+def test_a_symlink_to_an_allowed_folder_registers_at_its_resolved_path(
+    shelf_env, tmp_path
+):
+    """The positive direction: resolving must refuse system directories without
+    refusing a symlinked model folder, which is an ordinary way to keep adapters
+    on a second drive. The row stores the resolved path, so it names the
+    directory the scanner actually walks."""
+    real = tmp_path / "real-loras"
+    real.mkdir()
+    link = tmp_path / "linked-loras"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": str(link)})
+    assert r.status_code == 200, r.text
+    assert r.json()["path"] == os.path.realpath(str(real))
+
+    r = shelf_env.owner.post(f"{API}/model-folders/{r.json()['id']}/rescan")
+    assert r.status_code == 202, r.text
+
+
+def test_a_path_that_is_not_a_directory_is_refused(shelf_env, tmp_path):
+    """An existing directory or nothing: a file or a missing path registers a
+    folder that can only ever scan as unreachable."""
+    a_file = tmp_path / "adapter.safetensors"
+    a_file.write_bytes(b"not a folder")
+    for candidate in (str(a_file), str(tmp_path / "does-not-exist")):
+        r = shelf_env.owner.post(f"{API}/model-folders", json={"path": candidate})
+        assert r.status_code == 400, f"{candidate}: {r.status_code} {r.text}"
+        assert "not a directory" in r.json()["detail"], r.text
+
+
+def test_the_filesystem_root_is_refused(shelf_env):
+    """``/`` is absolute, is no blocklist entry and is prefixed by none, so the
+    blocklist alone admits it — and a rescan of it then stats every file on every
+    mounted volume and SHA-256s every adapter on the machine, with a server
+    restart as the only off switch. It is refused for containing the vault."""
+    assert_real_route(shelf_env.server.api, "POST", f"{API}/model-folders")
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": "/"})
+    assert r.status_code == 409, r.text
+    assert "PixlStash data folder" in r.json()["detail"], r.text
+
+
+def test_the_vault_data_folder_is_refused(shelf_env):
+    r = shelf_env.owner.post(
+        f"{API}/model-folders", json={"path": shelf_env.server.vault.image_root}
+    )
+    assert r.status_code == 409, r.text
+    assert "PixlStash data folder" in r.json()["detail"], r.text
+
+
+def test_a_folder_overlapping_a_registered_one_is_refused_in_both_directions(
+    shelf_env, tmp_path
+):
+    """Two roots over the same files give every file a ``model_file`` row per
+    root: double-counted in ``file_count`` and in a model's locations, and walked
+    twice by the scanner. Nesting is refused whichever way round it arrives."""
+    parent = _new_folder_path(str(tmp_path), "nest")
+    child = _new_folder_path(parent, "inner")
+    grandparent = str(tmp_path)
+
+    assert (
+        shelf_env.owner.post(f"{API}/model-folders", json={"path": parent}).status_code
+        == 200
+    )
+
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": child})
+    assert r.status_code == 409, r.text
+    assert "inside a registered model folder" in r.json()["detail"], r.text
+
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": grandparent})
+    assert r.status_code == 409, r.text
+    assert "is inside this path" in r.json()["detail"], r.text
+
+
+def test_a_folder_beside_a_registered_one_still_registers(shelf_env, tmp_path):
+    """The positive control for the containment rule: siblings do not overlap,
+    and refusing them would be its own regression."""
+    assert (
+        shelf_env.owner.post(
+            f"{API}/model-folders", json={"path": _new_folder_path(str(tmp_path), "a")}
+        ).status_code
+        == 200
+    )
+    r = shelf_env.owner.post(
+        f"{API}/model-folders", json={"path": _new_folder_path(str(tmp_path), "b")}
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_folder_list_counts_copies_and_reports_the_seeded_folder(shelf_env):
     r = shelf_env.owner.get(f"{API}/model-folders")
     assert r.status_code == 200, r.text
@@ -905,6 +1024,43 @@ def test_put_refuses_an_entity_that_does_not_exist_and_writes_nothing(shelf_env)
     assert r.json()["attachments"] == [
         {"entity_type": "character", "entity_id": shelf_env.character_id}
     ], "a refused attachment write still wiped the existing set"
+
+
+def test_put_refuses_a_list_longer_than_the_ceiling(shelf_env):
+    """Every element is a ``session.get`` inside one ``DBPriority.IMMEDIATE``
+    vault transaction, which is the queue every other write waits behind, so an
+    unbounded body is a stall any authenticated caller can trigger. Refused by
+    validation, before the handler opens that transaction."""
+    over = [
+        {"entity_type": "character", "entity_id": shelf_env.character_id}
+        for _ in range(MAX_ATTACHMENTS_PER_MODEL + 1)
+    ]
+    r = shelf_env.owner.put(_attachments_url(ADAPTER_WITH_BASE), json=over)
+    assert r.status_code == 422, r.text
+
+    # The positive control: a list at the ceiling still writes. Over-blocking a
+    # legitimate assignment would be its own regression.
+    at_limit = over[:MAX_ATTACHMENTS_PER_MODEL]
+    r = shelf_env.owner.put(_attachments_url(ADAPTER_WITH_BASE), json=at_limit)
+    assert r.status_code == 200, r.text
+
+
+def test_put_refuses_an_attachment_carrying_an_unrecognised_key(shelf_env):
+    """The response model allows extra keys so an old client keeps reading a
+    newer server. A request is the other direction: an unrecognised key is a
+    typo, and accepting it silently turns a misspelled ``entity_id`` into a
+    no-op the user reads as success."""
+    r = shelf_env.owner.put(
+        _attachments_url(ADAPTER_WITH_BASE),
+        json=[
+            {
+                "entity_type": "character",
+                "entity_id": shelf_env.character_id,
+                "entitiy_id": 999999,
+            }
+        ],
+    )
+    assert r.status_code == 422, r.text
 
 
 def test_put_refuses_an_unknown_entity_type(shelf_env):

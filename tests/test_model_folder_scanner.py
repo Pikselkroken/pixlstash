@@ -377,6 +377,46 @@ class TestCheckpointsAndUnknowns:
 
         assert checkpoints(hub)[0]["sha256"] == "abc"
 
+    def test_an_adapter_replaced_by_a_checkpoint_becomes_a_new_row(
+        self, hub, scanner, tmp_path
+    ):
+        # The stale-hash clear used to run on whatever row the path pointed at
+        # without looking at its `file_kind`, and the schema's
+        # `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` rejects a
+        # cleared adapter. The IntegrityError rolled back the whole write batch
+        # and escaped `scan_folder`, so the missing sweep and `last_checked`
+        # never ran -- and nothing self-heals it, because a changed file never
+        # matches the size-and-mtime fast path again.
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        path = folder / "thing.safetensors"
+        write_adapter(path, name="Thing")
+        write_adapter(folder / "bystander.safetensors", name="Bystander")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        write_checkpoint(path)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        # A file whose kind changed at a path is a new identity, not the old row
+        # with its hash cleared: that row still claimed `kind = 'lora'`.
+        rows = models(hub)
+        replaced = rows[located(hub)["thing.safetensors"]["model_id"]]
+        assert replaced["file_kind"] == "checkpoint"
+        assert replaced["kind"] is None
+        assert replaced["sha256"] is None
+        # The rest of the batch survived, and so did the sweeps that run after
+        # it. Both were lost with the rolled-back transaction.
+        assert located(hub)["bystander.safetensors"]["state"] == STATE_PRESENT
+        folder_row = hub.fetchone(
+            "SELECT last_checked FROM model_folder WHERE id = ?", (folder_id,)
+        )
+        assert folder_row["last_checked"] is not None
+
+        # Settled: the third scan takes the fast path and changes nothing.
+        scanner.scan_folder(folder_id, str(folder), "user")
+        assert located(hub)["thing.safetensors"]["model_id"] == replaced["id"]
+
 
 class TestStates:
     def test_a_vanished_file_goes_missing_and_keeps_its_model_row(
@@ -516,6 +556,25 @@ class TestScanCost:
         scanner.scan_folder(folder_id, str(folder), "user")
 
         assert calls == []
+
+    def test_a_settled_folder_still_counts_its_checkpoints(
+        self, hub, scanner, tmp_path
+    ):
+        # The fast path counted every unchanged file as an adapter, so a folder
+        # that had settled reported `checkpoints: 0` and an adapter count equal
+        # to its whole file count. `_known_files` already joins `model`, so the
+        # stored `file_kind` is there to be read back.
+        folder = tmp_path / "mixed"
+        folder.mkdir()
+        write_adapter(folder / "a.safetensors", name="A")
+        write_checkpoint(folder / "sdxl.safetensors")
+        folder_id = register_folder(hub, folder)
+        first = scanner.scan_folder(folder_id, str(folder), "user")
+
+        second = scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert (first.adapters, first.checkpoints) == (1, 1)
+        assert (second.adapters, second.checkpoints) == (1, 1)
 
     def test_a_changed_file_is_rehashed(self, hub, scanner, tmp_path, monkeypatch):
         folder = tmp_path / "loras"

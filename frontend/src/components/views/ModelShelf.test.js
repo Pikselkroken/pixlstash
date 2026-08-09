@@ -109,6 +109,13 @@ describe("a row with nothing in its header", () => {
 
 describe("file kinds", () => {
   it("never renders an unclassified file as a checkpoint", async () => {
+    // `unknown` is in neither default list (see api/modelShelf.js), so the row
+    // only reaches the shelf when the Unclassified box asks for its block.
+    useModelShelfStore().setFilters({
+      adapters: false,
+      checkpoints: false,
+      unclassified: true,
+    });
     const wrapper = await mountShelf([
       adapter({ file_kind: "unknown", kind: null, display_name: "aurora" }),
     ]);
@@ -174,12 +181,58 @@ describe("empty states", () => {
   });
 });
 
+describe("after a session reset", () => {
+  it("refetches rather than claiming the machine has no models", async () => {
+    // Logout, login, a share token or a restore empties the store. Nothing
+    // refetched, so the shelf showed its terminal "there is nothing here"
+    // state for a library that had simply not been asked.
+    const wrapper = await mountShelf([adapter()]);
+    expect(wrapper.find(".shelf-row").exists()).toBe(true);
+
+    listAdapters.mockClear();
+    useModelShelfStore().resetForSession();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    expect(listAdapters).toHaveBeenCalled();
+    expect(textOf(wrapper.find(".shelf-body"))).not.toContain("No models found");
+    expect(wrapper.find(".shelf-row").exists()).toBe(true);
+  });
+});
+
 describe("keyboard", () => {
+  it("takes focus on mount, not one round trip later", async () => {
+    // Focusing after the fetch discarded wherever the user had moved in the
+    // meantime. DuplicateQueue, the contract this view mirrors, is synchronous.
+    listAdapters.mockReturnValue(new Promise(() => {}));
+    listCheckpoints.mockReturnValue(new Promise(() => {}));
+    const wrapper = mount(ModelShelf, { ...globalOpts, attachTo: document.body });
+    await wrapper.vm.$nextTick();
+
+    expect(document.activeElement).toBe(wrapper.find(".shelf").element);
+
+    wrapper.unmount();
+  });
+
   it("leaves rows out of the tab order while they have no verb", async () => {
     // 1,800 empty tab stops is a trap. Roving focus arrives with the first
     // thing a focused row can do (F2/F4).
     const wrapper = await mountShelf([adapter()]);
     expect(wrapper.find(".shelf-row").attributes("tabindex")).toBeUndefined();
     expect(wrapper.find(".shelf").attributes("tabindex")).toBe("-1");
+  });
+});
+
+describe("the shelf's own accessible name", () => {
+  it("carries a role that is allowed to have one", async () => {
+    // A bare div is role `generic`, which prohibits an accessible name, so
+    // both aria-label and aria-describedby are dropped and the whole
+    // #shelf-help paragraph is never announced.
+    const wrapper = await mountShelf([adapter()]);
+    const root = wrapper.find(".shelf");
+    expect(root.attributes("role")).toBe("region");
+    expect(root.attributes("aria-label")).toBe("Model shelf");
+    expect(root.attributes("aria-describedby")).toBe("shelf-help");
+    expect(wrapper.find("#shelf-help").exists()).toBe(true);
   });
 });
