@@ -1,7 +1,7 @@
 name: Set up the Python backend
 description: >-
-  Reclaim runner disk space, install Python 3.12, restore the pip and
-  HuggingFace model caches, and install pixlstash with its test and dev extras.
+  Install Python 3.12, restore the pip and HuggingFace model caches, and
+  install pixlstash with its test and dev extras against CPU-only torch.
   Shared by every Linux backend job so the matrix shards cannot drift apart —
   in particular so they all compute the same cache keys and therefore all hit
   the same warm caches.
@@ -9,15 +9,6 @@ description: >-
 runs:
   using: composite
   steps:
-    - name: Remove unused tools
-      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-      with:
-        tool-cache: false
-        android: true
-        dotnet: true
-        haskell: true
-        large-packages: false
-
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
@@ -27,14 +18,46 @@ runs:
       uses: actions/cache@v5
       with:
         path: ~/.cache/pip
-        key: pip-${{ runner.os }}-py3.12-${{ hashFiles('setup.py', 'requirements.txt') }}
-        restore-keys: pip-${{ runner.os }}-py3.12-
+        # `pip-cpu-` is a fresh namespace, deliberately. actions/cache only
+        # writes on a key miss and restore-keys is a prefix match, so keeping
+        # the old `pip-` prefix would restore the 2.85 GB CUDA-fat cache and
+        # then re-save those same nvidia wheels forever. Renaming makes the
+        # old caches unreachable; the first run is cold, every run after it
+        # restores only the CPU wheel set.
+        key: pip-cpu-${{ runner.os }}-py3.12-${{ hashFiles('setup.py', 'requirements.txt') }}
+        restore-keys: pip-cpu-${{ runner.os }}-py3.12-
 
     - name: Install dependencies
       shell: bash
       run: |
+        set -euo pipefail
         python -m pip install --upgrade pip
+        # CPU-only torch, CI ONLY. Every backend job runs pytest with
+        # --force-cpu, so the CUDA payload PyPI's torch drags in
+        # (nvidia-*-cu13, triton, ~2.5 GB unpacked) is pure cost here: it was
+        # 68 s of the 96 s install, the reason the pip cache was 2.85 GB, and
+        # the reason this action had to reclaim runner disk first.
+        # download.pytorch.org/whl/cpu is PyTorch's own index and mirrors
+        # torch's pure-Python dependencies, so no --extra-index-url is needed
+        # and PyPI resolution is untouched for every other package.
+        # The specifiers are pyproject.toml's own, so CI resolves exactly the
+        # version it resolves today and just takes the +cpu build of it; the
+        # project install below then finds the requirement already satisfied
+        # and leaves it alone. If the pins ever diverge, the assertion after
+        # the install fails the job rather than silently reinstating CUDA.
+        # Nothing here changes what a user's `pip install -e .` resolves —
+        # that still gets the GPU build.
+        pip install --index-url https://download.pytorch.org/whl/cpu \
+          "torch~=2.12" "torchvision~=0.27"
         pip install .[test,dev]
+        # Fail loudly if a pin change ever lets PyPI's CUDA torch win again,
+        # rather than silently paying the install time and disk back.
+        pip show torch | grep -qE '^Version: .*\+cpu$' || {
+          echo "::error::torch is not a +cpu build; the CUDA wheels are back."
+          pip show torch | grep '^Version:'
+          exit 1
+        }
+        df -h /
 
     - name: Cache HuggingFace models
       uses: actions/cache@v4

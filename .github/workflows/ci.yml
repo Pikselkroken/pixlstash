@@ -156,9 +156,11 @@ jobs:
   #
   # Under a hard slot cap, jobs-per-run is the lever, not seconds-per-test.
   # Eight shards cannot spend the parallelism they ask for, and each one pays
-  # its own ~4 min of setup-backend (free-disk-space + setup-python + pip
-  # install + HuggingFace cache restore). At eight that is ~32 min of runner
-  # time per run before a single test executes, all of it competing for the
+  # its own setup-backend (setup-python + pip install + HuggingFace cache
+  # restore). That was ~4 min per shard when the install still pulled the CUDA
+  # torch stack (issue #796 cut it to under a minute by installing CPU-only
+  # torch); at eight shards it was ~32 min of runner
+  # time per run before a single test executed, all of it competing for the
   # same scarce slots as real work. Halving the matrix halves that fixed cost
   # and returns four slots per run. Together with the two Windows shards this
   # takes ci.yml from 16 jobs to 10, so two concurrent runs now fit inside the
@@ -168,7 +170,7 @@ jobs:
   # small. LPT over the committed map puts 1360 s of recorded load on each of
   # four shards (vs 680 s on each of eight); CI measures ~1.77x the recorded
   # local time (shard 7 of run 31031336234: 1202 s in CI against a ~680 s
-  # recorded share), so expect roughly 40 min of tests per shard plus ~4 min
+  # recorded share), so expect roughly 40 min of tests per shard plus ~1 min
   # setup, against ~20 min before. An UNCONTENDED run therefore gets slower —
   # ~45 min instead of ~25. It wins only because runs overlap, which is the
   # normal state here, and because a failed shard now costs one slot for 45
