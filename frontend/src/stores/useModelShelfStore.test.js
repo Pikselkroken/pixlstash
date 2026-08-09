@@ -274,3 +274,329 @@ describe("persistence", () => {
     expect(store.filters.unclassified).toBe(false);
   });
 });
+
+// ── F2: sorting and grouping ───────────────────────────────────────────────
+//
+// The assertions here guard the two measured realities that make a naive
+// grouping look broken on real data: 37% of real adapters record no base model,
+// so "not set" is one of the LARGEST groups rather than a tail, and folders
+// cluster hard, so a grouping that assumes an even spread is wrong. The rest
+// pin decisions that are easy to undo: sorting never refetches, a null value
+// sorts last in BOTH directions, and collapse is namespaced per axis.
+
+describe("sorting", () => {
+  it("never refetches: every sort field is already on the row", async () => {
+    // `fetchRows` merges up to three parallel requests, so a server-sorted list
+    // per block would be destroyed by the concatenation anyway. Sorting client
+    // side is therefore the correct answer, not a shortcut, and a direction
+    // flip must cost nothing.
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    listAdapters.mockClear();
+    listCheckpoints.mockClear();
+
+    store.setView({ sortKey: "size", sortDirection: "asc" });
+    store.setView({ sortDirection: "desc" });
+    store.setView({ groupBy: "base_model" });
+
+    expect(listAdapters).not.toHaveBeenCalled();
+    expect(listCheckpoints).not.toHaveBeenCalled();
+  });
+
+  it("sorts a row that cannot answer the key last in BOTH directions", async () => {
+    // The API's own contract for these keys. A row with no recorded size is not
+    // the smallest file; it is an unanswered question, and letting a third of
+    // the shelf pile up at whichever end the arrow points is how a sort stops
+    // being one.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, display_name: "big", file_size: 900 }),
+      adapter({ id: 2, display_name: "unknown", file_size: null }),
+      adapter({ id: 3, display_name: "small", file_size: 100 }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+
+    store.setView({ sortKey: "size", sortDirection: "desc" });
+    expect(store.groups[0].rows.map((r) => r.display_name)).toEqual([
+      "big",
+      "small",
+      "unknown",
+    ]);
+
+    store.setView({ sortDirection: "asc" });
+    expect(store.groups[0].rows.map((r) => r.display_name)).toEqual([
+      "small",
+      "big",
+      "unknown",
+    ]);
+  });
+
+  it("holds equal rows in one order when a refetch reorders the blocks", async () => {
+    // `Array.prototype.sort` is stable, but stability preserves the INPUT
+    // order, and the input changes: `fetchRows` re-concatenates the blocks
+    // every time. Without the id tiebreak two adapters of the same size swap
+    // places on a refresh, which reads as a rendering fault.
+    const store = useModelShelfStore();
+    const a = adapter({ id: 1, display_name: "a", file_size: 100 });
+    const b = adapter({ id: 2, display_name: "b", file_size: 100 });
+    store.setView({ sortKey: "size" });
+
+    listAdapters.mockResolvedValue([a, b]);
+    await store.fetchRows();
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([1, 2]);
+
+    listAdapters.mockResolvedValue([b, a]);
+    await store.fetchRows();
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([1, 2]);
+  });
+
+  it("uses the stack's own size and date, not its cover's", async () => {
+    // A six-step run understates by about six times when read off the cover, in
+    // the column the shelf exists to answer.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, display_name: "solo", file_size: 500 }),
+      adapter({
+        id: 2,
+        display_name: "stack",
+        file_size: 100,
+        total_size: 600,
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ sortKey: "size", sortDirection: "desc" });
+    expect(store.groups[0].rows.map((r) => r.display_name)).toEqual([
+      "stack",
+      "solo",
+    ]);
+  });
+});
+
+describe("grouping", () => {
+  it("puts the models that record no base model last, in both directions", async () => {
+    // 37% of real adapters record nothing, so this group is one of the largest
+    // on the shelf. It sorts last because it is the ABSENCE of a value rather
+    // than a value: it never joins the alphabetical run and never swaps ends
+    // when the direction flips, which would otherwise bury everything
+    // identifiable underneath it every other click.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, base_model: "sdxl" }),
+      adapter({ id: 2, base_model: null }),
+      adapter({ id: 3, base_model: "flux.1-dev" }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "base_model" });
+
+    expect(store.groups.map((g) => g.label)).toEqual([
+      "flux.1-dev",
+      "sdxl",
+      "Base model not set",
+    ]);
+
+    store.setView({ sortDirection: "asc" });
+    expect(store.groups.map((g) => g.label)).toEqual([
+      "flux.1-dev",
+      "sdxl",
+      "Base model not set",
+    ]);
+  });
+
+  it("lists a model under every folder holding a copy of it", async () => {
+    // Copied into two folders, or an interrupted move. A "primary location"
+    // would be a fiction the shelf then has to explain, and it makes the
+    // storage answer wrong: the file really does occupy both disks.
+    listAdapters.mockResolvedValue([
+      adapter({
+        id: 1,
+        locations: [
+          { state: "present", folder_path: "/a", relpath: "x.st" },
+          { state: "missing", folder_path: "/b", relpath: "x.st" },
+        ],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "folder" });
+
+    expect(store.groups.map((g) => g.label)).toEqual(["/a", "/b"]);
+    // ...and each row reports THAT folder's state, not the merged one, or a
+    // file present here and gone there would claim to be fine where it is not.
+    expect(store.groups[0].rows[0].locState).toBe("present");
+    expect(store.groups[1].rows[0].locState).toBe("missing");
+    // One model, two rows drawn: the toolbar states both numbers.
+    expect(store.visibleRows.length).toBe(1);
+    expect(store.renderedCount).toBe(2);
+  });
+
+  it("names the group for a model no folder holds any more", async () => {
+    listAdapters.mockResolvedValue([adapter({ id: 1, locations: [] })]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "folder" });
+    expect(store.groups.map((g) => g.label)).toEqual(["No registered copy"]);
+  });
+
+  it("still renders one group when nothing is grouped, so the list has one shape", async () => {
+    listAdapters.mockResolvedValue([adapter()]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    expect(store.view.groupBy).toBe("none");
+    expect(store.groups.length).toBe(1);
+    expect(store.groups[0].label).toBe("");
+    expect(store.renderedCount).toBe(1);
+  });
+
+  it("does not degenerate on the measured shape of a real folder", async () => {
+    // Generated to the distribution `scripts/generate_model_shelf_fixtures.py`
+    // measured on 2026-08-09: flux.1-dev dominant, 37% recording no base model
+    // at all, and everything in two folders. A grouping that assumed an even
+    // spread would look broken here, which is the point of checking at scale
+    // rather than on three rows.
+    const bases = ["flux.1-dev", "flux.1-dev", "sdxl", "qwen-image"];
+    const rows = [];
+    for (let i = 0; i < 1800; i += 1) {
+      const unnamed = i % 100 < 37;
+      rows.push(
+        adapter({
+          id: i + 1,
+          display_name: unnamed ? null : `model ${i}`,
+          base_model: unnamed ? null : bases[i % bases.length],
+          locations: [
+            { state: "present", folder_path: i % 3 ? "/big" : "/small" },
+          ],
+        }),
+      );
+    }
+    listAdapters.mockResolvedValue(rows);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+
+    store.setView({ groupBy: "base_model" });
+    const labels = store.groups.map((g) => g.label);
+    // Four groups, the largest two being ~46% and ~37% of the shelf. The point
+    // is that the biggest bucket is a real group with a header and a count,
+    // never a silent tail, and that "not set" is still last at that size.
+    expect(labels).toEqual([
+      "flux.1-dev",
+      "qwen-image",
+      "sdxl",
+      "Base model not set",
+    ]);
+    expect(labels[labels.length - 1]).toBe("Base model not set");
+    expect(store.groups[3].rows.length).toBe(666);
+    expect(store.renderedCount).toBe(1800);
+
+    // Folders cluster hard: 2 of 1,800 files in one folder and the rest in the
+    // other is the normal shape, not a defect to smooth over.
+    store.setView({ groupBy: "folder" });
+    expect(store.groups.map((g) => g.rows.length)).toEqual([1200, 600]);
+  });
+});
+
+describe("collapsing a group", () => {
+  it("is namespaced per axis, so one axis cannot collapse the other", async () => {
+    listAdapters.mockResolvedValue([
+      adapter({
+        id: 1,
+        base_model: "/a",
+        locations: [{ state: "present", folder_path: "/a" }],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+
+    store.setView({ groupBy: "base_model" });
+    store.toggleGroup("/a");
+    expect(store.isCollapsed("/a")).toBe(true);
+
+    // The same key on the other axis is a different group entirely.
+    store.setView({ groupBy: "folder" });
+    expect(store.isCollapsed("/a")).toBe(false);
+
+    store.setView({ groupBy: "base_model" });
+    expect(store.isCollapsed("/a")).toBe(true);
+  });
+
+  it("leaves the group in the list, with its count, while it is collapsed", async () => {
+    // A collapsed group that vanished would be indistinguishable from a
+    // filtered-out one, which is the conflation F1's three empty states exist
+    // to avoid.
+    listAdapters.mockResolvedValue([adapter({ id: 1, base_model: "sdxl" })]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "base_model" });
+    store.toggleGroup("sdxl");
+    expect(store.groups.map((g) => g.label)).toEqual(["sdxl"]);
+    expect(store.groups[0].rows.length).toBe(1);
+  });
+});
+
+describe("the view is remembered", () => {
+  it("persists a sort change on its own, with nothing else to save it", () => {
+    // Changing the sort and leaving is the common case; a collapse is not. An
+    // earlier version of this suite only ever asserted the pair together, and
+    // `setView` writing to the wrong key survived it.
+    const store = useModelShelfStore();
+    store.setView({ sortKey: "size", sortDirection: "asc" });
+    expect(
+      JSON.parse(window.localStorage.getItem("pixlstash:modelShelfView")),
+    ).toMatchObject({ sortKey: "size", sortDirection: "asc" });
+  });
+
+  it("restores the grouping, the sort and what was collapsed", () => {
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "base_model", sortKey: "size" });
+    store.toggleGroup("sdxl");
+
+    setActivePinia(createPinia());
+    const restored = useModelShelfStore();
+    expect(restored.view.groupBy).toBe("base_model");
+    expect(restored.view.sortKey).toBe("size");
+    expect(restored.isCollapsed("sdxl")).toBe(true);
+  });
+
+  it("keeps the view when the Show filters are reset", async () => {
+    // Two keys on purpose: `Reset filters` promises to clear the Show panel,
+    // and losing your sort order to it would be a different promise.
+    const store = useModelShelfStore();
+    store.setView({ sortKey: "name" });
+    store.setFilters({ unclassified: true });
+    await store.resetFilters();
+    expect(store.filters.unclassified).toBe(false);
+    expect(store.view.sortKey).toBe("name");
+  });
+
+  it("survives a session reset, holding no ids of its own", async () => {
+    // Same exemption `filters` already has: an axis and a direction are the
+    // user's own preference and say nothing about the previous credential.
+    listAdapters.mockResolvedValue([adapter()]);
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "folder", sortDirection: "asc" });
+    await store.fetchRows();
+    store.resetForSession();
+    expect(store.rows).toEqual([]);
+    expect(store.view.groupBy).toBe("folder");
+    expect(store.view.sortDirection).toBe("asc");
+  });
+
+  it("falls back to the defaults on a blob from another schema", () => {
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ v: 99, groupBy: "folder", sortKey: "name" }),
+    );
+    const store = useModelShelfStore();
+    expect(store.view.groupBy).toBe("none");
+    expect(store.view.sortKey).toBe("added_at");
+  });
+
+  it("refuses a grouping or sort key it does not recognise", () => {
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ v: 1, groupBy: "colour", sortKey: "vibes" }),
+    );
+    const store = useModelShelfStore();
+    expect(store.view.groupBy).toBe("none");
+    expect(store.view.sortKey).toBe("added_at");
+  });
+});
