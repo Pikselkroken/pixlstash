@@ -332,9 +332,21 @@ class TestLibraryIndependentRoutes:
         vault_reads = []
         real_read = server.vault.db.run_immediate_read_task
 
-        def observed_read(*args, **kwargs):
-            vault_reads.append(True)
-            return real_read(*args, **kwargs)
+        # Record WHO read, not merely that something did: the WorkPlanner
+        # probes the vault from its own thread every few seconds, and a bare
+        # "nothing was read" assertion fails on any machine slow enough for one
+        # to land inside this request (issue #807). Those probes come from
+        # ``pixlstash.tasks``; the guest-session enrichment this test forbids is
+        # ``_lookup_by_token``, defined in ``pixlstash.auth``, so filtering by
+        # module keeps the claim live while dropping the unrelated traffic.
+        def observed_read(callback, *args, **kwargs):
+            vault_reads.append(
+                (
+                    getattr(callback, "__module__", ""),
+                    getattr(callback, "__name__", repr(callback)),
+                )
+            )
+            return real_read(callback, *args, **kwargs)
 
         monkeypatch.setattr(server.vault.db, "run_immediate_read_task", observed_read)
         server.library_coordinator.state = SwitchState.SWITCHING
@@ -348,7 +360,10 @@ class TestLibraryIndependentRoutes:
             server.library_coordinator.state = SwitchState.READY
 
         assert response.status_code == 403
-        assert vault_reads == []
+        auth_reads = [read for read in vault_reads if read[0] == "pixlstash.auth"]
+        assert auth_reads == [], (
+            f"hub-only auth enriched from the guest vault mid-switch: {vault_reads}"
+        )
 
 
 class TestTheDeclarationContract:
