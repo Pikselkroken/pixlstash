@@ -106,6 +106,13 @@ describe("a row with nothing in its header", () => {
 
 describe("file kinds", () => {
   it("never renders an unclassified file as a checkpoint", async () => {
+    // `unknown` is in neither default list (see api/modelShelf.js), so the row
+    // only reaches the shelf when the Unclassified box asks for its block.
+    useModelShelfStore().setFilters({
+      adapters: false,
+      checkpoints: false,
+      unclassified: true,
+    });
     const wrapper = await mountShelf([
       adapter({ file_kind: "unknown", kind: null, display_name: "aurora" }),
     ]);

@@ -167,6 +167,38 @@ describe("overlapping fetches", () => {
   });
 });
 
+describe("the option vocabularies", () => {
+  it("survives a fetch narrowed by the type checkboxes", async () => {
+    // Both option lists are derived from the fetched rows, so a fetch that
+    // overwrote them deleted the kind checkboxes the parent is documented to
+    // grey, and dropped base models that stayed selected and persisted.
+    const store = useModelShelfStore();
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, kind: "lokr", base_model: "sdxl" }),
+    ]);
+    listCheckpoints.mockResolvedValue([
+      adapter({
+        id: 2,
+        file_kind: "checkpoint",
+        kind: null,
+        base_model: "flux.1-dev",
+      }),
+    ]);
+    await store.fetchRows();
+
+    await store.setFilters({ adapters: false }, { refetch: true });
+    expect(store.adapterKindOptions).toEqual(["lokr"]);
+    expect(store.visibleRows.map((r) => r.id)).toEqual([2]);
+
+    await store.setFilters(
+      { adapters: true, checkpoints: false },
+      { refetch: true },
+    );
+    expect(store.baseModelOptions).toEqual(["flux.1-dev", "sdxl"]);
+    expect(store.visibleRows.map((r) => r.id)).toEqual([1]);
+  });
+});
+
 describe("the badge", () => {
   it("counts sections that deviate, not ticked boxes", async () => {
     // Counting boxes would report "9" for a mild narrowing and the number

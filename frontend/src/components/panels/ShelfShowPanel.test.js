@@ -79,9 +79,13 @@ describe("ShelfShowPanel", () => {
       adapter({ id: 1, kind: "lora" }),
     ]);
     store.setFilters({ adapterKinds: ["lora"] });
-    store.setFilters({ adapters: false });
+    // With the refetch the component really performs: without it the rows
+    // survived in the test and the disabled state it asserts was unreachable
+    // in the app, where the narrowed fetch unmounted the whole nested block.
+    await store.setFilters({ adapters: false }, { refetch: true });
     await wrapper.vm.$nextTick();
     const kindBox = wrapper.find(".shelf-show-nested input");
+    expect(kindBox.exists()).toBe(true);
     expect(kindBox.attributes("disabled")).toBeDefined();
     expect(kindBox.element.checked).toBe(true);
   });

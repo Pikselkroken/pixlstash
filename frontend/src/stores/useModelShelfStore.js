@@ -57,8 +57,19 @@ function storedFilters() {
   }
 }
 
+/** The three top-level type checkboxes, each one request and one row bucket. */
+const BLOCKS = ["adapters", "checkpoints", "unclassified"];
+
+/** Which block a row came from, so a fetch only replaces what it asked for. */
+function blockOf(row) {
+  if (row.file_kind === "checkpoint") return "checkpoints";
+  if (row.file_kind === "unknown") return "unclassified";
+  return "adapters";
+}
+
 export const useModelShelfStore = defineStore("modelShelf", () => {
   const filters = reactive(storedFilters() || defaultFilters());
+  /** Every row fetched so far, across blocks. Not the shown set. */
   const rows = ref([]);
   const loading = ref(false);
   const error = ref("");
@@ -87,10 +98,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * and a base-model multi-select would otherwise be one request per option
    * with the results merged client-side anyway.
    *
+   * A fetch REPLACES the blocks it asked for and LEAVES THE REST STANDING.
+   * `rows` is therefore everything known, not the shown set: the type
+   * checkboxes narrow in {@link visibleRows} like the other two. Overwriting
+   * the whole array with a narrowed fetch is what used to delete the option
+   * vocabularies, because both are derived from it: unticking Adapters
+   * unmounted the kind checkboxes it is documented to grey, and unticking
+   * Checkpoints dropped base models that stayed selected and persisted with
+   * no box left to untick them.
+   *
    * `epoch` discards a flight the user has already overtaken: three
    * checkboxes each refetch, so a slower earlier request could otherwise land
-   * last and show adapters only while Checkpoints is ticked, and whichever
-   * finished first would clear the spinner. Same shape as
+   * last and show adapters only while Checkpoints is ticked. Same shape as
    * `useLibrariesStore.refresh`.
    */
   async function fetchRows() {
@@ -106,7 +125,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       }
       const results = await Promise.all(requests);
       if (startedAt !== epoch) return;
-      rows.value = results.flat();
+      const refreshed = new Set(
+        BLOCKS.filter((block) => filters[block]),
+      );
+      rows.value = [
+        ...rows.value.filter((row) => !refreshed.has(blockOf(row))),
+        ...results.flat(),
+      ];
       loaded.value = true;
     } catch (err) {
       if (startedAt !== epoch) return;
@@ -149,6 +174,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const bases = filters.baseModels;
     return rows.value
       .filter((row) => {
+        // The type checkboxes narrow here as well as choosing what to fetch:
+        // a block already fetched stays in `rows` so its options survive.
+        if (!filters[blockOf(row)]) return false;
         if (row.file_kind === "adapter" && kinds.length) {
           if (!kinds.includes(String(row.kind))) return false;
         }
