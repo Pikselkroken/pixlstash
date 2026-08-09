@@ -1496,6 +1496,17 @@ class Vault:
                     total = 0
                     missing = 0
                     worker_active_override = False
+            elif worker_type == TaskType.CHECKPOINT_HASH:
+                # The one worker here whose denominator is the model shelf and
+                # not the picture library. Left in the `planner_managed` default
+                # below it inherited the library's picture count as its own
+                # total and a hardcoded `missing = 0`, so reading tens of
+                # gigabytes off disk for minutes rendered as "N / N, nothing
+                # remaining, 0/s" on a row that still said running — which is
+                # what made a healthy long task look like a stuck one.
+                finder = self._planner_work_finders.get(TaskType.CHECKPOINT_HASH)
+                total, missing = finder.progress() if finder is not None else (0, 0)
+                label = "checkpoints_hashed"
             elif worker_type == TaskType.THUMBNAIL_GENERATION:
                 # Whole-frame bitmap regeneration (MissingThumbnailFinder). After
                 # the v1.8.0 upgrade this counts the entire library, which is what

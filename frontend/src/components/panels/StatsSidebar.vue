@@ -512,6 +512,7 @@ const tmLabelMap = {
   missing_file_purge: "File cleanup",
   snapshot_identity_scrub: "Snapshot cleanup",
   planner_managed: "Planner task",
+  checkpoints_hashed: "Checkpoint Hash",
   text_score: "Text score",
   object_detection: "Object detection",
 };
