@@ -16,6 +16,9 @@ class WorkPlanner:
     MIN_INTERVAL_S = 0.05
     MAX_INTERVAL_S = 10.0
     BACKOFF_FACTOR = 1.8
+    # How long stop() waits for the loop thread, and how long start() waits for
+    # a previous thread that is still winding down.
+    STOP_JOIN_TIMEOUT_S = 5.0
 
     @staticmethod
     def work_finders(
@@ -184,28 +187,90 @@ class WorkPlanner:
         # to run and confirmed it has nothing to do.
         self._finder_exhausted: dict[str, bool] = {}
         self._lock = threading.Lock()
+        # Serialises start()/stop() so a restart cannot interleave with a
+        # shutdown that is still joining the outgoing thread.
+        self._lifecycle_lock = threading.RLock()
 
     def start(self):
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._wake.clear()
-        self._thread = threading.Thread(
-            target=self._run, name="WorkPlanner", daemon=True
-        )
-        self._thread.start()
-        logger.debug("WorkPlanner started with %s finders.", len(self._task_finders))
+        with self._lifecycle_lock:
+            previous = self._thread
+            if previous is not None and previous.is_alive():
+                if not self._stop.is_set():
+                    return
+                # A thread that is alive with _stop set is winding down from an
+                # earlier stop() whose bounded join expired. Returning here
+                # would leave _stop set and, once that thread notices it and
+                # exits, the planner permanently dead with is_running() having
+                # answered True at the moment it was asked. Wait it out instead.
+                logger.info(
+                    "WorkPlanner start() found the previous thread still "
+                    "shutting down; waiting for it before restarting."
+                )
+                previous.join(timeout=self.STOP_JOIN_TIMEOUT_S)
+                if previous.is_alive():
+                    raise RuntimeError(
+                        "WorkPlanner cannot restart: the previous loop thread "
+                        f"is still alive {self.STOP_JOIN_TIMEOUT_S}s after "
+                        "stop(). A finder is blocked; starting a second loop "
+                        "would double-submit work."
+                    )
+            self._stop.clear()
+            self._wake.clear()
+            self._thread = threading.Thread(
+                target=self._run, name="WorkPlanner", daemon=True
+            )
+            self._thread.start()
+        with self._lock:
+            finder_count = len(self._task_finders)
+        logger.debug("WorkPlanner started with %s finders.", finder_count)
 
     def stop(self):
-        self._stop.set()
-        self._wake.set()
-        if self._thread is not None:
-            self._thread.join(timeout=5)
-            if self._thread.is_alive():
-                logger.warning("WorkPlanner did not stop within timeout.")
+        with self._lifecycle_lock:
+            self._stop.set()
+            self._wake.set()
+            if self._thread is not None:
+                self._thread.join(timeout=self.STOP_JOIN_TIMEOUT_S)
+                if self._thread.is_alive():
+                    logger.warning("WorkPlanner did not stop within timeout.")
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    def has_finder(self, task_type: "TaskType") -> bool:
+        """Whether a finder for *task_type* is still registered with the loop."""
+        with self._lock:
+            name = self._finder_name_by_task_type.get(task_type)
+            return bool(name) and name in self._task_finders_by_name
+
+    def detach_finders(self, task_types) -> set:
+        """Unregister the finders for *task_types* and return their names.
+
+        Supported replacement for reaching into `_task_finders` from a test
+        fixture: the planner keeps the finder set in three structures, all of
+        which have to stay consistent, and mutating them from another thread
+        used to race the loop's own read. Detached finders are marked exhausted
+        so a finder that `depends_on()` one of them is not blocked for ever
+        waiting for a report that will never come again.
+        """
+        removed = set()
+        with self._lock:
+            for task_type in task_types:
+                name = self._finder_name_by_task_type.pop(task_type, None)
+                if not name:
+                    continue
+                finder = self._task_finders_by_name.pop(name, None)
+                if finder is None:
+                    continue
+                self._task_finders = [f for f in self._task_finders if f is not finder]
+                self._finder_exhausted[name] = True
+                removed.add(name)
+            self._finder_order_idx = 0
+        return removed
+
+    def registered_finder_names(self) -> set:
+        """Names of the finders the loop will currently visit."""
+        with self._lock:
+            return set(self._task_finders_by_name)
 
     def inflight_count(self, finder_name: str) -> int:
         if not finder_name:
@@ -235,7 +300,8 @@ class WorkPlanner:
                     "GPU may be idle until next finder cycle.",
                     finder_name,
                 )
-            finder = self._task_finders_by_name.get(finder_name)
+            with self._lock:
+                finder = self._task_finders_by_name.get(finder_name)
             if finder is not None:
                 try:
                     finder.on_task_complete(task, error)
@@ -258,7 +324,20 @@ class WorkPlanner:
 
     def _run(self):
         while not self._stop.is_set():
-            submitted = self._run_finders_once()
+            try:
+                submitted = self._run_finders_once()
+            except Exception:
+                # Without this the exception unwinds the thread and the planner
+                # is simply gone: nothing schedules work again, is_running()
+                # answers False and every dependent caller reports its own
+                # unrelated symptom. Log it and keep cycling; the backoff below
+                # keeps a persistently failing cycle from spinning.
+                logger.exception(
+                    "WorkPlanner cycle raised; the planner keeps running. "
+                    "Finders registered: %s",
+                    sorted(self.registered_finder_names()),
+                )
+                submitted = False
 
             if submitted:
                 self._interval_s = self.MIN_INTERVAL_S
@@ -274,14 +353,23 @@ class WorkPlanner:
         logger.info("WorkPlanner stopped.")
 
     def _run_finders_once(self) -> bool:
-        if not self._task_finders:
+        # One immutable snapshot per cycle. The finder set is mutated from other
+        # threads (detach_finders), and indexing the live list against a length
+        # captured a moment earlier throws IndexError, which used to unwind the
+        # loop thread outright. A snapshot is taken rather than holding the lock
+        # across the loop because find_task() does database and filesystem work
+        # and must not block on_task_complete() for the length of it.
+        with self._lock:
+            finders = list(self._task_finders)
+            order_idx = self._finder_order_idx
+        if not finders:
             return False
 
         submitted_any = False
-        finder_count = len(self._task_finders)
+        finder_count = len(finders)
         for offset in range(finder_count):
-            idx = (self._finder_order_idx + offset) % finder_count
-            finder = self._task_finders[idx]
+            idx = (order_idx + offset) % finder_count
+            finder = finders[idx]
             finder_name = finder.finder_name()
             max_inflight = max(1, int(finder.max_inflight_tasks()))
 

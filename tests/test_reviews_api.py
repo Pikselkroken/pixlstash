@@ -71,22 +71,19 @@ def _disable_conflicting_backfill(server):
     reason twice.
 
     Only these finders go, and the planner keeps running: the import endpoint
-    refuses outright while the workers are down ("Face worker is not running")
-    and every fixture here imports pictures. Waiting the pipeline out instead
+    refuses outright while the face worker is down and every fixture here
+    imports pictures. Waiting the pipeline out instead
     (``tests.utils.wait_likeness_settled``, or a narrower poll on the columns)
     was tried and measured slower than the per-test servers this replaces.
 
     Returns the names of the finders it removed, so ``reset_library`` can
     re-check before every test that they are still gone.
     """
-    planner = server.vault._work_planner
-    removed = set()
     for task_type in _CONFLICTING_FINDERS:
-        finder = server.vault._planner_work_finders.pop(task_type)
-        planner._task_finders.remove(finder)
-        planner._task_finders_by_name.pop(finder.finder_name(), None)
-        removed.add(finder.finder_name())
-    return removed
+        server.vault._planner_work_finders.pop(task_type)
+    # detach_finders() edits the planner's finder structures under its own lock,
+    # so this is safe against the loop thread that is running right now.
+    return server.vault._work_planner.detach_finders(_CONFLICTING_FINDERS)
 
 
 def _tables_to_wipe(server):
@@ -189,7 +186,7 @@ def reset_library(env):
     # (which reviews, which pictures) rather than on counts or status codes,
     # because a review that failed to clear and a review that was refused look
     # identical from a status code.
-    running = {f.finder_name() for f in server.vault._work_planner._task_finders}
+    running = server.vault._work_planner.registered_finder_names()
     assert running.isdisjoint(env.disabled_finders), (
         "a backfill finder that rewrites this module's fixture data is running "
         f"again: {sorted(running & env.disabled_finders)}"

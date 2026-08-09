@@ -129,83 +129,34 @@ _PICTURE_BASELINE_COLUMNS = (
 _MISSING_PROJECT_PROBES = ("99999999", "NoSuchProjectHere")
 
 
-def _wait_for_planner_thread_to_exit(planner, timeout_s=60.0):
-    """Block until *planner*'s worker thread is really gone after ``stop()``.
-
-    ``WorkPlanner.stop()`` sets ``_stop``, joins with a **5 s timeout** and then
-    only *logs a warning* if the thread outlived it (``work_planner.py``). Both
-    things the caller does next are unsafe against that survivor, and neither
-    fails loudly:
-
-    * mutating ``_task_finders`` races the live ``_run_finders_once`` loop, which
-      indexes that list against a length it captured a moment earlier;
-    * ``start()`` returns early when ``_thread.is_alive()`` — *before* it reaches
-      ``self._stop.clear()``. The old thread then notices ``_stop`` and exits, so
-      the planner is left dead with ``_stop`` set for the rest of the module, and
-      ``is_running()`` was True at the moment it was asserted. The symptom
-      surfaces several tests later as a 503 from the staging-import endpoint,
-      which refuses while the workers are down.
-
-    So: wait for the thread to actually die, and fail here rather than let either
-    of those happen. A finder pass that is genuinely slow gets the extra time; a
-    hung one produces a message that names the cause.
-    """
-    deadline = time.time() + timeout_s
-    while planner.is_running() and time.time() < deadline:
-        time.sleep(0.1)
-    assert not planner.is_running(), (
-        f"the WorkPlanner thread was still alive {timeout_s}s after stop(). "
-        f"Editing its finder lists now would race the live loop, and start() "
-        f"would return early without clearing _stop, leaving the planner dead "
-        f"for the rest of the module and the staging-import tests answering 503"
-    )
-
-
 def _detach_volatile_finders(server):
     """Take `_VOLATILE_TASK_TYPES` out of the running WorkPlanner.
 
     The planner itself keeps running — the staging-import endpoint refuses while
-    the workers are down, and three tests here import — so this removes finders
-    rather than stopping the scheduler. `WorkPlanner.__init__` copies the finder
-    mapping into three of its own structures, so all three have to be pruned;
-    each removed finder is also marked exhausted so a dependent finder is not
-    left waiting forever for one that will never report again.
+    the face worker is down, and three tests here import — so this removes
+    finders rather than stopping the scheduler. `WorkPlanner.detach_finders`
+    edits the planner's three finder structures under the planner's own lock and
+    marks each removed finder exhausted, so a finder that `depends_on()` one of
+    them is not left waiting for a report that will never come.
+
+    This used to stop the planner, wait out its thread by hand and start it
+    again, because editing `_task_finders` under a live loop threw IndexError
+    there and killed the planner outright. That is fixed in the planner itself,
+    so the stop/wait/restart dance is gone.
     """
     planner = server.vault._work_planner
     finders = server.vault._planner_work_finders
-    names = set()
     for task_type in _VOLATILE_TASK_TYPES:
-        finder = finders.pop(task_type, None)
-        assert finder is not None, (
+        assert finders.pop(task_type, None) is not None, (
             f"{task_type} is not registered any more; this module's seeded rows "
             f"are only stable because it is detached — re-check the new finder set"
         )
-        names.add(finder.finder_name())
-
-    # Stop the scheduler before shortening its list. `_run_finders_once` reads
-    # `_task_finders[idx]` against a length it captured a moment earlier, so
-    # swapping the list under a live thread throws IndexError there and kills
-    # the planner outright — observed, not theoretical.
-    planner.stop()
-    _wait_for_planner_thread_to_exit(planner)
-    for task_type in _VOLATILE_TASK_TYPES:
-        planner._finder_name_by_task_type.pop(task_type, None)
-    planner._task_finders = [
-        finder for finder in planner._task_finders if finder.finder_name() not in names
-    ]
-    for name in names:
-        planner._task_finders_by_name.pop(name, None)
-        # A detached finder never reports "nothing to do" again, and a finder
-        # that depends_on() it would otherwise block for ever.
-        planner._finder_exhausted[name] = True
-    planner._finder_order_idx = 0
-    planner.start()
-    # The old thread is provably gone by now, so this is a *new* thread with
-    # `_stop` cleared, not the previous one still winding down.
-    assert planner.is_running() and not planner._stop.is_set(), (
-        "the WorkPlanner did not restart after detaching finders; the import "
+    removed = planner.detach_finders(_VOLATILE_TASK_TYPES)
+    assert planner.is_running(), (
+        "the WorkPlanner is not running after detaching finders; the import "
         "tests in this module need a live worker"
     )
+    return removed
 
 
 def _picture_baseline(server, picture_ids):

@@ -1254,8 +1254,36 @@ class Vault:
         return future
 
     def is_worker_running(self, worker_type: TaskType) -> bool:
-        """Check if a specific worker is running."""
-        return bool(self._work_planner and self._work_planner.is_running())
+        """Whether *worker_type* will actually be scheduled right now.
+
+        Both conditions matter and used to be conflated: the planner thread has
+        to be alive, and a finder for this task type has to still be registered
+        with it. Ignoring the argument meant a dead planner and a detached
+        finder produced the same answer, and callers reported whichever symptom
+        they happened to name.
+        """
+        if not self._work_planner or not self._work_planner.is_running():
+            return False
+        return self._work_planner.has_finder(worker_type)
+
+    def worker_unavailable_reason(self, worker_type: TaskType) -> str | None:
+        """Why *worker_type* is not schedulable, or None when it is.
+
+        Callers that refuse a request need to say which of the two conditions
+        failed; "the worker is not running" reads as a configuration choice and
+        has sent every investigation of a dead planner thread down the wrong
+        path.
+        """
+        if not self._work_planner:
+            return "the background work planner was never started"
+        if not self._work_planner.is_running():
+            return (
+                "the background work planner thread is not alive (it was "
+                "stopped, or it died); restart the server"
+            )
+        if not self._work_planner.has_finder(worker_type):
+            return f"no {worker_type} finder is registered with the work planner"
+        return None
 
     def _is_worker_active(self, worker_type: TaskType) -> bool:
         if not self._work_planner or not self._work_planner.is_running():

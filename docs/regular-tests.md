@@ -116,7 +116,7 @@ shrinks as automated coverage grows.
 | dragging files over the grid raises the import overlay; leaving clears it | A synthetic DataTransfer with a real JPEG File dispatched on the grid scroll wrapper raises the "Drop files here to import" overlay; dragleave clears it | ✅ |
 
 > ⚠️ **Drop → import completes is NOT automatable in this harness:**
-> `POST /pictures/import` returns 400 "Face worker is not running" and the e2e
+> `POST /pictures/import` returns 400 "Cannot import: …" (no face worker) and the e2e
 > backend boots with `disable_background_workers: true`. The import-completion
 > half of legacy §2 stays in the manual plan (Import & background processing)
 > until the harness grows a worker-enabled mode or a test hook.
