@@ -467,6 +467,45 @@ def _shard_options(job: dict) -> set[str]:
     }
 
 
+def _warn_or_fail_on_map_coverage(gated: set[str], recorded_files: set[str]) -> None:
+    """Name every gated file the map has not timed; fail only once too few remain.
+
+    Split out of the balance test so both branches can be exercised directly.
+    The failing branch is otherwise unreachable from a green tree — the map is
+    normally near-complete — and an unexercised fail branch is a guardrail on
+    paper, which is the specific way this repo has been bitten before.
+
+    Args:
+        gated: Every ``tests/...py`` path the Linux gate runs.
+        recorded_files: The files the durations map has at least one timing for.
+
+    Raises:
+        AssertionError: Coverage has fallen below :data:`MINIMUM_GATE_COVERAGE`.
+    """
+    unrecorded = sorted(gated - recorded_files)
+    if unrecorded:
+        # No ``stacklevel``: the interesting frame is this module, and pointing
+        # one level up lands in ``_pytest/python.py``, which helps nobody.
+        warnings.warn(
+            f"{len(unrecorded)} of {len(gated)} gated test files have no "
+            f"recorded durations: {unrecorded}. Every test in them is placed by "
+            "round-robin fallback at the median cost, so this balance assertion "
+            "says nothing about them. That costs shard skew, never coverage — "
+            "refresh the map by dispatching "
+            ".github/workflows/record-test-durations.yml when it is convenient."
+        )
+
+    coverage = (len(gated) - len(unrecorded)) / len(gated)
+    assert coverage >= MINIMUM_GATE_COVERAGE, (
+        f"The durations map now times only {coverage:.0%} of the {len(gated)} "
+        f"gated files, below the {MINIMUM_GATE_COVERAGE:.0%} floor. Below that "
+        "the balance asserted below is a measurement of a shrinking subset "
+        "rather than of the gate — which is exactly how it reported a perfect "
+        "1.000 over 76% of the gate. Refresh the map by dispatching "
+        f".github/workflows/record-test-durations.yml. Missing: {unrecorded}"
+    )
+
+
 def _gated_files(workflow: dict) -> set[str]:
     """Return the ``tests/...py`` paths the Linux gate runs."""
     job = workflow["jobs"][_GATE_JOB]
@@ -1238,27 +1277,7 @@ def test_recorded_durations_actually_balance_the_gate(workflow):
     gated = _gated_files(workflow)
     recorded_files = {nodeid.split("::", 1)[0] for nodeid in durations}
 
-    unrecorded = sorted(gated - recorded_files)
-    if unrecorded:
-        warnings.warn(
-            f"{len(unrecorded)} of {len(gated)} gated test files have no "
-            f"recorded durations: {unrecorded}. Every test in them is placed by "
-            "round-robin fallback at the median cost, so this balance assertion "
-            "says nothing about them. That costs shard skew, never coverage — "
-            "refresh the map by dispatching "
-            ".github/workflows/record-test-durations.yml when it is convenient.",
-            stacklevel=2,
-        )
-
-    coverage = (len(gated) - len(unrecorded)) / len(gated)
-    assert coverage >= MINIMUM_GATE_COVERAGE, (
-        f"The durations map now times only {coverage:.0%} of the {len(gated)} "
-        f"gated files, below the {MINIMUM_GATE_COVERAGE:.0%} floor. Below that "
-        "the balance asserted below is a measurement of a shrinking subset "
-        "rather than of the gate — which is exactly how it reported a perfect "
-        "1.000 over 76% of the gate. Refresh the map by dispatching "
-        f".github/workflows/record-test-durations.yml. Missing: {unrecorded}"
-    )
+    _warn_or_fail_on_map_coverage(gated, recorded_files)
 
     nodeids = sorted(
         nodeid for nodeid in durations if nodeid.split("::", 1)[0] in gated
@@ -1602,3 +1621,59 @@ def test_invalid_shard_spec_is_rejected(option, spec):
     assert option in (result.stdout + result.stderr), (
         f"{option}={spec} failed without naming the option"
     )
+
+
+# ── the coverage floor itself ────────────────────────────────────────────────
+# `_warn_or_fail_on_map_coverage` is the only thing standing between a rotting
+# map and a balance figure computed over a shrinking subset. Its failing branch
+# never fires on a healthy tree, so without these it would be asserted by
+# nobody — the exact shape the guardrail was written to replace.
+
+
+def _coverage_case(recorded: int, total: int = 100) -> tuple[set[str], set[str]]:
+    """Build a (gated, recorded) pair with a known coverage ratio."""
+    gated = {f"tests/test_f{i}.py" for i in range(total)}
+    return gated, {f"tests/test_f{i}.py" for i in range(recorded)}
+
+
+@pytest.mark.parametrize(
+    "recorded, passes",
+    [
+        (100, True),  # complete map
+        (90, True),  # exactly at the floor
+        (89, False),  # one file below it
+        (76, False),  # the historical defect: 1.000 reported over 76%
+        (0, False),  # nothing timed at all
+    ],
+)
+def test_the_coverage_floor_fails_only_below_the_minimum(recorded, passes):
+    gated, recorded_files = _coverage_case(recorded)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        if passes:
+            _warn_or_fail_on_map_coverage(gated, recorded_files)
+            return
+        with pytest.raises(AssertionError, match="below the .* floor"):
+            _warn_or_fail_on_map_coverage(gated, recorded_files)
+
+
+def test_an_untimed_file_warns_by_name_rather_than_failing():
+    """The whole point of the ruling: a stale map warns, it does not go red.
+
+    Named, because a warning that does not say which file is unactionable.
+    """
+    gated, recorded_files = _coverage_case(99)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _warn_or_fail_on_map_coverage(gated, recorded_files)
+    assert len(caught) == 1, [str(w.message) for w in caught]
+    assert "tests/test_f99.py" in str(caught[0].message)
+
+
+def test_a_complete_map_warns_about_nothing():
+    """Over-warning is its own regression: a noisy guardrail stops being read."""
+    gated, recorded_files = _coverage_case(100)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _warn_or_fail_on_map_coverage(gated, recorded_files)
+    assert caught == [], [str(w.message) for w in caught]
