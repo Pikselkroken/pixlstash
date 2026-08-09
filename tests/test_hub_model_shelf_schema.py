@@ -5,9 +5,16 @@ about the machine: a folder of LoRAs is on this disk. Re-registering the same
 folder in every library would be absurd. The only vault-side table is
 ``adapter_attachment``, which is a different change.
 
-The rule under test throughout: **applying the schema twice is a no-op, and a
-hub that already exists picks the tables up on its next open.** That is what
-lets these land by amending v2 instead of inventing a v3.
+Two rules under test throughout:
+
+1. **Applying the schema twice is a no-op, and a hub that already exists picks
+   the tables up on its next open.** That is what lets these land by amending v2
+   instead of inventing a v3.
+2. **``model`` is what a file is; ``model_file`` is where a copy of it sits.**
+   One content table and one location table, for adapters and checkpoints
+   alike (integration plan §3). A checkpoint therefore tombstones exactly the
+   way an adapter does, which the superseded inline ``checkpoint.local_path``
+   could not do.
 """
 
 import sqlite3
@@ -22,11 +29,14 @@ from pixlstash.hub.schema import (
 
 SHELF_TABLES = (
     "model_folder",
-    "adapter",
-    "adapter_file",
-    "checkpoint",
+    "model",
+    "model_file",
     "adapter_stack",
 )
+
+# The shape this replaced. Nothing ever wrote them (the scan is unmerged and no
+# released build shipped them), so `_apply_v2` drops rather than migrates.
+SUPERSEDED_TABLES = ("adapter", "adapter_file", "checkpoint")
 
 
 @pytest.fixture
@@ -55,10 +65,46 @@ def ddl_for(conn, name):
     return row[0] if row else None
 
 
+def add_model(conn, *, file_kind="adapter", sha256="h", **columns):
+    """Insert one content row and return its id."""
+    columns = {
+        "file_kind": file_kind,
+        "sha256": sha256,
+        "provenance": "external",
+        **columns,
+    }
+    placeholders = ", ".join("?" for _ in columns)
+    cursor = conn.execute(
+        f"INSERT INTO model ({', '.join(columns)}) VALUES ({placeholders})",
+        tuple(columns.values()),
+    )
+    return int(cursor.lastrowid)
+
+
+def add_folder(conn, path):
+    cursor = conn.execute(
+        "INSERT INTO model_folder (path, kind, movable) VALUES (?, 'user', 'per_item')",
+        (path,),
+    )
+    return int(cursor.lastrowid)
+
+
+def add_file(conn, model_id, folder_id, relpath, state="present"):
+    conn.execute(
+        "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+        "VALUES (?, ?, ?, ?)",
+        (model_id, folder_id, relpath, state),
+    )
+
+
 class TestFreshHub:
     def test_every_shelf_table_is_created(self, hub):
         apply_migrations(hub)
-        assert SHELF_TABLES == tuple(t for t in SHELF_TABLES if t in table_names(hub))
+        assert set(SHELF_TABLES) <= table_names(hub)
+
+    def test_the_superseded_tables_are_gone(self, hub):
+        apply_migrations(hub)
+        assert not (set(SUPERSEDED_TABLES) & table_names(hub))
 
     def test_the_hub_stays_on_version_two(self, hub):
         # The whole point of amending v2: a build that predates this change has
@@ -68,17 +114,15 @@ class TestFreshHub:
         assert read_schema_version(hub) == 2
         assert CURRENT_SCHEMA_VERSION == 2
 
-    @pytest.mark.parametrize(
-        "table", ("model_folder", "adapter", "checkpoint", "adapter_stack")
-    )
+    @pytest.mark.parametrize("table", ("model_folder", "model", "adapter_stack"))
     def test_ids_never_recycle(self, hub, table):
         # AUTOINCREMENT, per the library.id precedent. Without it SQLite hands a
-        # deleted row's id to the next insert, and a recycled folder id would
-        # silently re-point every adapter_file row at a different folder.
+        # deleted row's id to the next insert, and a recycled id would silently
+        # re-point every model_file row at a different folder or model.
         apply_migrations(hub)
         assert "AUTOINCREMENT" in ddl_for(hub, table)
 
-    def test_the_scan_and_stack_indexes_exist(self, hub):
+    def test_the_scan_stack_and_hash_queue_indexes_exist(self, hub):
         apply_migrations(hub)
         indexes = {
             row[0]
@@ -87,10 +131,20 @@ class TestFreshHub:
             ).fetchall()
         }
         assert {
-            "ix_adapter_file_sha",
-            "ix_adapter_file_folder",
-            "ix_adapter_stack_member",
+            "ix_model_file_model",
+            "ix_model_file_folder",
+            "ix_model_stack_member",
+            "ix_model_hash_queue",
         } <= indexes
+
+    def test_the_hash_queue_index_is_partial(self, hub):
+        # A full index on sha256 would be almost entirely rows the finder never
+        # wants: the queue is a handful of rows in a table of thousands.
+        apply_migrations(hub)
+        sql = hub.execute(
+            "SELECT sql FROM sqlite_master WHERE name='ix_model_hash_queue'"
+        ).fetchone()[0]
+        assert "WHERE sha256 IS NULL" in sql
 
 
 class TestReRunIsSafe:
@@ -114,7 +168,7 @@ class TestReRunIsSafe:
         apply_migrations is for.
         """
         apply_migrations(hub)
-        for table in SHELF_TABLES:
+        for table in ("model_file", "model", "model_folder", "adapter_stack"):
             hub.execute(f"DROP TABLE {table}")
         assert read_schema_version(hub) == 2  # still v2, nothing to upgrade
         assert not (set(SHELF_TABLES) & table_names(hub))
@@ -134,38 +188,80 @@ class TestReRunIsSafe:
             ("/models/loras",)
         ]
 
+    def test_a_pre_reshape_hub_is_reshaped_on_its_next_open(self, hub):
+        """A developer hub opened on an earlier develop still gets the new shape.
+
+        ``CREATE TABLE IF NOT EXISTS`` cannot reshape a table, so without the
+        drop guard such a hub would keep the superseded three tables and gain
+        the new two, with the scan writing to neither.
+        """
+        apply_migrations(hub)
+        hub.execute("DROP TABLE model_file")
+        hub.execute("DROP TABLE model")
+        hub.execute("CREATE TABLE adapter (sha256 TEXT)")
+        hub.execute("CREATE TABLE adapter_file (relpath TEXT)")
+        hub.execute("CREATE TABLE checkpoint (local_path TEXT)")
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert not (set(SUPERSEDED_TABLES) & table_names(hub))
+        assert {"model", "model_file"} <= table_names(hub)
+
+    def test_the_drop_guard_is_idempotent_and_loses_nothing_after_the_first_open(
+        self, hub
+    ):
+        """Three consecutive opens; only the first may drop anything.
+
+        The guard keys on ``adapter``, which does not exist after the reshape,
+        so it must be false on a fresh hub and false on every re-run. If it
+        ever fired again it would take a populated ``model``/``model_file`` pair
+        with it — the guard drops tables, and a drop cannot be undone.
+        """
+        apply_migrations(hub)
+        folder_id = add_folder(hub, "/models")
+        model_id = add_model(hub, display_name="Clementine v3")
+        add_file(hub, model_id, folder_id, "clem.safetensors")
+        hub.commit()
+
+        for _ in range(2):
+            apply_migrations(hub)
+            assert hub.execute("SELECT display_name FROM model").fetchone() == (
+                "Clementine v3",
+            )
+            assert hub.execute("SELECT COUNT(*) FROM model_file").fetchone()[0] == 1
+            assert hub.execute("SELECT COUNT(*) FROM model_folder").fetchone()[0] == 1
+
 
 class TestConstraints:
-    def test_an_adapter_is_identified_by_its_hash(self, hub):
+    def test_a_model_is_identified_by_its_hash(self, hub):
         apply_migrations(hub)
-        for _ in range(1):
-            hub.execute(
-                "INSERT INTO adapter (sha256, kind, provenance) VALUES (?, ?, ?)",
-                ("abc", "lora", "external"),
-            )
+        add_model(hub, sha256="abc")
         with pytest.raises(sqlite3.IntegrityError):
-            hub.execute(
-                "INSERT INTO adapter (sha256, kind, provenance) VALUES (?, ?, ?)",
-                ("abc", "lora", "trained"),
-            )
+            add_model(hub, sha256="abc", provenance="trained")
+
+    def test_an_adapter_may_not_be_stored_without_a_hash(self, hub):
+        # The CHECK keeps `adapter`'s old NOT NULL exactly where it was
+        # load-bearing: an adapter is hashed on sight, and its sha256 is the
+        # interop identity Civitai lookup and `{sha256}/file` both resolve on.
+        apply_migrations(hub)
+        with pytest.raises(sqlite3.IntegrityError):
+            add_model(hub, file_kind="adapter", sha256=None)
 
     def test_a_checkpoint_may_be_registered_before_it_is_hashed(self, hub):
-        # Deliberately different from `adapter`: a checkpoint can be many
+        # Deliberately different from an adapter: a checkpoint can be many
         # gigabytes and is registered in place long before anything hashes it.
         apply_migrations(hub)
-        hub.execute(
-            "INSERT INTO checkpoint (filename, local_path) VALUES (?, ?)",
-            ("flux1-dev.safetensors", "/models/flux1-dev.safetensors"),
-        )
-        assert hub.execute("SELECT sha256 FROM checkpoint").fetchone() == (None,)
+        add_model(hub, file_kind="checkpoint", sha256=None, filename="flux1-dev")
+        assert hub.execute("SELECT sha256 FROM model").fetchone() == (None,)
 
     def test_two_unhashed_checkpoints_do_not_collide(self, hub):
         # SQLite treats NULLs as distinct under UNIQUE, which is what allows a
         # whole folder to be registered before any of it is hashed.
         apply_migrations(hub)
         for name in ("a.safetensors", "b.safetensors"):
-            hub.execute("INSERT INTO checkpoint (filename) VALUES (?)", (name,))
-        assert hub.execute("SELECT COUNT(*) FROM checkpoint").fetchone()[0] == 2
+            add_model(hub, file_kind="checkpoint", sha256=None, filename=name)
+        assert hub.execute("SELECT COUNT(*) FROM model").fetchone()[0] == 2
 
     def test_one_path_per_folder_is_recorded_once(self, hub):
         apply_migrations(hub)
@@ -180,56 +276,95 @@ class TestConstraints:
             )
 
     def test_the_same_file_may_sit_in_two_folders(self, hub):
-        # One adapter, many paths. That is what a copy into a second registered
+        # One model, many paths. That is what a copy into a second registered
         # folder is, and what a duplicate after an interrupted move is.
         apply_migrations(hub)
-        hub.execute(
-            "INSERT INTO adapter (sha256, kind, provenance) VALUES ('h', 'lora', 'external')"
-        )
+        model_id = add_model(hub)
         for path in ("/a", "/b"):
-            hub.execute(
-                "INSERT INTO model_folder (path, kind, movable) VALUES (?, 'user', 'per_item')",
-                (path,),
-            )
-        for folder_id in (1, 2):
-            hub.execute(
-                "INSERT INTO adapter_file "
-                "(adapter_sha256, model_folder_id, relpath, state) "
-                "VALUES ('h', ?, 'x.safetensors', 'present')",
-                (folder_id,),
-            )
-        assert hub.execute("SELECT COUNT(*) FROM adapter_file").fetchone()[0] == 2
+            add_file(hub, model_id, add_folder(hub, path), "x.safetensors")
+        assert hub.execute("SELECT COUNT(*) FROM model_file").fetchone()[0] == 2
+
+    def test_a_location_cannot_name_a_model_that_does_not_exist(self, hub):
+        # The FK is what keeps `model_file` from outliving its content row.
+        apply_migrations(hub)
+        folder_id = add_folder(hub, "/models")
+        with pytest.raises(sqlite3.IntegrityError):
+            add_file(hub, 9999, folder_id, "ghost.safetensors")
+
+
+class TestUnknownIsFirstClass:
+    """``unknown`` is shown, never promoted, and correctable in one statement."""
+
+    def test_an_unknown_file_stores_as_unknown_and_is_not_an_adapter(self, hub):
+        apply_migrations(hub)
+        add_model(hub, file_kind="unknown", sha256="u", kind=None)
+        add_model(hub, file_kind="adapter", sha256="a", kind="lora")
+
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE sha256 = 'u'"
+        ).fetchone() == ("unknown",)
+        adapters = hub.execute(
+            "SELECT sha256 FROM model WHERE file_kind = 'adapter'"
+        ).fetchall()
+        assert adapters == [("a",)]
+
+    def test_correcting_an_unknown_to_checkpoint_keeps_its_locations(self, hub):
+        # The correction is the point of storing `unknown` rather than guessing.
+        # Under the superseded shape it was a cross-table move; here it is one
+        # UPDATE and the location rows never move.
+        apply_migrations(hub)
+        model_id = add_model(hub, file_kind="unknown", sha256="u", kind=None)
+        add_file(hub, model_id, add_folder(hub, "/a"), "vae.safetensors")
+        add_file(hub, model_id, add_folder(hub, "/b"), "vae.safetensors")
+        hub.commit()
+
+        hub.execute(
+            "UPDATE model SET file_kind = 'checkpoint' WHERE id = ?", (model_id,)
+        )
+
+        assert hub.execute("SELECT file_kind FROM model").fetchall() == [
+            ("checkpoint",)
+        ]
+        assert hub.execute(
+            "SELECT COUNT(*) FROM model_file WHERE model_id = ?", (model_id,)
+        ).fetchone() == (2,)
 
 
 class TestTombstone:
-    def test_dropping_a_folders_files_keeps_the_adapter_and_its_curation(self, hub):
-        """Why folder removal needs no confirmation prompt.
+    """Why folder removal needs no confirmation prompt.
 
-        Removing a folder drops ``adapter_file`` rows and keeps the ``adapter``
-        row, so the display name the user typed survives and re-adding the
-        folder re-links by sha256. Nothing a user authored is destroyed, which
-        is the whole basis for not interrupting them with a dialog.
-        """
+    Removing a folder drops ``model_file`` rows and keeps the ``model`` row, so
+    the display name the user typed survives and re-adding the folder re-links.
+    Nothing a user authored is destroyed, which is the whole basis for not
+    interrupting them with a dialog.
+    """
+
+    @pytest.mark.parametrize(
+        "file_kind, sha256",
+        (
+            ("adapter", "h"),
+            # The case the superseded shape could not do at all: a checkpoint
+            # carried its path inline, so removing the folder either destroyed
+            # the row or left it pointing at a folder that was gone.
+            ("checkpoint", None),
+        ),
+    )
+    def test_dropping_a_folders_files_keeps_the_model_and_its_curation(
+        self, hub, file_kind, sha256
+    ):
         apply_migrations(hub)
-        hub.execute(
-            "INSERT INTO adapter (sha256, kind, provenance, display_name) "
-            "VALUES ('h', 'lora', 'external', 'Clementine v3')"
+        model_id = add_model(
+            hub, file_kind=file_kind, sha256=sha256, display_name="Clementine v3"
         )
-        hub.execute(
-            "INSERT INTO model_folder (path, kind, movable) "
-            "VALUES ('/models', 'user', 'per_item')"
-        )
-        hub.execute(
-            "INSERT INTO adapter_file "
-            "(adapter_sha256, model_folder_id, relpath, state) "
-            "VALUES ('h', 1, 'clem.safetensors', 'present')"
-        )
+        folder_id = add_folder(hub, "/models")
+        add_file(hub, model_id, folder_id, "clem.safetensors")
         hub.commit()
 
-        hub.execute("DELETE FROM adapter_file WHERE model_folder_id = 1")
-        hub.execute("DELETE FROM model_folder WHERE id = 1")
+        hub.execute("DELETE FROM model_file WHERE model_folder_id = ?", (folder_id,))
+        hub.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
         hub.commit()
 
-        assert hub.execute("SELECT display_name FROM adapter").fetchone() == (
+        assert hub.execute("SELECT display_name FROM model").fetchone() == (
             "Clementine v3",
         )
+        assert hub.execute("SELECT COUNT(*) FROM model_file").fetchone()[0] == 0
