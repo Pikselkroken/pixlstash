@@ -738,3 +738,68 @@ class TestProgressReporting:
         folder_id = register_folder(hub, folder)
 
         assert scanner.scan_folder(folder_id, str(folder), "user").adapters == 1
+
+
+class TestWriteCadence:
+    """When rows become *visible*, not just when they are eventually correct.
+
+    ``MissingCheckpointHashFinder`` is a second worker that can only start once a
+    checkpoint row exists. With ``_WRITE_BATCH`` alone, a 91-file folder is one
+    commit at the very end and a measured 6.11 GB scan showed the finder **zero**
+    rows at any point while it ran: the two workers went nose to tail instead of
+    overlapping. The count still bounds the transaction; time bounds the wait.
+    """
+
+    def _folder_with(self, tmp_path, count):
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_checkpoint(folder / "big.safetensors")
+        for index in range(count - 1):
+            write_adapter(folder / f"a{index}.safetensors")
+        return folder
+
+    def test_rows_are_visible_before_the_scan_finishes(
+        self, hub, scanner, tmp_path, monkeypatch
+    ):
+        """The elapsed-time flush, exercised by making every file overdue."""
+        monkeypatch.setattr(scanner_module, "_WRITE_INTERVAL_S", 0.0)
+        folder = self._folder_with(tmp_path, 4)
+        folder_id = register_folder(hub, folder)
+
+        # What a reader in another thread — the work planner — would have seen.
+        visible: list[int] = []
+        scanner.scan_folder(
+            folder_id,
+            str(folder),
+            "user",
+            progress=lambda done, total: visible.append(
+                hub.fetchone("SELECT COUNT(*) AS n FROM model_file")["n"]
+            ),
+        )
+
+        # The leading 0 is the denominator callback, before any file is read.
+        assert visible == [0, 1, 2, 3, 4], (
+            "rows only appeared once the scan was over, so the checkpoint hash "
+            f"worker could not overlap it: {visible}"
+        )
+
+    def test_a_quick_folder_is_still_one_transaction(
+        self, hub, scanner, tmp_path, monkeypatch
+    ):
+        """The positive control. Files that cost nothing to read must not each
+        earn their own commit — the flush is a latency ceiling, not a per-file
+        write policy, and turning it into one is its own regression."""
+        commits = []
+        original = ModelFolderScanner._write_batch
+
+        def counting(self, folder_id, batch, scanned_at):
+            commits.append(len(batch))
+            return original(self, folder_id, batch, scanned_at)
+
+        monkeypatch.setattr(ModelFolderScanner, "_write_batch", counting)
+        folder = self._folder_with(tmp_path, 5)
+        folder_id = register_folder(hub, folder)
+
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert commits == [5], commits

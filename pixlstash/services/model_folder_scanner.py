@@ -47,6 +47,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, NamedTuple, Optional
@@ -85,6 +86,23 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 # transactions only", and this also means an interrupted scan keeps the rows it
 # already wrote instead of discarding the whole folder.
 _WRITE_BATCH = 200
+
+# ...and however long a record may wait for that batch to fill. The count alone
+# bounds the transaction; it does not bound *visibility*, and on a real folder
+# those are wildly different numbers. A 91-file folder is one commit, at the very
+# end, while the scan spends nearly all of its minutes hashing adapters inline —
+# so ``MissingCheckpointHashFinder`` saw zero rows at any point during a measured
+# 6.11 GB scan and could only start once the scan had finished. The two now
+# overlap instead of running nose to tail.
+#
+# Time, not a smaller count, because the cost driver is per-file hashing time:
+# ten 4 GB adapters are ten files and several minutes, so any count that bounded
+# latency for them would be one. Commits are cheap enough to spend freely —
+# measured on the hub (WAL, synchronous=NORMAL) at **0.06 ms marginal per extra
+# commit** over 1,800 files, i.e. committing every single file costs 100 ms on a
+# scan that reads tens of gigabytes. ``_WRITE_BATCH`` is therefore left alone: it
+# bounds transaction size, which is a job it still does correctly.
+_WRITE_INTERVAL_S = 2.0
 
 # SQLite LIKE wildcards. Escaped before a relpath prefix is used in a LIKE, or a
 # folder named ``sd_xl`` would match ``sdaxl`` and quietly protect the wrong
@@ -283,13 +301,18 @@ class ModelFolderScanner:
             progress(0, total)
 
         batch: list[_FileRecord] = []
+        last_write = time.monotonic()
         for processed, (abs_path, relpath) in enumerate(files, start=1):
             record = self._describe(abs_path, relpath, known, result)
             if record is not None:
                 batch.append(record)
-            if len(batch) >= _WRITE_BATCH:
+            if batch and (
+                len(batch) >= _WRITE_BATCH
+                or time.monotonic() - last_write >= _WRITE_INTERVAL_S
+            ):
                 self._write_batch(folder_id, batch, scanned_at)
                 batch = []
+                last_write = time.monotonic()
             if progress is not None:
                 progress(processed, total)
         if batch:
