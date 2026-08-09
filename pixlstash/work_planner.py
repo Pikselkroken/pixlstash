@@ -408,6 +408,9 @@ class WorkPlanner:
                 # found after shutdown has begun and the runner may already be
                 # stopped by Vault.stop().
                 if self._stop.is_set():
+                    self._release_unsubmitted(
+                        finder, task, "the planner stopped before it could submit"
+                    )
                     return submitted_any
 
                 task_id = getattr(task, "id", None)
@@ -420,7 +423,7 @@ class WorkPlanner:
 
                 try:
                     submitted_task_id = self._task_runner.submit(task)
-                except Exception:
+                except Exception as submit_exc:
                     with self._lock:
                         current_inflight = int(
                             self._inflight_by_finder.get(finder_name, 0)
@@ -431,6 +434,9 @@ class WorkPlanner:
                         )
                         if task_id:
                             self._finder_by_task_id.pop(task_id, None)
+                    self._release_unsubmitted(
+                        finder, task, f"submit() raised: {submit_exc}"
+                    )
                     # Close the remaining race between the stop check above and
                     # TaskRunner.submit(). A stopped runner is expected during
                     # vault teardown; any submission failure while still live
@@ -456,3 +462,38 @@ class WorkPlanner:
         if not submitted_any:
             self._finder_order_idx = (self._finder_order_idx + 1) % finder_count
         return submitted_any
+
+    def _release_unsubmitted(self, finder, task, reason: str):
+        """Hand a task the planner will never submit back to its finder.
+
+        ``find_task()`` has already claimed the batch's picture ids and
+        ``on_task_complete()`` is the only thing that discards them, so a task
+        dropped between finding and submitting leaks its claims for the life of
+        the process and those pictures can never be selected again.
+
+        Args:
+            finder: The finder that produced *task* and holds its claims.
+            task: The task that will not be submitted.
+            reason: Why it was dropped, for the log and the finder's error.
+        """
+        task_id = getattr(task, "id", None)
+        finder_name = finder.finder_name()
+        error = RuntimeError(
+            f"Task {task_id} was dropped before submission: {reason}",
+        )
+        try:
+            finder.on_task_complete(task, error)
+        except Exception as exc:
+            logger.warning(
+                "Finder %s failed to release the claims of dropped task %s: %s",
+                finder_name,
+                task_id,
+                exc,
+            )
+        logger.debug(
+            "WorkPlanner dropped task id=%s from finder=%s and released its "
+            "claims (%s).",
+            task_id,
+            finder_name,
+            reason,
+        )

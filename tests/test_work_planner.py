@@ -1,9 +1,13 @@
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
+from pixlstash.task_runner import TaskRunner
 from pixlstash.tasks import TaskType
+from pixlstash.tasks.base_task import BaseTask
+from pixlstash.tasks.base_task_finder import BaseTaskFinder
 from pixlstash.vault import Vault
 from pixlstash.work_planner import WorkPlanner
 
@@ -316,6 +320,147 @@ def test_detach_finders_prunes_every_structure_and_marks_exhausted():
     # depends_on() it would block for ever unless it counts as exhausted.
     assert planner._finder_exhausted["TagFinder"] is True
     assert planner.detach_finders([TaskType.TAGGER]) == set(), "detach is idempotent"
+
+
+class _ClaimedTask(BaseTask):
+    """A real task carrying the ``picture_ids`` the release path reads."""
+
+    def __init__(self, picture_ids):
+        super().__init__(task_type="ClaimedTask", params={"picture_ids": picture_ids})
+
+    def _run_task(self):
+        return None
+
+
+class _ClaimingFinder(BaseTaskFinder):
+    """A real finder, so the claim bookkeeping under test is the real one."""
+
+    def __init__(self, picture_ids):
+        super().__init__()
+        self._picture_ids = list(picture_ids)
+        self.last_task = None
+
+    def finder_name(self) -> str:
+        return "ClaimingFinder"
+
+    def find_task(self):
+        candidates = [SimpleNamespace(id=pid) for pid in self._picture_ids]
+        selected = self._filter_and_claim(candidates, len(candidates))
+        if not selected:
+            return None
+        self.last_task = _ClaimedTask([picture.id for picture in selected])
+        return self.last_task
+
+
+def test_a_task_cancelled_off_the_queue_releases_its_claims():
+    """A cancelled task must give back its slot and its picture ids.
+
+    ``cancel_pending_tasks()`` used to drain the queues without firing the
+    completion callbacks, which are the only path that discards claims and
+    decrements the in-flight count. One full restore therefore pinned the
+    tagger finder at max in-flight for the life of the process, starved every
+    finder that ``depends_on()`` it, and left the claimed pictures permanently
+    unselectable.
+    """
+    runner = TaskRunner(name="cancel-claims-test", num_workers=1)
+    finder = _ClaimingFinder([1, 2, 3])
+    planner = WorkPlanner(task_runner=runner, task_finders=[finder])
+    runner.add_task_complete_callback(planner.on_task_complete)
+
+    try:
+        # The workers are deliberately not started, so the task can only leave
+        # the queue through the cancel path.
+        assert planner._run_finders_once() is True
+        assert planner.inflight_count("ClaimingFinder") == 1
+        assert finder._claimed_picture_ids == {1, 2, 3}
+
+        assert runner.cancel_pending_tasks() == 1
+
+        assert finder._claimed_picture_ids == set()
+        assert planner.inflight_count("ClaimingFinder") == 0
+        assert planner._finder_by_task_id == {}
+
+        # And the finder can pick the same work up again.
+        assert planner._run_finders_once() is True
+        assert finder._claimed_picture_ids == {1, 2, 3}
+    finally:
+        runner.stop()
+
+
+def test_stop_between_find_and_submit_releases_the_claims():
+    """``find_task()`` claims before the planner decides not to submit."""
+    runner = _FastCompleteRunner()
+    finder = _ClaimingFinder([4, 5])
+    planner = WorkPlanner(task_runner=runner, task_finders=[finder])
+    submitted_tasks = []
+    runner.on_submit = submitted_tasks.append
+
+    real_find_task = finder.find_task
+
+    def find_then_stop():
+        task = real_find_task()
+        planner._stop.set()
+        return task
+
+    finder.find_task = find_then_stop
+
+    assert planner._run_finders_once() is False
+    assert submitted_tasks == []
+    assert planner.inflight_count("ClaimingFinder") == 0
+    assert finder._claimed_picture_ids == set()
+
+
+def test_a_failed_submit_releases_the_claims():
+    """The submit-raised handler unwound its own bookkeeping but not the claims."""
+    finder = _ClaimingFinder([6, 7])
+    planner = None
+
+    class _StoppingRunner:
+        def submit(self, task):
+            planner._stop.set()
+            raise RuntimeError("TaskRunner test is stopped.")
+
+    planner = WorkPlanner(task_runner=_StoppingRunner(), task_finders=[finder])
+
+    assert planner._run_finders_once() is False
+    assert planner.inflight_count("ClaimingFinder") == 0
+    assert planner._finder_by_task_id == {}
+    assert finder._claimed_picture_ids == set()
+
+
+def test_a_completed_task_releases_its_claims_exactly_once():
+    """The positive control: the happy path still releases, and only once."""
+    runner = TaskRunner(name="complete-claims-test", num_workers=1)
+    finder = _ClaimingFinder([8, 9])
+    releases = []
+    real_on_task_complete = finder.on_task_complete
+
+    def counting_on_task_complete(task, error):
+        releases.append((task.id, error))
+        real_on_task_complete(task, error)
+
+    finder.on_task_complete = counting_on_task_complete
+    planner = WorkPlanner(task_runner=runner, task_finders=[finder])
+    runner.add_task_complete_callback(planner.on_task_complete)
+    runner.start()
+    try:
+        assert planner._run_finders_once() is True
+        task = finder.last_task
+        assert task._done_event.wait(timeout=10.0), "the task never completed"
+        # The callbacks fire after the worker sets the done event.
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and not releases:
+            time.sleep(0.01)
+
+        assert releases == [(task.id, None)], (
+            f"expected exactly one release with no error, got {releases}"
+        )
+        assert finder._claimed_picture_ids == set()
+        assert planner.inflight_count("ClaimingFinder") == 0
+    finally:
+        runner.stop()
+
+    assert releases == [(task.id, None)], "stop() released the task a second time"
 
 
 class _VaultWorkerProbe:
