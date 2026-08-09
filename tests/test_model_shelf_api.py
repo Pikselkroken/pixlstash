@@ -1359,3 +1359,187 @@ def test_remote_owner_is_refused_on_every_move_route_naming_the_flag(shelf_env):
             f"{method} {path} denied without naming the setting that enables it: "
             f"{r.text}"
         )
+
+
+# ===========================================================================
+# ai-toolkit import (B7) — the route, and both authz directions
+# ===========================================================================
+
+_IMPORT_ROUTES = (
+    ("GET", f"{API}/model-folders/1/runs", {}),
+    (
+        "POST",
+        f"{API}/model-imports",
+        {
+            "json": {
+                "source_folder_id": 1,
+                "run_name": "Clementine",
+                "destination_folder_id": 1,
+            }
+        },
+    ),
+)
+
+
+def _write_run_adapter(path, seed):
+    """A header-only safetensors with LoRA markers and a distinguishing payload."""
+    import struct
+
+    header = {f"blocks.{i}.lora_A.weight": _TENSOR for i in range(2)}
+    header["blocks.0.lora_B.weight"] = _TENSOR
+    header["__metadata__"] = {"format": "pt"}
+    blob = json.dumps(header).encode()
+    path.write_bytes(struct.pack("<Q", len(blob)) + blob + seed)
+
+
+_TENSOR = {"dtype": "F16", "shape": [8, 16], "data_offsets": [0, 0]}
+
+
+@pytest.fixture
+def import_folders(shelf_env, tmp_path):
+    """A registered ai-toolkit output root with one run, and a destination."""
+    output_root = tmp_path / "output"
+    run_dir = output_root / "Clementine"
+    run_dir.mkdir(parents=True)
+    _write_run_adapter(run_dir / "Clementine.safetensors", b"final")
+    _write_run_adapter(run_dir / "Clementine_000000500.safetensors", b"step500")
+    destination_dir = tmp_path / "loras"
+    destination_dir.mkdir()
+
+    with shelf_env.server.hub.transaction() as conn:
+        source_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, owner, movable, "
+                "delete_after_import, created_at) VALUES (?, 'source', "
+                "'ai-toolkit', 'external', 0, '2026-08-09T00:00:00Z')",
+                (str(output_root),),
+            ).lastrowid
+        )
+        destination_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, movable, created_at) "
+                "VALUES (?, 'user', 'per_item', '2026-08-09T00:00:00Z')",
+                (str(destination_dir),),
+            ).lastrowid
+        )
+    return SimpleNamespace(
+        output_root=output_root,
+        run_dir=run_dir,
+        destination_dir=destination_dir,
+        source_id=source_id,
+        destination_id=destination_id,
+    )
+
+
+def test_every_import_route_is_declared_local_owner_only():
+    for method, path in (
+        ("GET", "/api/v1/model-folders/{folder_id}/runs"),
+        ("POST", "/api/v1/model-imports"),
+    ):
+        declared = ROUTE_POLICIES.get((method, path))
+        assert declared is not None, f"({method}, {path}) has no ROUTE_POLICIES entry"
+        assert declared.policy is AccessPolicy.LOCAL_OWNER_ONLY, (
+            f"{method} {path} declares {declared.policy}, not LOCAL_OWNER_ONLY"
+        )
+        assert declared.justification, f"{method} {path} is on the tier with no reason"
+
+
+def test_listing_runs_describes_them_without_importing_anything(
+    shelf_env, import_folders
+):
+    r = shelf_env.owner.get(f"{API}/model-folders/{import_folders.source_id}/runs")
+    assert r.status_code == 200, r.text
+    runs = r.json()["runs"]
+    assert [run["name"] for run in runs] == ["Clementine"]
+    assert len(runs[0]["checkpoints"]) == 2
+    # Nothing was taken: the card grid is drawn before any decision.
+    assert list(import_folders.destination_dir.iterdir()) == []
+    assert shelf_env.owner.get(f"{API}/adapters").json()["adapters"] != []
+
+
+def test_a_folder_that_is_catalogued_in_place_holds_no_runs(shelf_env, import_folders):
+    """A `user` folder is a library of models, not a place runs are taken from."""
+    r = shelf_env.owner.get(f"{API}/model-folders/{import_folders.destination_id}/runs")
+    assert r.status_code == 400, r.text
+
+
+def test_importing_a_run_registers_it_as_one_stack(shelf_env, import_folders):
+    r = shelf_env.owner.post(
+        f"{API}/model-imports",
+        json={
+            "source_folder_id": import_folders.source_id,
+            "run_name": "Clementine",
+            "destination_folder_id": import_folders.destination_id,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert [f["status"] for f in body["files"]] == ["imported", "imported"]
+    assert body["deleted_source"] is False
+    assert body["stack_id"] is not None
+
+    # delete_after_import is off, so the run keeps its own copy.
+    assert (import_folders.run_dir / "Clementine.safetensors").exists()
+    assert (import_folders.destination_dir / "Clementine.safetensors").exists()
+
+    rows = {
+        row["filename"]: row
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }
+    cover = rows["Clementine.safetensors"]
+    assert cover["provenance"] == "trained"
+    assert cover["stack_position"] == 0
+    assert cover["member_count"] == 2
+
+
+def test_a_run_name_that_escapes_the_output_root_is_refused(shelf_env, import_folders):
+    """The body names a run, never a path. A name that resolves outside the
+    registered root is refused rather than read."""
+    r = shelf_env.owner.post(
+        f"{API}/model-imports",
+        json={
+            "source_folder_id": import_folders.source_id,
+            "run_name": "../../etc",
+            "destination_folder_id": import_folders.destination_id,
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert list(import_folders.destination_dir.iterdir()) == []
+
+
+def test_import_routes_refuse_every_share_token(shelf_env):
+    for description, restriction in (
+        ("import scoped probe", {"resource_type": "character", "resource_id": 1}),
+        ("import unscoped probe", {}),
+    ):
+        token = _mint(shelf_env.owner, description, **restriction)
+        client = _bearer(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"{description} is dead; the refusals below would prove nothing"
+        )
+        for method, path, kwargs in _IMPORT_ROUTES:
+            assert_real_route(shelf_env.server.api, method, path)
+            r = client.request(method, path, **kwargs)
+            assert r.status_code == 403, (
+                f"{description} reached {method} {path}: {r.status_code} {r.text}"
+            )
+
+
+def test_local_owner_reaches_every_import_route(shelf_env):
+    for method, path, kwargs in _IMPORT_ROUTES:
+        for headers in ({}, _xff("192.168.1.9"), _xff("100.64.0.5")):
+            r = shelf_env.owner.request(method, path, headers=headers, **kwargs)
+            assert "restricted to local" not in r.text, (
+                f"{method} {path} from {headers or 'loopback'} was refused as "
+                f"non-local: {r.status_code} {r.text}"
+            )
+
+
+def test_remote_owner_is_refused_on_every_import_route_naming_the_flag(shelf_env):
+    for method, path, kwargs in _IMPORT_ROUTES:
+        r = shelf_env.owner.request(method, path, headers=_xff("8.8.8.8"), **kwargs)
+        assert r.status_code == 403, f"{method} {path}: {r.status_code} {r.text}"
+        assert "allow_remote_host_ops" in r.text, (
+            f"{method} {path} denied without naming the setting that enables it: "
+            f"{r.text}"
+        )
