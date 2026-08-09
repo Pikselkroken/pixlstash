@@ -434,14 +434,17 @@ class Picture(SQLModel, table=True):
     # non-deleted row to prove there is no work; scoped to the matching rows the
     # probe is O(rows that actually need work), i.e. free when idle.
     #
-    # Column order is load-bearing, not cosmetic. The obvious ``(id)``-only form
-    # does NOT get chosen: this database never runs ``ANALYZE``, so there is no
-    # ``sqlite_stat1``, and without statistics SQLite scores a partial index by the
-    # table's default row estimate. It only wins when it can claim MORE equality
-    # terms than the index it competes with. Leading with the nullable column makes
-    # ``<col> IS NULL`` a usable equality term (SQLite treats ``IS NULL`` as one),
-    # and ``deleted`` a second, which beats single-term ``ix_picture_deleted``
-    # outright rather than tying with it and losing on a creation-order tie-break.
+    # Column order is load-bearing, not cosmetic. A partial index only wins when
+    # it can claim MORE equality terms than the index it competes with. Leading
+    # with the nullable column makes ``<col> IS NULL`` a usable equality term
+    # (SQLite treats ``IS NULL`` as one), and ``deleted`` a second, which beats
+    # single-term ``ix_picture_deleted`` outright. The obvious ``(id)``-only form
+    # claims no extra term, so it ties and loses on a creation-order tie-break:
+    # measured without statistics it is not chosen at all and the probe falls
+    # back to ``ix_picture_deleted`` at 80 ms, against 0.003 ms here. This does
+    # not rest on PixlStash never running ``ANALYZE`` (it does not, but a user
+    # can run it from any SQLite client): the order above is the one that wins
+    # both with and without ``sqlite_stat1``.
     # Trailing ``id`` keeps ``ORDER BY picture.id`` free (no temp B-tree).
     # Measured on 200k rows with 3 matching: 17.9 ms -> under 0.01 ms per probe.
     __table_args__ = (
