@@ -46,6 +46,7 @@ the gate's own algorithm would audit that algorithm with itself, so
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -1368,19 +1369,34 @@ class _BudgetStubPluginManager:
         return self._reporter
 
 
+def _budget_annotation(reporter) -> str | None:
+    """The ``::warning::`` line the budget check emits, if it emitted one."""
+    for line in reporter.lines:
+        if line.startswith("::warning title=Test-time budget exceeded::"):
+            return line
+    return None
+
+
 def test_test_time_budget_fires_on_over_budget_input():
     """The ceiling trips on synthetic time, and stays quiet under it.
 
     Both directions on purpose: a budget that can only be observed to fire is
     no better evidenced than one that never fires, and a guard permanently red
     gets muted within a week.
+
+    The signal asserted on is the annotation, not the exit status: a shard
+    failed for being slow cannot be harvested by
+    ``record-test-durations.yml``, which is the workflow that fixes it.
     """
     ceiling = shard_conftest.TEST_TIME_BUDGET_SECONDS / 4
 
     over = _BudgetStubReporter([ceiling * 0.6, ceiling * 0.6])
     session = _BudgetStubSession(over, "1/4")
     shard_conftest._enforce_test_time_budget(session)
-    assert session.exitstatus == 1, "Over-budget shard did not go red"
+    assert session.exitstatus == 0, (
+        "The budget failed the shard; a slow gate cannot then be re-measured"
+    )
+    assert _budget_annotation(over), f"No budget annotation was emitted: {over.lines}"
     assert any("TEST-TIME BUDGET EXCEEDED" in line for line in over.lines), (
         f"No budget banner was printed: {over.lines}"
     )
@@ -1399,7 +1415,7 @@ def test_test_time_budget_fires_on_over_budget_input():
     resharded = _BudgetStubReporter([ceiling * 0.6, ceiling * 0.3])
     session = _BudgetStubSession(resharded, "1/16")
     shard_conftest._enforce_test_time_budget(session)
-    assert session.exitstatus == 1, "A reshard silently kept the old ceiling"
+    assert _budget_annotation(resharded), "A reshard silently kept the old ceiling"
 
     # Not sharding at all means not measuring: a local partial run collects a
     # fraction of the suite and must never be judged against a shard's share.
@@ -1422,8 +1438,8 @@ def test_test_time_budget_fires_on_over_budget_input():
     )
 
 
-def test_test_time_budget_actually_turns_a_green_run_red():
-    """End to end: a passing shard over its ceiling exits non-zero.
+def test_test_time_budget_annotates_without_failing_the_run(tmp_path):
+    """End to end: a passing shard over its ceiling still exits zero, loudly.
 
     The stub test above proves the arithmetic; this proves the wiring, which is
     where the previous guardrails in this repo failed. It runs the real hook,
@@ -1431,28 +1447,41 @@ def test_test_time_budget_actually_turns_a_green_run_red():
     the only synthetic part is the shard count: ``1/100000000`` puts the
     ceiling at 0.12 ms, which any real test exceeds.
 
-    ``1 passed`` is asserted as well as the exit code, because a renamed target
-    would make pytest exit non-zero for "no tests ran" and this would pass for
-    the wrong reason.
+    The exit code stays 0 on purpose. ``record-test-durations.yml`` refuses any
+    source run whose conclusion is not ``success``, and refreshing that map is
+    the standard remedy for a slow gate, so failing the shard for slowness took
+    away the fix. ``1 passed`` is asserted as well, because a renamed target
+    would make pytest exit non-zero for "no tests ran" and the annotation would
+    then be missing for the wrong reason.
     """
     target = (
         "tests/test_ci_shards.py::test_nonsense_duration_values_are_dropped_not_trusted"
     )
+    summary = tmp_path / "step-summary.md"
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", target, "--ci-shard=1/100000000"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, "GITHUB_STEP_SUMMARY": str(summary)},
     )
     output = result.stdout + result.stderr
 
     assert "1 passed" in output, f"The target test did not run:\n{output}"
-    assert result.returncode != 0, (
-        f"A shard over its test-time ceiling still exited 0:\n{output}"
+    assert result.returncode == 0, (
+        "A shard over its test-time ceiling exited non-zero, which makes the "
+        f"run ineligible for the durations refresh that fixes it:\n{output}"
     )
     assert "TEST-TIME BUDGET EXCEEDED" in output, (
-        f"No budget banner in the failing run:\n{output}"
+        f"No budget banner in the over-budget run:\n{output}"
+    )
+    assert "::warning title=Test-time budget exceeded::" in output, (
+        f"No GitHub annotation in the over-budget run:\n{output}"
+    )
+    assert summary.exists(), "The budget wrote no GITHUB_STEP_SUMMARY entry"
+    assert "TEST-TIME BUDGET EXCEEDED" in summary.read_text(encoding="utf-8"), (
+        f"The step summary does not name the breach: {summary.read_text()}"
     )
 
 
