@@ -640,13 +640,17 @@ def test_a_system_directory_is_refused(shelf_env):
 
 def test_a_symlink_into_a_system_directory_is_refused(shelf_env, tmp_path):
     """The blocklist is a string comparison, so it has to run on the resolved
-    path: ``~/models -> /etc`` passes the lexical check, and the scan then walks
-    /etc because ``os.walk`` follows the *top-level* link. ``GET /adapters`` is
-    reachable from any network location, so the walk's filenames leave the host.
+    path: ``/home/u/models-link -> /etc`` passes the lexical check, and the scan
+    then walks /etc because ``os.walk`` follows the *top-level* link. ``GET
+    /adapters`` is reachable from any network location, so the walk's filenames
+    leave the host.
     """
     assert_real_route(shelf_env.server.api, "POST", f"{API}/model-folders")
     link = tmp_path / "models-link"
-    link.symlink_to("/etc")
+    try:
+        link.symlink_to("/etc", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
 
     r = shelf_env.owner.post(f"{API}/model-folders", json={"path": str(link)})
     assert r.status_code == 400, r.text
@@ -670,7 +674,10 @@ def test_a_symlink_to_an_allowed_folder_registers_at_its_resolved_path(
     real = tmp_path / "real-loras"
     real.mkdir()
     link = tmp_path / "linked-loras"
-    link.symlink_to(real)
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
 
     r = shelf_env.owner.post(f"{API}/model-folders", json={"path": str(link)})
     assert r.status_code == 200, r.text
