@@ -1178,6 +1178,54 @@ Both directions are asserted in `tests/test_path_containment.py`: escape is
 refused at each sink, and in-root plus reference-folder files are still deleted
 (over-blocking is its own regression).
 
+### The managed model store (shelf plan B7)
+
+**Exactly one `model_folder` row with `kind='managed'` always exists.** It is
+PixlStash's own model storage, the way the vault owns picture files, and it is
+created on first run by
+[`services/managed_model_store.py`](../pixlstash/services/managed_model_store.py)
+(`ensure_managed_folder`, called from `Server.__init__` right after the hub is
+bootstrapped). It is the default destination for a drop or an ai-toolkit import.
+
+- **Why `managed` rather than a seeded `user` folder.** With zero registered
+  folders there is nowhere to drop or import a model, so drag-in is impossible
+  on a fresh install. But a `user` folder is an *association the owner made*, and
+  one the owner is forbidden to dissolve is not an association — the honest
+  answer is a kind that means "PixlStash's own storage", which was already in the
+  enum and created by nothing. `user` and `foreign` folders may legitimately
+  number **zero**; that is a normal state (nothing catalogued in place) and gets
+  no error and no message.
+- **Where it goes: beside `hub.db`, under the config directory, not at a fixed
+  `user_data_dir` path.** Same reasoning as the hub itself (#168), and stronger
+  here: this is a directory files are *copied into and unlinked from*, so a fixed
+  platform path would have every test run and every alternate deployment writing
+  into the owner's real store. A default install therefore gets it under the
+  platform user directory anyway, because that is where the config dir is.
+- **Relocatable, never removable.** `DELETE /api/v1/model-folders/{folder_id}`
+  answers **409** for this row — not 403: the caller is fully authorized and the
+  request is well formed, and what refuses it is the state of the target. A 403
+  would send an operator hunting through the §16.3 tiers for a permission that
+  does not exist. `POST /api/v1/model-folders` accepts `user` and `source` only,
+  so a second managed row cannot be made over HTTP either. Both directions are
+  asserted (`tests/test_model_shelf_api.py`): the managed row is refused, an
+  ordinary `user` row is still forgotten — over-blocking would break the shelf's
+  only tombstone.
+- **`ensure_managed_folder` never overrules a relocation.** The row's `path` is
+  the authority, so a start after the owner has moved the store to another drive
+  returns the existing row untouched rather than re-pointing it at the config
+  dir and stranding every file. It is also idempotent, promotes a pre-existing
+  `user` row at the same path rather than failing the `UNIQUE(path)` insert, and
+  degrades to "no store registered" rather than refusing to boot when the
+  directory cannot be created.
+- **`movable='root_only'`, `owner='pixlstash'`.** Nothing enforces `movable`
+  today — the mover does not read it — so it describes what the folder is rather
+  than gating an operation. Whether the UI offers moving a single file *out* of
+  the store is a verb question and is not settled here.
+- This is also what settles the integration plan's §4.1 zero-copy claim: the
+  ComfyUI picker node registers **this one store**, not an enumeration of every
+  present folder across possibly-offline drives. The store is therefore designed
+  as a single directory and must not become several.
+
 ### Hub and library identity
 
 `hub.db` sits beside `server-config.json`, outside every image library. It owns

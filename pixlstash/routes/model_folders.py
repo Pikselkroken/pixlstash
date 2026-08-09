@@ -12,6 +12,13 @@ removal skip a confirmation prompt (shelf plan §7): nothing a person typed is
 destroyed by it. If this ever hard-deletes ``model`` rows, the confirmation comes
 back.
 
+**Exactly one ``managed`` folder always exists and cannot be forgotten.** It
+is PixlStash's own model storage — created on first run, the default destination
+for a drop or an import — so there is no association to dissolve and ``DELETE``
+answers 409. ``user`` and ``foreign`` folders may legitimately number zero; that
+is a normal state, not an error. See
+:mod:`pixlstash.services.managed_model_store`.
+
 **Two of the four columns are derived, not asked for.** ``movable`` and ``owner``
 follow from ``kind``, and offering them as inputs would let a caller register a
 combination that means nothing (an ``external``-movable ``user`` folder). Only
@@ -38,6 +45,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.managed_model_store import MANAGED_KIND
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
@@ -354,7 +362,9 @@ def create_router(server) -> APIRouter:
             "Drops the folder and its location rows. The models themselves "
             "survive with their names, triggers, corrected kinds and "
             "attachments, so re-adding the folder re-links them by content. "
-            "Nothing on disk is touched."
+            "Nothing on disk is touched. The managed store cannot be forgotten: "
+            "it is PixlStash's own storage rather than a folder the owner "
+            "associated, so there is nothing to disassociate."
         ),
         tags=["model_shelf"],
         response_model=ModelFolderDeleteResponse,
@@ -362,6 +372,21 @@ def create_router(server) -> APIRouter:
     def delete_model_folder(folder_id: int, request: Request):
         server.auth.ensure_secure_when_required(request)
         folder = _fetch_folder(folder_id)
+        if folder["kind"] == MANAGED_KIND:
+            # 409, not 403: the caller is fully authorized and the request is
+            # well formed. What refuses it is the state of the target — this row
+            # is PixlStash's own storage, and exactly one of it always exists.
+            # A 403 would say "you may not", which is wrong and would send an
+            # operator hunting through the authz tiers for a permission that
+            # does not exist.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The managed model store cannot be forgotten: it is where "
+                    "PixlStash keeps models it was given, not a folder you "
+                    "associated. Move it instead."
+                ),
+            )
         with server.hub.transaction() as conn:
             cursor = conn.execute(
                 "DELETE FROM model_file WHERE model_folder_id = ?", (folder_id,)

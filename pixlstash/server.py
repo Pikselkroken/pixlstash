@@ -55,6 +55,7 @@ from pixlstash.services.library_switch_service import LibrarySwitchService
 from pixlstash.services.library_generation_coordinator import (
     LibraryGenerationCoordinator,
 )
+from pixlstash.services.managed_model_store import ensure_managed_folder
 from pixlstash.telemetry import ensure_install_identity, start_periodic_sender
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
@@ -405,6 +406,12 @@ class Server(
         )
         self.hub = self._hub_bootstrap.hub
         self.library_registry = LibraryRegistry(self.hub)
+        # Exactly one managed model folder always exists, created on first run
+        # beside the hub. Without it a fresh install has nowhere to drop or
+        # import a model into, so drag-in would be impossible; see
+        # services/managed_model_store.py for why it is `managed` rather than a
+        # seeded `user` folder nobody is allowed to remove.
+        ensure_managed_folder(self.hub, os.path.dirname(self._server_config_path))
         if self._hub_bootstrap.migrated:
             logger.info(
                 "First run after the hub/vault split: identity now lives in %s",
