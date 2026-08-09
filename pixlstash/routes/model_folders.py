@@ -48,7 +48,10 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.managed_model_store import MANAGED_KIND
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
-from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
+from pixlstash.utils.reference_folder_validator import (
+    validate_reference_folder_accessible,
+    validate_reference_folder_path,
+)
 
 logger = get_logger(__name__)
 
@@ -283,7 +286,21 @@ def create_router(server) -> APIRouter:
                 ),
             )
         path = os.path.normpath(payload.path)
+        # Lexical first, because it is the only check that can still see a
+        # relative path: realpath below would silently make one absolute against
+        # the server's cwd.
         error = validate_reference_folder_path(path)
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+        # That check compares strings, so one symlink defeats it: ``~/models ->
+        # /etc`` passes, and the scan then walks /etc because os.walk follows the
+        # top-level link (followlinks=False only governs links found inside the
+        # tree). Resolve, re-run the blocklist on what the link actually points
+        # at, and store the resolved path so the row names the directory that
+        # gets walked. This is the second half of the check
+        # ``create_reference_folder`` runs and this route was missing.
+        path = os.path.realpath(path)
+        error = validate_reference_folder_accessible(path)
         if error:
             raise HTTPException(status_code=400, detail=error)
         host_path = _normalize_optional_host_path(payload.host_path)

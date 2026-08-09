@@ -638,6 +638,59 @@ def test_a_system_directory_is_refused(shelf_env):
     assert r.status_code == 400, r.text
 
 
+def test_a_symlink_into_a_system_directory_is_refused(shelf_env, tmp_path):
+    """The blocklist is a string comparison, so it has to run on the resolved
+    path: ``~/models -> /etc`` passes the lexical check, and the scan then walks
+    /etc because ``os.walk`` follows the *top-level* link. ``GET /adapters`` is
+    reachable from any network location, so the walk's filenames leave the host.
+    """
+    assert_real_route(shelf_env.server.api, "POST", f"{API}/model-folders")
+    link = tmp_path / "models-link"
+    link.symlink_to("/etc")
+
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": str(link)})
+    assert r.status_code == 400, r.text
+    # The refusal must be the blocklist's, not an incidental 4xx: a generic
+    # failure here would leave the bypass open the moment the incident changed.
+    assert "restricted system directory" in r.json()["detail"], r.text
+    registered = {
+        row["path"]
+        for row in shelf_env.owner.get(f"{API}/model-folders").json()["folders"]
+    }
+    assert registered == {"/models/loras"}, registered
+
+
+def test_a_symlink_to_an_allowed_folder_registers_at_its_resolved_path(
+    shelf_env, tmp_path
+):
+    """The positive direction: resolving must refuse system directories without
+    refusing a symlinked model folder, which is an ordinary way to keep adapters
+    on a second drive. The row stores the resolved path, so it names the
+    directory the scanner actually walks."""
+    real = tmp_path / "real-loras"
+    real.mkdir()
+    link = tmp_path / "linked-loras"
+    link.symlink_to(real)
+
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": str(link)})
+    assert r.status_code == 200, r.text
+    assert r.json()["path"] == os.path.realpath(str(real))
+
+    r = shelf_env.owner.post(f"{API}/model-folders/{r.json()['id']}/rescan")
+    assert r.status_code == 202, r.text
+
+
+def test_a_path_that_is_not_a_directory_is_refused(shelf_env, tmp_path):
+    """An existing directory or nothing: a file or a missing path registers a
+    folder that can only ever scan as unreachable."""
+    a_file = tmp_path / "adapter.safetensors"
+    a_file.write_bytes(b"not a folder")
+    for candidate in (str(a_file), str(tmp_path / "does-not-exist")):
+        r = shelf_env.owner.post(f"{API}/model-folders", json={"path": candidate})
+        assert r.status_code == 400, f"{candidate}: {r.status_code} {r.text}"
+        assert "not a directory" in r.json()["detail"], r.text
+
+
 def test_folder_list_counts_copies_and_reports_the_seeded_folder(shelf_env):
     r = shelf_env.owner.get(f"{API}/model-folders")
     assert r.status_code == 200, r.text
