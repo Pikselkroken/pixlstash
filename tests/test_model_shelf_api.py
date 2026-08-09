@@ -1872,6 +1872,49 @@ def test_a_relocation_interrupted_before_the_promotion_leaves_one_managed_row(
         )
 
 
+def test_a_symlink_into_a_system_directory_is_refused_not_followed(
+    shelf_env, relocatable_store, tmp_path
+):
+    """The blocklist is canonicalized, not lexical.
+
+    Two reviews disagreed. The security sign-off filed the lexical check under
+    "explicitly not a finding" because owner-chosen paths are trusted and an
+    owner who may name ``/usr`` directly gains nothing by naming a link to it.
+    That is right about boundaries and beside the point about *this* check:
+    there is no non-owner principal, so the blocklist is not a boundary, it is
+    the guard against the owner relocating the store onto a system directory by
+    accident — and a symlink is exactly the accident the owner cannot see in the
+    path they typed. Lexically checked, this route would ``makedirs`` under
+    ``/usr``, move every file of the store there, and ``rmdir`` around it.
+    """
+    link = tmp_path / "big-drive-link"
+    os.symlink("/usr", str(link))
+    url = f"{API}/model-folders/{relocatable_store.managed_id}/relocate"
+
+    r = shelf_env.owner.post(url, json={"path": str(link / "models")})
+    assert r.status_code == 400, f"a link into /usr was accepted: {r.status_code}"
+    assert "restricted system directory" in r.text, r.text
+    assert not os.path.exists("/usr/models"), "the relocation wrote through the link"
+    assert sorted(p.name for p in relocatable_store.store.iterdir()) == [
+        "one.safetensors",
+        "two.safetensors",
+    ]
+
+    # Positive control, because over-blocking is its own regression: a link to
+    # an ordinary directory still relocates, and the store is registered at the
+    # location it really landed in rather than at the name it was reached by.
+    alias = tmp_path / "alias"
+    os.symlink(str(relocatable_store.target.parent), str(alias))
+    assert (
+        shelf_env.owner.post(url, json={"path": str(alias / "models")}).status_code
+        == 202
+    )
+    _await_move(shelf_env)
+    assert [row["path"] for row in _managed_rows(shelf_env)] == [
+        str(relocatable_store.target)
+    ]
+
+
 def test_a_relocation_target_must_be_absolute_and_off_the_system_blocklist(
     shelf_env, relocatable_store
 ):

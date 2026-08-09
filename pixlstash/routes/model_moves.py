@@ -128,9 +128,12 @@ class RelocateRequest(BaseModel):
     path: str = Field(
         description=(
             "Absolute host path to move the store to. Created if it does not "
-            "exist. Owner-chosen and therefore trusted, but still checked "
-            "against the system-directory blocklist, exactly as a reference "
-            "folder is."
+            "exist. Symlinks are resolved before the path is checked against "
+            "the system-directory blocklist and before it is recorded, so the "
+            "store is registered at the location it really lands in — a link "
+            "into `/usr` is refused rather than followed. Owner-chosen and "
+            "therefore trusted, exactly as a reference folder is; the blocklist "
+            "is there to catch the accident, not an attacker."
         )
     )
 
@@ -533,11 +536,36 @@ def create_router(server) -> APIRouter:
                 ),
             )
 
-        destination_path = os.path.normpath(payload.path)
-        error = validate_reference_folder_path(destination_path)
+        # **Canonicalized before the blocklist runs, and the canonical form is
+        # what gets registered.** Two reviews disagreed about this. The security
+        # sign-off filed the lexical check under "explicitly not a finding" on
+        # the owner-trust ruling — an owner who may name any destination
+        # directly gains nothing by naming one through a symlink — and that is
+        # correct *as a statement about boundaries*. It is not what this check
+        # is. There is no non-owner principal to keep out, so the blocklist is
+        # not a boundary at all: it is the guard that stops the owner relocating
+        # their model store onto ``/usr`` by accident, and the accident it has
+        # to catch is precisely the one the owner cannot see by reading the path
+        # they typed. ``/mnt/models`` may be a symlink to ``/usr/share``; the
+        # owner named the former and this route would create directories in,
+        # move every file of the store into, and ``rmdir`` around the latter. A
+        # lexical check walks straight past that, which makes it false
+        # assurance, and false assurance is worse than no check.
+        #
+        # It also matches what the reference folders this route is modelled on
+        # already do: ``validate_reference_folder_accessible`` realpaths before
+        # validating. The precedent the sign-off cited points this way.
+        #
+        # ``payload.path`` is validated first because ``realpath`` makes a
+        # relative path absolute against the server's cwd, which would turn the
+        # "must be absolute" refusal into an accidental acceptance.
+        destination_path = os.path.realpath(payload.path)
+        error = validate_reference_folder_path(
+            payload.path
+        ) or validate_reference_folder_path(destination_path)
         if error:
             raise HTTPException(status_code=400, detail=error)
-        if os.path.normpath(folder["path"]) == destination_path:
+        if os.path.realpath(folder["path"]) == destination_path:
             raise HTTPException(status_code=400, detail="The store is already there.")
         try:
             os.makedirs(destination_path, exist_ok=True)
