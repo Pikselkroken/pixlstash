@@ -424,12 +424,15 @@ jobs:
           tests/test_library_switch.py
           tests/test_likeness_and_face_search.py
           tests/test_likeness_worker.py
+          tests/test_managed_model_store.py
           tests/test_many_to_many_face_data.py
           tests/test_metadata_hash.py
           tests/test_metadata_hash_batching.py
           tests/test_migrations.py
           tests/test_model_file_classification.py
           tests/test_model_folder_scanner.py
+          tests/test_model_move.py
+          tests/test_model_run_import.py
           tests/test_model_shelf_api.py
           tests/test_model_shelf_fixtures.py
           tests/test_model_shelf_library_fixture.py
