@@ -37,7 +37,9 @@
 .ps-row {
   box-sizing: border-box;
   padding-left: calc(var(--space-3) + var(--depth, 0) * var(--indent-step));
-  padding-right: var(--sidebar-right-edge, 8px);
+  /* Fallback on the scale, not off it. --space-3 is 8px, so this is the same
+     edge it always was, expressed in the spacing ramp. */
+  padding-right: var(--sidebar-right-edge, var(--space-3));
   border-left: 3px solid transparent;
 }
 
@@ -79,9 +81,14 @@
   color: rgb(var(--v-theme-sidebar-text));
   user-select: none;
   min-height: 28px;
+  /* The tokens, not the 0.12s this carried over from the scoped rule it
+     replaced. This is now the canonical folder-row rule and will be imitated,
+     and `--dur-1` + `--ease-standard` is what visual-language.md §motion rules
+     for hover feedback and what App.css already uses on the same kind of row.
+     Hover tint lands 30 ms later than before, in step with every other row. */
   transition:
-    background 0.12s,
-    color 0.12s;
+    background var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard);
 }
 
 .sidebar-folder-row:hover {
