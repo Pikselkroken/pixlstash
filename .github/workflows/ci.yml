@@ -310,6 +310,7 @@ jobs:
           tests/test_batch_character_likeness_scope.py
           tests/test_character_face_assignment.py
           tests/test_characters_api.py
+          tests/test_checkpoint_hash_finder.py
           tests/test_ci_shards.py
           tests/test_clip_text_embedding_similarity.py
           tests/test_comfyui_api_prompt_extraction.py
