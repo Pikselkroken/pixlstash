@@ -131,6 +131,20 @@ class _FileRecord(NamedTuple):
     param_count: Optional[int] = None
 
 
+class _KnownFile(NamedTuple):
+    """A ``present`` location row as the unchanged-file fast path needs it.
+
+    ``file_kind`` comes off the joined ``model`` row and is only used to count
+    the file into the right bucket: taking the fast path means nothing was
+    parsed, so what the file is has to be read back rather than re-derived.
+    """
+
+    model_id: int
+    file_kind: str
+    file_size: Optional[int]
+    file_mtime: Optional[int]
+
+
 def sha256_file(path: str) -> str:
     """Return the full-file SHA-256 of *path* as lowercase hex.
 
@@ -313,7 +327,7 @@ class ModelFolderScanner:
         self,
         abs_path: str,
         relpath: str,
-        known: dict[str, tuple[int, Optional[int], Optional[int]]],
+        known: dict[str, _KnownFile],
         result: FolderScanResult,
     ) -> Optional[_FileRecord]:
         """Return the row for one file, hashing it only when it has to be.
@@ -348,10 +362,19 @@ class ModelFolderScanner:
         mtime_ns = stat_result.st_mtime_ns
 
         previous = known.get(relpath)
-        if previous is not None and previous[1:] == (size, mtime_ns):
-            result.adapters += 1
+        if previous is not None and (previous.file_size, previous.file_mtime) == (
+            size,
+            mtime_ns,
+        ):
+            if previous.file_kind == FILE_CHECKPOINT:
+                result.checkpoints += 1
+            else:
+                result.adapters += 1
             return _FileRecord(
-                relpath=relpath, size=size, mtime_ns=mtime_ns, model_id=previous[0]
+                relpath=relpath,
+                size=size,
+                mtime_ns=mtime_ns,
+                model_id=previous.model_id,
             )
 
         info = describe_adapter(abs_path)
@@ -406,10 +429,8 @@ class ModelFolderScanner:
 
     # -- hub reads --------------------------------------------------------
 
-    def _known_files(
-        self, folder_id: int
-    ) -> dict[str, tuple[int, Optional[int], Optional[int]]]:
-        """Return ``{relpath: (model_id, file_size, file_mtime)}`` for this folder.
+    def _known_files(self, folder_id: int) -> dict[str, _KnownFile]:
+        """Return ``{relpath: _KnownFile}`` for this folder.
 
         ``present`` rows only. These feed ``_describe``'s unchanged-file fast
         path, and a row that was ``missing`` or ``unreachable`` last time is a
@@ -417,13 +438,18 @@ class ModelFolderScanner:
         evidence that its digest still names what is on disk.
         """
         rows = self._hub.fetchall(
-            "SELECT mf.relpath, mf.model_id, mf.file_mtime, m.file_size "
+            "SELECT mf.relpath, mf.model_id, mf.file_mtime, m.file_kind, m.file_size "
             "FROM model_file mf JOIN model m ON m.id = mf.model_id "
             "WHERE mf.model_folder_id = ? AND mf.state = ?",
             (folder_id, STATE_PRESENT),
         )
         return {
-            row["relpath"]: (row["model_id"], row["file_size"], row["file_mtime"])
+            row["relpath"]: _KnownFile(
+                model_id=row["model_id"],
+                file_kind=row["file_kind"],
+                file_size=row["file_size"],
+                file_mtime=row["file_mtime"],
+            )
             for row in rows
         }
 
@@ -506,17 +532,53 @@ class ModelFolderScanner:
         """Register a checkpoint in place, with no hash.
 
         Identified by the location it was found at, because that is all it has
-        until something has read all 24 GB of it. Reaching here at all means the
-        size or the mtime moved, so the bytes changed and any hash already
-        recorded for this path is stale: it is cleared rather than left to
-        misidentify the file, which puts the row straight back into
-        ``MissingCheckpointHashFinder``'s queue.
+        until something has read all 24 GB of it.
+
+        Reaching here with a row already at this path means the size or the
+        mtime moved, so the bytes changed. That is a fact about **this path**,
+        and a ``model`` row is per *content*: one row legitimately holds many
+        ``model_file`` rows, which is what the same file in two registered
+        folders is, and what the duplicate an interrupted move leaves behind.
+        Changed bytes are therefore a new identity and get their own row, unless
+        the stored row is this path's alone *and* still describes the same kind
+        of file. That case is the same shelf entry carrying a stale hash, so it
+        is refreshed in place and the name and the triggers on it survive.
+
+        Forking rather than mutating is what keeps the other locations honest.
+        Clearing ``sha256`` by id strips the digest from copies nobody touched,
+        in the column Civitai lookup and the public ``{sha256}/file`` route both
+        resolve on. It is also the only thing the schema permits when the stored
+        row is an ``adapter``: ``CHECK (file_kind <> 'adapter' OR sha256 IS NOT
+        NULL)`` rejects the clear outright, which rolled back the entire write
+        batch and aborted the scan before its sweeps ever ran.
         """
         existing = conn.execute(
-            "SELECT model_id FROM model_file WHERE model_folder_id = ? AND relpath = ?",
+            "SELECT mf.model_id AS model_id, m.file_kind AS file_kind, "
+            "(SELECT COUNT(*) FROM model_file WHERE model_id = mf.model_id) "
+            "AS locations "
+            "FROM model_file mf JOIN model m ON m.id = mf.model_id "
+            "WHERE mf.model_folder_id = ? AND mf.relpath = ?",
             (folder_id, record.relpath),
         ).fetchone()
-        if existing is None:
+        reusable = (
+            existing is not None
+            and int(existing["locations"]) == 1
+            and existing["file_kind"] == record.file_kind
+        )
+        if not reusable:
+            if existing is not None:
+                logger.info(
+                    "Model folder %s: the bytes at %s changed, and model %s "
+                    "(file_kind=%s, %s location(s)) no longer describes them. "
+                    "Registering a new %s row rather than editing a row the "
+                    "other locations share.",
+                    folder_id,
+                    record.relpath,
+                    existing["model_id"],
+                    existing["file_kind"],
+                    existing["locations"],
+                    record.file_kind,
+                )
             return int(
                 conn.execute(
                     "INSERT INTO model (file_kind, kind, display_name, filename, "

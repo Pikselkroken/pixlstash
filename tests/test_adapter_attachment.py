@@ -119,6 +119,9 @@ class TestSchemaShape:
             tuple(ix["column_names"])
             for ix in inspect(engine).get_indexes("adapter_attachment")
         }
-        flattened = {col for cols in indexed for col in cols}
-        assert "adapter_sha256" in flattened
-        assert "entity_id" in flattened
+        assert ("adapter_sha256",) in indexed
+        # The composite, not merely a column: `attached_hashes()` filters on
+        # `entity_type AND entity_id` together. Asserting only that `entity_id`
+        # appears somewhere passed on a fresh database that had nothing but the
+        # single-column index, which is the shape revision 0103 could not reach.
+        assert ("entity_type", "entity_id") in indexed
