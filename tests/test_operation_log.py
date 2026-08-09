@@ -49,9 +49,68 @@ from pixlstash.db_models import (
 )
 from pixlstash.server import Server
 from pixlstash.services import operation_log_service
+from pixlstash.tasks import TaskType
 from tests.utils import upload_pictures_and_wait
 
 API = "/api/v1"
+
+
+# Backfill finders whose task owns a row or column this module hand-writes.
+# They are taken out of the planner for the lifetime of the module server (see
+# ``_disable_conflicting_backfill``).
+_CONFLICTING_FINDERS = (
+    # TagTask runs `delete(Tag).where(Tag.picture_id.in_(...))` before writing
+    # its own labels, so it removes a seeded Tag outright and puts real ones in
+    # its place; it also rewrites tag_prediction and anomaly_tag_uncertainty and
+    # invalidates smart_score. Every `_tags()` assertion here reads that table.
+    TaskType.TAGGER,
+    # TagPredictionBackfillTask rewrites tag_prediction, which the review
+    # decision tests seed by hand and then assert is absent again after an undo.
+    TaskType.TAG_PREDICTION_BACKFILL,
+    # SmartScoreTask fills any NULL smart_score. Dropping the cached score is
+    # part of what an undo must do, so a sweep that refills it turns the
+    # `score is None` assertion into a coin flip. It is only reachable at all
+    # once the tagger stops being in flight, which detaching TAGGER causes:
+    # detach_finders() marks a removed finder exhausted so its dependents are
+    # not blocked for ever.
+    TaskType.SMART_SCORE,
+)
+
+
+def _disable_conflicting_backfill(server):
+    """Take the backfill finders that fight this module's fixtures out of the planner.
+
+    These tests write ``Tag`` and ``TagPrediction`` rows straight into the vault
+    and then assert on the exact tag list and the exact prediction/ledger state
+    that an undo leaves behind. The tagging sweep owns those same rows: it
+    deletes the seeded tag, writes real labels over it, and recomputes the two
+    derived score columns beside them.
+
+    The per-test servers this module used to build hid the race. A vault that
+    had just come up had nothing to backfill and no model loaded, so the sweep
+    was still in a long backoff when the test ended. The shared server is warm
+    and its work pool only grows (``reset_operation_log`` never wipes
+    ``picture``), so the sweep lands *inside* a test instead: a run of this file
+    submits several ``TagTask`` batches, and a batch that lands between a seed
+    and its assertion fails it. Two or three failures per run, never the same
+    ones.
+
+    Only these finders go, and the planner keeps running. Detaching the whole
+    set the way ``tests/test_picture_mutation_scope.py`` does is not an option
+    here: that module imports its library once up front, whereas nearly every
+    test in this one uploads, and the import endpoint refuses a picture outright
+    with ``Cannot import: no TaskType.FACE_EXTRACTION finder is registered with
+    the work planner.`` Adding ``FACE_EXTRACTION`` to the tuple above was tried
+    and turned 51 of these 63 tests red.
+
+    Returns the names of the finders it removed, so ``reset_operation_log`` can
+    re-check before every test that they are still gone.
+    """
+    for task_type in _CONFLICTING_FINDERS:
+        server.vault._planner_work_finders.pop(task_type)
+    # detach_finders() edits the planner's finder structures under its own lock,
+    # so this is safe against the loop thread that is running right now.
+    return server.vault._work_planner.detach_finders(_CONFLICTING_FINDERS)
 
 
 @pytest.fixture(scope="module")
@@ -71,14 +130,17 @@ def _env():
         with open(server_config_path, "w") as fh:
             fh.write(json.dumps({"port": 8000}))
         server = Server(server_config_path)
+        disabled_finders = _disable_conflicting_backfill(server)
         try:
             client = TestClient(server.api)
             resp = client.post(
                 "/login", json={"username": "testuser", "password": "testpassword"}
             )
             assert resp.status_code == 200
-            yield client, server
+            yield client, server, disabled_finders
         finally:
+            # The detachment does not need undoing: it edits this server's own
+            # planner, and closing the server destroys it.
             server.close()
     finally:
         temp_dir.cleanup()
@@ -114,13 +176,21 @@ def reset_operation_log(_env):
     inflate its ``restored_count``. Clearing the flag is the whole reset: the
     endpoint's own query is ``Picture.deleted is True`` and nothing else.
 
-    Both integrity checks live here rather than in a "runs last" canary test on
-    purpose: the CI gate shards tests individually, so a canary only guards its
-    own shard while an autouse fixture runs ahead of every test in every shard.
-    They assert the log and the Scrapheap *are* empty rather than comparing
-    counts, because a leaked row is exactly what corrupts a count.
+    The third check is that the finders ``_disable_conflicting_backfill``
+    removed are still gone, so a later test cannot silently run with the tagging
+    sweep rewriting the rows it seeds.
+
+    Note the reset deliberately does not wipe ``picture``: the stale-claim /
+    id-reuse hazard that forces other shared-server modules to stop the
+    schedulers before truncating is not reachable from here.
+
+    All three integrity checks live here rather than in a "runs last" canary
+    test on purpose: the CI gate shards tests individually, so a canary only
+    guards its own shard while an autouse fixture runs ahead of every test in
+    every shard. They assert the log and the Scrapheap *are* empty rather than
+    comparing counts, because a leaked row is exactly what corrupts a count.
     """
-    _client, server = _env
+    _client, server, disabled_finders = _env
 
     def _reset(session):
         session.exec(delete(Operation))
@@ -133,6 +203,11 @@ def reset_operation_log(_env):
 
     server.vault.db.run_task(_reset)
 
+    running = server.vault._work_planner.registered_finder_names()
+    assert running.isdisjoint(disabled_finders), (
+        "a backfill finder that rewrites this module's Tag / TagPrediction / "
+        f"smart_score fixtures is running again: {sorted(running & disabled_finders)}"
+    )
     assert _operations(server) == [], (
         "the operation log must be empty at the start of every test; the "
         "truncation above is what makes this module's shared Server safe"
