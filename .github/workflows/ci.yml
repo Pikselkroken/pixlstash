@@ -373,6 +373,7 @@ jobs:
           tests/test_model_folder_scanner.py
           tests/test_model_shelf_fixtures.py
           tests/test_model_shelf_library_fixture.py
+          tests/test_model_shelf_scan_invariants.py
           tests/test_model_unload_race.py
           tests/test_multi_project_membership_authz.py
           tests/test_openapi_response_schemas.py
