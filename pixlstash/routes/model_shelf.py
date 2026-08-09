@@ -43,17 +43,20 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_shelf_service import (
+    ENTITY_TYPES,
+    UnknownAttachmentEntityError,
     attached_hashes,
     fetch_attachments,
     fetch_locations,
     fetch_model_by_hash,
     fetch_models,
+    replace_attachments,
 )
 from pixlstash.utils.adapter_header import FILE_ADAPTER, FILE_CHECKPOINT, FILE_UNKNOWN
 
@@ -163,6 +166,15 @@ class ModelResponse(BaseModel):
             "has to fetch them one row at a time."
         ),
     )
+
+
+class AttachmentsResponse(BaseModel):
+    """Body of ``PUT /adapters/{sha256}/attachments``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    sha256: str
+    attachments: list[ModelAttachment]
 
 
 class AdapterListResponse(BaseModel):
@@ -380,6 +392,72 @@ def create_router(server) -> APIRouter:
                 character_id=None,
                 set_id=None,
             )
+        )
+
+    @router.put(
+        "/adapters/{sha256}/attachments",
+        summary="Set which characters and sets use an adapter",
+        description=(
+            "Replaces the adapter's whole attachment set with the one given, in "
+            "one transaction. This is the assignment path an external import "
+            "lands on: it addresses the adapter by its interop hash, so it works "
+            "for a file that arrived from anywhere. Every entity id is checked "
+            "against this library before anything is written."
+        ),
+        tags=["model_shelf"],
+        response_model=AttachmentsResponse,
+    )
+    def put_adapter_attachments(
+        sha256: str,
+        request: Request,
+        attachments: list[ModelAttachment] = Body(
+            ...,
+            description=(
+                "The complete set of characters and sets that use this adapter. "
+                "An empty list detaches it from everything."
+            ),
+        ),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        row = fetch_model_by_hash(server.hub, sha256)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such adapter.")
+        if row["file_kind"] == FILE_CHECKPOINT:
+            # Attachment means "this character uses this LoRA". A base model is
+            # not something a character uses in that sense, and the table is
+            # keyed by a hash a checkpoint may not even have yet.
+            raise HTTPException(
+                status_code=400, detail="A checkpoint cannot be attached to an entity."
+            )
+
+        unknown_types = {
+            att.entity_type
+            for att in attachments
+            if att.entity_type not in ENTITY_TYPES
+        }
+        if unknown_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"entity_type must be one of {list(ENTITY_TYPES)}.",
+            )
+
+        try:
+            stored = replace_attachments(
+                server.vault,
+                sha256,
+                [(att.entity_type, att.entity_id) for att in attachments],
+            )
+        except UnknownAttachmentEntityError as exc:
+            # 404 rather than 400: the id names nothing in this library, which is
+            # the same answer every other by-id route gives.
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        logger.info(
+            "Adapter %s attachments set to %d entity/entities.", sha256, len(stored)
+        )
+        return AttachmentsResponse(
+            sha256=sha256,
+            attachments=[ModelAttachment(**att) for att in stored],
         )
 
     return router
