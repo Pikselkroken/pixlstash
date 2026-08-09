@@ -173,7 +173,14 @@ def _setup_server_with_pictures(temp_dir: str):
 
     # Upload the good pictures.
     picture_files = _good_picture_files()
-    assert picture_files, "No test pictures found in pictures/good/"
+    # The generator, not a directory listing: the message this replaced named
+    # pictures/good/, which this helper has not read since it started building
+    # its PNGs in memory. Every scoping assertion below is indexed off the
+    # fixture count, so a short library would fail them for the wrong reason.
+    assert len(picture_files) == _FIXTURE_PICTURE_COUNT, (
+        f"the fixture library is {len(picture_files)} pictures, not "
+        f"{_FIXTURE_PICTURE_COUNT}"
+    )
 
     files = [("file", (name, data, ct)) for name, data, ct in picture_files]
     import_status = upload_pictures_and_wait(client, files, timeout_s=30)
