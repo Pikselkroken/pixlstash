@@ -64,8 +64,10 @@ from pixlstash.utils.reference_folder_validator import validate_reference_folder
 logger = get_logger(__name__)
 
 # The one in-flight move, machine-wide, plus the last finished one so a client
-# that was not watching can still read the outcome. Guarded by ``_job_lock``;
-# the worker thread only ever mutates the dict it was handed.
+# that was not watching can still read the outcome. Guarded by ``_job_lock`` —
+# the worker thread's writes included, through ``_record_result`` /
+# ``_finish_job``, because ``_snapshot`` reads the dict in several steps and a
+# write landing between them is a torn snapshot.
 _job: Optional[dict] = None
 _job_lock = threading.Lock()
 
@@ -200,6 +202,44 @@ def _snapshot(job: Optional[dict]) -> MoveStatusResponse:
     )
 
 
+def _record_result(job: dict, outcome: MoveOutcome) -> None:
+    """Append one decided file to the job, under the lock the readers hold.
+
+    The worker thread is the only writer and ``GET`` / ``DELETE`` are the only
+    readers, but ``_snapshot`` reads ``job["results"]`` *twice* — once for
+    ``done`` and once for the list itself — so an append landing between those
+    two reads hands the client a snapshot whose ``done`` does not match its
+    ``results``. Sharing ``_job_lock`` is what makes the module docstring's
+    locking claim true rather than aspirational.
+    """
+    with _job_lock:
+        job["results"].append(
+            {
+                "folder_id": outcome.source_folder_id,
+                "relpath": outcome.source_relpath,
+                "status": outcome.status,
+                "detail": outcome.detail,
+            }
+        )
+
+
+def _done_count(job: dict) -> int:
+    """How many files this job has decided. Same lock as every other reader."""
+    with _job_lock:
+        return len(job["results"])
+
+
+def _finish_job(job: dict) -> None:
+    """Mark the job finished, under the lock the readers hold.
+
+    ``status`` and ``finished_at`` are read by ``_snapshot`` in the same pass as
+    ``results``; setting them off-lock is the same torn read as the append.
+    """
+    with _job_lock:
+        job["finished_at"] = _utcnow()
+        job["status"] = STATUS_FINISHED
+
+
 def _register_or_reuse(hub, path: str) -> int:
     """Register the relocation target as an ordinary ``user`` folder.
 
@@ -328,14 +368,7 @@ def create_router(server) -> APIRouter:
             _job = job
 
         def _record(outcome: MoveOutcome) -> None:
-            job["results"].append(
-                {
-                    "folder_id": outcome.source_folder_id,
-                    "relpath": outcome.source_relpath,
-                    "status": outcome.status,
-                    "detail": outcome.detail,
-                }
-            )
+            _record_result(job, outcome)
 
         def _run() -> None:
             try:
@@ -346,7 +379,7 @@ def create_router(server) -> APIRouter:
                 )
                 # The cancelled tail is decided in one go rather than reported
                 # file by file, so append whatever `on_progress` did not see.
-                for outcome in report.outcomes[len(job["results"]) :]:
+                for outcome in report.outcomes[_done_count(job) :]:
                     _record(outcome)
                 if on_finished is not None:
                     on_finished(report)
@@ -354,14 +387,13 @@ def create_router(server) -> APIRouter:
                 logger.error(
                     "Move into folder %s failed after %d of %d file(s): %s",
                     plan.destination_folder_id,
-                    len(job["results"]),
+                    _done_count(job),
                     len(plan.moves),
                     exc,
                     exc_info=True,
                 )
             finally:
-                job["finished_at"] = _utcnow()
-                job["status"] = STATUS_FINISHED
+                _finish_job(job)
                 # Released last, so a POST that wins the lock never observes a
                 # job still marked running.
                 SHELF_IO_LOCK.release()
@@ -373,8 +405,7 @@ def create_router(server) -> APIRouter:
             # that never started would strand the lock and refuse every later
             # move and import for the life of the process.
             SHELF_IO_LOCK.release()
-            job["status"] = STATUS_FINISHED
-            job["finished_at"] = _utcnow()
+            _finish_job(job)
             logger.error(
                 "Could not start the move worker for folder %s; the job slot has "
                 "been released.",

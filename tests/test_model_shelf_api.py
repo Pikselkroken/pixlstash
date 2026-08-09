@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -1256,6 +1257,56 @@ def _await_move(shelf_env, timeout=10.0):
             return body
         time.sleep(0.02)
     raise AssertionError("the move never finished")
+
+
+@pytest.mark.parametrize("mutate", ["_record_result", "_finish_job"])
+def test_the_move_worker_writes_the_job_under_the_readers_lock(mutate):
+    """The worker thread must not touch ``_job`` while a reader holds the lock.
+
+    ``_snapshot`` reads the dict in several steps — ``done`` from
+    ``len(results)``, then ``results`` itself, then ``status`` — so a write
+    landing between two of them hands the client a snapshot that contradicts
+    itself. Asserted as blocking rather than by racing for real: hold
+    ``_job_lock``, run the worker's write on another thread, and require that it
+    has *not* happened until the lock is released. Drop the ``with _job_lock``
+    from either helper and the write lands immediately and this goes red.
+
+    No server and no fixture: it is a claim about one module's locking.
+    """
+    from pixlstash.routes import model_moves
+    from pixlstash.services.model_mover import MoveOutcome
+
+    job = {"results": [], "status": "running", "finished_at": None}
+    write = (
+        (
+            lambda: model_moves._record_result(
+                job, MoveOutcome(1, "a.safetensors", "moved")
+            )
+        )
+        if mutate == "_record_result"
+        else (lambda: model_moves._finish_job(job))
+    )
+    landed = threading.Event()
+
+    def worker():
+        write()
+        landed.set()
+
+    with model_moves._job_lock:
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        assert not landed.wait(0.25), (
+            f"{mutate} wrote to the job while a reader held _job_lock"
+        )
+        assert job["results"] == [] and job["status"] == "running", (
+            "the reader saw a half-written job"
+        )
+    assert landed.wait(5.0), f"{mutate} never completed after the lock was released"
+    thread.join(5.0)
+    if mutate == "_record_result":
+        assert [r["relpath"] for r in job["results"]] == ["a.safetensors"]
+    else:
+        assert job["status"] == "finished" and job["finished_at"] is not None
 
 
 def test_every_move_route_is_declared_local_owner_only():
