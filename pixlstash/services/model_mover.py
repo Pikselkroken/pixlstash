@@ -167,6 +167,15 @@ class MovePlan:
     moves: list[PlannedMove]
     bytes_to_copy: int
     """Total size of the cross-device moves only; a rename copies nothing."""
+    skipped: list["MoveOutcome"] = field(default_factory=list)
+    """Items already in the destination folder: nothing to do, but still
+    *reported*. Dropping them silently left a caller unable to reconcile the
+    items it asked for against the results it got back."""
+
+    @property
+    def total(self) -> int:
+        """Every item the caller named, decided or not. What ``total`` means."""
+        return len(self.moves) + len(self.skipped)
 
 
 @dataclass
@@ -372,6 +381,7 @@ class ModelMover:
             )
 
         moves: list[PlannedMove] = []
+        skipped: list[MoveOutcome] = []
         claimed: set[str] = set()
         for folder_id, relpath in items:
             move = self._plan_one(
@@ -382,6 +392,14 @@ class ModelMover:
                 flatten=flatten,
             )
             if move is None:
+                skipped.append(
+                    MoveOutcome(
+                        folder_id,
+                        relpath,
+                        STATUS_SKIPPED,
+                        "Already in the destination folder.",
+                    )
+                )
                 continue
             if move.destination_relpath in claimed:
                 raise MoveRefused(
@@ -395,17 +413,20 @@ class ModelMover:
         bytes_to_copy = sum(move.size for move in moves if not move.same_device)
         require_space(destination_path, bytes_to_copy)
         logger.info(
-            "Planned a move of %d file(s) into %s: %d byte(s) to copy, %d rename(s).",
+            "Planned a move of %d file(s) into %s: %d byte(s) to copy, %d "
+            "rename(s), %d already there.",
             len(moves),
             destination_path,
             bytes_to_copy,
             sum(1 for move in moves if move.same_device),
+            len(skipped),
         )
         return MovePlan(
             destination_folder_id=destination_folder_id,
             destination_path=destination_path,
             moves=moves,
             bytes_to_copy=bytes_to_copy,
+            skipped=skipped,
         )
 
     def _plan_one(
@@ -432,7 +453,10 @@ class ModelMover:
             )
         if folder_id == destination_folder_id:
             # Not an error: the shelf lets a user drop a mixed selection onto a
-            # folder, and the files already in it are simply nothing to do.
+            # folder, and the files already in it are simply nothing to do. The
+            # caller still hears about them — ``plan`` turns this ``None`` into
+            # a ``skipped`` outcome — because an item that vanishes between the
+            # request and the results is one the client cannot account for.
             return None
 
         try:
@@ -575,10 +599,20 @@ class ModelMover:
             A :class:`MoveReport` with one outcome per planned file.
         """
         report = MoveReport()
-        for move in plan.moves:
+        # The already-there items lead, because they were decided in ``plan``
+        # and are the only outcomes a cancel can never touch. Reported rather
+        # than dropped: a caller has to be able to match what it asked for
+        # against what came back.
+        for outcome in plan.skipped:
+            report.outcomes.append(outcome)
+            if on_progress is not None:
+                on_progress(outcome)
+        for index, move in enumerate(plan.moves):
             if should_cancel is not None and should_cancel():
                 report.cancelled = True
-                for remaining in plan.moves[len(report.outcomes) :]:
+                # Indexed off ``plan.moves``, not off ``len(report.outcomes)``,
+                # which also counts the skipped items.
+                for remaining in plan.moves[index:]:
                     report.outcomes.append(
                         MoveOutcome(
                             remaining.source_folder_id,

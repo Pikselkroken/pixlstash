@@ -112,9 +112,10 @@ class MoveRequest(BaseModel):
         description=(
             "The copies to move. Files already in the destination folder are "
             "skipped rather than refused, so a mixed selection dropped onto a "
-            "folder does the obvious thing. Filenames are flattened to the "
-            "basename; a collision is refused before anything moves, never "
-            "overwritten."
+            "folder does the obvious thing; they come back in `results` with "
+            "status `skipped`, so every item you send is accounted for. "
+            "Filenames are flattened to the basename; a collision is refused "
+            "before anything moves, never overwritten."
         )
     )
 
@@ -161,8 +162,14 @@ class MoveStatusResponse(BaseModel):
         description="`running`, `finished`, or `idle` when none has ever run."
     )
     destination_folder_id: Optional[int] = None
-    total: int = Field(default=0, description="Files this move will touch.")
-    done: int = Field(default=0, description="Files decided so far.")
+    total: int = Field(
+        default=0,
+        description=(
+            "Items this move will decide — every one you sent, including the "
+            "ones already in the destination folder."
+        ),
+    )
+    done: int = Field(default=0, description="Items decided so far.")
     bytes_to_copy: int = Field(
         default=0,
         description=(
@@ -358,7 +365,7 @@ def create_router(server) -> APIRouter:
             job = {
                 "status": STATUS_RUNNING,
                 "destination_folder_id": plan.destination_folder_id,
-                "total": len(plan.moves),
+                "total": plan.total,
                 "bytes_to_copy": plan.bytes_to_copy,
                 "results": [],
                 "cancel": threading.Event(),

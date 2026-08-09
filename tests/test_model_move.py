@@ -36,6 +36,7 @@ from pixlstash.services.model_mover import (
     STATUS_CANCELLED,
     STATUS_FAILED,
     STATUS_MOVED,
+    STATUS_SKIPPED,
     ModelMover,
     MoveRefused,
 )
@@ -639,13 +640,65 @@ def test_a_source_folder_is_never_written_into(hub, tmp_path):
         ModelMover(hub).plan([(source_id, "alice.safetensors")], output_id)
 
 
-def test_a_file_already_in_the_destination_is_nothing_to_do(two_folders):
+def test_a_file_already_in_the_destination_is_reported_skipped_not_dropped(
+    two_folders,
+):
     """A mixed selection dropped onto a folder must do the obvious thing rather
-    than error on the files that are already there."""
-    plan = ModelMover(two_folders["hub"]).plan(
+    than error on the files that are already there — **and say so**.
+
+    Dropping them from the plan silently made ``STATUS_SKIPPED`` dead code and
+    left a client unable to reconcile the items it sent against the results it
+    got: three items in, two results out, no way to tell which one went missing
+    or why. ``total`` counts them too, so ``done == total`` still means finished.
+    """
+    mover = ModelMover(two_folders["hub"])
+    plan = mover.plan(
         [(two_folders["source_id"], "alice.safetensors")], two_folders["source_id"]
     )
     assert plan.moves == []
+    assert plan.total == 1, "an item the caller sent vanished from the tally"
+
+    seen = []
+    report = mover.execute(plan, on_progress=seen.append)
+    assert [
+        (o.source_folder_id, o.source_relpath, o.status) for o in report.outcomes
+    ] == [(two_folders["source_id"], "alice.safetensors", STATUS_SKIPPED)]
+    assert seen == report.outcomes, "a skipped item never reached the progress hook"
+    assert report.outcomes[0].detail
+
+
+def test_a_cancel_after_a_skipped_item_still_cancels_every_move(hub, tmp_path):
+    """The skipped items lead the report, so the cancelled tail must be indexed
+    off ``plan.moves`` and not off how many outcomes exist. Off by the number of
+    skipped items, the last file would silently never be reported at all."""
+    source_dir = tmp_path / "loras"
+    destination_dir = tmp_path / "archive"
+    source_dir.mkdir()
+    destination_dir.mkdir()
+    source_id = register_folder(hub, source_dir)
+    destination_id = register_folder(hub, destination_dir)
+    register_file(hub, destination_id, destination_dir, "already.safetensors")
+    for name in ("one.safetensors", "two.safetensors"):
+        register_file(hub, source_id, source_dir, name)
+
+    mover = ModelMover(hub)
+    plan = mover.plan(
+        [
+            (destination_id, "already.safetensors"),
+            (source_id, "one.safetensors"),
+            (source_id, "two.safetensors"),
+        ],
+        destination_id,
+    )
+    report = mover.execute(plan, should_cancel=lambda: True)
+
+    assert report.cancelled
+    assert [outcome.status for outcome in report.outcomes] == [
+        STATUS_SKIPPED,
+        STATUS_CANCELLED,
+        STATUS_CANCELLED,
+    ]
+    assert len(report.outcomes) == plan.total
 
 
 def test_relocating_a_folder_keeps_its_subdirectories(hub, tmp_path, cross_device):
