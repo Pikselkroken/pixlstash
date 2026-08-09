@@ -563,6 +563,13 @@ and the declarations themselves are pinned by
 | GET | `/api/v1/model-moves` | **local_owner_only** |  | §16.3 progress for the in-flight or last move: host paths, per-file relpaths and outcomes. Deliberately **not** the shelf's `owner_only` read tier — the only way this data exists is a POST that only a local owner can issue, so a lower tier here would hand the operation's filenames to a caller barred from every route that could produce them. No object data beyond what the same-tier POST already named |
 | DELETE | `/api/v1/model-moves` | **local_owner_only** |  | §16.3 cancels an in-flight host-filesystem move. Halting the owner's own file operation is the same authority as starting it, so it carries the same tier. Stops the queue between files; nothing already moved is rolled back, which is the ruling (shelf plan §7: no undo for shelf operations) |
 
+### model_imports.py (added 2026-08-09 — model shelf B7; §16.3 host-capability, whole block)
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/model-folders/{folder_id}/runs` | **local_owner_only** |  | §16.3 walks a registered ai-toolkit output root and reads every run folder and `config.yaml` under it — the same host-filesystem authority as `model-folders/{folder_id}/rescan` and `reference-folders/detect-sidecars`. Reads only: nothing is hashed, copied, moved or written, which is what lets the whole card grid be drawn before the user commits to anything. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| POST | `/api/v1/model-imports` | **local_owner_only** |  | §16.3 copies a run's checkpoints into a registered host folder and, when the source folder carries `delete_after_import`, unlinks them from the output root — the same authority as `POST /model-moves`. The run is named, never pathed: the body gives a registered `source` folder id and a run *name*, and the server joins them with `resolve_path_within`, so a name resolving outside the registered root is a 400 rather than a read. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+
 ### other
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |

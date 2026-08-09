@@ -431,6 +431,7 @@ jobs:
           tests/test_model_file_classification.py
           tests/test_model_folder_scanner.py
           tests/test_model_move.py
+          tests/test_model_run_import.py
           tests/test_model_shelf_api.py
           tests/test_model_shelf_fixtures.py
           tests/test_model_shelf_library_fixture.py

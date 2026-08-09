@@ -383,6 +383,19 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 cancels an in-flight host-filesystem move; halting the owner's own file operation is the same authority as starting it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # ── model_imports.py (shelf plan B7; §16.3 host-capability) ────────────
+    # The listing walks a registered output root; the import writes into one
+    # registered folder and may unlink from another. Neither takes a host path:
+    # the import names a run *inside* a registered folder and the server joins
+    # and contains it.
+    ("GET", "/api/v1/model-folders/{folder_id}/runs"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 walks a registered ai-toolkit output root and reads every run folder and config under it — the same authority as model-folders/{folder_id}/rescan and reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/model-imports"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 copies a run's files into a registered host folder and, when the source folder carries delete_after_import, unlinks them from the output root — the same filesystem authority as POST /model-moves; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
         _LOCAL,
