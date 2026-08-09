@@ -330,10 +330,13 @@ def register_routes(router, server):
         _MAX_ZIP_ENTRIES = 50_000  # max files inside a zip
         _MAX_ZIP_DECOMPRESSED_BYTES = 50 * 1024**3  # 50 GB total decompressed
 
-        if not server.vault.is_worker_running(TaskType.FACE_EXTRACTION):
+        face_worker_problem = server.vault.worker_unavailable_reason(
+            TaskType.FACE_EXTRACTION
+        )
+        if face_worker_problem:
             raise HTTPException(
                 status_code=400,
-                detail="Face worker is not running. Start it before import.",
+                detail=f"Cannot import: {face_worker_problem}.",
             )
 
         # The same fail-fast the staging path runs. Without it a project id that
@@ -1493,10 +1496,13 @@ def register_routes(router, server):
         staged_files: list[dict] = session["staged_files"]
         if not staged_files:
             raise HTTPException(status_code=400, detail="No staged files to import")
-        if not server.vault.is_worker_running(TaskType.FACE_EXTRACTION):
+        face_worker_problem = server.vault.worker_unavailable_reason(
+            TaskType.FACE_EXTRACTION
+        )
+        if face_worker_problem:
             raise HTTPException(
                 status_code=400,
-                detail="Face worker is not running. Start it before import.",
+                detail=f"Cannot import: {face_worker_problem}.",
             )
 
         # Re-validate the drop target at handoff (it may have been deleted/locked

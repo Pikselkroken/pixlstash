@@ -145,8 +145,9 @@ def _quiesce_background_work(server):
     code against hand-made objects — so every finder goes, not a curated
     subset. The planner thread itself keeps running (a route that wakes it must
     still find it alive) and so does the task runner, so routes that submit
-    work directly are unaffected. Stopping the planner around the removal keeps
-    ``_run_finders_once`` from indexing a list that is shrinking underneath it.
+    work directly are unaffected. ``detach_finders`` edits the planner's finder
+    structures under the planner's own lock, so the loop no longer has to be
+    stopped around the removal.
 
     Waiting the pipeline out per test instead was measured slower than the
     per-test servers this replaces (PR #814), which is why it is switched off
@@ -156,14 +157,10 @@ def _quiesce_background_work(server):
     re-check before every test that they are still gone.
     """
     planner = server.vault._work_planner
-    planner.stop()
-    removed = set()
-    for task_type in list(server.vault._planner_work_finders):
-        finder = server.vault._planner_work_finders.pop(task_type)
-        planner._task_finders.remove(finder)
-        planner._task_finders_by_name.pop(finder.finder_name(), None)
-        removed.add(finder.finder_name())
-    planner.start()
+    task_types = list(server.vault._planner_work_finders)
+    for task_type in task_types:
+        server.vault._planner_work_finders.pop(task_type)
+    removed = planner.detach_finders(task_types)
 
     # Work already queued or running when the finders went is still ours to
     # wait for: it would otherwise write into the first test's freshly reset
@@ -299,10 +296,7 @@ def fresh_state(_shared_env):
     shared = _shared_env
     _reset_library(shared)
 
-    running = {
-        finder.finder_name()
-        for finder in shared.server.vault._work_planner._task_finders
-    }
+    running = shared.server.vault._work_planner.registered_finder_names()
     assert running.isdisjoint(shared.disabled_finders), (
         "a background finder that rewrites this module's fixture data is "
         f"running again: {sorted(running & shared.disabled_finders)}"
