@@ -14,6 +14,7 @@ import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+import pixlstash
 import pytest
 from _pytest.config.exceptions import UsageError
 from fastapi.testclient import TestClient
@@ -468,7 +469,15 @@ def _enforce_test_time_budget(session) -> None:
     session.exitstatus = 1
 
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+# Both roots are needed. CI installs the package non-editable
+# (`pip install .[test,dev]`), so `pixlstash` runs from site-packages while
+# `tests/` runs from the checkout: a thread started inside product code has no
+# frame under the repo root at all, and matching only there would call it
+# third-party and let it through.
+_OWNED_ROOTS = (
+    Path(__file__).resolve().parent.parent,
+    Path(pixlstash.__file__).resolve().parent,
+)
 
 
 def _thread_stack(thread: threading.Thread) -> list:
@@ -479,14 +488,20 @@ def _thread_stack(thread: threading.Thread) -> list:
     return traceback.extract_stack(frame)
 
 
+def _owned(filename: str) -> bool:
+    """Whether a frame's file is ours (the checkout or the installed package)."""
+    path = Path(filename).resolve()
+    return any(path.is_relative_to(root) for root in _OWNED_ROOTS)
+
+
 def _is_ours(stack: list) -> bool:
-    """Whether any frame in the stack belongs to this repository.
+    """Whether any frame in the stack belongs to code we own.
 
     Ownership has to be read from the WHOLE stack, not the innermost frame:
     a leaked database worker parked in ``queue.get()`` reports a stdlib
     ``queue.py`` frame, while its entry point is ``pixlstash/database.py``.
     """
-    return any(Path(entry.filename).is_relative_to(_REPO_ROOT) for entry in stack)
+    return any(_owned(entry.filename) for entry in stack)
 
 
 def _enforce_no_leaked_threads(session) -> None:
@@ -529,7 +544,7 @@ def _enforce_no_leaked_threads(session) -> None:
         reporter.write_line(f"  [{owner}] {thread.name} daemon={thread.daemon} {where}")
         if _is_ours(stack):
             for entry in stack:
-                if Path(entry.filename).is_relative_to(_REPO_ROOT):
+                if _owned(entry.filename):
                     reporter.write_line(
                         f"      {entry.filename}:{entry.lineno} in {entry.name}"
                     )
