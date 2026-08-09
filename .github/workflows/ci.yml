@@ -777,6 +777,15 @@ jobs:
     # See the `backend` job for the rationale and the read-only token requirement.
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      # This job intermittently exits 139 SECONDS AFTER pytest prints a fully
+      # green summary, with no traceback anywhere in the log. pytest's bundled
+      # faulthandler plugin tears itself down in pytest_unconfigure, so it is
+      # already gone by then; that places the crash in Py_FinalizeEx. The env
+      # var enables faulthandler at interpreter start-up instead, where nothing
+      # can unregister it, so the next occurrence names the thread and frame.
+      # Costs nothing: it only installs a signal handler, and prints only if
+      # the process actually dies on a fatal signal.
+      PYTHONFAULTHANDLER: 1
     steps:
       - uses: actions/checkout@v6
 
