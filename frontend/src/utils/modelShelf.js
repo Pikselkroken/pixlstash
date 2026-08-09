@@ -1,0 +1,120 @@
+// Model-shelf row helpers: the name fallback chain, size, and location state.
+//
+// 37% of real adapters carry no title, no base model and no trigger word at
+// all, so none of this is edge-case handling — it is what most of the column
+// renders. Two rules follow from that and are load-bearing:
+//
+//   * The derived name is computed HERE, at render, never stored. That is what
+//     keeps `display_name IS NULL` an exact "nobody has named this" queue on
+//     the backend and stops a guess being mistaken for a choice.
+//   * A missing value is still rendered. "Base model not set" occupies the same
+//     slot in the same type as a real value; a blank cell is the failure mode.
+
+/** Trailing tokens that record where in a training run a file was saved.
+ *
+ * Mirrors `_TRAINING_SUFFIX_RE` in `pixlstash/utils/model_utils.py`. The
+ * bare-digit rule needs five digits on purpose: ai-toolkit zero-pads its step
+ * counts, so `000002750` goes while the `2` in `portrait mix v2` stays.
+ */
+const TRAINING_SUFFIX_RE = /^(?:step\d+|epoch\d+|\d+ep|\d{5,})$/i;
+
+/**
+ * Strip the extension and turn separators into spaces.
+ *
+ * Mirrors `clean_asset_name`, which must not change: its output is baked into
+ * stored sentence embeddings. Anything the shelf wants on top goes in
+ * {@link deriveModelName}.
+ *
+ * @param {string} filename - file name or path.
+ * @returns {string}
+ */
+export function cleanAssetName(filename) {
+  const base = String(filename || "").split(/[\\/]/).pop();
+  const stem = base.replace(/\.[^.]+$/, "");
+  return stem.replace(/[_-]/g, " ").trim();
+}
+
+/**
+ * Derive a display name for a file that never said what it is called.
+ *
+ * Mirrors `derive_model_name`: drops trailing training bookkeeping, because
+ * the step is parsed into its own field and repeating it turns six checkpoints
+ * of one run into six unrelated-looking rows.
+ *
+ * @param {string} filename - file name or path.
+ * @returns {string} a human-readable name, or `""` when nothing survives.
+ */
+export function deriveModelName(filename) {
+  const tokens = cleanAssetName(filename).split(/\s+/).filter(Boolean);
+  while (tokens.length && TRAINING_SUFFIX_RE.test(tokens[tokens.length - 1])) {
+    tokens.pop();
+  }
+  return tokens.join(" ");
+}
+
+/**
+ * Resolve what a row is called, and whether anybody chose it.
+ *
+ * The chain is: the name the user gave, else one derived from the filename,
+ * else the filename itself. `derived` is what the row uses to mark the name as
+ * a fact about the file rather than a title someone wrote.
+ *
+ * @param {Object} model - a row from `/adapters` or `/checkpoints`.
+ * @returns {{text: string, derived: boolean}}
+ */
+export function modelName(model) {
+  const given = String(model?.display_name || "").trim();
+  if (given) return { text: given, derived: false };
+  const filename = String(model?.filename || "").trim();
+  const derived = deriveModelName(filename);
+  if (derived) return { text: derived, derived: true };
+  // Nothing survived the strip (a file called `000002750.safetensors`). The
+  // raw filename is the only honest thing left to show.
+  return { text: filename || "no name in file", derived: true };
+}
+
+const SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"];
+
+/**
+ * Format a byte count for the size column.
+ *
+ * Deliberately its own function rather than the two `formatBytes` copies in
+ * `ProjectFiles.vue` and `ImageImporter.vue`: both are local, and the first
+ * tops out at MB, which understates a 4.3 GB adapter by three orders.
+ *
+ * @param {number|null|undefined} bytes
+ * @returns {string} e.g. `179.4 MB`, or `""` when the size is unknown.
+ */
+export function formatModelSize(bytes) {
+  // `Number(null)` is 0, so the null check has to come first or a row with no
+  // recorded size claims to be empty.
+  if (bytes === null || bytes === undefined || bytes === "") return "";
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n < 0) return "";
+  let value = n;
+  let unit = 0;
+  while (value >= 1024 && unit < SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const digits = unit === 0 ? 0 : 1;
+  return `${value.toFixed(digits)} ${SIZE_UNITS[unit]}`;
+}
+
+/**
+ * Reduce a row's copies to the one state worth reporting.
+ *
+ * `missing` is a fact (the folder was readable and the file was not in it);
+ * `unreachable` is the absence of one (we could not look). They must not read
+ * the same, and one present copy makes both moot — the file is usable.
+ *
+ * @param {Array<Object>} locations - the row's `locations` array.
+ * @returns {"present"|"missing"|"unreachable"|"forgotten"}
+ */
+export function locationState(locations) {
+  const list = Array.isArray(locations) ? locations : [];
+  if (!list.length) return "forgotten";
+  if (list.some((loc) => loc?.state === "present")) return "present";
+  if (list.some((loc) => loc?.state === "unreachable")) return "unreachable";
+  return "missing";
+}

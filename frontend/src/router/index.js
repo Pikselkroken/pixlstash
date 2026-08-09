@@ -19,6 +19,7 @@ import App from "../App.vue";
 //   /scrapheap                              → Scrapheap
 //   /duplicates                             → Duplicate triage queue
 //   /duplicates?scope=set&scope_id=12       → …scoped to one collection object
+//   /models                                 → Model shelf (adapters/checkpoints)
 //   /ref-folder/:id                         → Reference folder view (id = numeric)
 //   /import-folder/:id                      → Import folder view (id = numeric)
 //
@@ -40,6 +41,7 @@ const routes = [
   { path: "/project/:projectId/set/:id", name: "project-set", component: App },
   { path: "/scrapheap", name: "scrapheap", component: App },
   { path: "/duplicates", name: "duplicates", component: App },
+  { path: "/models", name: "models", component: App },
   { path: "/ref-folder/:id", name: "ref-folder", component: App },
   { path: "/import-folder/:id", name: "import-folder", component: App },
   // Catch-all: redirect unknown paths to home

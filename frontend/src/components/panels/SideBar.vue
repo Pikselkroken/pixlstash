@@ -154,6 +154,7 @@ const hasFolderFilter = computed(
 // Duplicates is addressed by route name, not by a selection sentinel: it shows
 // no pictures, so there is no selection to express.
 const isDuplicatesView = computed(() => route.name === "duplicates");
+const isModelsView = computed(() => route.name === "models");
 
 // A shared library keeps the duplicate affordances VISIBLE and inert rather
 // than hiding them: a read-only visitor should still see that the feature
@@ -171,6 +172,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   "select-duplicates",
+  "select-models",
   "select-character",
   "select-set",
   "import-finished",
@@ -2489,14 +2491,15 @@ function isCountSelected(id) {
 
 /**
  * Whether a selection-driven row may render as active at all. The Duplicates
- * view is addressed by ROUTE, not by the selection system, so while it is open
+ * view and the model shelf are addressed by ROUTE, not by the selection
+ * system, so while either is open
  * the underlying selection (kept so back-navigation restores it) must yield
  * the highlight — otherwise the sidebar shows two active destinations. A live
  * folder filter suppresses the same rows for the same reason, so the two
  * guards travel together.
  */
 const selectionOwnsHighlight = computed(
-  () => !hasFolderFilter.value && !isDuplicatesView.value,
+  () => !hasFolderFilter.value && !isDuplicatesView.value && !isModelsView.value,
 );
 
 const isAllPicturesRowActive = computed(() => {
@@ -4944,6 +4947,21 @@ defineExpose({
             </div>
           </div>
 
+          <!-- The shelf's dock mirror. Same <button> reasoning as the
+               expanded row. -->
+          <div :class="['sidebar-collapsed-row', { active: isModelsView }]">
+            <button
+              type="button"
+              class="sidebar-collapsed-item sidebar-destination-btn"
+              :class="{ active: isModelsView }"
+              :aria-current="isModelsView ? 'page' : undefined"
+              title="Models"
+              @click="emit('select-models')"
+            >
+              <v-icon>mdi-layers-outline</v-icon>
+            </button>
+          </div>
+
           <!-- Scrap Heap at bottom of dock. The flex spacer above it fills most
                of the dock's blank space; its right-clicks bubble to the list's
                catch-all handler, so it needs no handler of its own. -->
@@ -5391,6 +5409,26 @@ defineExpose({
                   title="There are duplicates to review"
                 ></span>
               </div>
+            </div>
+
+            <!-- The shelf is a destination, not a filter: it lists the LoRAs
+                 and checkpoints on this machine, which no picture view can
+                 express. A <button>, unlike the rows above it, because a new
+                 destination must not be born unreachable by keyboard; the
+                 other three are filed to follow. -->
+            <div class="sidebar-all-pictures-row">
+              <button
+                type="button"
+                class="sidebar-list-item sidebar-destination-btn"
+                :class="{ active: isModelsView }"
+                :aria-current="isModelsView ? 'page' : undefined"
+                @click="emit('select-models')"
+              >
+                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
+                  ><v-icon size="18">mdi-layers-outline</v-icon></span
+                >
+                <span class="sidebar-list-label">Models</span>
+              </button>
             </div>
 
             <div v-if="!isReadOnly" class="sidebar-all-pictures-row">

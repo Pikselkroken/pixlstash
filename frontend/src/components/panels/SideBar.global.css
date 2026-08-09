@@ -10,7 +10,10 @@
    same family, and a scoped rule in SideBar.css cannot cross a component
    boundary. It used to keep its own copy, which had drifted to a different
    padding and a missing base rail; that is the drift this placement prevents.
-   Every selector here is `sidebar-`-prefixed, so global scope is contained.
+   Every selector here is `sidebar-` or `ps-row`-prefixed, so global scope is
+   contained. `.ps-row` is the neutral alias: the model shelf renders rows of
+   this family outside the rail, and a private copy there is exactly the drift
+   this placement prevents. It is an ALIAS, never a second declaration.
 
    Two invariants do the work:
 
@@ -30,7 +33,8 @@
 .sidebar-project-tree-subheader,
 .sidebar-folder-row,
 .sidebar-folder-section-header,
-.sidebar-section-header {
+.sidebar-section-header,
+.ps-row {
   box-sizing: border-box;
   padding-left: calc(var(--space-3) + var(--depth, 0) * var(--indent-step));
   padding-right: var(--sidebar-right-edge, 8px);
@@ -44,7 +48,8 @@
    remove the box and the row jumps. This replaces an inline `:style` ternary in
    SideBar.vue and an `[style*="display: none"]` attribute-selector hack, which
    were two different local patches for this one missing rule. */
-.sidebar-row-glyph {
+.sidebar-row-glyph,
+.ps-row-glyph {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -57,7 +62,8 @@
   margin-right: var(--space-2);
 }
 
-.sidebar-row-glyph--empty {
+.sidebar-row-glyph--empty,
+.ps-row-glyph--empty {
   visibility: hidden;
 }
 
