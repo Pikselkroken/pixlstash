@@ -13,6 +13,90 @@ import { locationState, modelName } from "../utils/modelShelf";
 const FILTERS_KEY = "pixlstash:modelShelfFilters";
 
 /**
+ * Where the view axes are remembered: grouping, sort, and what is collapsed.
+ *
+ * A second key rather than more fields in {@link FILTERS_KEY}: `resetFilters`
+ * clears everything under that one, and losing your sort order because you
+ * cleared a filter is a different promise than the button makes.
+ */
+const VIEW_KEY = "pixlstash:modelShelfView";
+
+/** Bumped when the shape below changes; a blob from another `v` is discarded. */
+const VIEW_SCHEMA_VERSION = 1;
+
+/**
+ * Ceiling on remembered collapsed groups, per axis, oldest dropped.
+ *
+ * Base models come from file metadata and folders from a registry, so neither
+ * set is truly unbounded, but both are user-supplied strings and the blob must
+ * not grow forever. Losing one only means a group opens.
+ */
+const MAX_COLLAPSED_KEYS = 200;
+
+/** The axes the shelf can group by. `none` is the flat F1 list. */
+export const GROUP_BY_KEYS = ["none", "base_model", "folder"];
+
+/**
+ * The five ruled sort keys, mirroring `SortKey` in `routes/model_shelf.py`.
+ *
+ * Applied CLIENT-SIDE, and that is not a shortcut. `fetchRows` issues one
+ * request per selected block and concatenates the results, so three
+ * server-sorted lists would arrive correctly ordered and be destroyed by the
+ * merge. Every field these keys read is already on the list payload, so sorting
+ * here costs no request and no refetch when the user flips a direction.
+ */
+export const SORT_KEYS = [
+  "added_at",
+  "file_mtime",
+  "name",
+  "size",
+  "base_model",
+];
+
+/** What each sort key reads off a row. `null` means the row cannot answer. */
+const SORT_VALUE = {
+  // A stack's date is its newest member's, never its cover's.
+  added_at: (row) => row.newest_member_at || row.added_at || null,
+  file_mtime: (row) => row.newest_file_mtime ?? null,
+  name: (row) => row.name.text,
+  // The cover alone understates a six-step run by about six times, in the
+  // column the shelf exists to answer.
+  size: (row) => row.total_size ?? row.file_size ?? null,
+  base_model: (row) => row.base_model || null,
+};
+
+/**
+ * Order two rows on one key.
+ *
+ * A row with no value for the key sorts LAST IN BOTH DIRECTIONS, which is the
+ * API's own contract for these keys. It is not "smallest": "this file records
+ * no base model" is an unanswered question, and letting 37% of the shelf pile
+ * up at whichever end the direction points is how a sort stops being one.
+ */
+function compareOn(a, b, key, direction) {
+  const left = SORT_VALUE[key](a);
+  const right = SORT_VALUE[key](b);
+  if (left === null || left === "")
+    return right === null || right === "" ? 0 : 1;
+  if (right === null || right === "") return -1;
+  const sign = direction === "asc" ? 1 : -1;
+  if (typeof left === "number" && typeof right === "number") {
+    return (left - right) * sign;
+  }
+  return (
+    String(left).localeCompare(String(right), undefined, {
+      numeric: true,
+      sensitivity: "base",
+    }) * sign
+  );
+}
+
+/** The default view: newest added first, ungrouped, exactly what F1 showed. */
+function defaultView() {
+  return { groupBy: "none", sortKey: "added_at", sortDirection: "desc" };
+}
+
+/**
  * The default `Show` selection, and therefore what "no active filter" means.
  *
  * `unclassified` is off because a file we could not identify is not something
@@ -32,29 +116,156 @@ function defaultFilters() {
   };
 }
 
-/** Read the remembered selection, or null when there is none to trust. */
-function storedFilters() {
+/**
+ * Read one remembered blob, or null when there is none to trust.
+ *
+ * Private mode, a disabled store or a corrupt blob all land here. Falling back
+ * to the defaults is a fine outcome; a throwing getter that takes the whole
+ * shelf with it is not.
+ */
+function readStored(key) {
   try {
-    const raw = window.localStorage?.getItem(FILTERS_KEY);
+    const raw = window.localStorage?.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return null;
-    const filters = defaultFilters();
-    for (const key of ["adapters", "checkpoints", "unclassified"]) {
-      if (typeof parsed[key] === "boolean") filters[key] = parsed[key];
-    }
-    for (const key of ["adapterKinds", "baseModels"]) {
-      if (Array.isArray(parsed[key])) {
-        filters[key] = parsed[key].filter((v) => typeof v === "string");
-      }
-    }
-    return filters;
+    return parsed && typeof parsed === "object" ? parsed : null;
   } catch (err) {
-    // Private mode, or a corrupt blob. Showing the defaults is a fine outcome;
-    // a throwing getter that takes the whole shelf with it is not.
-    console.warn("[shelf] could not read the remembered filters", err);
+    console.warn(`[shelf] could not read ${key}`, err);
     return null;
   }
+}
+
+/** Persist one blob. The choice still applies this session if this fails. */
+function writeStored(key, value) {
+  try {
+    window.localStorage?.setItem(key, JSON.stringify(value));
+  } catch (err) {
+    console.warn(`[shelf] could not remember ${key} for next time`, err);
+  }
+}
+
+/** Read the remembered selection, or null when there is none to trust. */
+function storedFilters() {
+  const parsed = readStored(FILTERS_KEY);
+  if (!parsed) return null;
+  const filters = defaultFilters();
+  for (const key of ["adapters", "checkpoints", "unclassified"]) {
+    if (typeof parsed[key] === "boolean") filters[key] = parsed[key];
+  }
+  for (const key of ["adapterKinds", "baseModels"]) {
+    if (Array.isArray(parsed[key])) {
+      filters[key] = parsed[key].filter((v) => typeof v === "string");
+    }
+  }
+  return filters;
+}
+
+/** Read the remembered view axes, falling back to the defaults per field. */
+function storedView() {
+  const parsed = readStored(VIEW_KEY);
+  const view = defaultView();
+  // A blob an older build wrote is discarded whole rather than half-applied.
+  if (!parsed || parsed.v !== VIEW_SCHEMA_VERSION) return view;
+  if (GROUP_BY_KEYS.includes(parsed.groupBy)) view.groupBy = parsed.groupBy;
+  if (SORT_KEYS.includes(parsed.sortKey)) view.sortKey = parsed.sortKey;
+  if (parsed.sortDirection === "asc" || parsed.sortDirection === "desc") {
+    view.sortDirection = parsed.sortDirection;
+  }
+  return view;
+}
+
+/**
+ * Read the remembered collapsed groups, keyed by the axis they belong to.
+ *
+ * Namespaced per axis so collapsing `Not set` under `Base model` does not also
+ * collapse a folder that happens to be called the same thing, and so switching
+ * axis and back restores what you had. Only the COLLAPSED set is stored: groups
+ * default to expanded, so a base model that appears after this was written
+ * still opens.
+ */
+function storedCollapsed() {
+  const parsed = readStored(VIEW_KEY);
+  const collapsed = {};
+  for (const axis of GROUP_BY_KEYS) collapsed[axis] = new Set();
+  if (!parsed || parsed.v !== VIEW_SCHEMA_VERSION) return collapsed;
+  for (const axis of GROUP_BY_KEYS) {
+    const keys = parsed.collapsed?.[axis];
+    if (!Array.isArray(keys)) continue;
+    collapsed[axis] = new Set(
+      keys
+        .filter((k) => typeof k === "string" && k !== "")
+        .slice(-MAX_COLLAPSED_KEYS),
+    );
+  }
+  return collapsed;
+}
+
+/** The group a row with no value on the current axis falls into. */
+const UNSET_GROUP_KEY = "\u0000unset";
+
+/**
+ * Every group a row belongs to on one axis, as `{key, label, labelKind}`.
+ *
+ * A row belongs to exactly one base model but to EVERY folder holding a copy of
+ * it, so this returns a list rather than a key. The alternative was a "primary
+ * location", which is a fiction the shelf would then have to explain, and which
+ * makes the storage answer wrong: a file copied into two folders occupies both.
+ * `labelKind` is `path` for a literal filesystem path, which is set in the mono
+ * face and never uppercased, because uppercasing a path misstates the string.
+ */
+function groupsOf(row, axis) {
+  if (axis === "base_model") {
+    const base = row.base_model || "";
+    return base
+      ? [{ key: base, label: base, labelKind: "name" }]
+      : [
+          {
+            key: UNSET_GROUP_KEY,
+            label: "Base model not set",
+            labelKind: "name",
+          },
+        ];
+  }
+  const locations = Array.isArray(row.locations) ? row.locations : [];
+  if (!locations.length) {
+    return [
+      {
+        key: UNSET_GROUP_KEY,
+        label: "No registered copy",
+        labelKind: "name",
+      },
+    ];
+  }
+  return locations.map((loc) => ({
+    key: String(loc.folder_path || loc.folder_id || ""),
+    label: String(loc.folder_path || `Folder ${loc.folder_id}`),
+    labelKind: "path",
+    location: loc,
+  }));
+}
+
+/**
+ * Order two groups.
+ *
+ * Alphabetical by label, with the "not set" group ALWAYS last, in both sort
+ * directions. It is the absence of a value rather than a value, so it never
+ * joins the alphabetical run and never swaps ends when the direction flips.
+ * That is the same rule `baseModelOptions` already applies to the filter's
+ * `UNASSIGNED` option, and it matters here because "not set" is not a tail: 37%
+ * of real adapters record no base model, so it is one of the largest groups on
+ * the shelf and putting it first would bury everything identifiable under it.
+ *
+ * The sort keys never reorder groups, only rows inside them. Switching to
+ * "Largest first" moving every header out from under the reader would be a
+ * different view, not a sorted one.
+ */
+function compareGroups(a, b) {
+  if (a.key === UNSET_GROUP_KEY) return b.key === UNSET_GROUP_KEY ? 0 : 1;
+  if (b.key === UNSET_GROUP_KEY) return -1;
+  return a.label.localeCompare(b.label, undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
 }
 
 /** The three top-level type checkboxes, each one request and one row bucket. */
@@ -69,6 +280,10 @@ function blockOf(row) {
 
 export const useModelShelfStore = defineStore("modelShelf", () => {
   const filters = reactive(storedFilters() || defaultFilters());
+  /** Grouping and sort. A view preference, not part of the `Show` selection. */
+  const view = reactive(storedView());
+  /** Collapsed group keys, per axis. Replaced wholesale so templates react. */
+  const collapsed = ref(storedCollapsed());
   /** Every row fetched so far, across blocks. Not the shown set. */
   const rows = ref([]);
   const loading = ref(false);
@@ -81,12 +296,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   let epoch = 0;
 
   function remember() {
-    try {
-      window.localStorage?.setItem(FILTERS_KEY, JSON.stringify(filters));
-    } catch (err) {
-      // The selection still applies for this session; only the memory is lost.
-      console.warn("[shelf] could not remember the filters for next time", err);
+    writeStored(FILTERS_KEY, filters);
+  }
+
+  /** Persist the view axes and the collapsed sets as one versioned blob. */
+  function rememberView() {
+    const blob = { v: VIEW_SCHEMA_VERSION, ...view, collapsed: {} };
+    for (const axis of GROUP_BY_KEYS) {
+      blob.collapsed[axis] = [...collapsed.value[axis]].slice(
+        -MAX_COLLAPSED_KEYS,
+      );
     }
+    writeStored(VIEW_KEY, blob);
   }
 
   /**
@@ -125,9 +346,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       }
       const results = await Promise.all(requests);
       if (startedAt !== epoch) return;
-      const refreshed = new Set(
-        BLOCKS.filter((block) => filters[block]),
-      );
+      const refreshed = new Set(BLOCKS.filter((block) => filters[block]));
       rows.value = [
         ...rows.value.filter((row) => !refreshed.has(blockOf(row))),
         ...results.flat(),
@@ -201,6 +420,109 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   });
 
   /**
+   * The shown rows, sorted and cut into groups.
+   *
+   * Always at least one group, so the list has ONE shape to render: with
+   * `groupBy: 'none'` it is a single unlabelled group and the header is not
+   * drawn. That is what keeps the flat F1 list and the grouped list from
+   * becoming two copies of the row markup.
+   *
+   * ONE level of headers, deliberately, though the plan allows two. Folder is
+   * a grouping VALUE rather than a permanent outer band: a band per folder
+   * crossed with a group per base model fragments "what do I have for SDXL"
+   * into one answer per disk, which is the question the shelf exists to answer.
+   * The second level stays unspent for F5, where a stack genuinely nests inside
+   * a group.
+   */
+  const groups = computed(() => {
+    const axis = view.groupBy;
+    // A tiebreak on id, because a refetch can reorder equal-valued rows and a
+    // list that reshuffles under an unchanged sort reads as a rendering fault.
+    const sorted = [...visibleRows.value].sort(
+      (a, b) =>
+        compareOn(a, b, view.sortKey, view.sortDirection) || a.id - b.id,
+    );
+    if (axis === "none") {
+      return [{ key: "", label: "", labelKind: "name", rows: sorted }];
+    }
+
+    const byKey = new Map();
+    for (const row of sorted) {
+      for (const group of groupsOf(row, axis)) {
+        let bucket = byKey.get(group.key);
+        if (!bucket) {
+          bucket = {
+            key: group.key,
+            label: group.label,
+            labelKind: group.labelKind,
+            rows: [],
+          };
+          byKey.set(group.key, bucket);
+        }
+        // Under `folder` a row is listed once per copy and reports THAT copy's
+        // state rather than the merged one, or a file present here and missing
+        // there would claim to be fine in the folder it is absent from.
+        bucket.rows.push(
+          group.location
+            ? {
+                ...row,
+                rowKey: `${row.id}:${group.key}`,
+                locState: locationState([group.location]),
+              }
+            : { ...row, rowKey: String(row.id) },
+        );
+      }
+    }
+    return [...byKey.values()].sort(compareGroups);
+  });
+
+  /**
+   * How many rows the list actually draws.
+   *
+   * Higher than `visibleRows.length` under folder grouping, because a model
+   * with copies in two folders is drawn under both. The toolbar states both
+   * numbers when they differ rather than picking one and being wrong about the
+   * other.
+   */
+  const renderedCount = computed(() =>
+    groups.value.reduce((total, group) => total + group.rows.length, 0),
+  );
+
+  /** True when this group is collapsed on the axis currently in use. */
+  function isCollapsed(key) {
+    return collapsed.value[view.groupBy]?.has(key) ?? false;
+  }
+
+  /**
+   * Collapse or expand one group on the current axis.
+   *
+   * Namespaced by axis: collapsing `Not set` under `Base model` must not also
+   * collapse a folder of the same name, and switching axis and back restores
+   * what was there.
+   */
+  function toggleGroup(key) {
+    const axis = view.groupBy;
+    const next = new Set(collapsed.value[axis] || []);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    collapsed.value = { ...collapsed.value, [axis]: next };
+    rememberView();
+  }
+
+  /**
+   * Change the grouping or the sort.
+   *
+   * Never refetches: every field the five sort keys read is already on the list
+   * payload, so a direction flip is a resort of what is in hand.
+   *
+   * @param {Object} patch - any of `groupBy`, `sortKey`, `sortDirection`.
+   */
+  function setView(patch) {
+    Object.assign(view, patch);
+    rememberView();
+  }
+
+  /**
    * Active filters, counted by section rather than by box.
    *
    * A section contributes 1 when it deviates from its default, however many
@@ -263,6 +585,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   return {
     filters,
+    view,
+    collapsed,
     rows,
     loading,
     loaded,
@@ -271,10 +595,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     adapterKindOptions,
     baseModelOptions,
     visibleRows,
+    groups,
+    renderedCount,
     activeCount,
     nothingSelected,
+    isCollapsed,
+    toggleGroup,
     resetFilters,
     resetForSession,
     setFilters,
+    setView,
   };
 });

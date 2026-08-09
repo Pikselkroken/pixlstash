@@ -73,6 +73,54 @@ export function modelName(model) {
   return { text: filename || "no name in file", derived: true };
 }
 
+/**
+ * What each sort key is called on screen, and the glyph that stands for it.
+ *
+ * Keyed by the API's own `SortKey` values so there is one vocabulary rather
+ * than a UI one mapped onto a wire one.
+ */
+export const SORT_LABELS = {
+  added_at: { label: "Date added", icon: "mdi-clock-plus-outline" },
+  file_mtime: { label: "File date", icon: "mdi-file-clock-outline" },
+  name: { label: "Name", icon: "mdi-sort-alphabetical-variant" },
+  size: { label: "Size", icon: "mdi-harddisk" },
+  base_model: { label: "Base model", icon: "mdi-cube-outline" },
+};
+
+/**
+ * The two directions, worded for the axis being sorted.
+ *
+ * "Ascending" is not wrong so much as useless: nobody thinks of a date as
+ * ascending, and on a size column it is the opposite of what the reader wants
+ * to hear. Each key says what its own two ends are.
+ */
+const DIRECTION_WORDS = {
+  added_at: ["Oldest first", "Newest first"],
+  file_mtime: ["Oldest first", "Newest first"],
+  name: ["A to Z", "Z to A"],
+  base_model: ["A to Z", "Z to A"],
+  size: ["Smallest first", "Largest first"],
+};
+
+/**
+ * Name one direction of one sort key.
+ *
+ * @param {string} key - a `SORT_LABELS` key.
+ * @param {"asc"|"desc"} direction
+ * @returns {string} e.g. `Largest first`.
+ */
+export function sortDirectionLabel(key, direction) {
+  const words = DIRECTION_WORDS[key] || DIRECTION_WORDS.name;
+  return direction === "asc" ? words[0] : words[1];
+}
+
+/** What each grouping axis is called, and the glyph that stands for it. */
+export const GROUP_BY_LABELS = {
+  none: { label: "None", icon: "mdi-format-list-bulleted" },
+  base_model: { label: "Base model", icon: "mdi-cube-outline" },
+  folder: { label: "Folder", icon: "mdi-folder-outline" },
+};
+
 const SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"];
 
 /**
