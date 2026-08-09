@@ -1168,3 +1168,194 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
         )
     finally:
         server.hub.fetchall = original
+
+
+# ===========================================================================
+# Moves (B7) — behaviour at the route, and both authz directions
+# ===========================================================================
+
+_MOVE_ROUTES = (
+    ("POST", f"{API}/model-moves", {"json": {"destination_folder_id": 1, "items": []}}),
+    ("GET", f"{API}/model-moves", {}),
+    ("DELETE", f"{API}/model-moves", {}),
+)
+
+
+@pytest.fixture
+def move_folders(shelf_env, tmp_path):
+    """A real source folder with a real file in it, and a real destination.
+
+    Registered directly in the hub, because ``POST /model-folders`` validates
+    against the system-directory blocklist and a pytest tmp dir is not the thing
+    under test here. Reset by the autouse re-seed like everything else.
+    """
+    from pixlstash.routes import model_moves
+
+    model_moves._job = None
+    source_dir = tmp_path / "loras"
+    destination_dir = tmp_path / "archive"
+    source_dir.mkdir()
+    destination_dir.mkdir()
+    (source_dir / "moving.safetensors").write_bytes(b"moving" * 1024)
+
+    server = shelf_env.server
+    with server.hub.transaction() as conn:
+        source_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, movable, created_at) "
+                "VALUES (?, 'user', 'per_item', '2026-08-09T00:00:00Z')",
+                (str(source_dir),),
+            ).lastrowid
+        )
+        destination_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, movable, created_at) "
+                "VALUES (?, 'user', 'per_item', '2026-08-09T00:00:00Z')",
+                (str(destination_dir),),
+            ).lastrowid
+        )
+        model_id = int(
+            conn.execute(
+                "INSERT INTO model (file_kind, kind, sha256, filename, provenance, "
+                "file_size, created_at) VALUES ('adapter', 'lora', ?, "
+                "'moving.safetensors', 'external', ?, '2026-08-09T00:00:00Z')",
+                (_h("movingfile"), 6 * 1024),
+            ).lastrowid
+        )
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+            "seen_at, file_mtime) VALUES (?, ?, 'moving.safetensors', 'present', "
+            "'2026-08-09T00:00:00Z', 1)",
+            (model_id, source_id),
+        )
+    return SimpleNamespace(
+        source_dir=source_dir,
+        destination_dir=destination_dir,
+        source_id=source_id,
+        destination_id=destination_id,
+    )
+
+
+def _await_move(shelf_env, timeout=10.0):
+    """Poll the status route until the job stops running."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        body = shelf_env.owner.get(f"{API}/model-moves").json()
+        if body["status"] != "running":
+            return body
+        time.sleep(0.02)
+    raise AssertionError("the move never finished")
+
+
+def test_every_move_route_is_declared_local_owner_only():
+    """§16.3: the shelf's first block that writes and unlinks host files. The
+    GET is on the tier too, deliberately — see the coverage-matrix rationale."""
+    for method, path, _ in _MOVE_ROUTES:
+        key = (method, path.replace(API, "/api/v1"))
+        assert key in ROUTE_POLICIES, f"{key} has no ROUTE_POLICIES entry"
+        declared = ROUTE_POLICIES[key]
+        assert declared.policy is AccessPolicy.LOCAL_OWNER_ONLY, (
+            f"{key} declares {declared.policy}, not LOCAL_OWNER_ONLY"
+        )
+        assert declared.justification, f"{key} is on the §16.3 tier with no reason"
+
+
+def test_a_move_relocates_the_file_and_the_row(shelf_env, move_folders):
+    r = shelf_env.owner.post(
+        f"{API}/model-moves",
+        json={
+            "destination_folder_id": move_folders.destination_id,
+            "items": [
+                {"folder_id": move_folders.source_id, "relpath": "moving.safetensors"}
+            ],
+        },
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["total"] == 1
+
+    body = _await_move(shelf_env)
+    assert [item["status"] for item in body["results"]] == ["moved"]
+    assert not (move_folders.source_dir / "moving.safetensors").exists()
+    assert (move_folders.destination_dir / "moving.safetensors").exists()
+
+    row = shelf_env.owner.get(f"{API}/adapters/{_h('movingfile')}").json()
+    assert [location["folder_id"] for location in row["locations"]] == [
+        move_folders.destination_id
+    ]
+
+
+def test_a_move_is_refused_before_the_first_byte_when_it_cannot_work(
+    shelf_env, move_folders
+):
+    """Validation is in the POST, not in the background job: a mistake is an
+    immediate error, not 1,499 files moved and no undo."""
+    r = shelf_env.owner.post(
+        f"{API}/model-moves",
+        json={
+            "destination_folder_id": move_folders.destination_id,
+            "items": [
+                {"folder_id": move_folders.source_id, "relpath": "nope.safetensors"}
+            ],
+        },
+    )
+    assert r.status_code == 404, r.text
+    assert (move_folders.source_dir / "moving.safetensors").exists()
+    assert list(move_folders.destination_dir.iterdir()) == []
+
+    r = shelf_env.owner.post(
+        f"{API}/model-moves",
+        json={"destination_folder_id": 999999, "items": []},
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_cancelling_when_nothing_runs_is_a_conflict_not_a_silent_success(shelf_env):
+    from pixlstash.routes import model_moves
+
+    model_moves._job = None
+    assert shelf_env.owner.get(f"{API}/model-moves").json()["status"] == "idle"
+    assert shelf_env.owner.delete(f"{API}/model-moves").status_code == 409
+
+
+def test_move_routes_refuse_every_share_token(shelf_env):
+    """The negative direction, with a live positive control on each token so a
+    refusal cannot pass because the credential was dead."""
+    for description, restriction in (
+        ("move scoped probe", {"resource_type": "character", "resource_id": 1}),
+        ("move unscoped probe", {}),
+    ):
+        token = _mint(shelf_env.owner, description, **restriction)
+        client = _bearer(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"{description} is dead; the refusals below would prove nothing"
+        )
+        for method, path, kwargs in _MOVE_ROUTES:
+            assert_real_route(shelf_env.server.api, method, path)
+            r = client.request(method, path, **kwargs)
+            assert r.status_code == 403, (
+                f"{description} reached {method} {path}: {r.status_code} {r.text}"
+            )
+
+
+def test_local_owner_reaches_every_move_route(shelf_env):
+    """Over-blocking is its own regression: loopback, RFC1918 LAN and Tailscale
+    CGNAT must all pass the locality half."""
+    for method, path, kwargs in _MOVE_ROUTES:
+        for headers in ({}, _xff("192.168.1.9"), _xff("100.64.0.5")):
+            r = shelf_env.owner.request(method, path, headers=headers, **kwargs)
+            assert "restricted to local" not in r.text, (
+                f"{method} {path} from {headers or 'loopback'} was refused as "
+                f"non-local: {r.status_code} {r.text}"
+            )
+
+
+def test_remote_owner_is_refused_on_every_move_route_naming_the_flag(shelf_env):
+    for method, path, kwargs in _MOVE_ROUTES:
+        r = shelf_env.owner.request(method, path, headers=_xff("8.8.8.8"), **kwargs)
+        assert r.status_code == 403, f"{method} {path}: {r.status_code} {r.text}"
+        assert "allow_remote_host_ops" in r.text, (
+            f"{method} {path} denied without naming the setting that enables it: "
+            f"{r.text}"
+        )
