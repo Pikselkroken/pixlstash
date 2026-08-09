@@ -481,19 +481,34 @@ class WorkPlanner:
         error = RuntimeError(
             f"Task {task_id} was dropped before submission: {reason}",
         )
+        released = True
         try:
             finder.on_task_complete(task, error)
         except Exception as exc:
+            released = False
             logger.warning(
                 "Finder %s failed to release the claims of dropped task %s: %s",
                 finder_name,
                 task_id,
                 exc,
             )
-        logger.debug(
-            "WorkPlanner dropped task id=%s from finder=%s and released its "
-            "claims (%s).",
-            task_id,
-            finder_name,
-            reason,
-        )
+        # Two messages, because one that always claimed the claims were released
+        # would be at its most misleading in the one failure this helper exists
+        # to surface: a finder whose `on_task_complete` raised still holds the
+        # ids, and those pictures are refused until the process restarts.
+        if released:
+            logger.debug(
+                "WorkPlanner dropped task id=%s from finder=%s and released its "
+                "claims (%s).",
+                task_id,
+                finder_name,
+                reason,
+            )
+        else:
+            logger.debug(
+                "WorkPlanner dropped task id=%s from finder=%s (%s); its claims "
+                "were NOT released — see the warning above.",
+                task_id,
+                finder_name,
+                reason,
+            )
