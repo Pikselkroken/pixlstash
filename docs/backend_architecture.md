@@ -509,7 +509,13 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/model-folders                                                         | model_shelf     | Register a model folder                                    |
 | PATCH  | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Update a registered model folder                           |
 | DELETE | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Forget a registered model folder                           |
+| POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move the managed model store to another location           |
 | POST   | /api/v1/model-folders/{folder_id}/rescan                                      | model_shelf     | Rescan a registered model folder                           |
+| GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder      |
+| POST   | /api/v1/model-imports                                                         | model_shelf     | Import a training run onto the shelf                       |
+| GET    | /api/v1/model-moves                                                           | model_shelf     | How the current or last model move is going                |
+| POST   | /api/v1/model-moves                                                           | model_shelf     | Move model files into another registered folder            |
+| DELETE | /api/v1/model-moves                                                           | model_shelf     | Cancel the running model move                              |
 | GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                    |
 | POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                 |
 | POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                |
@@ -1171,7 +1177,82 @@ strands a file and is recoverable; over-blocking a read breaks the library.
 
 Both directions are asserted in `tests/test_path_containment.py`: escape is
 refused at each sink, and in-root plus reference-folder files are still deleted
-(over-blocking is its own regression).
+(over-blocking is its own regression). **That file covers the picture sinks
+only.** The model shelf's write/unlink sites (`services/model_mover.py`,
+`services/run_importer.py`) are the same class and are contained the same way,
+but they use the hub rather than the vault and are asserted in
+`tests/test_model_move.py` and `tests/test_model_run_import.py` — do not read
+the sentence above as covering them.
+
+- **The shelf's containment is reachable at every one of its four sites**, and
+  none of it is a dead sanitizer. Two are obvious: a `model_file.relpath` is a
+  database value, so the mover resolves each **source** against its own
+  `model_folder.path` before unlinking it, and a run *name* comes from the HTTP
+  body, so the importer resolves it against the registered output root before
+  reading it. The two **destination** checks were previously commented as
+  unreachable, on the grounds that `os.path.basename` had already flattened the
+  name — that is wrong. `resolve_path_within` calls `realpath`, so a **symlink
+  standing at the destination filename** resolves outside the folder and is
+  refused, which `basename` does nothing about. A *dangling* symlink is the
+  sharp case: `os.path.exists` is False for it, so the collision check that
+  follows waves it through, and the containment is the only thing between the
+  request and an `os.replace` writing outside a registered folder. Both are
+  pinned by a negative that goes red when the guard is swapped for
+  `os.path.join`.
+- **The relocation target is the one caller-supplied host path in the shelf**
+  (`POST /model-folders/{folder_id}/relocate`). Owner-chosen paths are trusted
+  here, as reference folders are, so the guard is deliberately narrow —
+  `validate_reference_folder_path`: absolute, and not a system directory — and
+  it is pinned in both directions by `tests/test_model_shelf_api.py` (`/etc/…`
+  and a relative path are 400; an ordinary absolute path still relocates).
+
+### The managed model store (shelf plan B7)
+
+**Exactly one `model_folder` row with `kind='managed'` always exists.** It is
+PixlStash's own model storage, the way the vault owns picture files, and it is
+created on first run by
+[`services/managed_model_store.py`](../pixlstash/services/managed_model_store.py)
+(`ensure_managed_folder`, called from `Server.__init__` right after the hub is
+bootstrapped). It is the default destination for a drop or an ai-toolkit import.
+
+- **Why `managed` rather than a seeded `user` folder.** With zero registered
+  folders there is nowhere to drop or import a model, so drag-in is impossible
+  on a fresh install. But a `user` folder is an *association the owner made*, and
+  one the owner is forbidden to dissolve is not an association — the honest
+  answer is a kind that means "PixlStash's own storage", which was already in the
+  enum and created by nothing. `user` and `foreign` folders may legitimately
+  number **zero**; that is a normal state (nothing catalogued in place) and gets
+  no error and no message.
+- **Where it goes: beside `hub.db`, under the config directory, not at a fixed
+  `user_data_dir` path.** Same reasoning as the hub itself (#168), and stronger
+  here: this is a directory files are *copied into and unlinked from*, so a fixed
+  platform path would have every test run and every alternate deployment writing
+  into the owner's real store. A default install therefore gets it under the
+  platform user directory anyway, because that is where the config dir is.
+- **Relocatable, never removable.** `DELETE /api/v1/model-folders/{folder_id}`
+  answers **409** for this row — not 403: the caller is fully authorized and the
+  request is well formed, and what refuses it is the state of the target. A 403
+  would send an operator hunting through the §16.3 tiers for a permission that
+  does not exist. `POST /api/v1/model-folders` accepts `user` and `source` only,
+  so a second managed row cannot be made over HTTP either. Both directions are
+  asserted (`tests/test_model_shelf_api.py`): the managed row is refused, an
+  ordinary `user` row is still forgotten — over-blocking would break the shelf's
+  only tombstone.
+- **`ensure_managed_folder` never overrules a relocation.** The row's `path` is
+  the authority, so a start after the owner has moved the store to another drive
+  returns the existing row untouched rather than re-pointing it at the config
+  dir and stranding every file. It is also idempotent, promotes a pre-existing
+  `user` row at the same path rather than failing the `UNIQUE(path)` insert, and
+  degrades to "no store registered" rather than refusing to boot when the
+  directory cannot be created.
+- **`movable='root_only'`, `owner='pixlstash'`.** Nothing enforces `movable`
+  today — the mover does not read it — so it describes what the folder is rather
+  than gating an operation. Whether the UI offers moving a single file *out* of
+  the store is a verb question and is not settled here.
+- This is also what settles the integration plan's §4.1 zero-copy claim: the
+  ComfyUI picker node registers **this one store**, not an enumeration of every
+  present folder across possibly-offline drives. The store is therefore designed
+  as a single directory and must not become several.
 
 ### Hub and library identity
 
@@ -1625,7 +1706,31 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
   - **Updated 2026-07-23 — the locality total is now `18 = 13 local + 5 loopback`.** `POST /api/v1/test-hooks/ws-event` was added as the 5th `loopback_owner_only` route. It calls `vault.notify` with a caller-supplied payload, i.e. it synthesises arbitrary grid WebSocket events broadcast to **every connected client** (up to 500 per call) — authority over *other* clients' state, not over the caller's own data, which is the characteristic the loopback tier exists for. `LOOPBACK` rather than `LOCAL_OWNER_ONLY` specifically so that `allow_remote_host_ops` — a **filesystem**-operations flag — can never expose a test hook. The router mounts only under `enable_test_hooks`, which only `frontend/e2e/serve_e2e_backend.py` sets. Independently CSO-certified 2026-07-23 (loopback owner 200; LAN / Tailscale CGNAT / public all 403 *even with* `allow_remote_host_ops=true`).
 
-  - **Updated 2026-08-09 — the locality total is now `23 = 18 local + 5 loopback`.** Re-derived from `ROUTE_POLICIES`, not carried forward from the line above, and the re-derivation **also corrects pre-existing drift**: the `18 = 13 + 5` figure went stale on 2026-08-01 when `POST /api/v1/libraries/active` joined the local tier without this tally being touched, so the true starting point was `19 = 14 + 5`. The model shelf (shelf plan B5) adds **+4 `local_owner_only`** and no loopback route: `POST /api/v1/model-folders`, `PATCH` and `DELETE /api/v1/model-folders/{folder_id}`, and `POST /api/v1/model-folders/{folder_id}/rescan`. All four are the reference-folder class exactly — the first three take a caller-supplied host path, and the rescan *walks* one and reads every model file under it, which is the same authority as `reference-folders/detect-sidecars`. The shelf's read routes (`GET /adapters`, `GET /adapters/{sha256}`, `GET /checkpoints`, `GET /model-folders`) stay `owner_only`: they surface host paths but take none, mirroring `GET /libraries`. Arithmetic, not judgement — pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_18_local_5_loopback`.
+  - **Updated 2026-08-09 — the locality total is now `23 = 18 local + 5 loopback`.** Re-derived from `ROUTE_POLICIES`, not carried forward from the line above, and the re-derivation **also corrects pre-existing drift**: the `18 = 13 + 5` figure went stale on 2026-08-01 when `POST /api/v1/libraries/active` joined the local tier without this tally being touched, so the true starting point was `19 = 14 + 5`. The model shelf (shelf plan B5) adds **+4 `local_owner_only`** and no loopback route: `POST /api/v1/model-folders`, `PATCH` and `DELETE /api/v1/model-folders/{folder_id}`, and `POST /api/v1/model-folders/{folder_id}/rescan`. All four are the reference-folder class exactly — the first three take a caller-supplied host path, and the rescan *walks* one and reads every model file under it, which is the same authority as `reference-folders/detect-sidecars`. The shelf's read routes (`GET /adapters`, `GET /adapters/{sha256}`, `GET /checkpoints`, `GET /model-folders`) stay `owner_only`: they surface host paths but take none, mirroring `GET /libraries`. Arithmetic, not judgement. *(Superseded by the three updates below; the tally test is renamed with every change, so the live assertion is always the one named in the last update — today `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_24_local_5_loopback`. It does not assert this line's `23 = 18 + 5`, which is history.)*
+
+  - **Updated 2026-08-09 (second change the same day) — the locality total is now `26 = 21 local + 5 loopback`.** Re-derived from `ROUTE_POLICIES`, not carried forward from the line above. The model shelf's **move** block (shelf plan B7) adds **+3 `local_owner_only`** and no loopback route: `POST`, `GET` and `DELETE /api/v1/model-moves`. This is the shelf's strongest filesystem authority so far and the first shelf route that *writes and unlinks* files rather than reading or registering paths: per file it copies into a registered destination folder, verifies by SHA-256, repoints the `model_file` row and commits, and only then unlinks the source. That is strictly more than `POST /reference-folders/{folder_id}/move-pictures`, which is already on this tier, so the POST is settled by precedent.
+
+    **The `GET` is the one that needed a decision, and it is deliberately *not* on the shelf's `owner_only` read tier.** Every other shelf read (`GET /adapters`, `GET /model-folders`) surfaces host paths but takes none, which is why those stayed `owner_only`. `GET /model-moves` is not a shelf read at all: it is the **control surface of a host-filesystem operation**, the route a move is watched through, sitting next to the `DELETE` that stops one — so the tier that alone may start a move is the tier that may observe and steer it. The `DELETE` is the same authority as the `POST` seen from the other end.
+
+    **Corrected 2026-08-09 (B7 sign-off).** This paragraph previously justified the tier by saying a lower one "would let a caller who is barred from every route capable of producing a move read that move's filenames". That is false: a remote owner is refused on `/model-moves` and **200 on `GET /adapters`**, which serves `locations[].folder_path` and `locations[].relpath` for every copy of every model. The relpaths are not secret, so secrecy was never the reason; the tier is right for the control-surface reason above. Recorded rather than silently rewritten because a rationale nobody can check is how the last three false ones survived — cf. **#830**, which corrects two others in `docs/authz-coverage-matrix.md`.
+
+    **Path containment applies here and did not apply to B4 or B5** (§13, #776): B4 walks and B5 registers, and reads are deliberately never contained; B7 is the write/delete path. Every destination is resolved with `resolve_path_within` against the **destination** `model_folder.path` and every source against its **own** `model_folder.path`, so a `model_file.relpath` that a faulty scan, a restored hub or a bug put in the table cannot make the mover write outside a registered folder or unlink outside one. Containment is on the `open(…, "wb")` and the `os.unlink`, never on the read.
+
+    Arithmetic, not judgement.
+
+  - **Updated 2026-08-09 (third change the same day) — the locality total is now `28 = 23 local + 5 loopback`.** Re-derived from `ROUTE_POLICIES`. The shelf's **ai-toolkit import** block (shelf plan B7) adds **+2 `local_owner_only`**: `GET /api/v1/model-folders/{folder_id}/runs` and `POST /api/v1/model-imports`. The listing walks a registered output root and reads every run folder and `config.yaml` under it, which is `model-folders/{folder_id}/rescan`'s authority exactly; the import writes files into one registered folder and, when the source folder carries `delete_after_import`, unlinks them from the output root, which is `POST /model-moves`' authority exactly. **Neither takes a host path**: the import names a registered `source` folder id and a run *name*, and the server joins them with `resolve_path_within`, so a run name resolving outside the registered root is refused rather than read. They are on the locality tier for the authority they exercise, not for an input they accept.
+
+    Arithmetic, not judgement.
+
+  - **Updated 2026-08-09 (fourth change the same day) — the locality total is now `29 = 24 local + 5 loopback`.** `POST /api/v1/model-folders/{folder_id}/relocate` moves the managed model store (§13) to a **caller-supplied host path**: it is the `reference-folders/{folder_id}/relocate` class *and* carries `POST /model-moves`' file movement, so it is the one shelf route on this tier for both reasons at once. It is refused with 409 for any folder that is not the managed store.
+
+    Arithmetic, not judgement — pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_24_local_5_loopback`.
+
+    **The destination path is canonicalized before the blocklist runs (ruled 2026-08-09).** `POST /model-folders/{folder_id}/relocate` originally validated `os.path.normpath(payload.path)`, and two reviews disagreed about that. The PR review called it symlink traversal: `/mnt/models` may be a link to `/usr/share`, the lexical check passes, and the route then `makedirs`, moves every file of the store into, and `rmdir`s around a restricted system directory. The B7 security sign-off had listed "the lexical (non-realpath) blocklist" under **explicitly not a finding**, on the owner-trust ruling and the reference-folder precedent — an owner who may name any destination directly gains nothing by naming one through a link.
+
+    **Ruled for canonicalization, and the sign-off's entry is withdrawn rather than left to disagree with the code.** The question is what the blocklist is *for*. As a security boundary the sign-off is right and there is nothing to defend: no non-owner principal exists, and the owner may type `/usr` directly. But that is not this check's job. It exists so the owner does not relocate the model store onto a system directory *by accident*, and the accident it must catch is precisely the one the owner cannot see by reading the path they typed. A guard a symlink walks past is false assurance, and false assurance is worse than no guard. The reference-folder precedent the sign-off cited also points this way on inspection: `validate_reference_folder_accessible` already `realpath`s before validating, so reference folders canonicalize at the point where the filesystem is touched — which is exactly where relocation sits.
+
+    Consequences: the resolved path is what the blocklist sees, what is compared against the current store path, and what is registered in `model_folder.path`, so the store is recorded where it really lands rather than by the name it was reached through. `payload.path` is validated **first**, before `realpath`, because `realpath` makes a relative path absolute against the server's cwd and would otherwise turn the "must be absolute" refusal into an acceptance. Owner trust is unchanged and no path outside the blocklist became harder to use — pinned in both directions by `tests/test_model_shelf_api.py::test_a_symlink_into_a_system_directory_is_refused_not_followed` (a link into `/usr` refused; a link to an ordinary directory still relocates).
 
     **Scope of that guarantee (do not over-read it).** Loopback enforcement inherits the pre-existing proxy caveat in CSO Condition 2 below, shared with the other four loopback routes: a reverse proxy that sets no `X-Forwarded-For`, or passes an inbound one through, can make a remote caller resolve to loopback. So the correct claim is that safety depends on the flag being off **or** the proxy being configured correctly — *not* that it stops depending on the flag entirely. Container port-mapping is **not** a bypass (Docker bridge / slirp present `172.17.x` / `10.0.2.x`, which are not loopback).
 
