@@ -171,11 +171,14 @@ def test_host_capability_tier_split_is_24_local_5_loopback():
     settled by precedent — it writes files into one registered folder and
     unlinks them from another, which is strictly more than
     ``reference-folders/{id}/move-pictures``, already on this tier. The GET is
-    the deliberate one: unlike the shelf's other reads it exposes the per-file
-    relpaths and outcomes of an operation only a local owner can start, so a
-    lower tier would hand those filenames to a caller barred from every route
-    that could produce them. The DELETE is the POST's authority from the other
-    end.
+    the deliberate one: it is not a shelf read but the *control surface* of a
+    host-filesystem operation — how a move is watched, beside the DELETE that
+    stops one — so the tier that alone may start a move is the tier that may
+    observe and steer it. **Not** a secrecy claim about the relpaths: a remote
+    owner is 200 on ``GET /adapters``, which serves ``locations[].folder_path``
+    and ``locations[].relpath`` for every copy (the earlier wording here said
+    otherwise and was corrected in the B7 sign-off). The DELETE is the POST's
+    authority from the other end.
 
     28 = 23 + 5 later still, when the shelf's **ai-toolkit import** block joined
     it: ``GET /model-folders/{folder_id}/runs`` and ``POST /model-imports``.

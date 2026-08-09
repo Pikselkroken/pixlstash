@@ -367,17 +367,20 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # The strongest filesystem authority the shelf has: this block writes new
     # files into a registered host folder and unlinks files out of another one.
     # The read (GET) is on the same tier rather than OWNER_ONLY because it is
-    # not a shelf read at all — it reports host paths and per-file progress for
-    # an operation only a local owner could have started, and putting it a tier
-    # lower would leak that operation's filenames to a caller who is barred from
-    # every route that could produce them.
+    # the control surface of that operation — how a move is watched, next to the
+    # DELETE that stops one — so a caller who may not start a move may not
+    # observe or steer one either. It is NOT because the filenames are otherwise
+    # unreachable: a remote owner is 200 on GET /adapters, which already serves
+    # locations[].folder_path and locations[].relpath for every copy. (The
+    # earlier "barred from every route that could produce them" reasoning was
+    # false and was corrected in the B7 sign-off.)
     ("POST", "/api/v1/model-moves"): RoutePolicy(
         _LOCAL,
         justification="§16.3 writes model files into a registered host folder and unlinks them from another — strictly more filesystem authority than reference-folders/move-pictures, which is already on this tier; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("GET", "/api/v1/model-moves"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 reports the host paths and per-file outcomes of an in-flight move; same tier as the POST that alone can create one, so progress for a local-only operation is not readable from a tier that cannot start it",
+        justification="§16.3 the control surface of an in-flight host-filesystem move — how one is watched, beside the DELETE that stops one — so the tier that alone can start a move is the tier that may observe and steer it; not a secrecy claim about the relpaths, which GET /adapters already serves",
     ),
     ("POST", "/api/v1/model-folders/{folder_id}/relocate"): RoutePolicy(
         _LOCAL,
