@@ -10,6 +10,7 @@ from pixlstash.services.portable_identity import (
     sanitize_snapshot_archive,
 )
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
+from pixlstash.utils.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
 
@@ -58,7 +59,23 @@ class SnapshotIdentityScrubTask(BaseTask):
 
     def _run_task(self):
         vault_root = self._db.image_root
-        archive = os.path.join(vault_root, self._relative_path)
+        try:
+            archive = resolve_path_within(vault_root, self._relative_path)
+        except ValueError as exc:
+            # A registered archive path outside the vault root is never a file
+            # this task may touch. There is nothing legitimate to scrub there;
+            # record it done so it stops being handed out, exactly like the
+            # missing-archive branch below.
+            logger.error(
+                "SnapshotIdentityScrubTask: snapshot %s is registered at %s, "
+                "which is outside the vault root — refusing to touch it and "
+                "recording it as done: %s",
+                self._snapshot_id,
+                self._relative_path,
+                exc,
+            )
+            self._db.run_task(self._record_scrubbed, None)
+            return
 
         if not os.path.exists(archive):
             # An orphaned row: the snapshot was registered but its archive is

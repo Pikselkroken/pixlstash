@@ -39,6 +39,7 @@ from pixlstash.db_models.picture_likeness import (
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.path_utils import resolve_path_within
 
 from ._models import (
     RestoreInProgressError,
@@ -160,7 +161,7 @@ class FullRestoreMixin:
             Populated RestoreReport.
         """
         cp = self._get_snapshot_or_raise(snapshot_id)
-        abs_snapshot = os.path.join(vault_root, cp.relative_path)
+        abs_snapshot = resolve_path_within(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
             raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
@@ -647,7 +648,16 @@ class FullRestoreMixin:
             for snap in live_snapshots:
                 if snap["relative_path"] in existing_snapshot_paths:
                     continue
-                abs_snap = os.path.join(vault_root, snap["relative_path"])
+                try:
+                    abs_snap = resolve_path_within(vault_root, snap["relative_path"])
+                except ValueError as exc:
+                    logger.warning(
+                        "RestoreService: snapshot index row %s points outside "
+                        "the vault root; not re-inserting it after restore: %s",
+                        snap["relative_path"],
+                        exc,
+                    )
+                    continue
                 if not os.path.exists(abs_snap):
                     # File was pruned/deleted since capture — skip rather than
                     # leave a dangling index row pointing at nothing.

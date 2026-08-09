@@ -32,6 +32,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.snapshot_compression import is_compressed
 
 from ._models import (
@@ -73,7 +74,7 @@ class PreviewMixin:
         """
         vault_root = self._vault.image_root
         cp = self._get_snapshot_or_raise(snapshot_id)
-        abs_snapshot = os.path.join(vault_root, cp.relative_path)
+        abs_snapshot = resolve_path_within(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
             raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
@@ -147,7 +148,7 @@ class PreviewMixin:
 
         vault_root = self._vault.image_root
         cp = self._get_snapshot_or_raise(snapshot_id)
-        abs_snapshot = os.path.join(vault_root, cp.relative_path)
+        abs_snapshot = resolve_path_within(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
             raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
@@ -216,7 +217,7 @@ class PreviewMixin:
         """
         vault_root = self._vault.image_root
         cp = self._get_snapshot_or_raise(snapshot_id)
-        abs_snapshot = os.path.join(vault_root, cp.relative_path)
+        abs_snapshot = resolve_path_within(vault_root, cp.relative_path)
         if not os.path.exists(abs_snapshot):
             raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 

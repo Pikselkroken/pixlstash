@@ -189,13 +189,30 @@ def writeback_path(
     Prefers an already-resolved *existing_path*; otherwise builds one from the
     *configured_suffix* (or the module default for the type).
 
+    *existing_path* is typically the ``tags_file`` / ``description_file``
+    column, so it is a database value and is only honoured when it is exactly
+    the image stem plus a safe suffix, the one shape a legitimately recorded
+    sidecar path can have. Anything else is ignored (logged) and the standard
+    suffix-derived path is used instead, so a fabricated column cannot direct
+    a file write somewhere else (#776).
+
     Returns ``None`` when the folder's configured suffix is not a usable
     filename fragment, so a folder configured before the rule was enforced on
     every write path skips its write-back (logged) instead of raising through
     the caller and wedging a scan or returning a 500. Callers must handle it.
     """
     if existing_path:
-        return existing_path
+        stem = os.path.splitext(image_path)[0]
+        tail = existing_path[len(stem) :] if existing_path.startswith(stem) else ""
+        if tail and is_safe_sidecar_suffix(tail):
+            return existing_path
+        logger.warning(
+            "Ignoring recorded %s sidecar path %r for %s: not the image "
+            "stem plus a safe suffix; using the configured suffix instead",
+            sidecar_type,
+            existing_path,
+            image_path,
+        )
     suffix = configured_suffix or (
         DEFAULT_TAGS_SUFFIX
         if sidecar_type == SIDECAR_TYPE_TAGS

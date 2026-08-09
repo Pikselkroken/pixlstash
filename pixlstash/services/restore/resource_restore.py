@@ -32,6 +32,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.path_utils import resolve_path_within
 
 from ._models import (
     MissingDependenciesError,
@@ -108,7 +109,7 @@ class ResourceRestoreMixin:
         try:
             vault_root = self._vault.image_root
             cp = self._get_snapshot_or_raise(snapshot_id)
-            abs_snapshot = os.path.join(vault_root, cp.relative_path)
+            abs_snapshot = resolve_path_within(vault_root, cp.relative_path)
             if not os.path.exists(abs_snapshot):
                 raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 
@@ -202,7 +203,7 @@ class ResourceRestoreMixin:
         try:
             vault_root = self._vault.image_root
             cp = self._get_snapshot_or_raise(snapshot_id)
-            abs_snapshot = os.path.join(vault_root, cp.relative_path)
+            abs_snapshot = resolve_path_within(vault_root, cp.relative_path)
             if not os.path.exists(abs_snapshot):
                 raise ValueError(f"Snapshot file not found on disk: {abs_snapshot}")
 

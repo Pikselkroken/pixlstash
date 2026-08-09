@@ -211,12 +211,25 @@ def test_writeback_path_returns_none_for_unusable_configured_suffix():
         writeback_path("/refs/f/photo.png", SIDECAR_TYPE_TAGS, "../escape.txt", None)
         is None
     )
-    # An already-resolved existing path is still honoured.
+    # An already-resolved existing path is still honoured when it is the image
+    # stem plus a safe suffix (the only shape a legitimately recorded sidecar
+    # path can have — see #776 for why anything else is refused).
+    assert (
+        writeback_path(
+            "/refs/f/photo.png",
+            SIDECAR_TYPE_TAGS,
+            "../escape.txt",
+            "/refs/f/photo_tags.txt",
+        )
+        == "/refs/f/photo_tags.txt"
+    )
+    # An existing path that is NOT stem+suffix (e.g. a fabricated tags_file
+    # column) is ignored; with no usable configured suffix either, no path.
     assert (
         writeback_path(
             "/refs/f/photo.png", SIDECAR_TYPE_TAGS, "../escape.txt", "/refs/f/ok.txt"
         )
-        == "/refs/f/ok.txt"
+        is None
     )
     # And a clean suffix is unaffected.
     assert (
