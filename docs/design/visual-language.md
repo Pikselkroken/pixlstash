@@ -434,6 +434,98 @@ header 36px) so the custom title bar and controls fit — see the overrides in
 onto `--bar-height` is an open reconciliation item; it moves pixels, so it needs
 UI/UX sign-off — see §13.)
 
+### 5.1 The row grid (how a list row shares a left edge)
+
+The claim above — *columns of controls share a left edge* — is the one §5 made and
+never enforced. A list row is **four columns**, and the first two are reserved:
+
+```
+[disclosure gutter] [identity mark] [label 1fr] [actions auto]
+   --gutter-glyph      --entity-thumb
+```
+
+**Columns 1 and 2 are never conditional.** A row with no chevron reserves the
+gutter anyway; a row with no thumbnail reserves the identity column anyway. That is
+the whole mechanism: a character with a face photo and one without share a left edge
+because neither column ever collapses. Optional glyphs go `visibility: hidden`, never
+`display: none`, and never `v-if`.
+
+**Depth is a number, not a class.** A row carries `--depth: 0 | 1 | 2` and the grid
+multiplies it:
+
+```css
+padding-inline-start: calc(var(--space-3) + var(--depth, 0) * var(--indent-step));
+```
+
+No per-level classes, no `!important` override, no nested wrapper adding padding and
+a margin and a border that sum to an off-grid step.
+
+**The selection rail is always present and always transparent.** Only its colour
+changes on `.active`:
+
+```css
+border-left: 3px solid transparent;   /* base — always */
+.active { border-left-color: var(--active-bar); }
+```
+
+Never add the border on select, and never "compensate" for it with padding. Adding
+3px of border and 8px of padding on `.active` moves the label 3px right; that is a
+bug that has shipped here twice, once under a comment asserting it does not happen.
+
+**Rank is carried by type; depth is carried by indent.** Two rows at different
+ranks must differ in *type* even when they also differ in indent, so neither
+signal is load-bearing on its own. This is not decoration. When a project row and
+the section captions nested under it were set identically (both `--text-2xs`,
+semibold, uppercase), indentation had to signal both containment *and* rank, and
+the only way to make rank legible was a bigger step. Three levels of that pushed
+entity names to 91px in a 240px rail. Two ramp steps of size between project and
+caption is what makes a 16px indent enough.
+
+**Rank is size, weight and tracking. It is never opacity.** A structural label
+must not be dimmer than the content it heads. Dimming the section captions to 0.7
+made them the quietest thing in the column, sitting between a full-strength
+project above and full-strength entity names below, which reads as a hole rather
+than a hierarchy. Chrome recedes by being *smaller*, not by fading.
+
+**A row's caret takes its row's colour and never its own opacity.** When only the
+caption was dimmed, its caret was not, so the caret outshone the label it
+belonged to while the project's caret sat far below its own. Tying a caret to a
+fraction of its label does not fix it either: 0.7 of a 0.7 label is 0.49, which
+measures 2.95:1 against the light sidebar and misses the 3:1 that a disclosure
+glyph owes as a meaningful graphical object (WCAG 1.4.11). Leave both alone.
+
+**The indent step is set by legibility, not by glyph arithmetic.** `--indent-step`
+is 16px because that is the smallest on-grid step that still reads as nesting at
+this density. It is deliberately *not* derived from the glyph column. An earlier
+version set it to `--gutter-glyph + --space-3` = 24px so that one chevron would
+advance exactly one level, and tuned a margin onto the glyph slot to make the sum
+come out. That bought a child's chevron landing precisely under its parent's
+label, which nobody notices, and charged 24px per level for it. Do not tune the
+step and the glyph advance to each other; they answer different questions.
+
+**Why the other two widths.** `--gutter-glyph` is 16px because the sidebar already
+forced every chevron and row icon to 16px with `!important`. `--entity-thumb` is
+24px, promoted from the sidebar's own `--sidebar-thumb-size`.
+
+**Children indent past their parent's glyph, not past its row.** A disclosure
+group's children step in once from the group's own glyph column, so a child's mark
+lands under its parent's label. That is what every file tree does. Do not flatten
+it to save width; take the width out of the step size instead.
+
+**A caption with nothing under it is not a disclosure.** Rendering a disclosure
+affordance for an empty group is wrong whether the chevron is visible or hidden,
+and reserved-but-blank is the worst of the three because the empty box reads as a
+missing glyph. Make the row inert instead: `aria-disabled`, no hover response,
+label at `--opacity-disabled`. The dimmed label is what explains the blank slot.
+Keep the slot reserved so the caption does not shift when the first child
+arrives, and **keep the group's own add action at full strength and operable**,
+because it is the only way out of the empty state.
+
+**Scoped CSS does not cross a component boundary.** A row rendered by a child
+component gets none of the parent's scoped rules, so a recursive tree component must
+consume these tokens itself rather than keep a private copy. Two copies of a row
+style drift, and the copy is where the rail bug survives.
+
 ---
 
 ## 6. Radius

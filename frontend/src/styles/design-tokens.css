@@ -42,6 +42,22 @@
   --space-9: 64px;  /* hero / empty-state breathing room */
 
   /* ---------------------------------------------------------------------------
+     ROW WIDTHS — the three sizes that make list rows share a left edge. A row
+     reserves its leading glyph slot whether or not it has a glyph, and moves by
+     whole indent steps. See visual-language.md §5.1. None of these is a new
+     value: each is measured off a size the sidebar already forced.
+     --------------------------------------------------------------------------- */
+  --gutter-glyph: 16px; /* the de-facto glyph box: chevrons and row icons */
+  --indent-step: 16px;  /* the smallest on-grid step that still reads as nesting
+                           at sidebar density. Set by legibility, NOT by glyph
+                           arithmetic: a step tuned to make a chevron advance
+                           exactly one level cost 24px per level and pushed
+                           names off the end of a 240px rail. Rank is carried
+                           by type, depth by this. */
+  --entity-thumb: 24px; /* identity slot for a row carrying a picture; the
+                           sidebar overrides it from its thumbnail slider. */
+
+  /* ---------------------------------------------------------------------------
      RADIUS — four steps and a pill. The audit found 14 distinct radii
      (2/3/4/5/6/8/9/10/12/14/16/18/999/9999). Collapse to these. 9999 was a typo
      for the pill; use `--radius-pill`.
