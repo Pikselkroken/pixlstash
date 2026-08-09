@@ -52,12 +52,32 @@ import { useDedupStore } from "./useDedupStore";
 import { useReviewSessionsStore } from "./useReviewSessionsStore";
 import { useOperationStore } from "./useOperationStore";
 import { useLibrariesStore } from "./useLibrariesStore";
+import { useModelShelfStore } from "./useModelShelfStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
  * with a previous credential's rows, and what "dropped" means for it.
  */
 const STORES = [
+  {
+    // The model rows are hub-side facts about this machine, but each one
+    // carries the characters and sets in the ACTIVE LIBRARY that use it, so
+    // the page is stale the moment the credential changes. The `Show`
+    // selection is deliberately kept: it is the user's own preference and
+    // holds no ids.
+    name: "useModelShelfStore",
+    use: useModelShelfStore,
+    seed: (s) => {
+      s.rows = [
+        {
+          id: 1,
+          file_kind: "adapter",
+          attachments: [{ entity_type: "character", entity_id: 9 }],
+        },
+      ];
+    },
+    isEmpty: (s) => s.rows.length === 0,
+  },
   {
     name: "useLockedSetsStore",
     use: useLockedSetsStore,

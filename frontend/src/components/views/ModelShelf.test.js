@@ -8,6 +8,8 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { setActivePinia, createPinia } from "pinia";
+
 const listAdapters = vi.fn();
 const listCheckpoints = vi.fn();
 
@@ -18,8 +20,19 @@ vi.mock("../../api/modelShelf", () => ({
 }));
 
 import ModelShelf from "./ModelShelf.vue";
+import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
-const globalOpts = { global: { stubs: { "v-icon": true } } };
+const globalOpts = {
+  global: {
+    stubs: {
+      "v-icon": true,
+      "v-menu": {
+        template: "<div><slot name='activator' :props='{}' /><slot /></div>",
+      },
+      ShelfShowPanel: true,
+    },
+  },
+};
 
 /** The shape `/adapters` really returns, taken from a fixture probe. */
 function adapter(overrides = {}) {
@@ -53,6 +66,8 @@ function textOf(el) {
 }
 
 beforeEach(() => {
+  setActivePinia(createPinia());
+  window.localStorage.clear();
   listAdapters.mockReset();
   listCheckpoints.mockReset();
 });
@@ -125,10 +140,34 @@ describe("location state", () => {
 
 describe("empty states", () => {
   it("says where PixlStash looks when the shelf is empty", async () => {
+    // No reset offered here: resetting the filters would fix nothing, and
+    // offering it would blame the user for an empty disk.
     const wrapper = await mountShelf([]);
     const state = textOf(wrapper.find(".shelf-state"));
     expect(state).toContain("No models found");
-    expect(state).toContain("model folders registered on this machine");
+    expect(state).not.toContain("Reset filters");
+  });
+
+  it("offers a way out of a filter that matched nothing", async () => {
+    const wrapper = await mountShelf([adapter({ base_model: "sdxl" })]);
+    useModelShelfStore().setFilters({ baseModels: ["UNASSIGNED"] });
+    await wrapper.vm.$nextTick();
+    const state = textOf(wrapper.find(".shelf-state"));
+    expect(state).toContain("No models match these filters");
+    expect(state).toContain("Reset filters");
+  });
+
+  it("says so when Show asks for nothing at all", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    useModelShelfStore().setFilters({
+      adapters: false,
+      checkpoints: false,
+      unclassified: false,
+    });
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper.find(".shelf-state"))).toContain(
+      "Nothing is selected in Show",
+    );
   });
 });
 
