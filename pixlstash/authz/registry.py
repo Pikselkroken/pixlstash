@@ -363,6 +363,46 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 walks a registered host path and reads every model file under it — the same authority as reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # ── model_moves.py (shelf plan B7; §16.3 host-capability) ───────────────
+    # The strongest filesystem authority the shelf has: this block writes new
+    # files into a registered host folder and unlinks files out of another one.
+    # The read (GET) is on the same tier rather than OWNER_ONLY because it is
+    # the control surface of that operation — how a move is watched, next to the
+    # DELETE that stops one — so a caller who may not start a move may not
+    # observe or steer one either. It is NOT because the filenames are otherwise
+    # unreachable: a remote owner is 200 on GET /adapters, which already serves
+    # locations[].folder_path and locations[].relpath for every copy. (The
+    # earlier "barred from every route that could produce them" reasoning was
+    # false and was corrected in the B7 sign-off.)
+    ("POST", "/api/v1/model-moves"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 writes model files into a registered host folder and unlinks them from another — strictly more filesystem authority than reference-folders/move-pictures, which is already on this tier; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/model-moves"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 the control surface of an in-flight host-filesystem move — how one is watched, beside the DELETE that stops one — so the tier that alone can start a move is the tier that may observe and steer it; not a secrecy claim about the relpaths, which GET /adapters already serves",
+    ),
+    ("POST", "/api/v1/model-folders/{folder_id}/relocate"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 takes a caller-supplied host path and moves every file the managed model store holds into it, then unlinks the originals — the reference-folders/{folder_id}/relocate class with the file movement of POST /model-moves; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("DELETE", "/api/v1/model-moves"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 cancels an in-flight host-filesystem move; halting the owner's own file operation is the same authority as starting it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # ── model_imports.py (shelf plan B7; §16.3 host-capability) ────────────
+    # The listing walks a registered output root; the import writes into one
+    # registered folder and may unlink from another. Neither takes a host path:
+    # the import names a run *inside* a registered folder and the server joins
+    # and contains it.
+    ("GET", "/api/v1/model-folders/{folder_id}/runs"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 walks a registered ai-toolkit output root and reads every run folder and config under it — the same authority as model-folders/{folder_id}/rescan and reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/model-imports"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 copies a run's files into a registered host folder and, when the source folder carries delete_after_import, unlinks them from the output root — the same filesystem authority as POST /model-moves; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
         _LOCAL,

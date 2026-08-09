@@ -148,10 +148,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_18_local_5_loopback():
+def test_host_capability_tier_split_is_24_local_5_loopback():
     """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 23 routes carry a
-    locality tier = 18 local + 5 loopback.
+    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 29 routes carry a
+    locality tier = 24 local + 5 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -166,6 +166,34 @@ def test_host_capability_tier_split_is_18_local_5_loopback():
     which is the reference-folder class exactly. The shelf's *read* routes stay
     ``owner_only`` — they surface host paths but take none.
 
+    26 = 21 + 5 from later the same day, when the shelf's **move** block (B7)
+    joined it: ``POST``, ``GET`` and ``DELETE /model-moves``. The POST is
+    settled by precedent — it writes files into one registered folder and
+    unlinks them from another, which is strictly more than
+    ``reference-folders/{id}/move-pictures``, already on this tier. The GET is
+    the deliberate one: it is not a shelf read but the *control surface* of a
+    host-filesystem operation — how a move is watched, beside the DELETE that
+    stops one — so the tier that alone may start a move is the tier that may
+    observe and steer it. **Not** a secrecy claim about the relpaths: a remote
+    owner is 200 on ``GET /adapters``, which serves ``locations[].folder_path``
+    and ``locations[].relpath`` for every copy (the earlier wording here said
+    otherwise and was corrected in the B7 sign-off). The DELETE is the POST's
+    authority from the other end.
+
+    28 = 23 + 5 later still, when the shelf's **ai-toolkit import** block joined
+    it: ``GET /model-folders/{folder_id}/runs`` and ``POST /model-imports``.
+    The listing walks a registered output root, which is ``rescan``'s authority;
+    the import writes into one registered folder and may unlink from the output
+    root, which is ``POST /model-moves``' authority. Neither takes a host path —
+    the import names a registered folder id and a run *name* — so they are on
+    this tier for what they do, not for what they accept.
+
+    29 = 24 + 5 with ``POST /model-folders/{folder_id}/relocate``, which moves
+    every file the managed model store holds to a caller-supplied host path and
+    unlinks the originals. It is the ``reference-folders/{folder_id}/relocate``
+    class carrying ``POST /model-moves``' file movement, so it is the one route
+    in the shelf that is on this tier for **both** reasons at once.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -179,7 +207,7 @@ def test_host_capability_tier_split_is_18_local_5_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 18, sorted(local)
+    assert len(local) == 24, sorted(local)
 
 
 # ===========================================================================

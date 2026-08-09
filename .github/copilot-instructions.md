@@ -172,13 +172,51 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 - **Build frontend:** `npm run build` (in `frontend/`)
 - **Dev frontend:** `npm run dev` (in `frontend/`)
 
+## Fixing a CI failure: update the existing PR, do not open another
+
+**One full gate run costs ~200 runner-minutes** (8 Linux shards, 4 Windows, e2e,
+checks). A PR is not free to open and it is not free to leave open — every push
+to it, and every push to anything it is stacked on, runs the whole gate again.
+On 2026-08-09 this repo had **13 PRs open at once** and opened **47 in a day**.
+Treat runner time as a budget you are spending, because you are.
+
+So, in order:
+
+1. **A CI failure on a PR is fixed on that PR's branch.** Even when the cause is
+   somewhere else entirely — a stale map, another PR's merge, an unrelated
+   flake. Pushing the fix to the red PR turns it green in the run it was already
+   going to spend. Opening a second PR to fix the first spends a second run and
+   leaves the first red until the second lands.
+2. **Check `gh pr list --state open` before opening anything.** Several agent
+   sessions run against this repository at once and cannot see each other. On
+   2026-08-09 two sessions independently fixed the same red guardrail (#848 and
+   #851), which is ~400 runner-minutes for one change. This check costs one
+   second.
+3. **Fold the unblock into the fix.** If the guardrail is wrong *and* its data is
+   stale, that is one PR, not two. Splitting them doubles the CI for no review
+   benefit — the reviewer reads the same diff either way.
+4. **Close a superseded PR the moment it is superseded**, not at merge time. A PR
+   left open after its content moved elsewhere keeps drawing runs from every push
+   to its base, and it is a live hazard: merging it can reintroduce exactly the
+   code a later fix corrected.
+5. **Prefer one PR per work step, with clean separated commits.** Split into a
+   stack only when the pieces can genuinely **merge independently** — not merely
+   because the diff is large. Review granularity comes from commits; a reviewer
+   reads commits either way. A six-PR stack whose parts must all land together
+   re-runs the gate on growing supersets and buys nothing.
+
+The corollary for anyone orchestrating parallel agents: per-agent instructions
+bound each agent's diff, and nothing bounds the *aggregate*. Counting the PRs
+across all in-flight lanes is the orchestrator's job, and it is the one that was
+not being done when the number reached 13.
+
 ## New test files must be gated in CI
 
 Every file under `tests/` must be either listed in the `backend` job's file list in `.github/workflows/ci.yml` (preferred, since it then blocks PRs) or listed in `DEFERRED_FROM_GATE` in `tests/test_ci_shards.py` with a reason if it is not green yet. `tests/test_ci_shards.py::test_every_test_file_is_classified` fails the build on anything unclassified, so a new suite that is written and passing locally still breaks CI until it is listed. Add the file in alphabetical position as part of the same change that adds the test.
 
 **Do not try to place a test in a particular shard.** The blocking gate runs `--ci-shard N/8`, which splits by *test* rather than by file (`tests/conftest.py`), so all eight shards share one file list and a single file's tests spread across all of them. There is no per-shard list to pick and no placement decision to make when you add a test file.
 
-The deal is time-balanced, not round-robin. `_time_balanced_shard_assignment` (`tests/conftest.py`) seeds every test on its round-robin position and then re-places the ones it has timings for, longest-processing-time-first, over the committed `tests/ci_test_durations.json`; a test missing from the map keeps its seeded position and is charged the median cost. Shards therefore come out level on recorded *time* (max/min 1.000 at N=8), and `tests/test_ci_shards.py::test_recorded_durations_actually_balance_the_gate` fails the build above 1.05, reading N from the workflow so a resize has to re-prove it. CI records the data that feeds this: `PYTEST_FLAGS` carries `--durations=0 --durations-min=0`, and `scripts/record_test_durations.py` turns that output back into the committed map. Refreshing the map after adding tests is an optimisation chore, never a correctness obligation: a stale map costs a little balance and never coverage.
+The deal is time-balanced, not round-robin. `_time_balanced_shard_assignment` (`tests/conftest.py`) seeds every test on its round-robin position and then re-places the ones it has timings for, longest-processing-time-first, over the committed `tests/ci_test_durations.json`; a test missing from the map keeps its seeded position and is charged the median cost. Shards therefore come out level on recorded *time* (max/min 1.000 at N=8), and `tests/test_ci_shards.py::test_recorded_durations_actually_balance_the_gate` fails the build above 1.05, reading N from the workflow so a resize has to re-prove it. CI records the data that feeds this: `PYTEST_FLAGS` carries `--durations=0 --durations-min=0`, and `scripts/record_test_durations.py` turns that output back into the committed map. Adding a test file therefore imposes no obligation on the map: refreshing it is an optimisation chore, never a correctness obligation, and a stale map costs a little balance and never coverage. The guardrail names every gated file it has not timed as a warning rather than a failure, because that failure could only ever land on an unrelated PR — the file is already on `develop` by the time the map is stale. It does fail once the map times less than `MINIMUM_GATE_COVERAGE` (90%) of the gated files, at which point the 1.05 balance figure is describing a shrinking subset rather than the gate. Refresh it by dispatching `.github/workflows/record-test-durations.yml`, which harvests a green `backend` gate run and pushes the regenerated map to a branch.
 
 ## Tests: reuse the environment, don't rebuild it
 
