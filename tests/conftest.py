@@ -11,6 +11,7 @@ import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+import pytest
 from _pytest.config.exceptions import UsageError
 from fastapi.testclient import TestClient
 from pixlstash.server import Server
@@ -43,6 +44,23 @@ _TEST_DURATIONS_PATH = Path(__file__).resolve().parent / "ci_test_durations.json
 # 648 tests on one shard against ~153 on each of the others. The load was
 # balanced and the count was absurd, and the count is not free either.
 _PER_TEST_OVERHEAD_SECONDS = 0.005
+
+# Ceiling on the gate's TOTAL test time, divided by the shard count at runtime
+# so a reshard cannot silently move the effective bar.
+#
+# Measured from THIS run's own per-test report durations, never from
+# ci_test_durations.json: that map is stale between refactors by design, so a
+# guard reading it would be checking its own input and would report a healthy
+# gate for tests it had never timed.
+#
+# Baseline: the last green develop run before this landed (Actions run
+# 31307604252, N=8) summed to 6662 s of test time, worst shard 1005 s, mean
+# 833 s. 12000 s total is 1.8x the measured total and 1500 s per shard is 1.5x
+# the worst shard, so runner noise and an out-of-date balance map cannot trip
+# it. It still fires at roughly half the drift back to the 2844 s/shard the
+# gate had reached before the #796 wave, which is the regression it exists to
+# catch.
+TEST_TIME_BUDGET_SECONDS = 12000.0
 
 
 def _normalize_test_path(path: str):
@@ -379,8 +397,80 @@ def pytest_configure(config):
     Server.DEFAULT_INSIGHTFACE_MODEL_PACK = config.getoption("--insightface-model-pack")
 
 
+def _measured_test_seconds(reporter) -> float:
+    """Sum this run's own setup + call + teardown time over every phase report.
+
+    ``stats`` holds one report per phase under the outcome key it was filed as
+    (passed setup and teardown land under ``""``), which is the same
+    setup+call+teardown total ``scripts/record_test_durations.py`` reconstructs
+    from ``--durations`` output. Non-report entries (warnings, for example) do
+    not carry a duration and are skipped.
+    """
+    return sum(
+        report.duration
+        for reports in reporter.stats.values()
+        for report in reports
+        if hasattr(report, "duration")
+    )
+
+
+def _enforce_test_time_budget(session) -> None:
+    """Turn the shard red when its own measured test time blows the budget.
+
+    Only active under ``--ci-shard``, so a local partial run cannot trip it.
+    Deliberately a signal rather than a correctness gate: every test can pass
+    and this still exits non-zero, which is why the banner says exactly that.
+    The repo has no required status checks; a red step is simply the loudest
+    thing available, and the drift it watches for (the gate creeping from 15 to
+    47 minutes per shard) has no other alarm.
+    """
+    spec = session.config.getoption("--ci-shard")
+    if not spec:
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is None:
+        # No terminal reporter (-p no:terminal): nothing accumulated the phase
+        # reports this check measures, and there is nowhere to print the
+        # banner, so the budget simply does not apply to that invocation.
+        return
+
+    _, shards = _parse_ci_shard(spec)
+    measured = _measured_test_seconds(reporter)
+    ceiling = TEST_TIME_BUDGET_SECONDS / shards
+    if measured <= ceiling:
+        return
+
+    banner = "TEST-TIME BUDGET EXCEEDED - THIS IS NOT A TEST FAILURE"
+    reporter.write_sep("=", banner, red=True, bold=True)
+    reporter.write_line(
+        f"Every test above may have passed. This shard spent {measured:.6g}s of "
+        f"test time against a ceiling of {ceiling:.6g}s "
+        f"({TEST_TIME_BUDGET_SECONDS:.0f}s for the whole suite / {shards} shards)."
+    )
+    reporter.write_line(
+        "The suite got slower, it did not break. Reuse an existing "
+        "module-scoped environment instead of standing up a Server per test "
+        "(CLAUDE.md, 'Tests: reuse the environment, don't rebuild it'), or "
+        "raise TEST_TIME_BUDGET_SECONDS in tests/conftest.py deliberately and "
+        "put the measurement that justifies it in the commit message."
+    )
+    reporter.write_sep("=", banner, red=True, bold=True)
+    if session.exitstatus == 0:
+        # Never downgrade a real failure, an interrupt or an internal error:
+        # those are more informative than a budget breach.
+        session.exitstatus = 1
+
+
+@pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
-    """Release native model/session resources before interpreter teardown."""
+    """Release native model/session resources before interpreter teardown.
+
+    ``trylast`` so any other session-finish work runs before the budget check
+    below. The phase reports it measures are filed during the run rather than
+    at teardown, so its input is complete either way.
+    """
+    _enforce_test_time_budget(session)
+
     try:
         # Drain optional CPU spillover tagger if one was created by tag tasks.
         TagTask.release_idle_cpu_spillover_engine(force=True)

@@ -243,6 +243,54 @@ DEFERRED_FROM_GATE = frozenset(
     }
 )
 
+# Gated files the committed durations map has never timed. Same shape and same
+# job as DEFERRED_FROM_GATE: half of a partition, written down rather than
+# tolerated, so the hole is a decision instead of a silent gap. Repo-relative
+# paths here rather than bare names, because the gate also runs a subdirectory.
+#
+# This exists because the balance guardrail below used to build its node list
+# from the map's own keys, which made it structurally blind to exactly these
+# files: it reported a perfect 1.000 ratio while 27 of 118 gated files (23%)
+# were absent from the data it was grading. Refreshing the map with
+# scripts/record_test_durations.py is what empties this list, and emptying it
+# is the intended direction of travel.
+#
+# The list is self-cleaning in both directions. A newly gated file that nobody
+# recorded fails the guardrail, and so does an entry here that the map has
+# since learned about, so it cannot rot into a stale allowlist the way the
+# blindness it documents did.
+UNRECORDED_IN_DURATIONS_MAP = frozenset(
+    {
+        "tests/multi_project_authz/test_generic_field_reader_allowlist.py",
+        "tests/test_adapter_attachment.py",
+        "tests/test_adapter_header.py",
+        "tests/test_aitoolkit_run.py",
+        "tests/test_authz_library_pin.py",
+        "tests/test_checkpoint_hash_finder.py",
+        "tests/test_comfyui_pixlstash_saver.py",
+        "tests/test_hub_bootstrap.py",
+        "tests/test_hub_engine.py",
+        "tests/test_hub_model_shelf_schema.py",
+        "tests/test_hub_registry.py",
+        "tests/test_identity_storage_guardrail.py",
+        "tests/test_libraries_routes.py",
+        "tests/test_library_backup.py",
+        "tests/test_library_generation_coordinator.py",
+        "tests/test_library_settings.py",
+        "tests/test_library_switch.py",
+        "tests/test_model_file_classification.py",
+        "tests/test_model_folder_scanner.py",
+        "tests/test_model_shelf_fixtures.py",
+        "tests/test_model_shelf_library_fixture.py",
+        "tests/test_model_shelf_scan_invariants.py",
+        "tests/test_model_unload_race.py",
+        "tests/test_path_containment.py",
+        "tests/test_pending_score_invalidation.py",
+        "tests/test_share_link_library_pin.py",
+        "tests/test_tag_task.py",
+    }
+)
+
 
 @pytest.fixture(scope="module")
 def workflow() -> dict:
@@ -1199,9 +1247,44 @@ def test_recorded_durations_actually_balance_the_gate(workflow):
     show the difference in kind, and it is the *balanced* side that carries the
     assertion. If a single test ever grows past a shard's share this fails, and
     it should: no assignment can balance that, and the fix is the test.
+
+    The node list comes from the gate's own file list, never from the map's
+    keys. Grading the map on the tests it happens to contain is a tautology: it
+    reported 1.000 while 27 of 118 gated files were absent, and every test in
+    those files was being placed by round-robin fallback rather than by the
+    balance this claims to prove. Whatever the map does not know is either an
+    acknowledged entry in ``UNRECORDED_IN_DURATIONS_MAP`` or a failure here.
     """
     durations = _load_recorded_durations(DURATIONS_PATH)
-    nodeids = sorted(durations)
+    gated = _gated_files(workflow)
+    recorded_files = {nodeid.split("::", 1)[0] for nodeid in durations}
+
+    unlisted = sorted(gated - recorded_files - UNRECORDED_IN_DURATIONS_MAP)
+    assert not unlisted, (
+        f"These gated test files have no recorded durations: {unlisted}. Every "
+        "test in them is placed by round-robin fallback, so this balance "
+        "assertion says nothing about them. Refresh the map with "
+        "scripts/record_test_durations.py, or add them to "
+        "UNRECORDED_IN_DURATIONS_MAP."
+    )
+
+    recorded_now = sorted(UNRECORDED_IN_DURATIONS_MAP & recorded_files)
+    assert not recorded_now, (
+        f"UNRECORDED_IN_DURATIONS_MAP names files the map now times: "
+        f"{recorded_now}. Drop them from the list so it keeps naming the real "
+        "hole rather than an imagined one."
+    )
+
+    ungated = sorted(UNRECORDED_IN_DURATIONS_MAP - gated)
+    assert not ungated, (
+        f"UNRECORDED_IN_DURATIONS_MAP names files the gate does not run: "
+        f"{ungated}. Remove them; only gated files can be missing from the "
+        "data that balances the gate."
+    )
+
+    nodeids = sorted(
+        nodeid for nodeid in durations if nodeid.split("::", 1)[0] in gated
+    )
     total = len(_shard_matrix(workflow["jobs"][_GATE_JOB]))
 
     assignment = _time_balanced_shard_assignment(nodeids, total, durations)
@@ -1239,6 +1322,136 @@ def test_negligible_tests_do_not_all_land_on_one_shard():
 
     assert max(counts) <= 2 * min(counts), (
         f"Zero-cost tests piled onto one shard instead of being dealt: {counts}"
+    )
+
+
+class _BudgetStubReporter:
+    """The three pieces of the terminal reporter the budget check touches."""
+
+    def __init__(self, durations: list[float]):
+        self.stats = {"passed": [_BudgetStubReport(value) for value in durations]}
+        self.lines: list[str] = []
+
+    def write_sep(self, _sep, title, **_kwargs):
+        self.lines.append(title)
+
+    def write_line(self, line, **_kwargs):
+        self.lines.append(line)
+
+
+class _BudgetStubReport:
+    def __init__(self, duration: float):
+        self.duration = duration
+
+
+class _BudgetStubSession:
+    """A session whose exit status the budget check is allowed to change."""
+
+    def __init__(self, reporter, shard_spec, exitstatus=0):
+        self.exitstatus = exitstatus
+        self.config = _BudgetStubConfig(reporter, shard_spec)
+
+
+class _BudgetStubConfig:
+    def __init__(self, reporter, shard_spec):
+        self._shard_spec = shard_spec
+        self.pluginmanager = _BudgetStubPluginManager(reporter)
+
+    def getoption(self, name):
+        assert name == "--ci-shard", f"Unexpected option read: {name}"
+        return self._shard_spec
+
+
+class _BudgetStubPluginManager:
+    def __init__(self, reporter):
+        self._reporter = reporter
+
+    def get_plugin(self, name):
+        assert name == "terminalreporter", f"Unexpected plugin read: {name}"
+        return self._reporter
+
+
+def test_test_time_budget_fires_on_over_budget_input():
+    """The ceiling trips on synthetic time, and stays quiet under it.
+
+    Both directions on purpose: a budget that can only be observed to fire is
+    no better evidenced than one that never fires, and a guard permanently red
+    gets muted within a week.
+    """
+    ceiling = shard_conftest.TEST_TIME_BUDGET_SECONDS / 4
+
+    over = _BudgetStubReporter([ceiling * 0.6, ceiling * 0.6])
+    session = _BudgetStubSession(over, "1/4")
+    shard_conftest._enforce_test_time_budget(session)
+    assert session.exitstatus == 1, "Over-budget shard did not go red"
+    assert any("TEST-TIME BUDGET EXCEEDED" in line for line in over.lines), (
+        f"No budget banner was printed: {over.lines}"
+    )
+    assert any("NOT A TEST FAILURE" in line for line in over.lines), (
+        "The banner must be unmistakable from a failing test"
+    )
+
+    under = _BudgetStubReporter([ceiling * 0.6, ceiling * 0.3])
+    session = _BudgetStubSession(under, "1/4")
+    shard_conftest._enforce_test_time_budget(session)
+    assert session.exitstatus == 0, "Under-budget shard was failed anyway"
+    assert under.lines == [], f"Under-budget shard printed a banner: {under.lines}"
+
+    # The ceiling is one total-suite constant divided by the shard count, so
+    # the same measured time is fine at N=4 and a breach at N=16.
+    resharded = _BudgetStubReporter([ceiling * 0.6, ceiling * 0.3])
+    session = _BudgetStubSession(resharded, "1/16")
+    shard_conftest._enforce_test_time_budget(session)
+    assert session.exitstatus == 1, "A reshard silently kept the old ceiling"
+
+    # Not sharding at all means not measuring: a local partial run collects a
+    # fraction of the suite and must never be judged against a shard's share.
+    local = _BudgetStubReporter([ceiling * 99])
+    session = _BudgetStubSession(local, None)
+    shard_conftest._enforce_test_time_budget(session)
+    assert session.exitstatus == 0 and local.lines == [], (
+        "The budget applied to an unsharded run"
+    )
+
+    # A real failure, an interrupt or an internal error is more informative
+    # than a budget breach, so the check may escalate from 0 and nothing else.
+    interrupted = _BudgetStubReporter([ceiling * 99])
+    session = _BudgetStubSession(interrupted, "1/4", exitstatus=2)
+    shard_conftest._enforce_test_time_budget(session)
+    assert session.exitstatus == 2, "The budget downgraded a worse exit status"
+
+
+def test_test_time_budget_actually_turns_a_green_run_red():
+    """End to end: a passing shard over its ceiling exits non-zero.
+
+    The stub test above proves the arithmetic; this proves the wiring, which is
+    where the previous guardrails in this repo failed. It runs the real hook,
+    against the real terminal reporter's stats, in a real pytest process, and
+    the only synthetic part is the shard count: ``1/100000000`` puts the
+    ceiling at 0.12 ms, which any real test exceeds.
+
+    ``1 passed`` is asserted as well as the exit code, because a renamed target
+    would make pytest exit non-zero for "no tests ran" and this would pass for
+    the wrong reason.
+    """
+    target = (
+        "tests/test_ci_shards.py::test_nonsense_duration_values_are_dropped_not_trusted"
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", target, "--ci-shard=1/100000000"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = result.stdout + result.stderr
+
+    assert "1 passed" in output, f"The target test did not run:\n{output}"
+    assert result.returncode != 0, (
+        f"A shard over its test-time ceiling still exited 0:\n{output}"
+    )
+    assert "TEST-TIME BUDGET EXCEEDED" in output, (
+        f"No budget banner in the failing run:\n{output}"
     )
 
 
