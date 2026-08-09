@@ -53,6 +53,7 @@ import { useReviewSessionsStore } from "./useReviewSessionsStore";
 import { useOperationStore } from "./useOperationStore";
 import { useLibrariesStore } from "./useLibrariesStore";
 import { useModelShelfStore } from "./useModelShelfStore";
+import { useModelFoldersStore } from "./useModelFoldersStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -77,6 +78,19 @@ const STORES = [
       ];
     },
     isEmpty: (s) => s.rows.length === 0,
+  },
+  {
+    // Absolute paths on the host machine, readable only by the owner. A share
+    // or read-only session could never have asked for them, so none of it may
+    // survive the transition, and any scan being waited on is abandoned with
+    // it, because this session no longer has standing to poll for it.
+    name: "useModelFoldersStore",
+    use: useModelFoldersStore,
+    seed: (s) => {
+      s.folders = [{ id: 1, path: "/home/g/loras", kind: "user", file_count: 91 }];
+      s.loaded = true;
+    },
+    isEmpty: (s) => s.folders.length === 0 && !s.loaded,
   },
   {
     name: "useLockedSetsStore",

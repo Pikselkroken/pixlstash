@@ -321,7 +321,6 @@ button:focus:not(:focus-visible) {
   box-shadow: none !important;
 }
 
-
 .face-bbox-toggle-btn .face-bbox-icon-wrapper {
   display: inline-flex;
   align-items: center;
@@ -437,7 +436,6 @@ kbd {
   border-radius: var(--radius-sm);
   line-height: 1.5;
 }
-
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Toolbar menus — shared chrome for the Sort / Filter / Grid-view popovers.
@@ -949,6 +947,169 @@ kbd {
 .tbm-ghost:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+/* ── Bar buttons: the toolbar control dialect ──────────────────────────────
+   Moved here from `Toolbar.vue`'s scoped block, unchanged. `<style scoped>`
+   compiles these to `.bar-btn[data-v-hash]`, which matches only Toolbar.vue's
+   own elements, so the model shelf's toolbar (which uses the same class names)
+   rendered its buttons as bare `<button>`s. The `--open` state below was
+   already global, so half the family lived here and half did not; that split is
+   what this closes. Selectors stay `bar-`-prefixed, so global scope is
+   contained, the same containment argument `SideBar.global.css` makes. Toolbar
+   keeps only its own overrides (the responsive fold, the icon-trigger accent).
+   ────────────────────────────────────────────────────────────────────────── */
+.bar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  font-size: var(--text-base);
+  font-family: inherit;
+  /* Icons and labels take the sidebar's treatment: the toolbar-text token
+     (identical to sidebar-text) at the sidebar's muted alpha, brightening on
+     hover/active — so the toolbar and sidebar chrome read as one strip. */
+  color: rgb(var(--v-theme-toolbar-text));
+  /* A transparent 1px border is reserved so the open state (which colours the
+     border) does not change the box size and make the button jump. */
+  border: 1px solid transparent;
+  box-sizing: border-box;
+  height: 32px;
+  white-space: nowrap;
+  position: relative;
+}
+
+.bar-btn:hover {
+  background: rgba(var(--v-theme-toolbar-text), 0.1);
+  color: rgb(var(--v-theme-toolbar-text));
+}
+
+.bar-btn--active {
+  color: rgb(var(--v-theme-primary));
+}
+
+.bar-btn--boxed {
+  border-radius: var(--radius-sm);
+}
+
+/* Icon-only bar button */
+.bar-btn--icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.bar-btn-label {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+}
+
+.bar-btn-prefix {
+  font-size: var(--text-sm);
+  opacity: 0.6;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bar-split-toggle {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  padding-right: var(--space-2);
+}
+
+.bar-split-menu {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+}
+
+/* Wrapper so the filter-count badge can overlay the icon without affecting
+   layout (the badge is absolutely positioned within this). */
+.bar-icon-badge-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Small count badge, overlaid on the top-right of the filter icon. Absolutely
+   positioned so it never changes the size of the button or shifts the chevron
+   and the buttons that follow it. */
+.bar-filter-badge {
+  position: absolute;
+  top: -5px;
+  right: -7px;
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  padding: 0 var(--space-2);
+  min-width: 15px;
+  height: 15px;
+  text-align: center;
+  line-height: 15px;
+  pointer-events: none;
+}
+
+.bar-separator {
+  width: 1px;
+  height: 24px;
+  background: rgba(var(--v-theme-on-background), 0.2);
+  margin: 0 var(--space-2);
+  align-self: center;
+  flex-shrink: 0;
+}
+
+.bar-btn-sort-type {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+  flex-shrink: 1;
+  /* The current selection reads at full strength against the muted "Sort:". */
+  color: rgb(var(--v-theme-toolbar-text));
+}
+
+.bar-btn-sort-secondary {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+  flex-shrink: 1;
+}
+
+/* ── Split button (a direction toggle welded to a menu trigger) ───────────── */
+.bar-split-button {
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+/* Open state: the whole split button adopts the panel fill + border so it reads
+   as one object with its menu (the caret bridges the gap). */
+.bar-split-button--open {
+  border-color: rgb(var(--v-theme-border));
+  background: rgb(var(--v-theme-panel));
+}
+
+.bar-split-button--open .bar-split-toggle,
+.bar-split-button--open .bar-split-menu {
+  background: transparent;
+}
+
+.bar-split-button--open .bar-btn-chevron {
+  transform: rotate(180deg);
+  transition: transform var(--dur-1) var(--ease-standard);
 }
 
 /* ── Open trigger state — the toolbar button while its menu is open ────────── */

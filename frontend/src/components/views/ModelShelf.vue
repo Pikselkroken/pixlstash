@@ -12,49 +12,128 @@
   >
     <p id="shelf-help" class="visually-hidden">
       Every adapter and checkpoint PixlStash has found on this machine. Show
-      chooses which kinds are listed and which base models. A name in a
-      monospaced face was taken from the filename, because nobody has named
-      that file yet.
+      chooses which kinds are listed and which base models. Sort chooses the
+      order and whether the list is cut into groups. A name in a monospaced face
+      was taken from the filename, because nobody has named that file yet.
     </p>
+
+    <!-- One announcement for a resort, because the rows reorder silently: the
+         two buttons' own names change, but a reader who is not on them hears
+         nothing. Group collapse gets none, because `aria-expanded` on the
+         header already says it and a second announcer double-speaks. -->
+    <p class="visually-hidden" role="status">{{ sortAnnouncement }}</p>
 
     <div class="shelf-toolbar">
       <span class="shelf-title">Models</span>
       <span class="shelf-sub">{{ countLabel }}</span>
       <span class="shelf-spacer"></span>
-      <v-menu
-        v-model="showMenuOpen"
-        :close-on-content-click="false"
-        location="bottom end"
-        origin="top end"
-        :offset="8"
-        transition="scale-transition"
-      >
-        <!-- The boxed bar button, its badge and the panel shell are the
+
+      <!-- The bar's own cluster gap. `.shelf-toolbar` separates the title from
+           its controls at --space-4; the controls separate from each other at
+           --space-3, which is what every other bar in the app uses. -->
+      <div class="shelf-bar-cluster">
+        <v-menu
+          v-model="sortMenuOpen"
+          :close-on-content-click="false"
+          location="bottom end"
+          origin="top end"
+          :offset="8"
+          transition="scale-transition"
+        >
+          <!-- The shipped split-button: a direction toggle welded to a menu
+             trigger. `role="group"` names the pair; the two halves keep their
+             own accessible names, and v-menu returns focus to the trigger on
+             Escape, on an outside click and on a selection. -->
+          <template #activator="{ props: menuProps }">
+            <div
+              class="bar-split-button"
+              :class="{ 'bar-split-button--open': sortMenuOpen }"
+              role="group"
+              aria-label="Sort"
+            >
+              <!-- The accessible name IS the current state and flips on press,
+                 which is what a keyboard user hears when focus returns. -->
+              <button
+                class="bar-btn bar-split-toggle"
+                type="button"
+                :title="directionLabel"
+                :aria-label="directionLabel"
+                @click.stop="toggleDirection"
+              >
+                <v-icon size="19">{{ directionIcon }}</v-icon>
+              </button>
+              <!-- `aria-haspopup="dialog"`, not `menu`: the panel is a div of
+                 grouped toggles, and claiming a menu would promise roving
+                 arrow keys nothing implements. Matches SearchResultBar. -->
+              <button
+                v-bind="menuProps"
+                class="bar-btn bar-split-menu"
+                type="button"
+                aria-haspopup="dialog"
+                :aria-expanded="sortMenuOpen"
+                :title="sortButtonTitle"
+              >
+                <span class="bar-btn-prefix">Sort:</span>
+                <v-icon size="19">{{ activeSort.icon }}</v-icon>
+                <span class="bar-btn-sort-type">{{ activeSort.label }}</span>
+                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
+              </button>
+            </div>
+          </template>
+          <ShelfSortPanel />
+        </v-menu>
+
+        <v-menu
+          v-model="showMenuOpen"
+          :close-on-content-click="false"
+          location="bottom end"
+          origin="top end"
+          :offset="8"
+          transition="scale-transition"
+        >
+          <!-- The boxed bar button, its badge and the panel shell are the
              toolbar's shipped filter pattern; v-menu is also what returns
              focus to this button on Escape and on an outside click, so none
              of that is hand-rolled. -->
-        <template #activator="{ props: menuProps }">
-          <button
-            v-bind="menuProps"
-            class="bar-btn bar-btn--boxed"
-            :class="{
-              'bar-btn--active': store.activeCount > 0 && !showMenuOpen,
-              'bar-btn--open': showMenuOpen,
-            }"
-            type="button"
-            title="Show"
-          >
-            <span class="bar-icon-badge-wrap">
-              <v-icon size="19">mdi-eye-outline</v-icon>
-              <span v-if="store.activeCount > 0" class="bar-filter-badge">{{
-                store.activeCount
-              }}</span>
-            </span>
-            <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-          </button>
-        </template>
-        <ShelfShowPanel />
-      </v-menu>
+          <template #activator="{ props: menuProps }">
+            <button
+              v-bind="menuProps"
+              class="bar-btn bar-btn--boxed"
+              :class="{
+                'bar-btn--active': store.activeCount > 0 && !showMenuOpen,
+                'bar-btn--open': showMenuOpen,
+              }"
+              type="button"
+              title="Show"
+            >
+              <span class="bar-icon-badge-wrap">
+                <v-icon size="19">mdi-eye-outline</v-icon>
+                <span v-if="store.activeCount > 0" class="bar-filter-badge">{{
+                  store.activeCount
+                }}</span>
+              </span>
+              <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
+            </button>
+          </template>
+          <ShelfShowPanel />
+        </v-menu>
+
+        <!-- No count badge: `bar-filter-badge` counts a deviation from a default
+           the user set, and a folder count never returns to zero (the managed
+           store always exists), so a permanent number 8px from the Show
+           button's identical pill would mean something else entirely. -->
+        <button
+          ref="foldersBtnRef"
+          class="bar-btn bar-btn--boxed"
+          :class="{ 'bar-btn--open': foldersOpen }"
+          type="button"
+          title="Model folders"
+          aria-label="Model folders"
+          @click="openFolders"
+        >
+          <v-icon size="19">mdi-folder-multiple-outline</v-icon>
+        </button>
+      </div>
     </div>
 
     <div class="shelf-body">
@@ -76,8 +155,11 @@
         <p>No models found.</p>
         <p>
           PixlStash lists what it finds in the model folders registered on this
-          machine. Register one to fill the shelf.
+          machine. Add the folder where you keep them.
         </p>
+        <button class="tbm-action" type="button" @click="openFolders($event)">
+          Add a model folder
+        </button>
       </div>
       <div v-else-if="!store.visibleRows.length" class="shelf-state">
         <p>No models match these filters.</p>
@@ -88,57 +170,132 @@
 
       <!-- Rows are not focus stops: they carry no verb and no selection, so
            1,800 empty tab stops would be a trap. Roving focus arrives with the
-           first thing a focused row can do. -->
-      <ul v-else class="shelf-list" role="list">
-        <li
-          v-for="row in store.visibleRows"
-          :key="row.id"
-          class="ps-row shelf-row"
-          :title="rowTitle(row)"
-        >
-          <span class="ps-row-glyph ps-row-glyph--empty"></span>
-          <span class="shelf-row-kind">
-            <v-icon size="16">{{ KIND_ICON[row.file_kind] }}</v-icon>
-          </span>
-          <span class="shelf-row-label">
-            <span
-              class="shelf-row-name"
-              :class="{ 'shelf-row-name--derived': row.name.derived }"
-              >{{ row.name.text
-              }}<span v-if="row.name.derived" class="visually-hidden">
-                (name taken from the filename)</span
-              ></span
+           first thing a focused row can do. The group headers are therefore the
+           only stops in the list, which makes Tab a group-to-group move and is
+           why no jump shortcut was invented for one. -->
+      <template v-else>
+        <div v-for="group in store.groups" :key="group.key" class="shelf-group">
+          <!-- The header IS the button, on the same four-column grid as the
+               rows, so its label starts at their left edge. Column 2 stays
+               reserved and empty exactly as a row with no thumbnail reserves it
+               (§5.1). A heading as well as a button, so a screen reader can
+               jump group to group by heading. -->
+          <h3 v-if="grouped" class="shelf-group-heading">
+            <button
+              class="ps-row shelf-group-btn"
+              type="button"
+              :aria-expanded="!store.isCollapsed(group.key)"
+              :aria-label="`${group.label}, ${modelCount(group.rows.length)}`"
+              @click="store.toggleGroup(group.key)"
             >
-            <span class="shelf-row-meta">
-              <span>{{ kindLabel(row) }}</span>
-              <span>{{ row.base_model || "Base model not set" }}</span>
-              <span v-if="row.file_size" class="shelf-row-size">{{
-                formatModelSize(row.file_size)
+              <span
+                class="ps-row-glyph shelf-group-chevron"
+                :class="{
+                  'shelf-group-chevron--open': !store.isCollapsed(group.key),
+                }"
+              >
+                <v-icon size="16">mdi-chevron-right</v-icon>
+              </span>
+              <span class="shelf-group-mark"></span>
+              <span
+                class="shelf-group-label"
+                :class="`shelf-group-label--${group.labelKind}`"
+                >{{ group.label }}</span
+              >
+              <span class="shelf-group-count">{{
+                modelCount(group.rows.length)
               }}</span>
-            </span>
-          </span>
-          <span
-            class="shelf-row-loc"
-            :class="`shelf-row-loc--${row.locState}`"
-            :title="LOC_TITLE[row.locState]"
+            </button>
+          </h3>
+
+          <ul
+            v-if="!grouped || !store.isCollapsed(group.key)"
+            class="shelf-list"
+            role="list"
           >
-            <v-icon size="16">{{ LOC_ICON[row.locState] }}</v-icon>
-          </span>
-        </li>
-      </ul>
+            <li
+              v-for="row in group.rows"
+              :key="row.rowKey"
+              class="ps-row shelf-row"
+              :title="rowTitle(row)"
+            >
+              <span class="ps-row-glyph ps-row-glyph--empty"></span>
+              <span class="shelf-row-kind">
+                <v-icon size="16">{{ KIND_ICON[row.file_kind] }}</v-icon>
+              </span>
+              <span class="shelf-row-label">
+                <span
+                  class="shelf-row-name"
+                  :class="{ 'shelf-row-name--derived': row.name.derived }"
+                  >{{ row.name.text
+                  }}<span v-if="row.name.derived" class="visually-hidden">
+                    (name taken from the filename)</span
+                  ></span
+                >
+                <span class="shelf-row-meta">
+                  <span>{{ kindLabel(row) }}</span>
+                  <span>{{ row.base_model || "Base model not set" }}</span>
+                  <span v-if="row.file_size" class="shelf-row-size">{{
+                    formatModelSize(row.file_size)
+                  }}</span>
+                </span>
+              </span>
+              <span
+                class="shelf-row-loc"
+                :class="`shelf-row-loc--${row.locState}`"
+                :title="LOC_TITLE[row.locState]"
+              >
+                <v-icon size="16">{{ LOC_ICON[row.locState] }}</v-icon>
+              </span>
+            </li>
+          </ul>
+        </div>
+      </template>
     </div>
+
+    <ModelFoldersDialog :open="foldersOpen" @close="closeFolders" />
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from "vue";
 import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
+import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
+import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
-import { formatModelSize } from "../../utils/modelShelf";
+import {
+  formatModelSize,
+  SORT_LABELS,
+  sortDirectionLabel,
+} from "../../utils/modelShelf";
 
 const store = useModelShelfStore();
 const rootEl = ref(null);
 const showMenuOpen = ref(false);
+const sortMenuOpen = ref(false);
+const foldersOpen = ref(false);
+const foldersBtnRef = ref(null);
+
+// Two controls open the same dialog, so which one gets focus back is a fact
+// about the press rather than about the dialog. Held raw: it is a DOM node, and
+// making it reactive would deep-track an element tree for nothing.
+const folderInvoker = shallowRef(null);
+
+function openFolders(event) {
+  folderInvoker.value =
+    event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  foldersOpen.value = true;
+}
+
+async function closeFolders() {
+  const returnTo = folderInvoker.value;
+  foldersOpen.value = false;
+  folderInvoker.value = null;
+  await nextTick();
+  // The empty-state button unmounts the moment the first folder is scanned in,
+  // so fall back to the toolbar control rather than dropping focus to <body>.
+  (returnTo?.isConnected ? returnTo : foldersBtnRef.value)?.focus();
+}
 
 // A closed vocabulary gets a glyph, an open one a word. `unknown` gets a plain
 // file rather than a question mark (an unclassified file is a fact about our
@@ -176,10 +333,61 @@ const ALGO_LABEL = {
   oft: "OFT",
 };
 
-const countLabel = computed(() => {
-  const n = store.visibleRows.length;
+/** "1 model" / "12 models", so no line ever reads "1 models". */
+function modelCount(n) {
   return `${n.toLocaleString()} ${n === 1 ? "model" : "models"}`;
+}
+
+/**
+ * The count under the title.
+ *
+ * Under folder grouping a model with copies in two folders is drawn under both,
+ * so the group counts add up to more than the shelf holds. Both numbers are
+ * stated when they differ rather than picking one and being wrong about the
+ * other: `models` is distinct files on the shelf, `copies` is rows on screen.
+ */
+const countLabel = computed(() => {
+  const models = modelCount(store.visibleRows.length);
+  const drawn = store.renderedCount;
+  if (drawn === store.visibleRows.length) return models;
+  return `${models} · ${drawn.toLocaleString()} copies`;
 });
+
+/** True while the list is cut into groups, i.e. headers are drawn. */
+const grouped = computed(() => store.view.groupBy !== "none");
+
+const activeSort = computed(
+  () => SORT_LABELS[store.view.sortKey] || SORT_LABELS.added_at,
+);
+
+const directionLabel = computed(() =>
+  sortDirectionLabel(store.view.sortKey, store.view.sortDirection),
+);
+
+const directionIcon = computed(() =>
+  store.view.sortDirection === "asc"
+    ? "mdi-sort-ascending"
+    : "mdi-sort-descending",
+);
+
+// The direction phrase keeps its own capital: "A to Z" lowercased is "a to z",
+// which reads as a typo and is why the two halves are joined by a colon rather
+// than folded into one sentence.
+const sortButtonTitle = computed(
+  () =>
+    `Sort by ${activeSort.value.label.toLowerCase()}: ${directionLabel.value}`,
+);
+
+const sortAnnouncement = computed(
+  () =>
+    `Sorted by ${activeSort.value.label.toLowerCase()}: ${directionLabel.value}`,
+);
+
+function toggleDirection() {
+  store.setView({
+    sortDirection: store.view.sortDirection === "asc" ? "desc" : "asc",
+  });
+}
 
 /** The always-present anchor of the metadata line, whatever else is null. */
 function kindLabel(row) {
@@ -255,6 +463,15 @@ watch(
   flex: 1 1 auto;
 }
 
+/* The toolbar separates the title from its controls at --space-4; the controls
+   separate from each other at --space-3, which is the gap the grid bar uses.
+   Without the cluster every child of .shelf-toolbar sat at the wider gap. */
+.shelf-bar-cluster {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
 .shelf-body {
   flex: 1;
   min-height: 0;
@@ -276,6 +493,104 @@ watch(
   list-style: none;
   padding: 0;
   margin: 0;
+}
+
+/* ── Group headers ─────────────────────────────────────────────────────────
+   ONE level, though the plan allows two: folder is a grouping value rather
+   than a permanent outer band, so there is one sticky offset and no stacking
+   arithmetic. The second level is reserved for F5's stacks. */
+
+/* Space BETWEEN groups, no separator rule: a rule as well as the header's own
+   hairline would draw two lines at every boundary. */
+.shelf-group + .shelf-group {
+  margin-top: var(--space-5);
+}
+
+.shelf-group-heading {
+  margin: 0;
+  font: inherit;
+}
+
+/* Sticky inside the body's own scroller, the same band DuplicateQueue's
+   `.mixed-head` ships: an OPAQUE `background` (rows pass underneath it), the
+   named `--z-sticky` rung, and one hairline. No elevation: a shadow is for an
+   object floating above a surface, and this band is part of the list. */
+.shelf-group-btn {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  width: 100%;
+  display: grid;
+  grid-template-columns:
+    var(--gutter-glyph)
+    var(--entity-thumb)
+    minmax(0, 1fr)
+    auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+  text-align: left;
+  background: rgb(var(--v-theme-background));
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  color: rgb(var(--v-theme-on-background));
+  transition: background var(--dur-1) var(--ease-standard);
+}
+
+.shelf-group-btn:hover {
+  background: var(--hover-wash);
+}
+
+/* One icon rotated, not two swapped: a swap cannot animate. --dur-2 is the
+   ramp's expand/collapse step; reduced motion is handled globally in
+   design-tokens.css and is not re-stated here. */
+.shelf-group-chevron {
+  transition: transform var(--dur-2) var(--ease-standard);
+}
+
+.shelf-group-chevron--open {
+  transform: rotate(90deg);
+}
+
+/* Column 2. Reserved and empty, so a header's label starts at the same x as
+   the row names under it. */
+.shelf-group-mark {
+  width: var(--entity-thumb);
+}
+
+/* Rank is size, weight and tracking, never opacity: this label is at FULL
+   strength above full-strength row names, and it is the case and the tracking
+   that rank an 11px label above a 14px sentence-case one. */
+.shelf-group-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+/* A folder header's label is a literal filesystem path. §3 gives the mono face
+   to paths, and uppercasing one misstates the string, so this variant drops the
+   case change and the tracking and takes the larger of the two ramp steps. */
+.shelf-group-label--path {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+/* Column 4, where the row's own status glyph sits, so both align on one right
+   edge. The count is meta ON the header rather than the header's label, so it
+   takes the row meta line's alpha, not the label's full strength. */
+.shelf-group-count {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-background), 0.7);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  margin-left: var(--space-3);
 }
 
 /* The box, the rail and the indent come from the shared row system

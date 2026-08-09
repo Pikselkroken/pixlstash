@@ -73,6 +73,40 @@ def test_an_active_dedup_scan_never_reports_terminal_task_progress(monkeypatch):
         gc.collect()
 
 
+def test_checkpoint_hash_does_not_report_the_picture_library_as_its_progress(
+    monkeypatch,
+):
+    """The Checkpoint Hash row must not borrow the library's numbers.
+
+    It used to fall through to the generic `planner_managed` branch, which set
+    `missing = 0` and left `total` at the picture count. Reading tens of
+    gigabytes off disk then rendered as "N / N, 0 remaining, 0/s" on a row that
+    still said running, so a healthy long task read as a stuck one.
+
+    The picture count is forced to a sentinel rather than importing pictures:
+    an empty library makes the two branches indistinguishable, which is exactly
+    how this would pass while still broken.
+    """
+    temp_dir, _client, server = _setup()
+    try:
+        monkeypatch.setattr(
+            server.vault, "_count_total_pictures", lambda _session: 4242
+        )
+        workers = server.vault.get_worker_progress()
+        snapshot = workers[TaskType.CHECKPOINT_HASH.value]
+        assert snapshot["label"] == "checkpoints_hashed"
+        # The sentinel proves the branch ran: a picture-scoped worker shows it.
+        assert workers[TaskType.QUALITY.value]["total"] == 4242
+        # No hub registration in this fixture, so there is no shelf to count and
+        # the honest answer is zero — never the picture library's total.
+        assert snapshot["total"] == 0
+        assert snapshot["current"] == 0
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_version_endpoint_returns_200():
     temp_dir, client, server = _setup()
     try:

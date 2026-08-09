@@ -32,7 +32,9 @@ def hub(tmp_path):
     database.close()
 
 
-def register(hub, path, *, sha256=None, base_model=None, state="present"):
+def register(
+    hub, path, *, sha256=None, base_model=None, state="present", file_kind="checkpoint"
+):
     """Register one checkpoint the way a scan would: content row plus location."""
     path = str(path)
     folder, relpath = os.path.split(path)
@@ -53,10 +55,14 @@ def register(hub, path, *, sha256=None, base_model=None, state="present"):
         )
         model_id = int(
             conn.execute(
-                "INSERT INTO model (file_kind, filename, file_size, sha256, "
+                "INSERT INTO model (file_kind, kind, filename, file_size, sha256, "
                 "base_model, provenance, created_at) "
-                "VALUES ('checkpoint', ?, ?, ?, ?, 'external', 'now')",
+                "VALUES (?, ?, ?, ?, ?, ?, 'external', 'now')",
                 (
+                    file_kind,
+                    # The schema demands an algorithm for an adapter and forbids
+                    # guessing one for anything else.
+                    "lora" if file_kind == "adapter" else None,
                     relpath,
                     os.path.getsize(path) if os.path.exists(path) else None,
                     sha256,
@@ -413,3 +419,71 @@ class _NeverSubmits:
 
     def submit(self, task):
         raise AssertionError("the planner submitted a task after it had stopped")
+
+
+class TestProgress:
+    """What the task manager is fed while this worker is running.
+
+    Hashing 57 GB is genuinely minutes of disk-bound work, so the row is
+    legitimately active for a long time. It looked stuck rather than busy
+    because it reported no progress at all: the snapshot fell through to the
+    generic branch, which advertised the *picture library's* total and a
+    hardcoded zero remaining. "N / N, nothing left" on a row that says running
+    is the report a healthy long task must never produce.
+    """
+
+    def test_it_counts_the_shelf_and_not_the_picture_library(self, hub, tmp_path):
+        register(hub, write_model(tmp_path / "a.safetensors"))
+        register(hub, write_model(tmp_path / "b.safetensors", b"b"))
+        register(hub, write_model(tmp_path / "c.safetensors", b"c"), sha256="done")
+
+        assert MissingCheckpointHashFinder(hub).progress() == (3, 2)
+
+    def test_an_adapter_the_scan_already_hashed_is_not_in_the_denominator(
+        self, hub, tmp_path
+    ):
+        # Adapters are hashed inline by the scan and are never this worker's
+        # business. Counting them would park the bar at ~100% on any real LoRA
+        # folder, which is the same "nothing left to do" lie by another route.
+        register(hub, write_model(tmp_path / "a.safetensors"))
+        register(
+            hub,
+            write_model(tmp_path / "lora.safetensors", b"lora"),
+            sha256="hashed-by-the-scan",
+            file_kind="adapter",
+        )
+
+        assert MissingCheckpointHashFinder(hub).progress() == (1, 1)
+
+    def test_a_row_with_no_present_copy_is_not_counted(self, hub, tmp_path):
+        # find_task() skips it, so counting it would leave the bar permanently
+        # short of its total over a drive that is merely unplugged.
+        register(hub, write_model(tmp_path / "gone.safetensors"), state="unreachable")
+
+        assert MissingCheckpointHashFinder(hub).progress() == (0, 0)
+
+    def test_it_never_reports_nothing_left_while_a_batch_is_still_owed(
+        self, hub, tmp_path
+    ):
+        """The invariant that makes the number worth showing.
+
+        Whatever ``find_task`` would still hand out has to appear in the
+        remaining count, including rows deferred for the session: those are
+        work this process refuses to retry, not work that finished.
+        """
+        for index in range(3):
+            register(
+                hub, write_model(tmp_path / f"{index}.safetensors", bytes([index]))
+            )
+        finder = MissingCheckpointHashFinder(hub)
+
+        seen = []
+        while (task := finder.find_task()) is not None:
+            _total, pending = finder.progress()
+            seen.append(pending)
+            assert pending > 0, "progress said nothing was left while work was in hand"
+            task.run()
+            finder.on_task_complete(task, None)
+
+        assert seen, "the finder never handed anything out"
+        assert finder.progress() == (3, 0)

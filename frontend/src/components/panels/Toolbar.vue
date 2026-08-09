@@ -1144,31 +1144,11 @@ const gbCollapseAllStacksDisabled = computed(
    Grid Bar – Sort / Filter / View buttons and panels
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── Bar buttons ──────────────────────────────────────────────────────────── */
-.bar-split-button {
-  display: flex;
-  align-items: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-}
-
-/* Open state: the whole split button adopts the panel fill + border so it reads
-   as one object with its menu (the caret bridges the gap). */
-.bar-split-button--open {
-  border-color: rgb(var(--v-theme-border));
-  background: rgb(var(--v-theme-panel));
-}
-
-.bar-split-button--open .bar-split-toggle,
-.bar-split-button--open .bar-split-menu {
-  background: transparent;
-}
-
-.bar-split-button--open .bar-btn-chevron {
-  transform: rotate(180deg);
-  transition: transform var(--dur-1) var(--ease-standard);
-}
+/* The `.bar-*` family itself now lives unscoped in App.css, next to the
+   `.bar-btn--open` state that was already there. It is shared chrome: the model
+   shelf's toolbar uses the same classes, and a scoped rule cannot cross a
+   component boundary, so every `.bar-btn` outside this file rendered unstyled.
+   Only the toolbar's own overrides stay here. */
 
 /* ── Search menu (icon trigger → popover with input + recent searches) ─────── */
 .gb-search-panel {
@@ -1233,113 +1213,6 @@ const gbCollapseAllStacksDisabled = computed(
 }
 .gb-recent-row:hover .gb-recent-apply {
   color: rgba(var(--v-theme-on-panel), 0.7);
-}
-
-.bar-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-3);
-  font-size: var(--text-base);
-  font-family: inherit;
-  /* Icons and labels take the sidebar's treatment: the toolbar-text token
-     (identical to sidebar-text) at the sidebar's muted alpha, brightening on
-     hover/active — so the toolbar and sidebar chrome read as one strip. */
-  color: rgb(var(--v-theme-toolbar-text));
-  /* A transparent 1px border is reserved so the open state (which colours the
-     border) does not change the box size and make the button jump. */
-  border: 1px solid transparent;
-  box-sizing: border-box;
-  height: 32px;
-  white-space: nowrap;
-  position: relative;
-}
-
-.bar-btn:hover {
-  background: rgba(var(--v-theme-toolbar-text), 0.1);
-  color: rgb(var(--v-theme-toolbar-text));
-}
-
-.bar-btn--active {
-  color: rgb(var(--v-theme-primary));
-}
-
-.bar-btn--boxed {
-  border-radius: var(--radius-sm);
-}
-
-/* Icon-only bar button */
-.bar-btn--icon {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.bar-btn-label {
-  max-width: 130px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-base);
-}
-
-.bar-btn-prefix {
-  font-size: var(--text-sm);
-  opacity: 0.6;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.bar-split-toggle {
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  padding-right: var(--space-2);
-}
-
-.bar-split-menu {
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  padding-left: var(--space-3);
-  padding-right: var(--space-3);
-}
-
-/* Wrapper so the filter-count badge can overlay the icon without affecting
-   layout (the badge is absolutely positioned within this). */
-.bar-icon-badge-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-/* Small count badge, overlaid on the top-right of the filter icon. Absolutely
-   positioned so it never changes the size of the button or shifts the chevron
-   and the buttons that follow it. */
-.bar-filter-badge {
-  position: absolute;
-  top: -5px;
-  right: -7px;
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  border-radius: var(--radius-pill);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  padding: 0 var(--space-2);
-  min-width: 15px;
-  height: 15px;
-  text-align: center;
-  line-height: 15px;
-  pointer-events: none;
-}
-
-.bar-separator {
-  width: 1px;
-  height: 24px;
-  background: rgba(var(--v-theme-on-background), 0.2);
-  margin: 0 var(--space-2);
-  align-self: center;
-  flex-shrink: 0;
 }
 
 /* ── Sort panel ───────────────────────────────────────────────────────────── */
@@ -1530,26 +1403,6 @@ const gbCollapseAllStacksDisabled = computed(
     border-left: none;
     border-radius: var(--radius-sm);
   }
-}
-
-.bar-btn-sort-type {
-  max-width: 100px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-base);
-  flex-shrink: 1;
-  /* The current selection reads at full strength against the muted "Sort:". */
-  color: rgb(var(--v-theme-toolbar-text));
-}
-
-.bar-btn-sort-secondary {
-  max-width: 100px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-base);
-  flex-shrink: 1;
 }
 
 /* Stack time is conditional on the stacked lens. The small filter glyph makes

@@ -30,6 +30,10 @@ const globalOpts = {
         template: "<div><slot name='activator' :props='{}' /><slot /></div>",
       },
       ShelfShowPanel: true,
+      ShelfSortPanel: true,
+      // Its own suite mounts it. Here it would only drag Vuetify's dialog and
+      // tooltip providers into a suite that installs neither.
+      ModelFoldersDialog: true,
     },
   },
 };
@@ -192,7 +196,9 @@ describe("after a session reset", () => {
     await wrapper.vm.$nextTick();
 
     expect(listAdapters).toHaveBeenCalled();
-    expect(textOf(wrapper.find(".shelf-body"))).not.toContain("No models found");
+    expect(textOf(wrapper.find(".shelf-body"))).not.toContain(
+      "No models found",
+    );
     expect(wrapper.find(".shelf-row").exists()).toBe(true);
   });
 });
@@ -203,7 +209,10 @@ describe("keyboard", () => {
     // meantime. DuplicateQueue, the contract this view mirrors, is synchronous.
     listAdapters.mockReturnValue(new Promise(() => {}));
     listCheckpoints.mockReturnValue(new Promise(() => {}));
-    const wrapper = mount(ModelShelf, { ...globalOpts, attachTo: document.body });
+    const wrapper = mount(ModelShelf, {
+      ...globalOpts,
+      attachTo: document.body,
+    });
     await wrapper.vm.$nextTick();
 
     expect(document.activeElement).toBe(wrapper.find(".shelf").element);
@@ -231,5 +240,129 @@ describe("the shelf's own accessible name", () => {
     expect(root.attributes("aria-label")).toBe("Model shelf");
     expect(root.attributes("aria-describedby")).toBe("shelf-help");
     expect(wrapper.find("#shelf-help").exists()).toBe(true);
+  });
+});
+
+// ── F2: group headers and the Sort split-button ────────────────────────────
+
+describe("group headers", () => {
+  it("draws no header at all while the list is ungrouped", async () => {
+    // The flat F1 list and the grouped list are ONE piece of markup with the
+    // header switched off, not two copies of the row template.
+    const wrapper = await mountShelf([adapter()]);
+    expect(wrapper.find(".shelf-group-btn").exists()).toBe(false);
+    expect(wrapper.findAll(".shelf-row").length).toBe(1);
+  });
+
+  it("states the group and its size, and collapses to the header alone", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1, base_model: "sdxl" }),
+      adapter({ id: 2, base_model: "sdxl" }),
+    ]);
+    useModelShelfStore().setView({ groupBy: "base_model" });
+    await wrapper.vm.$nextTick();
+
+    const header = wrapper.find(".shelf-group-btn");
+    expect(textOf(header)).toContain("sdxl");
+    expect(textOf(header)).toContain("2 models");
+    expect(header.attributes("aria-expanded")).toBe("true");
+    // The accessible name carries the count, so the reader hears how big the
+    // group is BEFORE deciding to open it.
+    expect(header.attributes("aria-label")).toBe("sdxl, 2 models");
+
+    await header.trigger("click");
+    expect(wrapper.find(".shelf-group-btn").attributes("aria-expanded")).toBe(
+      "false",
+    );
+    expect(wrapper.findAll(".shelf-row").length).toBe(0);
+    // The header survives with its count: a group that vanished would be
+    // indistinguishable from one the filters removed.
+    expect(textOf(wrapper.find(".shelf-group-btn"))).toContain("2 models");
+  });
+
+  it("is a real button and leaves the rows out of the tab order", async () => {
+    // Rows carry no verb, so the headers are the only stops in the list, which
+    // is what makes Tab a group-to-group move without inventing a shortcut.
+    const wrapper = await mountShelf([adapter({ base_model: "sdxl" })]);
+    useModelShelfStore().setView({ groupBy: "base_model" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-group-btn").element.tagName).toBe("BUTTON");
+    expect(wrapper.find(".shelf-group-heading").element.tagName).toBe("H3");
+    expect(wrapper.find(".shelf-row").attributes("tabindex")).toBeUndefined();
+  });
+
+  it("sets a folder path in the path variant, never uppercased", async () => {
+    // §3 gives the mono face to file paths, and uppercasing one misstates the
+    // string. A base-model name is a label and takes the other treatment.
+    const wrapper = await mountShelf([
+      adapter({
+        locations: [{ state: "present", folder_path: "/mnt/Models" }],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "folder" });
+    await wrapper.vm.$nextTick();
+    const label = wrapper.find(".shelf-group-label");
+    expect(label.classes()).toContain("shelf-group-label--path");
+    expect(label.text()).toBe("/mnt/Models");
+
+    store.setView({ groupBy: "base_model" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-group-label").classes()).toContain(
+      "shelf-group-label--name",
+    );
+  });
+
+  it("counts models and copies apart when a model sits in two folders", async () => {
+    const wrapper = await mountShelf([
+      adapter({
+        locations: [
+          { state: "present", folder_path: "/a" },
+          { state: "present", folder_path: "/b" },
+        ],
+      }),
+    ]);
+    useModelShelfStore().setView({ groupBy: "folder" });
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper.find(".shelf-sub"))).toBe("1 model · 2 copies");
+  });
+});
+
+describe("the Sort split-button", () => {
+  it("names its direction so a keyboard user hears it on focus return", async () => {
+    // The accessible name IS the state and flips on press. "Ascending" would be
+    // useless on a date column and backwards on a size one, so each key words
+    // its own two ends.
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    store.setView({ sortKey: "size", sortDirection: "desc" });
+    await wrapper.vm.$nextTick();
+
+    const toggle = wrapper.find(".bar-split-toggle");
+    expect(toggle.attributes("aria-label")).toBe("Largest first");
+    await toggle.trigger("click");
+    expect(store.view.sortDirection).toBe("asc");
+    expect(wrapper.find(".bar-split-toggle").attributes("aria-label")).toBe(
+      "Smallest first",
+    );
+  });
+
+  it("claims a dialog rather than a menu, because the panel is not one", async () => {
+    // `aria-haspopup="menu"` promises a role="menu" popup with roving arrow
+    // keys. The .tbm panel is a div of grouped toggles and implements none of
+    // that; the same reasoning rejected role="listbox"/option here before.
+    const wrapper = await mountShelf([adapter()]);
+    const trigger = wrapper.find(".bar-split-menu");
+    expect(trigger.attributes("aria-haspopup")).toBe("dialog");
+    expect(trigger.attributes("aria-expanded")).toBe("false");
+    expect(wrapper.find(".bar-split-button").attributes("role")).toBe("group");
+  });
+
+  it("announces a resort, because the rows reorder silently", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    useModelShelfStore().setView({ sortKey: "name", sortDirection: "asc" });
+    await wrapper.vm.$nextTick();
+    const status = wrapper.find('[role="status"]');
+    expect(status.text()).toBe("Sorted by name: A to Z");
   });
 });
