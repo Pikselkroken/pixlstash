@@ -127,6 +127,46 @@ describe("adapter kinds", () => {
   });
 });
 
+describe("overlapping fetches", () => {
+  // Three checkboxes each refetch, so two flights are one double-click apart.
+  it("ignores a flight the user has already overtaken", async () => {
+    const store = useModelShelfStore();
+    let landFirst;
+    listAdapters
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            landFirst = () => resolve([adapter({ id: 1, kind: "lora" })]);
+          }),
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve([adapter({ id: 2, kind: "lokr" })]),
+      );
+
+    const overtaken = store.fetchRows();
+    const winner = store.fetchRows();
+    await winner;
+    expect(store.rows.map((r) => r.id)).toEqual([2]);
+
+    landFirst();
+    await overtaken;
+    expect(store.rows.map((r) => r.id)).toEqual([2]);
+  });
+
+  it("leaves the spinner up while the newest flight is still running", async () => {
+    const store = useModelShelfStore();
+    listAdapters
+      .mockImplementationOnce(() => Promise.resolve([adapter({ id: 1 })]))
+      .mockImplementationOnce(() => new Promise(() => {}));
+
+    const first = store.fetchRows();
+    store.fetchRows();
+    await first;
+
+    expect(store.loading).toBe(true);
+  });
+});
+
 describe("the badge", () => {
   it("counts sections that deviate, not ticked boxes", async () => {
     // Counting boxes would report "9" for a mild narrowing and the number

@@ -64,6 +64,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const error = ref("");
   /** True once a fetch has completed, so "empty" and "not asked yet" differ. */
   const loaded = ref(false);
+  // Discards a list read the user has already overtaken, and one that was on
+  // the wire when the credential changed. Every fetch takes the next number,
+  // so only the newest one may write.
+  let epoch = 0;
 
   function remember() {
     try {
@@ -82,8 +86,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * already carries locations and attachments, so a row costs no follow-up,
    * and a base-model multi-select would otherwise be one request per option
    * with the results merged client-side anyway.
+   *
+   * `epoch` discards a flight the user has already overtaken: three
+   * checkboxes each refetch, so a slower earlier request could otherwise land
+   * last and show adapters only while Checkpoints is ticked, and whichever
+   * finished first would clear the spinner. Same shape as
+   * `useLibrariesStore.refresh`.
    */
   async function fetchRows() {
+    const startedAt = (epoch += 1);
     loading.value = true;
     error.value = "";
     try {
@@ -94,13 +105,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         requests.push(listAdapters({ fileKind: "unknown" }));
       }
       const results = await Promise.all(requests);
+      if (startedAt !== epoch) return;
       rows.value = results.flat();
       loaded.value = true;
     } catch (err) {
+      if (startedAt !== epoch) return;
       error.value = errorDetail(err) || err?.message || String(err);
       rows.value = [];
     } finally {
-      loading.value = false;
+      if (startedAt === epoch) loading.value = false;
     }
   }
 
@@ -183,6 +196,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * the same reasoning that exempts `useUserPrefsStore`.
    */
   function resetForSession() {
+    epoch += 1;
     rows.value = [];
     loaded.value = false;
     error.value = "";
