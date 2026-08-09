@@ -1413,12 +1413,16 @@ def test_test_time_budget_fires_on_over_budget_input():
         "The budget applied to an unsharded run"
     )
 
-    # A real failure, an interrupt or an internal error is more informative
-    # than a budget breach, so the check may escalate from 0 and nothing else.
+    # A run that is already red is red for a better reason. The check must not
+    # downgrade that status, and must not print "this is not a test failure"
+    # directly above a real FAILURES section, which is triage misdirection.
     interrupted = _BudgetStubReporter([ceiling * 99])
     session = _BudgetStubSession(interrupted, "1/4", exitstatus=2)
     shard_conftest._enforce_test_time_budget(session)
     assert session.exitstatus == 2, "The budget downgraded a worse exit status"
+    assert interrupted.lines == [], (
+        f"The budget banner claimed nothing failed on a red run: {interrupted.lines}"
+    )
 
 
 def test_test_time_budget_actually_turns_a_green_run_red():

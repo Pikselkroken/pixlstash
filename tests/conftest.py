@@ -55,11 +55,12 @@ _PER_TEST_OVERHEAD_SECONDS = 0.005
 #
 # Baseline: the last green develop run before this landed (Actions run
 # 31307604252, N=8) summed to 6662 s of test time, worst shard 1005 s, mean
-# 833 s. 12000 s total is 1.8x the measured total and 1500 s per shard is 1.5x
-# the worst shard, so runner noise and an out-of-date balance map cannot trip
-# it. It still fires at roughly half the drift back to the 2844 s/shard the
-# gate had reached before the #796 wave, which is the regression it exists to
-# catch.
+# 833 s. Only the WORST shard can trip, so the margin that matters is
+# 1500 / 1005 = 1.49x, and at that run's 1.21 imbalance the gate goes red at a
+# total near 9900 s rather than at 12000 s. That is still far above runner
+# noise and above what a stale balance map can shift, and it fires at roughly
+# half the drift back to the 2844 s/shard the gate had reached before the #796
+# wave, which is the regression it exists to catch.
 TEST_TIME_BUDGET_SECONDS = 12000.0
 
 
@@ -427,6 +428,12 @@ def _enforce_test_time_budget(session) -> None:
     spec = session.config.getoption("--ci-shard")
     if not spec:
         return
+    if session.exitstatus != 0:
+        # Already red for a better reason. Printing "this is not a test
+        # failure" directly above a real FAILURES section is triage
+        # misdirection, and the breach will still be there on the next green
+        # run, so say nothing rather than something false.
+        return
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     if reporter is None:
         # No terminal reporter (-p no:terminal): nothing accumulated the phase
@@ -455,22 +462,21 @@ def _enforce_test_time_budget(session) -> None:
         "put the measurement that justifies it in the commit message."
     )
     reporter.write_sep("=", banner, red=True, bold=True)
-    if session.exitstatus == 0:
-        # Never downgrade a real failure, an interrupt or an internal error:
-        # those are more informative than a budget breach.
-        session.exitstatus = 1
+    session.exitstatus = 1
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
     """Release native model/session resources before interpreter teardown.
 
-    ``trylast`` so any other session-finish work runs before the budget check
-    below. The phase reports it measures are filed during the run rather than
-    at teardown, so its input is complete either way.
-    """
-    _enforce_test_time_budget(session)
+    ``trylast`` so any other session-finish work runs before this one. The
+    phase reports the budget check measures are filed during the run rather
+    than at teardown, so its input is complete wherever it sits.
 
+    The budget check runs *last*, after the native handles are released: if it
+    ever raises, the release below has already happened, rather than the
+    session dropping into interpreter teardown still holding models.
+    """
     try:
         # Drain optional CPU spillover tagger if one was created by tag tasks.
         TagTask.release_idle_cpu_spillover_engine(force=True)
@@ -492,3 +498,5 @@ def pytest_sessionfinish(session, exitstatus):
         pass
 
     gc.collect()
+
+    _enforce_test_time_budget(session)
