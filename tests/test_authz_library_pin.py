@@ -332,9 +332,19 @@ class TestLibraryIndependentRoutes:
         vault_reads = []
         real_read = server.vault.db.run_immediate_read_task
 
-        def observed_read(*args, **kwargs):
-            vault_reads.append(True)
-            return real_read(*args, **kwargs)
+        # Record WHAT was read, for the reason spelled out in
+        # TestPinnedRoutes.test_guest_enrichment_never_runs_for_a_pinned_route:
+        # the WorkPlanner thread probes the vault on its own schedule, so a
+        # bare "nothing was read" assertion fails whenever one of those probes
+        # lands inside the request.
+        def observed_read(callback, *args, **kwargs):
+            vault_reads.append(
+                (
+                    getattr(callback, "__module__", ""),
+                    getattr(callback, "__name__", repr(callback)),
+                )
+            )
+            return real_read(callback, *args, **kwargs)
 
         monkeypatch.setattr(server.vault.db, "run_immediate_read_task", observed_read)
         server.library_coordinator.state = SwitchState.SWITCHING
@@ -348,7 +358,12 @@ class TestLibraryIndependentRoutes:
             server.library_coordinator.state = SwitchState.READY
 
         assert response.status_code == 403
-        assert vault_reads == []
+        # Enrichment lives in ``pixlstash.auth``; the background probes come
+        # from ``pixlstash.tasks`` and are none of this test's business.
+        auth_reads = [read for read in vault_reads if read[0] == "pixlstash.auth"]
+        assert auth_reads == [], (
+            f"authentication read the guest vault during a switch: {vault_reads}"
+        )
 
 
 class TestTheDeclarationContract:
