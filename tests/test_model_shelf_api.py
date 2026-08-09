@@ -1821,6 +1821,45 @@ def test_a_relocation_interrupted_before_the_promotion_leaves_one_managed_row(
         )
 
 
+def test_a_relocation_target_must_be_absolute_and_off_the_system_blocklist(
+    shelf_env, relocatable_store
+):
+    """The only caller-supplied host path in the whole B7 stack, and it had no
+    test at all: nulling the guard left the suite green.
+
+    Owner-chosen paths are trusted here (the reference-folder precedent), so the
+    guard is narrow on purpose — absolute, and not a system directory — but it
+    is the difference between relocating the store onto ``/etc`` and not. Both
+    refusals plus the positive control below, because over-blocking would make
+    the store unmovable.
+    """
+    url = f"{API}/model-folders/{relocatable_store.managed_id}/relocate"
+    for path, why in (
+        ("/etc/pixlstash-models", "restricted system directory"),
+        ("relative/models", "absolute"),
+    ):
+        r = shelf_env.owner.post(url, json={"path": path})
+        assert r.status_code == 400, f"{path} was accepted: {r.status_code} {r.text}"
+        assert why in r.text, f"{path} was refused without saying why: {r.text}"
+    # Nothing moved and the store is still the store.
+    assert sorted(p.name for p in relocatable_store.store.iterdir()) == [
+        "one.safetensors",
+        "two.safetensors",
+    ]
+    assert [row["id"] for row in _managed_rows(shelf_env)] == [
+        relocatable_store.managed_id
+    ]
+
+    # Positive control: an ordinary absolute path is still accepted.
+    assert (
+        shelf_env.owner.post(
+            url, json={"path": str(relocatable_store.target)}
+        ).status_code
+        == 202
+    )
+    _await_move(shelf_env)
+
+
 def test_only_the_managed_store_can_be_relocated(shelf_env, tmp_path):
     """An ordinary folder is one the owner registered; moving it is the owner's
     own act, and re-registering is how the shelf hears about it."""
