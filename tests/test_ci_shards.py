@@ -77,6 +77,7 @@ PRIVILEGED_WORKFLOW_PATHS = tuple(
         "electron.yml",
         "pages.yml",
         "publish-pypi.yml",
+        "record-test-durations.yml",
         "release-test-issues.yml",
         "release-version.yml",
         "windows-installer.yml",
@@ -248,49 +249,18 @@ DEFERRED_FROM_GATE = frozenset(
 # tolerated, so the hole is a decision instead of a silent gap. Repo-relative
 # paths here rather than bare names, because the gate also runs a subdirectory.
 #
-# This exists because the balance guardrail below used to build its node list
-# from the map's own keys, which made it structurally blind to exactly these
-# files: it reported a perfect 1.000 ratio while 28 of 119 gated files (24%)
-# were absent from the data it was grading. Refreshing the map with
-# scripts/record_test_durations.py is what empties this list, and emptying it
-# is the intended direction of travel.
+# EMPTY, which is the intended end state. It held 28 of 119 gated files (24%)
+# when the balance guardrail below still built its node list from the map's own
+# keys and was therefore structurally blind to exactly those files, reporting a
+# perfect 1.000 ratio over data that did not contain a quarter of the gate.
+# Regenerating the map from a real gate run recorded all 119, so there is
+# nothing left to acknowledge.
 #
-# The list is self-cleaning in both directions. A newly gated file that nobody
-# recorded fails the guardrail, and so does an entry here that the map has
-# since learned about, so it cannot rot into a stale allowlist the way the
-# blindness it documents did.
-UNRECORDED_IN_DURATIONS_MAP = frozenset(
-    {
-        "tests/multi_project_authz/test_generic_field_reader_allowlist.py",
-        "tests/test_adapter_attachment.py",
-        "tests/test_adapter_header.py",
-        "tests/test_aitoolkit_run.py",
-        "tests/test_authz_library_pin.py",
-        "tests/test_checkpoint_hash_finder.py",
-        "tests/test_comfyui_pixlstash_saver.py",
-        "tests/test_hub_bootstrap.py",
-        "tests/test_hub_engine.py",
-        "tests/test_hub_model_shelf_schema.py",
-        "tests/test_hub_registry.py",
-        "tests/test_identity_storage_guardrail.py",
-        "tests/test_libraries_routes.py",
-        "tests/test_library_backup.py",
-        "tests/test_library_generation_coordinator.py",
-        "tests/test_library_settings.py",
-        "tests/test_library_switch.py",
-        "tests/test_model_file_classification.py",
-        "tests/test_model_folder_scanner.py",
-        "tests/test_model_shelf_api.py",
-        "tests/test_model_shelf_fixtures.py",
-        "tests/test_model_shelf_library_fixture.py",
-        "tests/test_model_shelf_scan_invariants.py",
-        "tests/test_model_unload_race.py",
-        "tests/test_path_containment.py",
-        "tests/test_pending_score_invalidation.py",
-        "tests/test_share_link_library_pin.py",
-        "tests/test_tag_task.py",
-    }
-)
+# Leave the mechanism in place. The list is self-cleaning in both directions: a
+# newly gated file that nobody recorded fails the guardrail until it is listed
+# here, and an entry the map has since learned about fails it until it is
+# removed. Both halves have to exist for either to work.
+UNRECORDED_IN_DURATIONS_MAP: frozenset[str] = frozenset()
 
 
 @pytest.fixture(scope="module")
