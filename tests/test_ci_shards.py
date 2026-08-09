@@ -250,7 +250,7 @@ DEFERRED_FROM_GATE = frozenset(
 #
 # This exists because the balance guardrail below used to build its node list
 # from the map's own keys, which made it structurally blind to exactly these
-# files: it reported a perfect 1.000 ratio while 27 of 118 gated files (23%)
+# files: it reported a perfect 1.000 ratio while 28 of 119 gated files (24%)
 # were absent from the data it was grading. Refreshing the map with
 # scripts/record_test_durations.py is what empties this list, and emptying it
 # is the intended direction of travel.
@@ -280,6 +280,7 @@ UNRECORDED_IN_DURATIONS_MAP = frozenset(
         "tests/test_library_switch.py",
         "tests/test_model_file_classification.py",
         "tests/test_model_folder_scanner.py",
+        "tests/test_model_shelf_api.py",
         "tests/test_model_shelf_fixtures.py",
         "tests/test_model_shelf_library_fixture.py",
         "tests/test_model_shelf_scan_invariants.py",
@@ -1250,7 +1251,7 @@ def test_recorded_durations_actually_balance_the_gate(workflow):
 
     The node list comes from the gate's own file list, never from the map's
     keys. Grading the map on the tests it happens to contain is a tautology: it
-    reported 1.000 while 27 of 118 gated files were absent, and every test in
+    reported 1.000 while 28 of 119 gated files were absent, and every test in
     those files was being placed by round-robin fallback rather than by the
     balance this claims to prove. Whatever the map does not know is either an
     acknowledged entry in ``UNRECORDED_IN_DURATIONS_MAP`` or a failure here.
