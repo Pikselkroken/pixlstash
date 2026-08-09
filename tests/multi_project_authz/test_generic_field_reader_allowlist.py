@@ -45,22 +45,20 @@ from pixlstash.utils.field_allowlist import (
     require_servable_field,
     servable_field_names,
 )
-from tests import test_multi_project_membership_authz as _multi_project
-from tests.authz_guard import (  # noqa: F401
-    assert_real_route,
-    no_spa_fallback,
+from tests.authz_guard import assert_real_route
+from tests.multi_project_authz.shared_env import (
+    API,
+    _bearer,
+    _enforcing,
+    _make_face,
 )
 
-# Reused from the #125 / #719 suite rather than duplicated: that fixture already
-# builds the three projects, the shared set and the shared character this needs,
-# and its scoped tokens are the ones the leak was reproduced with. Re-exported by
-# assignment (not `from … import env`) so the module-level name and the `env`
-# test parameters do not read as a redefinition.
-API = _multi_project.API
-env = _multi_project.env
-_bearer = _multi_project._bearer
-_enforcing = _multi_project._enforcing
-_make_face = _multi_project._make_face
+# The environment is shared with the #125 suite next door rather than duplicated:
+# it already builds the three projects, the shared set and the shared character
+# this needs, and its scoped tokens are the ones the leak was reproduced with.
+# The autouse `env` fixture reaches these tests from the package conftest, which
+# is the only sharing mechanism that keeps working when `env` grows a dependency
+# — copying it out of the other module's namespace did not.
 
 pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 

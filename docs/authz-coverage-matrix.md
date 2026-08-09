@@ -591,7 +591,7 @@ three cases; the two `project_scoped` routes have it *instead of*
 `set`/`character` routes have it *in addition to* their own inline check. Do not
 reorder it after the resolution. See `docs/backend_architecture.md` §16.6; both
 directions pinned in the R1d section of
-`tests/test_multi_project_membership_authz.py`. Note: `GET
+`tests/multi_project_authz/test_multi_project_membership_authz.py`. Note: `GET
 /projects/{project_id}/summary|export|attachments*` are **numeric** `project_id`
 (or the aggregate `UNASSIGNED`, which the gate fails closed to 403 for a scoped
 token — matching the handler), so those are gate-enforced, not `resolved_inline`.

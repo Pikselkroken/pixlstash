@@ -468,10 +468,15 @@ def test_every_test_file_is_classified(workflow):
     CI and nothing would say so. Requiring ``tests/`` to equal GATED + DEFERRED
     turns "I forgot" into a red test, and makes deferring a file a decision
     someone has to write down.
+
+    Discovery recurses. Suites that share one heavy environment live in a
+    sub-package with their own ``conftest.py`` (``tests/multi_project_authz/``),
+    and a non-recursive glob would let every file in one drop out of CI without
+    anything going red — the exact drift this test exists to stop.
     """
     gated = _gated_files(workflow)
     discovered = {
-        str(path.relative_to(REPO_ROOT)) for path in TESTS_DIR.glob("test_*.py")
+        str(path.relative_to(REPO_ROOT)) for path in TESTS_DIR.rglob("test_*.py")
     }
     deferred = {f"tests/{name}" for name in DEFERRED_FROM_GATE}
 
