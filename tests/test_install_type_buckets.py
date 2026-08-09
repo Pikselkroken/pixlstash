@@ -13,16 +13,19 @@ and three of them are not Python:
    for that bucket answers JSON or a 404 page.
 
 Adding a bucket to some-but-not-all of those is the exact shape of the bug this
-file exists to stop, and it has now happened twice:
+file exists to stop, and it has already happened once: the metrics collector was
+taught to classify a declared ``dev`` machine into its own excluded bucket while
+(1) still rejected ``PIXLSTASH_INSTALL_TYPE=dev`` as invalid. A developer who set
+it was reported as an ordinary ``pip`` install, so the cohort the change existed
+to subtract was never marked.
 
-* The metrics collector was taught to classify a declared ``dev`` machine into
-  its own excluded bucket while (1) still rejected ``PIXLSTASH_INSTALL_TYPE=dev``
-  as invalid. A developer who set it was silently reported as ``pip``, so the
-  cohort the change existed to subtract was never marked.
-* (4) is the one with teeth. A bucket with no manifest answers 404 *HTML*, and
-  the client stamped its 24-hour throttle only after successfully parsing JSON —
-  so the missing file did not merely lose one signal, it made that machine
-  re-check on every page load. One development machine sent 136 checks in a day.
+(4) is the one with teeth, because a missing manifest is not merely a lost
+signal. The bucket answers 404 *HTML*, and the client used to stamp its
+24-hour throttle only after parsing JSON, so the first machine to ask for a
+bucket with no file would have re-checked on every page load. That combination
+never shipped -- every released bucket had a manifest, so every check got JSON --
+and ``useVersionCheck.js`` now stamps before the request. This test keeps the
+other half of the invariant.
 
 A fifth holder, ``INSTALL_BUCKETS`` in the pixlstash-metrics collector, lives in
 another repository and cannot be checked from here. It is the *consumer*: a
