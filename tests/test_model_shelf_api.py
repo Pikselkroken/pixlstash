@@ -1862,6 +1862,60 @@ def test_relocate_is_owner_only_and_local_only(shelf_env, relocatable_store):
     assert "restricted to local" not in local.text, local.text
 
 
+def test_relocating_keeps_the_stores_subdirectories(shelf_env, relocatable_store):
+    """The store is ``movable='root_only'`` — it moves as a unit — so its tree
+    has to arrive as a tree. Flattened, two runs holding a same-named checkpoint
+    collide and the store can never be relocated at all."""
+    with shelf_env.server.hub.transaction() as conn:
+        for run in ("runA", "runB"):
+            nested = relocatable_store.store / run
+            nested.mkdir()
+            (nested / "model.safetensors").write_bytes(run.encode() * 512)
+            model_id = int(
+                conn.execute(
+                    "INSERT INTO model (file_kind, kind, sha256, filename, "
+                    "provenance, file_size, created_at) VALUES ('adapter', 'lora', "
+                    "?, 'model.safetensors', 'external', ?, '2026-08-09T00:00:00Z')",
+                    (_h(f"nested{run}"), 512 * len(run)),
+                ).lastrowid
+            )
+            conn.execute(
+                "INSERT INTO model_file (model_id, model_folder_id, relpath, "
+                "state, seen_at, file_mtime) VALUES (?, ?, ?, 'present', "
+                "'2026-08-09T00:00:00Z', 1)",
+                (model_id, relocatable_store.managed_id, f"{run}/model.safetensors"),
+            )
+
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{relocatable_store.managed_id}/relocate",
+        json={"path": str(relocatable_store.target)},
+    )
+    assert r.status_code == 202, r.text
+    body = _await_move(shelf_env)
+    assert [item["status"] for item in body["results"]] == ["moved"] * 4, body
+
+    for run in ("runA", "runB"):
+        assert (relocatable_store.target / run / "model.safetensors").exists()
+    managed = _managed_rows(shelf_env)
+    assert len(managed) == 1
+    assert managed[0]["path"] == str(relocatable_store.target)
+    relpaths = {
+        row["relpath"]
+        for row in shelf_env.server.hub.fetchall(
+            "SELECT relpath FROM model_file WHERE model_folder_id = ? AND "
+            "state = 'present'",
+            (managed[0]["id"],),
+        )
+    }
+    assert relpaths == {
+        "one.safetensors",
+        "two.safetensors",
+        "runA/model.safetensors",
+        "runB/model.safetensors",
+    }
+    assert not relocatable_store.store.exists(), "the emptied tree was not tidied"
+
+
 def test_a_relocation_with_a_failed_file_does_not_promote_the_new_folder(
     shelf_env, relocatable_store, monkeypatch
 ):

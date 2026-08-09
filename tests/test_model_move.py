@@ -614,6 +614,45 @@ def test_a_file_already_in_the_destination_is_nothing_to_do(two_folders):
     assert plan.moves == []
 
 
+def test_relocating_a_folder_keeps_its_subdirectories(hub, tmp_path, cross_device):
+    """``flatten=False``: a folder that moves as a unit moves as a tree.
+
+    Flattened, ``runA/model.safetensors`` and ``runB/model.safetensors`` collide
+    on one name, which refuses the relocation permanently — and the refusal's
+    advice ("move them separately") names a verb the shelf does not have.
+    """
+    store = tmp_path / "store"
+    target = tmp_path / "elsewhere"
+    store.mkdir()
+    target.mkdir()
+    store_id = register_folder(hub, store)
+    target_id = register_folder(hub, target)
+    nested = [
+        os.path.join("runA", "model.safetensors"),
+        os.path.join("runB", "model.safetensors"),
+    ]
+    for relpath in nested:
+        register_file(hub, store_id, store, relpath)
+
+    mover = ModelMover(hub)
+    # Flattened, this same batch is the permanent 400.
+    with pytest.raises(MoveRefused, match="would both land on"):
+        mover.plan([(store_id, relpath) for relpath in nested], target_id)
+
+    report = mover.execute(
+        mover.plan(
+            [(store_id, relpath) for relpath in nested], target_id, flatten=False
+        )
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_MOVED] * 2
+    for relpath in nested:
+        assert os.path.exists(os.path.join(target, relpath))
+        assert not os.path.exists(os.path.join(store, relpath))
+    assert set(locations(hub)) == {(target_id, relpath) for relpath in nested}
+    assert_no_dangling_rows(hub)
+
+
 # ===========================================================================
 # Cancel
 # ===========================================================================

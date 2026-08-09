@@ -299,7 +299,11 @@ class ModelMover:
     # -- planning ---------------------------------------------------------
 
     def plan(
-        self, items: list[tuple[int, str]], destination_folder_id: int
+        self,
+        items: list[tuple[int, str]],
+        destination_folder_id: int,
+        *,
+        flatten: bool = True,
     ) -> MovePlan:
         """Resolve and check a batch without writing anything.
 
@@ -310,6 +314,16 @@ class ModelMover:
             destination_folder_id: Where they go. Must be registered, and must
                 be a folder that is catalogued in place: a ``source`` folder is
                 an ai-toolkit output root, taken *from*, never written into.
+            flatten: True — the default, and what dropping files onto a folder
+                means — lands every file at its basename. False keeps each
+                file's ``relpath`` verbatim, subdirectories and all, which is
+                what **relocating a whole folder** needs: a store holding
+                ``runA/model.safetensors`` and ``runB/model.safetensors`` is not
+                two files fighting over one name, it is a tree that has to
+                arrive as a tree. Flattening it would refuse the relocation
+                outright (a collision that no "move them separately" can
+                resolve, because there is no such verb) or, with one such file,
+                silently drop the subdirectory.
 
         Returns:
             The validated :class:`MovePlan`.
@@ -339,7 +353,11 @@ class ModelMover:
         claimed: set[str] = set()
         for folder_id, relpath in items:
             move = self._plan_one(
-                folder_id, relpath, destination_folder_id, destination_path
+                folder_id,
+                relpath,
+                destination_folder_id,
+                destination_path,
+                flatten=flatten,
             )
             if move is None:
                 continue
@@ -374,6 +392,8 @@ class ModelMover:
         relpath: str,
         destination_folder_id: int,
         destination_path: str,
+        *,
+        flatten: bool,
     ) -> Optional[PlannedMove]:
         row = self._hub.fetchone(
             "SELECT mf.model_id, mf.state, m.sha256, m.file_size, f.path AS "
@@ -410,16 +430,23 @@ class ModelMover:
                 f"{relpath!r} resolves outside its registered folder."
             ) from exc
 
-        # Flattened to the basename: dropping a file onto a folder means "put it
-        # in that folder", not "recreate three levels of somebody else's tree in
-        # it". A collision is refused below, never silently overwritten.
+        # Flattened to the basename when a *selection* is dropped onto a folder:
+        # that means "put it in that folder", not "recreate three levels of
+        # somebody else's tree in it". A collision is refused below, never
+        # silently overwritten. A whole-folder relocation passes
+        # ``flatten=False`` and keeps the tree, because there the tree *is* the
+        # thing being moved.
         #
-        # The containment that follows is therefore a sanitizer rather than the
-        # live guard — ``basename`` has already made an escape unreachable. The
-        # reachable containment on this path is the *source* one above, which
-        # governs the unlink and does have a test. This one stays because it
-        # becomes load-bearing the day the destination stops being flattened.
-        destination_relpath = os.path.basename(relpath)
+        # The containment that follows is **reachable and load-bearing in both
+        # modes**, not a sanitizer. ``basename`` neutralises ``..`` but not a
+        # *symlink* standing at the destination filename: ``resolve_path_within``
+        # calls ``realpath``, so a dangling ``dest/alice.safetensors ->
+        # /elsewhere/alice.safetensors`` is refused here — and only here, since
+        # ``os.path.exists`` is False for a dangling link and the collision check
+        # below would wave it through, straight into an ``os.replace`` that
+        # writes outside the registered folder. Asserted at both ends in
+        # ``tests/test_model_move.py``.
+        destination_relpath = os.path.basename(relpath) if flatten else relpath
         try:
             resolved_destination = resolve_path_within(
                 destination_path, destination_relpath

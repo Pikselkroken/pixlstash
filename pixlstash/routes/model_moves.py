@@ -248,7 +248,23 @@ def _finish_relocation(hub, old_folder_id: int, new_folder_id: int) -> None:
 
 
 def _remove_if_empty(path: str) -> None:
-    """Tidy the vacated directory, and never let tidying fail a relocation."""
+    """Tidy the vacated directory, and never let tidying fail a relocation.
+
+    Bottom-up, because a relocation preserves subdirectories: the files have
+    moved out of ``runA/`` and ``runB/`` but the empty directories remain, and
+    ``os.rmdir`` on the root would refuse while they do. Only *empty*
+    directories are removed, so anything the owner left behind keeps the store
+    directory alive and is never deleted.
+    """
+    for root, dirs, _files in os.walk(path, topdown=False):
+        for name in dirs:
+            child = os.path.join(root, name)
+            try:
+                os.rmdir(child)
+            except OSError as exc:
+                logger.debug(
+                    "Left the vacated subdirectory %s in place: %s", child, exc
+                )
     try:
         os.rmdir(path)
     except OSError as exc:
@@ -509,8 +525,16 @@ def create_router(server) -> APIRouter:
 
         mover = ModelMover(server.hub)
         try:
+            # ``flatten=False``: the store is ``movable='root_only'`` — it moves
+            # as a unit — so its tree has to arrive as a tree. Flattening would
+            # make ``runA/model.safetensors`` and ``runB/model.safetensors``
+            # collide, refusing the relocation permanently with advice ("move
+            # them separately") naming a verb the shelf does not have, and with
+            # only one such file it would silently drop the subdirectory.
             plan = mover.plan(
-                [(folder_id, relpath) for relpath in relpaths], destination_id
+                [(folder_id, relpath) for relpath in relpaths],
+                destination_id,
+                flatten=False,
             )
         except MoveRefused as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
