@@ -45,6 +45,7 @@ from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models.adapter_attachment import AdapterAttachment
 from pixlstash.server import Server
+from pixlstash.services.model_mover import SHELF_IO_LOCK
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -1319,6 +1320,48 @@ def test_a_move_is_refused_before_the_first_byte_when_it_cannot_work(
     assert r.status_code == 404, r.text
 
 
+def test_a_move_and_an_import_share_one_job_slot(
+    shelf_env, move_folders, import_folders
+):
+    """They used to hold **separate** locks, which serialized each against
+    itself and neither against the other: both could find one destination
+    filename free and whichever wrote second won in silence.
+
+    Held deterministically rather than by racing two threads — the slot is the
+    contract, and a timing test would prove less and flake more. Both directions
+    plus a positive control, so a 409 cannot pass because the request was bad.
+    """
+    assert SHELF_IO_LOCK.acquire(blocking=False), "the slot was left held"
+    move_body = {
+        "destination_folder_id": move_folders.destination_id,
+        "items": [
+            {"folder_id": move_folders.source_id, "relpath": "moving.safetensors"}
+        ],
+    }
+    import_body = {
+        "source_folder_id": import_folders.source_id,
+        "run_name": "Clementine",
+        "destination_folder_id": import_folders.destination_id,
+    }
+    try:
+        for url, body in (
+            (f"{API}/model-moves", move_body),
+            (f"{API}/model-imports", import_body),
+        ):
+            r = shelf_env.owner.post(url, json=body)
+            assert r.status_code == 409, f"{url} ran while the slot was taken: {r.text}"
+            assert "already running" in r.text
+        assert (move_folders.source_dir / "moving.safetensors").exists()
+        assert list(import_folders.destination_dir.iterdir()) == []
+    finally:
+        SHELF_IO_LOCK.release()
+
+    # Positive control: with the slot free, the same import is accepted.
+    assert shelf_env.owner.post(
+        f"{API}/model-imports", json=import_body
+    ).status_code == (200)
+
+
 def test_cancelling_when_nothing_runs_is_a_conflict_not_a_silent_success(shelf_env):
     from pixlstash.routes import model_moves
 
@@ -1411,7 +1454,9 @@ def import_folders(shelf_env, tmp_path):
     run_dir.mkdir(parents=True)
     _write_run_adapter(run_dir / "Clementine.safetensors", b"final")
     _write_run_adapter(run_dir / "Clementine_000000500.safetensors", b"step500")
-    destination_dir = tmp_path / "loras"
+    # Not "loras": ``move_folders`` claims that name under the same ``tmp_path``,
+    # and ``model_folder.path`` is UNIQUE, so one test may want both fixtures.
+    destination_dir = tmp_path / "imported"
     destination_dir.mkdir()
 
     with shelf_env.server.hub.transaction() as conn:

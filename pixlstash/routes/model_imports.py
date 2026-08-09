@@ -28,14 +28,13 @@ and may unlink them from another, which is the ``model-moves`` authority.
 from __future__ import annotations
 
 import os
-import threading
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.model_mover import MoveRefused
+from pixlstash.services.model_mover import SHELF_IO_LOCK, MoveRefused
 from pixlstash.services.run_importer import RunImporter
 from pixlstash.utils.aitoolkit_run import read_output_root
 from pixlstash.utils.path_utils import resolve_path_within
@@ -43,10 +42,6 @@ from pixlstash.utils.path_utils import resolve_path_within
 logger = get_logger(__name__)
 
 SOURCE_FOLDER_KIND = "source"
-
-# One import at a time, for the same reason as one move at a time: both are
-# I/O-bound on one disk and both space-check the destination up front.
-_importing = threading.Lock()
 
 
 class RunSample(BaseModel):
@@ -305,12 +300,17 @@ def create_router(server) -> APIRouter:
             ) from exc
 
         delete_source = bool(folder["delete_after_import"])
-        if not _importing.acquire(blocking=False):
+        # The *same* slot a move takes, not an import-only one. Two separate
+        # locks serialized each operation against itself and neither against the
+        # other, so a move and an import could both find one destination
+        # filename free and whichever wrote second won in silence.
+        if not SHELF_IO_LOCK.acquire(blocking=False):
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "An import is already running. Two at once would race for "
-                    "the free space each of them checked."
+                    "A move or an import is already running. Two at once would "
+                    "race for the free space and the filenames each of them "
+                    "checked before starting."
                 ),
             )
         try:
@@ -327,7 +327,7 @@ def create_router(server) -> APIRouter:
         except MoveRefused as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         finally:
-            _importing.release()
+            SHELF_IO_LOCK.release()
 
         return ImportResponse(
             run_name=report.run_name,

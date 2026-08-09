@@ -58,6 +58,8 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import sqlite3
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -87,6 +89,21 @@ STATUS_COPIED = "copied"
 STATUS_SKIPPED = "skipped"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
+
+# **One shelf file operation at a time, machine-wide — a move and an import
+# included.** They used to hold separate locks, which serialized each against
+# itself and *nothing* against the other: a move planned at 12:00 and an import
+# started at 12:01 could both decide the same destination filename was free,
+# and whichever wrote second won silently. Both are I/O-bound on one disk and
+# both space-check the destination up front, so there is nothing to gain from
+# overlapping them anyway.
+#
+# **The loser fails cleanly with 409 and never retries.** Queueing would mean
+# the plan the caller was shown — free space, collisions, what is on disk — had
+# been validated against a filesystem the other operation was still changing,
+# and silently re-planning under the caller is worse than telling them to press
+# it again.
+SHELF_IO_LOCK = threading.Lock()
 
 
 class MoveRefused(ValueError):
@@ -427,10 +444,7 @@ class ModelMover:
                 status_code=409,
             )
         self._check_destination_free(
-            resolved_destination,
-            destination_folder_id,
-            destination_relpath,
-            int(row["model_id"]),
+            resolved_destination, destination_folder_id, destination_relpath
         )
 
         return PlannedMove(
@@ -450,12 +464,19 @@ class ModelMover:
         destination: str,
         destination_folder_id: int,
         destination_relpath: str,
-        model_id: int,
     ) -> None:
         """Refuse rather than overwrite a file the caller did not name.
 
         A move that clobbers is a move that destroys data the shelf never
         offered to touch, and there is no undo for shelf operations.
+
+        Run **twice**: once in :meth:`plan`, so a doomed batch is a 4xx to the
+        caller rather than a background job, and again in :meth:`_move_one`
+        immediately before the write, because the plan ran in the POST and the
+        write runs minutes later on the worker thread. ``SHELF_IO_LOCK`` keeps
+        the other shelf operation out of that gap; the owner, ComfyUI or a
+        trainer is not under any lock of ours, and both ``os.replace`` and
+        ``os.rename`` overwrite in silence.
         """
         if os.path.exists(destination):
             raise MoveRefused(
@@ -466,13 +487,15 @@ class ModelMover:
             "SELECT model_id FROM model_file WHERE model_folder_id = ? AND relpath = ?",
             (destination_folder_id, destination_relpath),
         )
-        if existing is not None and int(existing["model_id"]) != model_id:
-            # A row with no file: stale, but it belongs to a *different* model,
-            # and repointing onto its key would delete that model's only known
-            # location. Let a rescan clear it instead.
+        if existing is not None:
+            # A row with no file: stale. Repointing onto its key would violate
+            # UNIQUE(model_folder_id, relpath) at commit time, and when the row
+            # belongs to a different model it would also delete that model's
+            # only known location. Let a rescan clear it instead.
             raise MoveRefused(
-                f"{destination_relpath} is registered to another model in the "
-                "destination folder. Rescan that folder first."
+                f"{destination_relpath} is registered to model "
+                f"{existing['model_id']} in the destination folder. Rescan that "
+                "folder first."
             )
 
     # -- execution --------------------------------------------------------
@@ -531,12 +554,32 @@ class ModelMover:
         self, move: PlannedMove, plan: MovePlan, *, delete_source: bool
     ) -> MoveOutcome:
         try:
+            self._check_destination_free(
+                move.destination_path,
+                plan.destination_folder_id,
+                move.destination_relpath,
+            )
+        except MoveRefused as exc:
+            logger.warning(
+                "Refusing to move %s -> %s: the destination stopped being free "
+                "between planning and now (%s). The source is untouched.",
+                move.source_path,
+                move.destination_path,
+                exc,
+            )
+            return MoveOutcome(
+                move.source_folder_id, move.source_relpath, STATUS_FAILED, str(exc)
+            )
+        try:
+            # ``flatten=False`` moves a tree, so the destination subdirectory
+            # may not exist yet. A no-op for the flattened case.
+            os.makedirs(os.path.dirname(move.destination_path), exist_ok=True)
             if move.same_device and delete_source:
                 return self._rename(move, plan)
             return self._copy_verify_repoint_unlink(
                 move, plan, delete_source=delete_source
             )
-        except OSError as exc:
+        except (OSError, sqlite3.IntegrityError) as exc:
             logger.error(
                 "Moving %s -> %s failed: %s. The source is untouched.",
                 move.source_path,
@@ -554,12 +597,32 @@ class ModelMover:
         No copy, no verify and no space check, because no second copy is made —
         the ruling. The residue of a crash between the two steps is a file at the
         destination that no row names plus a row that will read ``missing``, and
-        the next scan of either folder re-links it by content with its curation
-        intact. That is narrower than the copy path's guarantee, and it is bought
-        with a window measured in syscalls rather than in minutes of I/O.
+        a manual rescan of either folder re-links it by content with its
+        curation intact. That is narrower than the copy path's guarantee, and it
+        is bought with a window measured in syscalls rather than in minutes of
+        I/O.
         """
         os.rename(move.source_path, move.destination_path)
-        self._repoint(move, plan)
+        try:
+            self._repoint(move, plan)
+        except sqlite3.IntegrityError:
+            # Somebody registered this destination key between the check above
+            # and this commit — a rescan, which is deliberately not under
+            # SHELF_IO_LOCK. Put the file back: the row still names the source,
+            # and leaving it renamed away is the dangling row this whole module
+            # exists to prevent. The racing row is left for the rescan that owns
+            # it; correcting somebody else's bookkeeping from inside a failed
+            # move is how a tombstone gets deleted by accident.
+            logger.error(
+                "The destination key (folder %s, %r) was registered between the "
+                "check and the commit; renaming %s back and failing this file.",
+                plan.destination_folder_id,
+                move.destination_relpath,
+                move.destination_path,
+                exc_info=True,
+            )
+            os.rename(move.destination_path, move.source_path)
+            raise
         return MoveOutcome(move.source_folder_id, move.source_relpath, STATUS_MOVED)
 
     def _copy_verify_repoint_unlink(
@@ -594,7 +657,22 @@ class ModelMover:
             raise
 
         # Durable before the unlink, and *only* then the unlink.
-        self._repoint(move, plan, delete_source=delete_source)
+        try:
+            self._repoint(move, plan, delete_source=delete_source)
+        except sqlite3.IntegrityError:
+            # See ``_rename``. Here the undo is simply to drop the copy we just
+            # made: the source has not been touched and its row still names it.
+            logger.error(
+                "The destination key (folder %s, %r) was registered between the "
+                "check and the commit; discarding the copy at %s and failing "
+                "this file.",
+                plan.destination_folder_id,
+                move.destination_relpath,
+                move.destination_path,
+                exc_info=True,
+            )
+            discard_partial(move.destination_path)
+            raise
         if not delete_source:
             return MoveOutcome(
                 move.source_folder_id, move.source_relpath, STATUS_COPIED

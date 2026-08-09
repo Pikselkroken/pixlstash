@@ -53,7 +53,12 @@ from pixlstash.services.managed_model_store import (
     MANAGED_MOVABLE,
     MANAGED_OWNER,
 )
-from pixlstash.services.model_mover import ModelMover, MoveOutcome, MoveRefused
+from pixlstash.services.model_mover import (
+    SHELF_IO_LOCK,
+    ModelMover,
+    MoveOutcome,
+    MoveRefused,
+)
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
 logger = get_logger(__name__)
@@ -270,8 +275,11 @@ def create_router(server) -> APIRouter:
         """Put one planned batch on the single move thread and return its job.
 
         Shared by the plain move and by a relocation, because a relocation *is* a
-        move — of every file one folder holds. One job slot machine-wide: two at
-        once would race for the free space each of them checked before starting.
+        move — of every file one folder holds. One slot machine-wide, and it is
+        ``model_mover.SHELF_IO_LOCK``, the *same* slot an ai-toolkit import
+        takes: two file operations at once race for the free space each of them
+        checked and for the destination filenames each of them found free. The
+        loser is a 409 and never queues — see the lock's own note.
 
         Args:
             mover: The mover bound to this server's hub.
@@ -281,15 +289,16 @@ def create_router(server) -> APIRouter:
                 completion. A relocation uses it to flip the folder rows.
         """
         global _job
+        if not SHELF_IO_LOCK.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A move or an import is already running. Two at once would "
+                    "race for the free space and the filenames each of them "
+                    "checked before starting."
+                ),
+            )
         with _job_lock:
-            if _job is not None and _job["status"] == STATUS_RUNNING:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "A move is already running. Two at once would race for "
-                        "the free space each of them checked."
-                    ),
-                )
             job = {
                 "status": STATUS_RUNNING,
                 "destination_folder_id": plan.destination_folder_id,
@@ -337,8 +346,26 @@ def create_router(server) -> APIRouter:
             finally:
                 job["finished_at"] = _utcnow()
                 job["status"] = STATUS_FINISHED
+                # Released last, so a POST that wins the lock never observes a
+                # job still marked running.
+                SHELF_IO_LOCK.release()
 
-        threading.Thread(target=_run, daemon=True, name="model-move").start()
+        try:
+            threading.Thread(target=_run, daemon=True, name="model-move").start()
+        except BaseException:
+            # The worker's ``finally`` is the only other release, so a thread
+            # that never started would strand the lock and refuse every later
+            # move and import for the life of the process.
+            SHELF_IO_LOCK.release()
+            job["status"] = STATUS_FINISHED
+            job["finished_at"] = _utcnow()
+            logger.error(
+                "Could not start the move worker for folder %s; the job slot has "
+                "been released.",
+                plan.destination_folder_id,
+                exc_info=True,
+            )
+            raise
         return job
 
     @router.post(

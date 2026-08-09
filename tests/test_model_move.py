@@ -449,6 +449,103 @@ def test_a_relpath_that_escapes_its_folder_is_refused_not_unlinked(hub, tmp_path
     assert os.listdir(destination_dir) == []
 
 
+@pytest.mark.parametrize("force_copy", [False, True], ids=["rename", "copy"])
+def test_a_destination_taken_after_planning_is_refused_not_clobbered(
+    two_folders, monkeypatch, force_copy
+):
+    """The plan-time check is not enough, on either path.
+
+    ``plan`` runs inside the POST and ``os.replace`` / ``os.rename`` run minutes
+    later on the worker thread, and both overwrite in silence. Before the
+    execution-time re-check this destroyed the file that arrived in between and
+    reported ``moved``. Reproduced deterministically — write the destination
+    between ``plan`` and ``execute`` — rather than by threading, because the
+    window is the whole gap and needs no timing to enter.
+    """
+    if force_copy:
+        monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+    mover = ModelMover(two_folders["hub"])
+    plan = mover.plan(
+        [(two_folders["source_id"], "alice.safetensors")], two_folders["destination_id"]
+    )
+
+    arrived = b"written after the move was planned"
+    with open(two_folders["destination_path"], "wb") as handle:
+        handle.write(arrived)
+
+    report = mover.execute(plan)
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_FAILED]
+    with open(two_folders["destination_path"], "rb") as handle:
+        assert handle.read() == arrived, "the move overwrote a file it never named"
+    assert os.path.exists(two_folders["source_path"])
+    assert set(locations(two_folders["hub"])) == {
+        (two_folders["source_id"], "alice.safetensors")
+    }
+    assert_no_dangling_rows(two_folders["hub"])
+
+
+@pytest.mark.parametrize("force_copy", [False, True], ids=["rename", "copy"])
+def test_a_destination_row_that_appears_at_commit_time_leaves_no_dangling_row(
+    two_folders, hub, monkeypatch, force_copy
+):
+    """The second-order damage the ordering is supposed to make impossible.
+
+    A rescan writes ``model_file`` and is deliberately **not** under
+    ``SHELF_IO_LOCK``, so a row can appear at the destination key after the
+    execution-time check and before the commit. ``_repoint``'s UPDATE then
+    violates ``UNIQUE(model_folder_id, relpath)``, and an ``IntegrityError`` is
+    not an ``OSError``: it used to escape the per-file handler entirely, so the
+    source was never unlinked and — on the rename path — never put back either,
+    leaving a committed row naming content it does not describe.
+
+    Simulated by inserting the racing row from inside ``_repoint``, which is the
+    exact instant the race has to land on.
+    """
+    if force_copy:
+        monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+    original_repoint = ModelMover._repoint
+
+    def racing_repoint(self, move, plan, **kwargs):
+        with hub.transaction() as conn:
+            intruder = int(
+                conn.execute(
+                    "INSERT INTO model (file_kind, kind, sha256, filename, "
+                    "provenance, file_size, created_at) VALUES ('adapter', "
+                    "'lora', ?, 'alice.safetensors', 'external', 9, "
+                    "'2026-08-09T00:00:00+00:00')",
+                    ("b" * 64,),
+                ).lastrowid
+            )
+            conn.execute(
+                "INSERT INTO model_file (model_id, model_folder_id, relpath, "
+                "state, seen_at) VALUES (?, ?, 'alice.safetensors', 'present', "
+                "'2026-08-09T00:00:00+00:00')",
+                (intruder, two_folders["destination_id"]),
+            )
+        return original_repoint(self, move, plan, **kwargs)
+
+    monkeypatch.setattr(ModelMover, "_repoint", racing_repoint)
+    mover = ModelMover(hub)
+    report = mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_FAILED]
+    # The file is back where its row says it is, on both paths: renamed back
+    # after the rename, or the copy discarded after the copy.
+    assert os.path.exists(two_folders["source_path"])
+    assert not os.path.exists(two_folders["destination_path"])
+    assert (two_folders["source_id"], "alice.safetensors") in locations(hub)
+    # The racing row is left for the rescan that owns it — deleting somebody
+    # else's bookkeeping from inside a failed move is how a tombstone goes
+    # missing — so ``assert_no_dangling_rows`` is deliberately not used here.
+    assert (two_folders["destination_id"], "alice.safetensors") in locations(hub)
+
+
 def test_an_existing_destination_file_is_never_overwritten(two_folders, cross_device):
     """There is no undo for shelf operations, so a move must not destroy a file
     the caller never named."""
