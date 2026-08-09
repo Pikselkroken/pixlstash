@@ -1319,7 +1319,6 @@
    fade (the one legal fade, visual-language.md §11) drops the row's own
    content back. Shared by character/set rows, project rows and folder rows. */
 
-
 .sidebar-header-spacer {
   flex: 1 1 auto;
 }

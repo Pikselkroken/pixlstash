@@ -61,6 +61,18 @@ describe("the row system is defined once, unscoped", () => {
     expect(globalCss).toContain("--indent-step");
   });
 
+  it("the refused-drop state is unscoped too", () => {
+    // #757 shipped `.not-droppable` twice: once in SideBar.css and once copied
+    // into FolderTreeNode under a comment explaining that the copy was needed
+    // because the styles are scoped. It is not needed once the folder-row
+    // family lives in the unscoped sheet, and a second copy is how the two
+    // drift apart again.
+    expect(globalCss).toContain(".sidebar-folder-row.not-droppable");
+    expect(scopedCss).not.toContain("not-droppable");
+    const style = folderTreeNode.split("<style")[1] ?? "";
+    expect(style).not.toContain("not-droppable");
+  });
+
   it("FolderTreeNode keeps no private copy of the row styles", () => {
     // It used to, and the copy had drifted to a different inset with no base
     // rail, so selecting a nested folder shifted its label 3px right.
