@@ -49,8 +49,17 @@ def _setup_server_with_owner_session():
         )
         assert r.status_code == 200, r.text
     except BaseException:
-        server.__exit__(None, None, None)
-        tmp.cleanup()
+        # `BaseException`, not `Exception`, on purpose: a KeyboardInterrupt here
+        # would otherwise strand exactly the Server this function exists to stop
+        # stranding. It re-raises, so nothing is swallowed.
+        #
+        # `finally`, so the temp directory goes even when `__exit__` raises —
+        # otherwise a failing teardown leaks the directory as well as whatever
+        # `__exit__` failed to close.
+        try:
+            server.__exit__(None, None, None)
+        finally:
+            tmp.cleanup()
         raise
     return tmp, server, client
 
