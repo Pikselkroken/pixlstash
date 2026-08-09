@@ -227,12 +227,30 @@ When a file does need its own fixture:
   and `WorkPlanner._inflight_by_finder` drain only on a task's completion path, so
   a cancelled task never releases its ids — and SQLite reuses picture ids from 1
   after a wipe, so a finder then permanently refuses the next test's pictures.
-- **Wipe under `PRAGMA defer_foreign_keys = ON`**, never `foreign_keys` off/on: if
-  a delete raises in between, enforcement stays off on that pooled connection and
-  silently weakens every later test.
+- **Order the wipe instead of reaching for a PRAGMA.** Restore or insert parents
+  first, then delete children, and no foreign-key trickery is needed at all.
+  `PRAGMA defer_foreign_keys = ON` does not work here: with pysqlite a PRAGMA
+  issued before any DML runs in autocommit, so the deferral is already gone by
+  the time the DELETEs open their own transaction. #822 measured it reading back
+  `0`. Never `PRAGMA foreign_keys` off/on either: if a delete raises in between,
+  enforcement stays OFF on that pooled connection and silently weakens every
+  later test. Whichever approach you pick, demonstrate it took effect rather
+  than assume it did.
 - **Anything that used to die with the per-test engine now leaks** — `connect`
   listeners, patched SQLite limits, monkeypatched globals. Undo them in a
   `finally`.
+- **Anchor a mutation check, then confirm it landed.** Proving an assertion can
+  fail means editing the thing it asserts on, and a first-occurrence replace
+  often hits prose instead of code. `AUTHZ_GATE_ENFORCING = True` appears twice
+  in `pixlstash/authz/gate.py`, once inside a docstring: mutate that one and
+  behaviour is unchanged, the suite stays green, and the green reads as "this
+  assertion is dead". Anchor on `^AUTHZ_GATE_ENFORCING = True$` and verify the
+  mutation is in the line you meant.
+- **Assert the route resolves before trusting an authz negative.** Those paths
+  are guarded twice, by the READ-token middleware and by the gate, and the
+  middleware runs ahead of routing. A request to a renamed or nonexistent route
+  therefore returns the same 403 as a genuine in-scope refusal, so a negative
+  test that names its path as a string can pass against a dead path.
 
 For an authz or security suite the shared environment also has to keep the
 negative assertions honest. Re-mint credentials in the autouse fixture, keep the
