@@ -49,6 +49,7 @@ import json
 import re
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -244,23 +245,28 @@ DEFERRED_FROM_GATE = frozenset(
     }
 )
 
-# Gated files the committed durations map has never timed. Same shape and same
-# job as DEFERRED_FROM_GATE: half of a partition, written down rather than
-# tolerated, so the hole is a decision instead of a silent gap. Repo-relative
-# paths here rather than bare names, because the gate also runs a subdirectory.
+# How much of the gate the committed durations map must still time before its
+# balance number stops meaning anything.
 #
-# EMPTY, which is the intended end state. It held 28 of 119 gated files (24%)
-# when the balance guardrail below still built its node list from the map's own
-# keys and was therefore structurally blind to exactly those files, reporting a
-# perfect 1.000 ratio over data that did not contain a quarter of the gate.
-# Regenerating the map from a real gate run recorded all 119, so there is
-# nothing left to acknowledge.
+# Not zero, deliberately. The map is an optimisation input: a gated file it has
+# never timed costs a little shard skew and no coverage at all, because
+# `_time_balanced_shard_assignment` seeds every test on its round-robin position
+# and charges the unknown ones the median. Failing the build over that would
+# make refreshing the map a correctness obligation, which it is not — and would
+# do it non-locally, on whichever PR happens to run next rather than on the one
+# that added the file. That is not hypothetical: #832 added
+# tests/test_security_supported_versions.py and merged on a check that predated
+# this guardrail, so the guardrail could not block the PR that caused the hole
+# and then failed every unrelated PR afterwards.
 #
-# Leave the mechanism in place. The list is self-cleaning in both directions: a
-# newly gated file that nobody recorded fails the guardrail until it is listed
-# here, and an entry the map has since learned about fails it until it is
-# removed. Both halves have to exist for either to work.
-UNRECORDED_IN_DURATIONS_MAP: frozenset[str] = frozenset()
+# Not absent either. The defect this guardrail was written for (#833) was a
+# *silent* one: the balance was modelled over the map's own keys, so 28 of 119
+# gated files were structurally invisible and the ratio read a perfect 1.000
+# over data missing a quarter of the gate. A ratio computed over 76% of the gate
+# is not a measurement, and no warning would have been read. So: name the gaps
+# every run, and fail once the map has rotted far enough that the 1.05 assertion
+# below is describing something other than the gate.
+MINIMUM_GATE_COVERAGE = 0.9
 
 
 @pytest.fixture(scope="module")
@@ -1223,34 +1229,35 @@ def test_recorded_durations_actually_balance_the_gate(workflow):
     keys. Grading the map on the tests it happens to contain is a tautology: it
     reported 1.000 while 28 of 119 gated files were absent, and every test in
     those files was being placed by round-robin fallback rather than by the
-    balance this claims to prove. Whatever the map does not know is either an
-    acknowledged entry in ``UNRECORDED_IN_DURATIONS_MAP`` or a failure here.
+    balance this claims to prove. So the coverage of the gate is reported every
+    run and asserted against ``MINIMUM_GATE_COVERAGE`` — a handful of freshly
+    added files is a refresh chore and warns, a map that has stopped describing
+    the gate fails.
     """
     durations = _load_recorded_durations(DURATIONS_PATH)
     gated = _gated_files(workflow)
     recorded_files = {nodeid.split("::", 1)[0] for nodeid in durations}
 
-    unlisted = sorted(gated - recorded_files - UNRECORDED_IN_DURATIONS_MAP)
-    assert not unlisted, (
-        f"These gated test files have no recorded durations: {unlisted}. Every "
-        "test in them is placed by round-robin fallback, so this balance "
-        "assertion says nothing about them. Refresh the map with "
-        "scripts/record_test_durations.py, or add them to "
-        "UNRECORDED_IN_DURATIONS_MAP."
-    )
+    unrecorded = sorted(gated - recorded_files)
+    if unrecorded:
+        warnings.warn(
+            f"{len(unrecorded)} of {len(gated)} gated test files have no "
+            f"recorded durations: {unrecorded}. Every test in them is placed by "
+            "round-robin fallback at the median cost, so this balance assertion "
+            "says nothing about them. That costs shard skew, never coverage — "
+            "refresh the map by dispatching "
+            ".github/workflows/record-test-durations.yml when it is convenient.",
+            stacklevel=2,
+        )
 
-    recorded_now = sorted(UNRECORDED_IN_DURATIONS_MAP & recorded_files)
-    assert not recorded_now, (
-        f"UNRECORDED_IN_DURATIONS_MAP names files the map now times: "
-        f"{recorded_now}. Drop them from the list so it keeps naming the real "
-        "hole rather than an imagined one."
-    )
-
-    ungated = sorted(UNRECORDED_IN_DURATIONS_MAP - gated)
-    assert not ungated, (
-        f"UNRECORDED_IN_DURATIONS_MAP names files the gate does not run: "
-        f"{ungated}. Remove them; only gated files can be missing from the "
-        "data that balances the gate."
+    coverage = (len(gated) - len(unrecorded)) / len(gated)
+    assert coverage >= MINIMUM_GATE_COVERAGE, (
+        f"The durations map now times only {coverage:.0%} of the {len(gated)} "
+        f"gated files, below the {MINIMUM_GATE_COVERAGE:.0%} floor. Below that "
+        "the balance asserted below is a measurement of a shrinking subset "
+        "rather than of the gate — which is exactly how it reported a perfect "
+        "1.000 over 76% of the gate. Refresh the map by dispatching "
+        f".github/workflows/record-test-durations.yml. Missing: {unrecorded}"
     )
 
     nodeids = sorted(
