@@ -20,15 +20,43 @@ thing that differs.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models.adapter_attachment import AdapterAttachment
+from pixlstash.db_models.adapter_attachment import (
+    ENTITY_CHARACTER,
+    ENTITY_SET,
+    AdapterAttachment,
+)
+from pixlstash.db_models.character import Character
+from pixlstash.db_models.picture_set import PictureSet
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
+
+# Which vault table each ``entity_type`` names. The attachment table addresses
+# characters and sets through a discriminator rather than two nullable scalar
+# columns, so this mapping is the one place the discriminator is resolved.
+_ENTITY_MODELS = {ENTITY_CHARACTER: Character, ENTITY_SET: PictureSet}
+
+ENTITY_TYPES = tuple(_ENTITY_MODELS)
+
+
+class UnknownAttachmentEntityError(LookupError):
+    """An attachment named a character or set that does not exist in this library.
+
+    Its own type rather than an ``HTTPException`` so the service stays free of
+    transport concerns; the route maps it to a 404.
+    """
+
+    def __init__(self, entity_type: str, entity_id: int) -> None:
+        super().__init__(f"No {entity_type} with id {entity_id} in this library.")
+        self.entity_type = entity_type
+        self.entity_id = entity_id
+
 
 # "Has no base model recorded", as a filter value. The same spelling the project
 # filter already uses for "has none", so the frontend has one idiom rather than
@@ -197,3 +225,62 @@ def attached_hashes(vault, entity_type: str, entity_id: int) -> set[str]:
         )
 
     return set(vault.db.run_task(fetch, priority=DBPriority.IMMEDIATE))
+
+
+def replace_attachments(
+    vault, sha256: str, wanted: list[tuple[str, int]]
+) -> list[dict]:
+    """Make *sha256*'s attachment set exactly *wanted*, in one transaction.
+
+    A full replacement rather than an add/remove pair: the shelf's assignment UI
+    hands over the state it wants, and computing the delta client-side would let
+    two open tabs interleave into a set neither of them chose.
+
+    Every ``entity_id`` is checked against the live table before anything is
+    written. ``adapter_attachment`` carries no foreign key — it cannot, its other
+    end is in the hub — so nothing else would ever notice a typo'd id, and the
+    row would sit there invisible and permanent.
+
+    Args:
+        vault: The active vault.
+        sha256: The model's interop identity. Not validated here; the caller has
+            already resolved it to a hub row.
+        wanted: ``(entity_type, entity_id)`` pairs, deduplicated by the composite
+            primary key.
+
+    Returns:
+        The attachment set as stored, oldest entity first.
+
+    Raises:
+        UnknownAttachmentEntityError: An entity id names no row in this library.
+    """
+
+    def write(session: Session):
+        for entity_type, entity_id in wanted:
+            model = _ENTITY_MODELS[entity_type]
+            if session.get(model, entity_id) is None:
+                raise UnknownAttachmentEntityError(entity_type, entity_id)
+        session.exec(
+            delete(AdapterAttachment).where(AdapterAttachment.adapter_sha256 == sha256)
+        )
+        now = datetime.now(timezone.utc)
+        for entity_type, entity_id in dict.fromkeys(wanted):
+            session.add(
+                AdapterAttachment(
+                    adapter_sha256=sha256,
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    created_at=now,
+                )
+            )
+        session.commit()
+        return [
+            {"entity_type": row.entity_type, "entity_id": row.entity_id}
+            for row in session.exec(
+                select(AdapterAttachment)
+                .where(AdapterAttachment.adapter_sha256 == sha256)
+                .order_by(AdapterAttachment.entity_type, AdapterAttachment.entity_id)
+            ).all()
+        ]
+
+    return vault.db.run_task(write, priority=DBPriority.IMMEDIATE)

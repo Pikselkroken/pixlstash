@@ -714,3 +714,135 @@ def test_share_tokens_never_reach_a_folder_mutator(shelf_env):
         assert_real_route(shelf_env.server.api, method, path)
         r = client.request(method, path, **kwargs)
         assert r.status_code == 403, f"{method} {path}: {r.status_code} {r.text}"
+
+
+# ===========================================================================
+# PUT /adapters/{sha256}/attachments — the assignment path (B5, part 3)
+# ===========================================================================
+
+
+def _attachments_url(sha256: str) -> str:
+    return f"{API}/adapters/{sha256}/attachments"
+
+
+def test_put_attachments_replaces_the_whole_set(shelf_env):
+    """PUT, not PATCH: the shelf hands over the state it wants. Computing a delta
+    client-side would let two open tabs interleave into a set neither chose."""
+    _attach(shelf_env.server, ADAPTER_WITH_BASE, "set", shelf_env.set_id)
+
+    r = shelf_env.owner.put(
+        _attachments_url(ADAPTER_WITH_BASE),
+        json=[{"entity_type": "character", "entity_id": shelf_env.character_id}],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["attachments"] == [
+        {"entity_type": "character", "entity_id": shelf_env.character_id}
+    ], "the pre-existing set attachment survived a full replacement"
+
+    # And the list route agrees, which is what the shelf will actually render.
+    rows = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    by_name = {row["filename"]: row for row in rows}
+    assert by_name["alice.safetensors"]["attachments"] == [
+        {"entity_type": "character", "entity_id": shelf_env.character_id}
+    ]
+
+
+def test_put_empty_list_detaches_everything(shelf_env):
+    _attach(shelf_env.server, ADAPTER_WITH_BASE, "character", shelf_env.character_id)
+    r = shelf_env.owner.put(_attachments_url(ADAPTER_WITH_BASE), json=[])
+    assert r.status_code == 200, r.text
+    assert r.json()["attachments"] == []
+
+
+def test_put_deduplicates_on_the_composite_key(shelf_env):
+    r = shelf_env.owner.put(
+        _attachments_url(ADAPTER_WITH_BASE),
+        json=[
+            {"entity_type": "character", "entity_id": shelf_env.character_id},
+            {"entity_type": "character", "entity_id": shelf_env.character_id},
+        ],
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()["attachments"]) == 1
+
+
+def test_put_refuses_an_entity_that_does_not_exist_and_writes_nothing(shelf_env):
+    """``adapter_attachment`` carries no foreign key — it cannot, its other end
+    is in the hub — so a typo'd id would sit there invisible and permanent.
+    The check runs before the delete, so a refused call is a no-op."""
+    _attach(shelf_env.server, ADAPTER_WITH_BASE, "character", shelf_env.character_id)
+
+    r = shelf_env.owner.put(
+        _attachments_url(ADAPTER_WITH_BASE),
+        json=[{"entity_type": "character", "entity_id": 999999}],
+    )
+    assert r.status_code == 404, r.text
+
+    r = shelf_env.owner.get(f"{API}/adapters/{ADAPTER_WITH_BASE}")
+    assert r.json()["attachments"] == [
+        {"entity_type": "character", "entity_id": shelf_env.character_id}
+    ], "a refused attachment write still wiped the existing set"
+
+
+def test_put_refuses_an_unknown_entity_type(shelf_env):
+    r = shelf_env.owner.put(
+        _attachments_url(ADAPTER_WITH_BASE),
+        json=[{"entity_type": "project", "entity_id": 1}],
+    )
+    assert r.status_code == 400, r.text
+
+
+def test_put_refuses_a_checkpoint_and_an_unknown_hash(shelf_env):
+    """Attachment means "this character uses this LoRA". A base model is not
+    something a character uses in that sense, and the table is keyed by a hash a
+    checkpoint may not have yet."""
+    r = shelf_env.owner.put(_attachments_url(CHECKPOINT_HASHED), json=[])
+    assert r.status_code == 400, r.text
+
+    r = shelf_env.owner.put(_attachments_url(_h("nosuchmodel")), json=[])
+    assert r.status_code == 404, r.text
+
+
+def test_put_attaches_an_unclassified_file(shelf_env):
+    """An ``unknown`` is hashed on sight and is most likely an adapter format we
+    have not met yet, so it must be assignable while it waits for a correction."""
+    r = shelf_env.owner.put(
+        _attachments_url(UNKNOWN_HASH),
+        json=[{"entity_type": "set", "entity_id": shelf_env.set_id}],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["attachments"] == [
+        {"entity_type": "set", "entity_id": shelf_env.set_id}
+    ]
+
+
+def test_attachment_write_is_owner_only_in_both_directions(shelf_env):
+    """Positive: the owner writes. Negative: no share token does.
+
+    Same caveat as the folder mutators — PUT is a non-GET, so the middleware's
+    READ-token write block answers before the gate's ``OWNER_ONLY`` check. The
+    block is the live enforcement; ``assert_real_route`` is what stops a renamed
+    route from 403ing identically and making this vacuous.
+    """
+    assert (
+        shelf_env.owner.put(_attachments_url(ADAPTER_WITH_BASE), json=[]).status_code
+        == 200
+    )
+
+    for description, restriction in (
+        (
+            "attachment scoped probe",
+            {"resource_type": "character", "resource_id": shelf_env.character_id},
+        ),
+        ("attachment unscoped probe", {}),
+    ):
+        token = _mint(shelf_env.owner, description, **restriction)
+        client = _bearer(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"{description} is dead; the refusal below would prove nothing"
+        )
+        assert_real_route(
+            shelf_env.server.api, "PUT", _attachments_url(ADAPTER_WITH_BASE)
+        )
+        r = client.put(_attachments_url(ADAPTER_WITH_BASE), json=[])
+        assert r.status_code == 403, f"{description}: {r.status_code} {r.text}"

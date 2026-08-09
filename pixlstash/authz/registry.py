@@ -337,6 +337,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/adapters"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/adapters/{sha256}"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/checkpoints"): RoutePolicy(_OWNER),
+    # The assignment path. OWNER_ONLY, same pin: it WRITES the active vault's
+    # adapter_attachment rows, so a token stamped for another library must not
+    # reach it. Not LOCAL_OWNER_ONLY — it names a hash and two row ids, never a
+    # host path, so it is not the §16.3 filesystem-authority class.
+    ("PUT", "/api/v1/adapters/{sha256}/attachments"): RoutePolicy(_OWNER),
     # ── model_folders.py (shelf plan B5; §16.3 host-capability for the writes)
     # The read is OWNER_ONLY like the rest of the shelf. Every mutator and the
     # rescan take — or walk — a caller-supplied host path, which is the
