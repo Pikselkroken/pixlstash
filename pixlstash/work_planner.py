@@ -473,6 +473,13 @@ class WorkPlanner:
                 current_inflight = int(self._inflight_by_finder.get(finder_name, 0))
                 self._inflight_by_finder[finder_name] = current_inflight + 1
                 self._finder_exhausted[finder_name] = False
+                # Armed *before* submit, because a runner that completes the
+                # task synchronously calls back before submit() returns and the
+                # flag has to be visible by then. Captured so the failure path
+                # can put it back: see the rollback below.
+                previous_all_done_pending = self._all_done_pending.get(
+                    finder_name, False
+                )
                 self._all_done_pending[finder_name] = True
                 if task_id:
                     self._finder_by_task_id[task_id] = finder_name
@@ -486,6 +493,13 @@ class WorkPlanner:
                         0,
                         current_inflight - 1,
                     )
+                    # Disarm, or leave it as it was. Nothing was submitted, so
+                    # this burst never earned an `on_all_tasks_complete()`; a
+                    # flag left armed here is claimed later by the first
+                    # `find_task() -> None`, firing the callback for work that
+                    # never ran. Restoring rather than clearing keeps a burst
+                    # that was already legitimately armed by an earlier task.
+                    self._all_done_pending[finder_name] = previous_all_done_pending
                     if task_id:
                         self._finder_by_task_id.pop(task_id, None)
                 self._release_unsubmitted(

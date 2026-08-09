@@ -831,3 +831,40 @@ def test_snapshot_scrub_progress_is_counted_in_archives_not_pictures(tmp_path):
 
     assert (total, remaining) == (5, 3)
     assert max(total - remaining, 0) == 2, "two archives are genuinely done"
+
+
+class _SubmitRaisesRunner:
+    """A runner whose ``submit()`` always fails, with the planner still live."""
+
+    def submit(self, task):
+        raise RuntimeError("runner refused the task")
+
+
+def test_a_failed_submit_does_not_arm_the_drain_for_work_that_never_ran():
+    """`on_all_tasks_complete()` is a burst-ended signal, not a cycle-ended one.
+
+    `_all_done_pending` is armed *before* `submit()`, because a runner that
+    completes synchronously calls back before `submit()` returns. That arming
+    has to be undone when the submit fails: nothing ran, so the burst never
+    earned its callback. Left armed, the flag is claimed by the next
+    `find_task() -> None` — the finder reports no work, in-flight is zero,
+    exhausted is true — and the drain fires for a task that was never submitted.
+    For the tagger that means tearing down a CUDA arena that was never built.
+    """
+    finder = _OneShotFinder()
+    drained = []
+    finder.on_all_tasks_complete = lambda: drained.append("drained")
+    planner = WorkPlanner(task_runner=_SubmitRaisesRunner(), task_finders=[finder])
+
+    # The sweep catches the finder's failure and carries on -- that is this
+    # PR's subject -- so nothing propagates here.
+    planner._run_finders_once()
+
+    assert planner._all_done_pending.get("TestFinder", False) is False, (
+        "a failed submit left the drain armed"
+    )
+
+    # The next sweep finds no work. Nothing was ever submitted, so nothing is
+    # owed a completion callback.
+    assert planner._run_finders_once() is False
+    assert drained == [], f"drain fired for work that never ran: {drained}"
