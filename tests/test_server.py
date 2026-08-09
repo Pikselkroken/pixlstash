@@ -41,7 +41,7 @@ from fastapi.testclient import TestClient
 from io import BytesIO
 from pathlib import Path
 from sqlalchemy import text
-from sqlmodel import Session, delete, select
+from sqlmodel import Session, delete, select, update
 from urllib.parse import quote
 
 from pixlstash.db_models import (
@@ -328,15 +328,27 @@ def clean_library(request, server, client):
         runner.stop()
 
     def _wipe(session: Session):
-        # ``picture.stack_id -> picturestack.id`` and ``picture.<parent> ->
-        # picture.id`` are cycles, so no single delete order satisfies every
-        # constraint. ``defer_foreign_keys`` holds enforcement until COMMIT,
-        # by which point every table below is empty and the constraints hold.
-        # Preferred over toggling ``foreign_keys`` off and on: it is scoped to
-        # this transaction and resets itself, so a delete that raises cannot
-        # leave enforcement disabled on a pooled connection for the rest of the
-        # module — which would quietly weaken every test that follows.
+        # ``picture.stack_id -> picturestack.id`` and ``picture.source_picture_id
+        # -> picture.id`` are the references no delete order below satisfies, so
+        # they are nulled first and the remaining tables delete children before
+        # parents. That UPDATE is also what opens the transaction: pysqlite
+        # emits BEGIN lazily on the first DML, and ``defer_foreign_keys`` only
+        # holds for the transaction it is set in, so issued ahead of any
+        # statement it runs in autocommit and is gone again by COMMIT (#822
+        # measured it reading back 0). The pragma is therefore a safety net over
+        # an order that already holds, and the assertion proves it engaged
+        # rather than assuming it. Preferred over toggling ``foreign_keys`` off
+        # and on: it is scoped to this transaction and resets itself, so a
+        # delete that raises cannot leave enforcement disabled on a pooled
+        # connection for the rest of the module. Removing the pragma from this
+        # exact order was tried and stays green, which is what makes it a net
+        # rather than the thing correctness rests on.
+        session.exec(update(Picture).values(stack_id=None, source_picture_id=None))
         session.exec(text("PRAGMA defer_foreign_keys = ON"))
+        assert session.exec(text("PRAGMA defer_foreign_keys")).one()[0] == 1, (
+            "deferred FK enforcement did not engage; the deletes below would be "
+            "order-sensitive without it"
+        )
         for model in _LIBRARY_TABLES:
             session.exec(delete(model))
         session.commit()
