@@ -424,6 +424,10 @@ describe("dedup keyboard — the blink compare (zoom)", () => {
       flip: vi.fn(),
       to: vi.fn(),
       togglePixels: vi.fn(),
+      step: vi.fn(),
+      // Reports whether the pan applied. False means "nothing to pan", which
+      // is what lets the key fall through to the flip.
+      pan: vi.fn(() => true),
     };
     compareOpen = true;
     handle = createDedupKeyHandler({ ...deps, zoom });
@@ -451,6 +455,67 @@ describe("dedup keyboard — the blink compare (zoom)", () => {
     zoomOpen = true;
     handle(keyEvent("p"));
     expect(zoom.togglePixels).toHaveBeenCalled();
+  });
+
+  it("plus and minus step the zoom", () => {
+    zoomOpen = true;
+    handle(keyEvent("+"));
+    handle(keyEvent("-"));
+    expect(zoom.step).toHaveBeenCalledWith(1);
+    expect(zoom.step).toHaveBeenCalledWith(-1);
+  });
+
+  it("accepts = for zoom in, so it needs no Shift", () => {
+    // `=` is the unshifted key on the same cap as `+` on most layouts.
+    zoomOpen = true;
+    handle(keyEvent("="));
+    expect(zoom.step).toHaveBeenCalledWith(1);
+  });
+
+  it("Shift plus an arrow pans instead of flipping", () => {
+    zoomOpen = true;
+    handle(keyEvent("ArrowRight", { shiftKey: true }));
+    expect(zoom.pan).toHaveBeenCalledWith(1, 0);
+    // The whole point: the flip must NOT also fire, or the image the user is
+    // panning changes under them.
+    expect(zoom.flip).not.toHaveBeenCalled();
+  });
+
+  it("pans in all four directions", () => {
+    zoomOpen = true;
+    for (const [key, vector] of [
+      ["ArrowLeft", [-1, 0]],
+      ["ArrowRight", [1, 0]],
+      ["ArrowUp", [0, -1]],
+      ["ArrowDown", [0, 1]],
+    ]) {
+      handle(keyEvent(key, { shiftKey: true }));
+      expect(zoom.pan).toHaveBeenCalledWith(vector[0], vector[1]);
+    }
+  });
+
+  it("an unmodified arrow still flips, which is the core gesture", () => {
+    zoomOpen = true;
+    handle(keyEvent("ArrowRight"));
+    expect(zoom.flip).toHaveBeenCalledWith(1);
+    expect(zoom.pan).not.toHaveBeenCalled();
+  });
+
+  it("falls through to the flip when there is nothing to pan", () => {
+    // At Fit the image does not overflow, so a pan is meaningless. Eating the
+    // key there would make Shift+Arrow feel broken rather than unavailable.
+    zoomOpen = true;
+    zoom.pan = vi.fn(() => false);
+    handle(keyEvent("ArrowRight", { shiftKey: true }));
+    expect(zoom.flip).toHaveBeenCalledWith(1);
+  });
+
+  it("leaves the zoom keys alone when the zoom is shut", () => {
+    zoomOpen = false;
+    handle(keyEvent("+"));
+    handle(keyEvent("ArrowRight", { shiftKey: true }));
+    expect(zoom.step).not.toHaveBeenCalled();
+    expect(zoom.pan).not.toHaveBeenCalled();
   });
 
   it("Escape peels one layer: zoom first, Compare second", () => {

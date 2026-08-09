@@ -190,6 +190,14 @@ const NO_ZOOM = {
   togglePixels: () => {},
 };
 
+/** Which way each arrow pans, as [dx, dy] in step units. */
+const ZOOM_PAN_VECTORS = {
+  arrowleft: [-1, 0],
+  arrowright: [1, 0],
+  arrowup: [0, -1],
+  arrowdown: [0, 1],
+};
+
 export function createDedupKeyHandler({
   store,
   isCompareOpen,
@@ -308,6 +316,20 @@ export function createDedupKeyHandler({
           zoom.close();
           return;
         }
+        // Shift turns the arrows into a PAN. Unmodified they still flip, which
+        // is the gesture the comparison is built on. Only Shift can express
+        // this: the guard above returns on ctrl/meta/alt before reaching here,
+        // so those modifiers never arrive.
+        //
+        // The pan is refused at Fit, where there is nothing to move, and the
+        // key then falls through to the flip rather than eating the press.
+        if (event.shiftKey) {
+          const pan = ZOOM_PAN_VECTORS[key];
+          if (pan && zoom.pan?.(pan[0], pan[1])) {
+            claim(event);
+            return;
+          }
+        }
         if (key === "arrowright" || key === "arrowdown") {
           claim(event);
           zoom.flip(1);
@@ -316,6 +338,18 @@ export function createDedupKeyHandler({
         if (key === "arrowleft" || key === "arrowup") {
           claim(event);
           zoom.flip(-1);
+          return;
+        }
+        // `=` is the unshifted key on the same cap as `+` on most layouts, so
+        // accepting it means zooming in does not require Shift.
+        if (key === "+" || key === "=") {
+          claim(event);
+          zoom.step?.(1);
+          return;
+        }
+        if (key === "-" || key === "_") {
+          claim(event);
+          zoom.step?.(-1);
           return;
         }
         if (/^[1-9]$/.test(key)) {
