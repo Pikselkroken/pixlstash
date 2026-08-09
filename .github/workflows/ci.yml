@@ -591,15 +591,6 @@ jobs:
     # its absence is a coverage failure, never permission to skip the lane.
     runs-on: ubuntu-latest
     steps:
-      - name: Remove unused tools
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-
       - uses: actions/checkout@v6
 
       - name: Require committed e2e fixture
@@ -621,14 +612,53 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/pip
-          key: pip-${{ runner.os }}-py3.12-${{ hashFiles('setup.py', 'requirements.txt') }}
-          restore-keys: pip-${{ runner.os }}-py3.12-
+          # Own namespace, on purpose, and NOT the composite's `pip-cpu-` key.
+          # This job installs `pip install .` while every setup-backend job
+          # installs `.[test,dev]`, and actions/cache only writes on a key
+          # miss — so one shared key would let whichever job raced first fix
+          # the contents, and an e2e win would make the backend shards
+          # re-download the test/dev wheels on every run without ever getting
+          # to re-save them. A separate namespace costs ~0.5 GB of the 10 GB
+          # repo ceiling and buys zero interaction between the two lanes.
+          # `-cpu-` because the old `pip-` prefix would restore the 2.79 GB
+          # CUDA-fat cache and re-save those nvidia wheels forever.
+          key: pip-e2e-cpu-${{ runner.os }}-py3.12-${{ hashFiles('setup.py', 'requirements.txt') }}
+          restore-keys: pip-e2e-cpu-${{ runner.os }}-py3.12-
 
       - name: Install backend
         if: steps.fixture.outputs.present == 'true'
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
+          # CPU-only torch, CI ONLY — same treatment the setup-backend
+          # composite got, which this job cannot share because it has its own
+          # inline Python setup. This runner only drives Chromium against a
+          # browse-only backend (workers disabled, no ML models), so the CUDA
+          # payload PyPI's torch drags in (nvidia-*-cu13, triton, ~2.5 GB
+          # unpacked) is pure cost: it was most of the 92 s install and the
+          # reason this job's pip cache was 2.79 GB.
+          # The specifiers are pyproject.toml's own, so CI resolves exactly
+          # the version it resolves today and just takes the +cpu build of it;
+          # `pip install .` below then finds the requirement already satisfied
+          # and leaves it alone. --index-url, not --extra-index-url: it
+          # confines this one invocation to PyTorch's own index instead of
+          # letting a second index shadow PyPI names. Nothing a user installs
+          # changes — `pip install -e .` still resolves the GPU build.
+          pip install --index-url https://download.pytorch.org/whl/cpu \
+            "torch~=2.12" "torchvision~=0.27"
           pip install .
+          df -h /
+          # Fail loudly if a pin change ever lets PyPI's CUDA torch win again.
+          # sed, not `grep -q`: under `pipefail` an early-exiting grep SIGPIPEs
+          # pip and the guard fires on its own plumbing instead of the version.
+          torch_version="$(pip show torch | sed -n 's/^Version: //p')"
+          case "$torch_version" in
+            *+cpu) echo "torch $torch_version" ;;
+            *)
+              echo "::error::torch is $torch_version, not a +cpu build; the CUDA wheels are back."
+              exit 1
+              ;;
+          esac
 
       - name: Set up Node
         if: steps.fixture.outputs.present == 'true'
@@ -644,6 +674,12 @@ jobs:
           cd frontend
           npm ci
           npx playwright install --with-deps chromium
+          # This job used to reclaim runner disk with jlumbroso/free-disk-space
+          # (88 s) before installing anything. That step is gone; this `df` is
+          # what replaces the assumption with a measurement, on the fullest
+          # point of the job — after Python, Node, npm deps and Chromium are
+          # all on disk. If it ever gets tight, put the reclaim step back.
+          df -h /
 
       - name: Run Playwright e2e
         if: steps.fixture.outputs.present == 'true'
