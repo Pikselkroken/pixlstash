@@ -31,6 +31,8 @@ the refused token is live.
 
 from __future__ import annotations
 
+import json
+import os
 import tempfile
 from types import SimpleNamespace
 
@@ -43,7 +45,7 @@ from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models.adapter_attachment import AdapterAttachment
 from pixlstash.server import Server
-from tests.authz_guard import no_spa_fallback  # noqa: F401
+from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
 
@@ -144,7 +146,14 @@ def _attach(server, sha256: str, entity_type: str, entity_id: int) -> None:
 def shelf_env():
     """One Server, one owner login, one character and one set to attach to."""
     tmp = tempfile.TemporaryDirectory()
-    server = Server(f"{tmp.name}/server-config.json")
+    config_path = f"{tmp.name}/server-config.json"
+    # trusted_proxies lets a test spoof the real client IP through
+    # X-Forwarded-For, which is the only way to exercise the LOCAL_OWNER_ONLY
+    # locality half. Without the header the in-process peer reads as loopback,
+    # so it changes nothing for the other tests.
+    with open(config_path, "w") as handle:
+        json.dump({"port": 8000, "trusted_proxies": ["testclient"]}, handle)
+    server = Server(config_path)
     server.__enter__()
     try:
         owner = TestClient(server.api, raise_server_exceptions=True)
@@ -455,3 +464,253 @@ def test_unauthenticated_is_refused_on_every_shelf_route(shelf_env):
         assert r.status_code == 401, (
             f"{path} answered an unauthenticated caller: {r.status_code} {r.text}"
         )
+
+
+# ===========================================================================
+# model_folder CRUD + rescan (shelf plan B5, part 2)
+# ===========================================================================
+
+
+def _new_folder_path(tmp_root: str, name: str) -> str:
+    path = os.path.join(tmp_root, name)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def test_registering_a_folder_derives_movable_and_owner(shelf_env, tmp_path):
+    """``movable`` and ``owner`` follow from ``kind`` and are not caller inputs:
+    offering them would let a caller register a combination that means nothing."""
+    r = shelf_env.owner.post(
+        f"{API}/model-folders",
+        json={"path": _new_folder_path(str(tmp_path), "loras")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["kind"], body["movable"], body["owner"]) == ("user", "per_item", None)
+
+    r = shelf_env.owner.post(
+        f"{API}/model-folders",
+        json={"path": _new_folder_path(str(tmp_path), "runs"), "kind": "source"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["kind"], body["movable"], body["owner"]) == (
+        "source",
+        "external",
+        "ai-toolkit",
+    )
+
+
+def test_managed_and_foreign_folders_are_not_creatable_over_http(shelf_env, tmp_path):
+    """PixlStash registers those for itself (tagger artifacts, InsightFace, the
+    HuggingFace cache); a hand-made row would collide with that registration."""
+    for kind in ("managed", "foreign", "nonsense"):
+        r = shelf_env.owner.post(
+            f"{API}/model-folders",
+            json={"path": _new_folder_path(str(tmp_path), f"k-{kind}"), "kind": kind},
+        )
+        assert r.status_code == 400, f"{kind}: {r.status_code} {r.text}"
+
+
+def test_registering_the_same_folder_twice_conflicts(shelf_env, tmp_path):
+    path = _new_folder_path(str(tmp_path), "dupe")
+    assert (
+        shelf_env.owner.post(f"{API}/model-folders", json={"path": path}).status_code
+        == 200
+    )
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": path})
+    assert r.status_code == 409, r.text
+
+
+def test_a_system_directory_is_refused(shelf_env):
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": "/etc"})
+    assert r.status_code == 400, r.text
+
+
+def test_folder_list_counts_copies_and_reports_the_seeded_folder(shelf_env):
+    r = shelf_env.owner.get(f"{API}/model-folders")
+    assert r.status_code == 200, r.text
+    folders = {row["path"]: row for row in r.json()["folders"]}
+    assert folders["/models/loras"]["file_count"] == len(_SEED_MODELS)
+
+
+def test_patch_changes_the_bind_path_but_never_the_registered_path(shelf_env):
+    r = shelf_env.owner.patch(
+        f"{API}/model-folders/1",
+        json={"host_path": "/host/models", "delete_after_import": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["host_path"] == "/host/models"
+    assert r.json()["delete_after_import"] is True
+    assert r.json()["path"] == "/models/loras"
+
+    # `path` is not a field on the update schema at all: relocating a folder is
+    # a copy-verify-repoint operation (B7), not an edit.
+    r = shelf_env.owner.patch(f"{API}/model-folders/1", json={"path": "/elsewhere"})
+    assert r.status_code == 422, r.text
+
+
+def test_forgetting_a_folder_tombstones_and_keeps_every_model(shelf_env):
+    """Shelf plan §7: removal drops the location rows and keeps the model rows
+    with their curation, which is what lets it skip a confirmation prompt. If
+    this ever hard-deletes, the confirmation has to come back."""
+    before = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    assert _names(before) == {
+        "alice.safetensors",
+        "bob.safetensors",
+        "sd_xl_noname.safetensors",
+        "dana.safetensors",
+    }
+
+    r = shelf_env.owner.delete(f"{API}/model-folders/1")
+    assert r.status_code == 200, r.text
+    assert r.json()["tombstoned_files"] == len(_SEED_MODELS)
+
+    after = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    assert _names(after) == _names(before), (
+        "forgetting a folder deleted model rows; the shelf's no-confirmation "
+        "rule depends on this being a tombstone"
+    )
+    assert all(row["locations"] == [] for row in after)
+    # Identity, not just count: the curation survived, which is the whole point.
+    assert {row["filename"]: row["display_name"] for row in after} == {
+        row["filename"]: row["display_name"] for row in before
+    }
+    assert shelf_env.owner.get(f"{API}/model-folders").json()["folders"] == []
+
+
+def test_rescan_of_a_missing_folder_reports_started_and_does_not_raise(shelf_env):
+    """The seeded folder does not exist on disk, so the scan marks it
+    unreachable. The route still answers 202 immediately: it must never block on
+    reading a folder of 1,800 adapters."""
+    r = shelf_env.owner.post(f"{API}/model-folders/1/rescan")
+    assert r.status_code == 202, r.text
+    assert r.json() == {"status": "started", "id": 1}
+
+
+def test_rescan_skips_a_source_folder(shelf_env, tmp_path):
+    """`source` folders are taken FROM, never catalogued in place."""
+    r = shelf_env.owner.post(
+        f"{API}/model-folders",
+        json={"path": _new_folder_path(str(tmp_path), "src"), "kind": "source"},
+    )
+    folder_id = r.json()["id"]
+    r = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
+    assert r.status_code == 202, r.text
+    assert r.json()["status"] == "skipped"
+
+
+def test_unknown_folder_id_is_404_on_every_mutator(shelf_env):
+    assert (
+        shelf_env.owner.patch(f"{API}/model-folders/999999", json={}).status_code == 404
+    )
+    assert shelf_env.owner.delete(f"{API}/model-folders/999999").status_code == 404
+    assert shelf_env.owner.post(f"{API}/model-folders/999999/rescan").status_code == 404
+
+
+# ---- authorization: the read tier vs the §16.3 locality tier ---------------
+
+_FOLDER_MUTATORS = (
+    ("POST", f"{API}/model-folders", {"json": {"path": "/tmp/pixlstash-authz-probe"}}),
+    ("PATCH", f"{API}/model-folders/1", {"json": {}}),
+    ("DELETE", f"{API}/model-folders/1", {}),
+    ("POST", f"{API}/model-folders/1/rescan", {}),
+)
+
+
+def _xff(ip: str) -> dict:
+    return {"X-Forwarded-For": ip}
+
+
+def test_folder_list_is_owner_only_in_both_directions(shelf_env):
+    assert shelf_env.owner.get(f"{API}/model-folders").status_code == 200
+
+    token = _mint(shelf_env.owner, "folder list probe")
+    client = _bearer(shelf_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the READ token is dead; the refusal below would prove nothing"
+    )
+    assert client.get(f"{API}/model-folders").status_code == 403
+
+
+def test_local_owner_reaches_every_folder_mutator(shelf_env):
+    """The positive direction of the §16.3 tier: loopback, RFC1918 LAN and
+    Tailscale CGNAT all pass. Over-blocking is its own regression, and the
+    Tailscale case is the one that was a false deny before the scoped predicate."""
+    for method, path, kwargs in _FOLDER_MUTATORS:
+        for headers in ({}, _xff("192.168.1.9"), _xff("100.64.0.5")):
+            r = shelf_env.owner.request(method, path, headers=headers, **kwargs)
+            assert "restricted to local" not in r.text, (
+                f"{method} {path} from {headers or 'loopback'} was refused as "
+                f"non-local: {r.status_code} {r.text}"
+            )
+
+
+def test_remote_owner_is_refused_on_every_folder_mutator_naming_the_flag(shelf_env):
+    """The negative direction. A public client IP is 403'd and the message names
+    ``allow_remote_host_ops``, exactly as the reference-folder block does."""
+    for method, path, kwargs in _FOLDER_MUTATORS:
+        r = shelf_env.owner.request(method, path, headers=_xff("8.8.8.8"), **kwargs)
+        assert r.status_code == 403, f"{method} {path}: {r.status_code} {r.text}"
+        assert "allow_remote_host_ops" in r.text, (
+            f"{method} {path} denied without naming the setting that enables it: "
+            f"{r.text}"
+        )
+
+
+def test_remote_owner_is_admitted_when_the_flag_is_set(shelf_env):
+    """The flag is what separates this tier from the loopback red line; if it did
+    nothing here, the tier would silently be the stricter one."""
+    config = shelf_env.server.auth._server_config
+    previous = config.get("allow_remote_host_ops")
+    config["allow_remote_host_ops"] = True
+    try:
+        for method, path, kwargs in _FOLDER_MUTATORS:
+            r = shelf_env.owner.request(method, path, headers=_xff("8.8.8.8"), **kwargs)
+            assert "restricted to local" not in r.text, (
+                f"{method} {path} stayed refused with allow_remote_host_ops=true: "
+                f"{r.status_code} {r.text}"
+            )
+    finally:
+        if previous is None:
+            config.pop("allow_remote_host_ops", None)
+        else:
+            config["allow_remote_host_ops"] = previous
+
+
+def test_share_tokens_never_reach_a_folder_mutator(shelf_env):
+    """No share token reaches these four, and this pins **which layer** says so.
+
+    Be precise about what this proves, because the alternative is a decorative
+    test. All four mutators are non-GET, and the auth middleware blocks every
+    non-GET for a READ token ahead of routing; every resource-scoped token is a
+    READ token (``ALL``+``resource_type`` is refused at mint and fail-closed at
+    the middleware). So the 403 below is the **middleware's**, and the gate's
+    ``LOCAL_OWNER_ONLY`` owner half is defence in depth that no HTTP request can
+    observe independently — there exists no credential that reaches the gate on
+    these routes and fails its owner check. Verified by mutation: deleting
+    ``_enforce_unscoped_owner`` from the gate's ``LOCAL_OWNER_ONLY`` branch does
+    **not** turn this file red, and that is a property of the system rather than
+    a hole in this test. It is flagged to the adversarial review rather than
+    papered over, and it is not specific to the shelf: it holds for all 18
+    routes on the tier.
+
+    What this test does own: the block is real, the credential is live, and the
+    routes exist. ``assert_real_route`` is load-bearing — middleware answers 403
+    before routing, so a renamed route would 403 identically and the assertion
+    would dissolve into nothing.
+    """
+    token = _mint(
+        shelf_env.owner,
+        "folder mutator probe",
+        resource_type="character",
+        resource_id=shelf_env.character_id,
+    )
+    client = _bearer(shelf_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the scoped token is dead; the refusals below would prove nothing"
+    )
+    for method, path, kwargs in _FOLDER_MUTATORS:
+        assert_real_route(shelf_env.server.api, method, path)
+        r = client.request(method, path, **kwargs)
+        assert r.status_code == 403, f"{method} {path}: {r.status_code} {r.text}"

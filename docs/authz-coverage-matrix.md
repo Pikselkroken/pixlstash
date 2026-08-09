@@ -544,6 +544,16 @@ and the declarations themselves are pinned by
 | GET | `/api/v1/adapters/{sha256}` | owner_only |  | Detail for one adapter (or one `unknown`, which is hashed on sight and therefore hash-addressable). Same pin reasoning as the list. A checkpoint hash 404s here rather than being served, so the two blocks stay separate |
 | GET | `/api/v1/checkpoints` | owner_only |  | The same `model` query filtered to `file_kind='checkpoint'`. No by-hash detail sibling: a checkpoint registers with `sha256` NULL until `MissingCheckpointHashFinder` reads it, so `model.id` is its only identifier. `unknown` is never returned here |
 
+### model_folders.py (added 2026-08-09 — model shelf B5; §16.3 host-capability for the writes)
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/model-folders` | owner_only |  | Registered model folders, with a per-folder copy count. Reads host paths but takes none, so it stays on the shelf's `owner_only` tier rather than the locality tier, mirroring `GET /libraries` |
+| POST | `/api/v1/model-folders` | **local_owner_only** |  | §16.3 model-folder create; takes a caller-supplied host path, exactly the reference-folder create class. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| PATCH | `/api/v1/model-folders/{folder_id}` | **local_owner_only** |  | §16.3 model-folder update; sets the Docker bind host path. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| DELETE | `/api/v1/model-folders/{folder_id}` | **local_owner_only** |  | §16.3 model-folder delete; drops a registered host path and tombstones its `model_file` rows (the `model` rows and their curation survive). Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+| POST | `/api/v1/model-folders/{folder_id}/rescan` | **local_owner_only** |  | §16.3 walks a registered host path and reads every model file under it — the same host-filesystem authority as `reference-folders/detect-sidecars`. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true` (§16.3.1) |
+
 ### other
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |

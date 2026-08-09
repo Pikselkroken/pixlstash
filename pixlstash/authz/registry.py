@@ -337,6 +337,27 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/adapters"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/adapters/{sha256}"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/checkpoints"): RoutePolicy(_OWNER),
+    # ── model_folders.py (shelf plan B5; §16.3 host-capability for the writes)
+    # The read is OWNER_ONLY like the rest of the shelf. Every mutator and the
+    # rescan take — or walk — a caller-supplied host path, which is the
+    # reference-folders class exactly, so they carry the §16.3 locality tier.
+    ("GET", "/api/v1/model-folders"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/model-folders"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 model-folder create; takes a caller-supplied host path, same class as reference-folder create; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("PATCH", "/api/v1/model-folders/{folder_id}"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 model-folder update; sets the Docker bind host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("DELETE", "/api/v1/model-folders/{folder_id}"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 model-folder delete; drops a registered host path and tombstones its location rows; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/model-folders/{folder_id}/rescan"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 walks a registered host path and reads every model file under it — the same authority as reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
         _LOCAL,

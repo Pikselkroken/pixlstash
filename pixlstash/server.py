@@ -91,6 +91,7 @@ from pixlstash.routes.import_folders import (
 )
 from pixlstash.routes.filesystem import create_router as create_filesystem_router
 from pixlstash.routes.libraries import create_router as create_libraries_router
+from pixlstash.routes.model_folders import create_router as create_model_folders_router
 from pixlstash.routes.model_shelf import create_router as create_model_shelf_router
 from pixlstash.routes.guest_scores import create_router as create_guest_scores_router
 from pixlstash.routes.share import create_router as create_share_router
@@ -1451,6 +1452,11 @@ class Server(
         # a duplicated tag that reaches OpenAPI and the generated route table.
         self.api.include_router(
             create_model_shelf_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_model_folders_router(self),
             prefix=API_V1_PREFIX,
             dependencies=gate,
         )
