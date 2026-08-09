@@ -14,6 +14,10 @@ class Character(SQLModel, table=True):
     name: str = Field(index=True, nullable=False)
     description: Optional[str] = Field(default=None)
     extra_metadata: Optional[str] = Field(default=None)
+    # Mirrors PictureSet.set_color: a hex string seeded by POSITION in the
+    # shared 48-colour list, never by value. The list is therefore never
+    # reordered or trimmed. See #761.
+    character_color: Optional[str] = Field(default=None)
 
     reference_picture_set_id: Optional[int] = Field(
         default=None, foreign_key="pictureset.id"

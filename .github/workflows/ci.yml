@@ -294,6 +294,7 @@ jobs:
           CI_SHARD: ${{ matrix.shard }}
         run: >-
           python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/4"
+          tests/test_adapter_attachment.py
           tests/test_adapter_header.py
           tests/test_aitoolkit_run.py
           tests/test_anomaly_region_scope.py

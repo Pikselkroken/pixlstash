@@ -1,3 +1,8 @@
+from .adapter_attachment import (  # noqa: F401
+    ENTITY_CHARACTER,
+    ENTITY_SET,
+    AdapterAttachment,
+)
 from .character import Character  # noqa: F401
 from .dedup import (  # noqa: F401
     DedupGroup,
