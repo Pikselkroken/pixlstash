@@ -352,8 +352,14 @@ CREATE TABLE IF NOT EXISTS model_file (
     model_id         INTEGER NOT NULL REFERENCES model(id),
     model_folder_id  INTEGER NOT NULL REFERENCES model_folder(id),
     relpath          TEXT NOT NULL,
-    state            TEXT NOT NULL,
+    state            TEXT NOT NULL,   -- 'present' | 'missing' | 'unreachable'
     seen_at          TEXT,
+    -- st_mtime_ns of this copy at the last scan. Paired with model.file_size it
+    -- is what lets a sweep skip re-hashing 1,800 unchanged adapters, without
+    -- the size-only blind spot where a same-size in-place edit leaves
+    -- model.sha256 naming bytes that are no longer there. Per-location, not
+    -- per-model: two copies of one file have two mtimes.
+    file_mtime       INTEGER,
     PRIMARY KEY (model_folder_id, relpath)
 )
 """
