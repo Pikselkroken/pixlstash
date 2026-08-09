@@ -330,7 +330,11 @@ CREATE TABLE IF NOT EXISTS model (
     stack_position        INTEGER,
     run_key               TEXT,
     created_at            TEXT,
-    CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)
+    CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL),
+    -- Same shape one column over: every producer already supplies an algorithm
+    -- for an adapter ('unknown' is a first-class value, never NULL), so an
+    -- adapter with no kind at all is a state the code cannot reach.
+    CHECK (file_kind <> 'adapter' OR kind IS NOT NULL)
 )
 """
 
@@ -481,8 +485,10 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     # and `adapter_stack` are NOT dropped: a developer may have registered
     # folders, and neither table changes shape.
     existing = {
-        row[0]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        row[0]: row[1]
+        for row in conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'table'"
+        )
     }
     # `adapter` does not exist after the reshape, so this guard is false on a
     # fresh hub and false on every subsequent re-run.
@@ -495,6 +501,22 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         # ix_adapter_* indexes need no separate statement.
         for table in _V2_SUPERSEDED_SHELF_TABLES:
             conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+    # The `kind` CHECK was added after the reshape and SQLite has no
+    # ALTER TABLE ADD CONSTRAINT, so a hub that already holds the pre-CHECK
+    # `model` table needs the same drop-and-rescan treatment. Legitimate for
+    # the same reason and only while v2 is unreleased: nothing a person typed
+    # lives in these two tables yet (the shelf UI is unbuilt), `model_folder`
+    # survives, and the next scan refills them from disk. Child first, so the
+    # FK the drop enforces has nothing pointing at it.
+    model_ddl = existing.get("model")
+    if model_ddl is not None and "kind IS NOT NULL" not in model_ddl:
+        logger.info(
+            "Rebuilding the model table to pick up the adapter-kind CHECK; "
+            "the next folder scan refills it from disk."
+        )
+        conn.execute("DROP TABLE IF EXISTS model_file")
+        conn.execute("DROP TABLE IF EXISTS model")
 
     for statement in _V2_MODEL_SHELF_TABLES:
         conn.execute(statement)

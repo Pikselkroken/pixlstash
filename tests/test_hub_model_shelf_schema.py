@@ -66,10 +66,17 @@ def ddl_for(conn, name):
 
 
 def add_model(conn, *, file_kind="adapter", sha256="h", **columns):
-    """Insert one content row and return its id."""
+    """Insert one content row and return its id.
+
+    ``kind`` defaults the way the scanner writes it — an algorithm for an
+    adapter, NULL for anything else — so the suite's rows are shaped the way
+    real ones are. A helper that left it NULL on an adapter would be the one
+    thing that lets a constraint or query regression pass unnoticed.
+    """
     columns = {
         "file_kind": file_kind,
         "sha256": sha256,
+        "kind": "lora" if file_kind == "adapter" else None,
         "provenance": "external",
         **columns,
     }
@@ -208,6 +215,34 @@ class TestReRunIsSafe:
         assert not (set(SUPERSEDED_TABLES) & table_names(hub))
         assert {"model", "model_file"} <= table_names(hub)
 
+    def test_a_hub_with_the_pre_check_model_table_is_rebuilt(self, hub):
+        """The adapter-kind CHECK lands on a hub that already has `model`.
+
+        SQLite has no ``ALTER TABLE ADD CONSTRAINT``, so the table is replaced
+        rather than altered. Legitimate only while v2 is unreleased: nothing a
+        person typed lives in ``model``/``model_file`` yet, ``model_folder``
+        survives, and the next scan refills them from disk.
+        """
+        apply_migrations(hub)
+        hub.execute("DROP TABLE model_file")
+        hub.execute("DROP TABLE model")
+        hub.execute(
+            "CREATE TABLE model (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "file_kind TEXT NOT NULL, kind TEXT, sha256 TEXT UNIQUE, "
+            "display_name TEXT, provenance TEXT NOT NULL, "
+            "CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL))"
+        )
+        folder_id = add_folder(hub, "/models")
+        hub.commit()
+
+        apply_migrations(hub)
+
+        with pytest.raises(sqlite3.IntegrityError):
+            add_model(hub, file_kind="adapter", kind=None)
+        # The registration is the only thing in here a developer typed, and the
+        # rebuild leaves it alone.
+        assert hub.execute("SELECT id FROM model_folder").fetchall() == [(folder_id,)]
+
     def test_the_drop_guard_is_idempotent_and_loses_nothing_after_the_first_open(
         self, hub
     ):
@@ -247,6 +282,21 @@ class TestConstraints:
         apply_migrations(hub)
         with pytest.raises(sqlite3.IntegrityError):
             add_model(hub, file_kind="adapter", sha256=None)
+
+    def test_an_adapter_may_not_be_stored_without_a_kind(self, hub):
+        # No producer emits it: AdapterInfo.kind is typed str and
+        # detect_adapter_kind returns 'unknown' rather than None on every path.
+        # The CHECK is what keeps it that way once something else writes rows.
+        apply_migrations(hub)
+        with pytest.raises(sqlite3.IntegrityError):
+            add_model(hub, file_kind="adapter", kind=None)
+
+    def test_a_checkpoint_needs_no_kind(self, hub):
+        # The other direction: `kind` names an adapter algorithm, so demanding
+        # one of a checkpoint would be its own bug.
+        apply_migrations(hub)
+        add_model(hub, file_kind="checkpoint", sha256=None, kind=None)
+        assert hub.execute("SELECT kind FROM model").fetchone() == (None,)
 
     def test_a_checkpoint_may_be_registered_before_it_is_hashed(self, hub):
         # Deliberately different from an adapter: a checkpoint can be many
