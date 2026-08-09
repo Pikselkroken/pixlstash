@@ -16,6 +16,21 @@ I/O-bound on one disk regardless. A second POST while one runs is a 409.
 moved. That is the ruling, and it is the only answer that does not need its own
 crash-window argument for the undo.
 
+**Relocating the managed store lives here too**, at
+``POST /model-folders/{folder_id}/relocate``, despite the path — because a
+relocation *is* a move, of every file one folder holds, and it runs the same
+plan/execute machinery and the same single job slot. Doing it any other way
+would mean a second implementation of the ordering.
+
+The relocation's own trick is how it keeps "exactly one ``managed`` folder"
+true throughout. The new location is registered as an ordinary ``user`` folder
+first; every file is moved into it with its ``model_file`` row repointed
+individually, so the per-file invariant is untouched; and only when every file
+has landed does **one** transaction promote the new row to ``managed`` and drop
+the old one. A crash at any point leaves exactly one managed row (the old,
+partly emptied store) plus a ``user`` folder holding what already moved, with
+every row naming a file that exists. Re-running the relocation resumes it.
+
 Authorization: `LOCAL_OWNER_ONLY` on all three, declared in
 ``pixlstash/authz/registry.py`` and never inline. See the §16.3 note on the
 tier in ``docs/backend_architecture.md``; the reasoning per route is in
@@ -24,6 +39,7 @@ tier in ``docs/backend_architecture.md``; the reasoning per route is in
 
 from __future__ import annotations
 
+import os
 import threading
 from datetime import datetime, timezone
 from typing import Optional
@@ -32,7 +48,13 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.managed_model_store import (
+    MANAGED_KIND,
+    MANAGED_MOVABLE,
+    MANAGED_OWNER,
+)
 from pixlstash.services.model_mover import ModelMover, MoveOutcome, MoveRefused
+from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
 logger = get_logger(__name__)
 
@@ -86,6 +108,21 @@ class MoveRequest(BaseModel):
             "folder does the obvious thing. Filenames are flattened to the "
             "basename; a collision is refused before anything moves, never "
             "overwritten."
+        )
+    )
+
+
+class RelocateRequest(BaseModel):
+    """Body of ``POST /model-folders/{folder_id}/relocate``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(
+        description=(
+            "Absolute host path to move the store to. Created if it does not "
+            "exist. Owner-chosen and therefore trusted, but still checked "
+            "against the system-directory blocklist, exactly as a reference "
+            "folder is."
         )
     )
 
@@ -158,6 +195,66 @@ def _snapshot(job: Optional[dict]) -> MoveStatusResponse:
     )
 
 
+def _register_or_reuse(hub, path: str) -> int:
+    """Register the relocation target as an ordinary ``user`` folder.
+
+    Ordinary on purpose: two ``managed`` rows must never exist, not even for the
+    minutes a relocation takes, because the managed row is what "the default
+    destination" resolves to. It is promoted in one transaction at the end.
+
+    Reuses a row already at that path — a retry of an interrupted relocation
+    lands here, and ``model_folder.path`` is UNIQUE.
+    """
+    existing = hub.fetchone("SELECT id FROM model_folder WHERE path = ?", (path,))
+    if existing is not None:
+        return int(existing["id"])
+    with hub.transaction() as conn:
+        return int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, movable, created_at) "
+                "VALUES (?, 'user', 'per_item', ?)",
+                (path, _utcnow()),
+            ).lastrowid
+        )
+
+
+def _finish_relocation(hub, old_folder_id: int, new_folder_id: int) -> None:
+    """Promote the new folder and retire the old one, in one transaction.
+
+    Ordered so that at no instant are there two ``managed`` rows or none: the
+    old row stops being managed and the new one starts being managed inside a
+    single commit.
+
+    The old folder's ``missing`` and ``unreachable`` rows are carried across
+    rather than dropped. They are tombstones — a file the shelf once saw and can
+    re-link by content — and the store moving is not news about whether those
+    files came back.
+    """
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET model_folder_id = ? WHERE model_folder_id = ?",
+            (new_folder_id, old_folder_id),
+        )
+        conn.execute(
+            "UPDATE model_folder SET kind = ?, owner = ?, movable = ? WHERE id = ?",
+            (MANAGED_KIND, MANAGED_OWNER, MANAGED_MOVABLE, new_folder_id),
+        )
+        conn.execute("DELETE FROM model_folder WHERE id = ?", (old_folder_id,))
+
+
+def _remove_if_empty(path: str) -> None:
+    """Tidy the vacated directory, and never let tidying fail a relocation."""
+    try:
+        os.rmdir(path)
+    except OSError as exc:
+        logger.info(
+            "Left %s in place after the managed store moved out of it: %s. "
+            "Anything still in it is not the shelf's to remove.",
+            path,
+            exc,
+        )
+
+
 def create_router(server) -> APIRouter:
     """Create the model-move router.
 
@@ -169,35 +266,21 @@ def create_router(server) -> APIRouter:
     """
     router = APIRouter()
 
-    @router.post(
-        "/model-moves",
-        summary="Move model files into another registered folder",
-        description=(
-            "Validates the whole batch first — destination, every item, path "
-            "containment and free space — and refuses it before writing a byte "
-            "if anything is wrong. Then copies on a thread and returns 202. Per "
-            "file the order is copy, verify by SHA-256, repoint the row and "
-            "commit, and only then unlink, so an interruption leaves a "
-            "duplicate and never a row naming a file that is gone. A move "
-            "within one filesystem is a rename and copies nothing."
-        ),
-        status_code=202,
-        tags=["model_shelf"],
-        response_model=MoveStatusResponse,
-    )
-    def start_move(request: Request, payload: MoveRequest = Body(...)):
+    def _launch(mover: ModelMover, plan, on_finished=None) -> dict:
+        """Put one planned batch on the single move thread and return its job.
+
+        Shared by the plain move and by a relocation, because a relocation *is* a
+        move — of every file one folder holds. One job slot machine-wide: two at
+        once would race for the free space each of them checked before starting.
+
+        Args:
+            mover: The mover bound to this server's hub.
+            plan: A validated :class:`MovePlan`.
+            on_finished: Called with the :class:`MoveReport` when every file has
+                been decided, on the worker thread, only when the batch ran to
+                completion. A relocation uses it to flip the folder rows.
+        """
         global _job
-        server.auth.ensure_secure_when_required(request)
-
-        mover = ModelMover(server.hub)
-        try:
-            plan = mover.plan(
-                [(item.folder_id, item.relpath) for item in payload.items],
-                payload.destination_folder_id,
-            )
-        except MoveRefused as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-
         with _job_lock:
             if _job is not None and _job["status"] == STATUS_RUNNING:
                 raise HTTPException(
@@ -240,6 +323,8 @@ def create_router(server) -> APIRouter:
                 # file by file, so append whatever `on_progress` did not see.
                 for outcome in report.outcomes[len(job["results"]) :]:
                     _record(outcome)
+                if on_finished is not None:
+                    on_finished(report)
             except Exception as exc:
                 logger.error(
                     "Move into folder %s failed after %d of %d file(s): %s",
@@ -254,7 +339,37 @@ def create_router(server) -> APIRouter:
                 job["status"] = STATUS_FINISHED
 
         threading.Thread(target=_run, daemon=True, name="model-move").start()
-        return _snapshot(job)
+        return job
+
+    @router.post(
+        "/model-moves",
+        summary="Move model files into another registered folder",
+        description=(
+            "Validates the whole batch first — destination, every item, path "
+            "containment and free space — and refuses it before writing a byte "
+            "if anything is wrong. Then copies on a thread and returns 202. Per "
+            "file the order is copy, verify by SHA-256, repoint the row and "
+            "commit, and only then unlink, so an interruption leaves a "
+            "duplicate and never a row naming a file that is gone. A move "
+            "within one filesystem is a rename and copies nothing."
+        ),
+        status_code=202,
+        tags=["model_shelf"],
+        response_model=MoveStatusResponse,
+    )
+    def start_move(request: Request, payload: MoveRequest = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+
+        mover = ModelMover(server.hub)
+        try:
+            plan = mover.plan(
+                [(item.folder_id, item.relpath) for item in payload.items],
+                payload.destination_folder_id,
+            )
+        except MoveRefused as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+        return _snapshot(_launch(mover, plan))
 
     @router.get(
         "/model-moves",
@@ -298,5 +413,102 @@ def create_router(server) -> APIRouter:
                 _job["total"],
             )
             return _snapshot(_job)
+
+    @router.post(
+        "/model-folders/{folder_id}/relocate",
+        summary="Move the managed model store to another location",
+        description=(
+            "Moves every file the managed store holds to a new host path and "
+            "points the store at it. This is a model move like any other — copy, "
+            "verify by SHA-256, repoint the row and commit, then unlink, per "
+            "file — so an interruption leaves duplicates rather than rows naming "
+            "files that are gone, and a move within one filesystem is a rename. "
+            "Only the managed store can be relocated: an ordinary folder is one "
+            "you registered, so if you move it yourself, register it again."
+        ),
+        status_code=202,
+        tags=["model_shelf"],
+        response_model=MoveStatusResponse,
+    )
+    def relocate_managed_store(
+        folder_id: int, request: Request, payload: RelocateRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        folder = server.hub.fetchone(
+            "SELECT id, path, kind FROM model_folder WHERE id = ?", (folder_id,)
+        )
+        if folder is None:
+            raise HTTPException(status_code=404, detail="Model folder not found.")
+        if folder["kind"] != MANAGED_KIND:
+            # 409 for the same reason the managed store's DELETE is 409: the
+            # caller is authorized and the request is well formed, and what
+            # refuses it is what the target row is.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Only the managed store can be relocated. A folder you "
+                    "registered is one you moved yourself; register it again at "
+                    "its new path."
+                ),
+            )
+
+        destination_path = os.path.normpath(payload.path)
+        error = validate_reference_folder_path(destination_path)
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+        if os.path.normpath(folder["path"]) == destination_path:
+            raise HTTPException(status_code=400, detail="The store is already there.")
+        try:
+            os.makedirs(destination_path, exist_ok=True)
+        except OSError as exc:
+            logger.error(
+                "Could not create %s for the managed store relocation: %s",
+                destination_path,
+                exc,
+            )
+            raise HTTPException(
+                status_code=409, detail=f"Could not create {destination_path}: {exc}"
+            ) from exc
+
+        destination_id = _register_or_reuse(server.hub, destination_path)
+        relpaths = [
+            row["relpath"]
+            for row in server.hub.fetchall(
+                "SELECT relpath FROM model_file WHERE model_folder_id = ? "
+                "AND state = ? ORDER BY relpath",
+                (folder_id, "present"),
+            )
+        ]
+
+        mover = ModelMover(server.hub)
+        try:
+            plan = mover.plan(
+                [(folder_id, relpath) for relpath in relpaths], destination_id
+            )
+        except MoveRefused as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+        def _promote(report) -> None:
+            failed = [o for o in report.outcomes if o.status != "moved"]
+            if failed or report.cancelled:
+                logger.warning(
+                    "Managed store relocation to %s stopped with %d file(s) not "
+                    "moved. The store stays at %s and the moved files are "
+                    "catalogued under the new folder; re-run to finish.",
+                    destination_path,
+                    len(failed),
+                    folder["path"],
+                )
+                return
+            _finish_relocation(server.hub, folder_id, destination_id)
+            _remove_if_empty(folder["path"])
+            logger.info(
+                "Managed model store relocated from %s to %s (%d file(s)).",
+                folder["path"],
+                destination_path,
+                len(plan.moves),
+            )
+
+        return _snapshot(_launch(mover, plan, on_finished=_promote))
 
     return router

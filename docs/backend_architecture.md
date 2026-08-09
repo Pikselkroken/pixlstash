@@ -509,6 +509,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/model-folders                                                         | model_shelf     | Register a model folder                                    |
 | PATCH  | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Update a registered model folder                           |
 | DELETE | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Forget a registered model folder                           |
+| POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move the managed model store to another location           |
 | POST   | /api/v1/model-folders/{folder_id}/rescan                                      | model_shelf     | Rescan a registered model folder                           |
 | GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder      |
 | POST   | /api/v1/model-imports                                                         | model_shelf     | Import a training run onto the shelf                       |
@@ -1690,7 +1691,11 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
   - **Updated 2026-08-09 (third change the same day) — the locality total is now `28 = 23 local + 5 loopback`.** Re-derived from `ROUTE_POLICIES`. The shelf's **ai-toolkit import** block (shelf plan B7) adds **+2 `local_owner_only`**: `GET /api/v1/model-folders/{folder_id}/runs` and `POST /api/v1/model-imports`. The listing walks a registered output root and reads every run folder and `config.yaml` under it, which is `model-folders/{folder_id}/rescan`'s authority exactly; the import writes files into one registered folder and, when the source folder carries `delete_after_import`, unlinks them from the output root, which is `POST /model-moves`' authority exactly. **Neither takes a host path**: the import names a registered `source` folder id and a run *name*, and the server joins them with `resolve_path_within`, so a run name resolving outside the registered root is refused rather than read. They are on the locality tier for the authority they exercise, not for an input they accept.
 
-    Arithmetic, not judgement — pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_23_local_5_loopback`.
+    Arithmetic, not judgement.
+
+  - **Updated 2026-08-09 (fourth change the same day) — the locality total is now `29 = 24 local + 5 loopback`.** `POST /api/v1/model-folders/{folder_id}/relocate` moves the managed model store (§13) to a **caller-supplied host path**: it is the `reference-folders/{folder_id}/relocate` class *and* carries `POST /model-moves`' file movement, so it is the one shelf route on this tier for both reasons at once. It is refused with 409 for any folder that is not the managed store.
+
+    Arithmetic, not judgement — pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_24_local_5_loopback`.
 
     **Scope of that guarantee (do not over-read it).** Loopback enforcement inherits the pre-existing proxy caveat in CSO Condition 2 below, shared with the other four loopback routes: a reverse proxy that sets no `X-Forwarded-For`, or passes an inbound one through, can make a remote caller resolve to loopback. So the correct claim is that safety depends on the flag being off **or** the proxy being configured correctly — *not* that it stops depending on the flag entirely. Container port-mapping is **not** a bypass (Docker bridge / slirp present `172.17.x` / `10.0.2.x`, which are not loopback).
 

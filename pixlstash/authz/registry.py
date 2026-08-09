@@ -379,6 +379,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 reports the host paths and per-file outcomes of an in-flight move; same tier as the POST that alone can create one, so progress for a local-only operation is not readable from a tier that cannot start it",
     ),
+    ("POST", "/api/v1/model-folders/{folder_id}/relocate"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 takes a caller-supplied host path and moves every file the managed model store holds into it, then unlinks the originals — the reference-folders/{folder_id}/relocate class with the file movement of POST /model-moves; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("DELETE", "/api/v1/model-moves"): RoutePolicy(
         _LOCAL,
         justification="§16.3 cancels an in-flight host-filesystem move; halting the owner's own file operation is the same authority as starting it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",

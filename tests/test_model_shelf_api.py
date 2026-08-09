@@ -1114,12 +1114,20 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
     the rows and one for the locations, whatever the sort and *whatever the row
     count*. 1,806 rows sorted by "the total size of the stack this row belongs
     to" is otherwise the textbook N+1."""
+    import threading
+
     server = shelf_env.server
     calls: list[str] = []
     original = server.hub.fetchall
 
+    # The move worker is excluded by name. The server is shared, a move started
+    # by another test runs on its own thread, and letting its queries land in
+    # the tally would fail this assertion for a reason that has nothing to do
+    # with the list query. The request handler itself runs on Starlette's
+    # threadpool, so "only my thread" would count nothing at all.
     def counting(sql, params=()):
-        calls.append(sql)
+        if not threading.current_thread().name.startswith("model-move"):
+            calls.append(sql)
         return original(sql, params)
 
     server.hub.fetchall = counting
@@ -1616,3 +1624,221 @@ def test_the_managed_kind_cannot_be_created_over_http(shelf_env, tmp_path):
         json={"path": str(tmp_path / "second-store"), "kind": "managed"},
     )
     assert r.status_code == 400, r.text
+
+
+# ===========================================================================
+# Relocating the managed store — a B7 move of every file it holds
+# ===========================================================================
+
+
+@pytest.fixture
+def relocatable_store(shelf_env, tmp_path):
+    """A managed store with two adapters in it, and an empty target drive."""
+    from pixlstash.routes import model_moves
+
+    model_moves._job = None
+    store = tmp_path / "store"
+    target = tmp_path / "big-drive" / "models"
+    store.mkdir()
+    with shelf_env.server.hub.transaction() as conn:
+        managed_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, owner, movable, created_at) "
+                "VALUES (?, 'managed', 'pixlstash', 'root_only', "
+                "'2026-08-09T00:00:00Z')",
+                (str(store),),
+            ).lastrowid
+        )
+        for index, name in enumerate(("one.safetensors", "two.safetensors")):
+            (store / name).write_bytes(name.encode() * 512)
+            model_id = int(
+                conn.execute(
+                    "INSERT INTO model (file_kind, kind, sha256, filename, "
+                    "provenance, file_size, created_at) VALUES ('adapter', 'lora', "
+                    "?, ?, 'external', ?, '2026-08-09T00:00:00Z')",
+                    (_h(f"stored{index}z"), name, 512 * len(name)),
+                ).lastrowid
+            )
+            conn.execute(
+                "INSERT INTO model_file (model_id, model_folder_id, relpath, "
+                "state, seen_at, file_mtime) VALUES (?, ?, ?, 'present', "
+                "'2026-08-09T00:00:00Z', 1)",
+                (model_id, managed_id, name),
+            )
+        # A tombstone: a file the store once held and no longer has. It must
+        # survive the relocation rather than be dropped with the old row.
+        ghost = int(
+            conn.execute(
+                "INSERT INTO model (file_kind, kind, sha256, filename, "
+                "provenance, file_size, created_at) VALUES ('adapter', 'lora', "
+                "?, 'ghost.safetensors', 'external', 10, '2026-08-09T00:00:00Z')",
+                (_h("ghostz"),),
+            ).lastrowid
+        )
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+            "seen_at) VALUES (?, ?, 'ghost.safetensors', 'missing', "
+            "'2026-08-09T00:00:00Z')",
+            (ghost, managed_id),
+        )
+    return SimpleNamespace(store=store, target=target, managed_id=managed_id)
+
+
+def _managed_rows(shelf_env):
+    return shelf_env.server.hub.fetchall(
+        "SELECT id, path, kind FROM model_folder WHERE kind = 'managed' ORDER BY id"
+    )
+
+
+def test_relocating_the_store_moves_its_files_and_keeps_one_managed_row(
+    shelf_env, relocatable_store
+):
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{relocatable_store.managed_id}/relocate",
+        json={"path": str(relocatable_store.target)},
+    )
+    assert r.status_code == 202, r.text
+    body = _await_move(shelf_env)
+    assert [item["status"] for item in body["results"]] == ["moved", "moved"]
+
+    assert sorted(p.name for p in relocatable_store.target.iterdir()) == [
+        "one.safetensors",
+        "two.safetensors",
+    ]
+    assert not relocatable_store.store.exists(), "the vacated directory was tidied"
+
+    managed = _managed_rows(shelf_env)
+    assert len(managed) == 1, "exactly one managed folder, always"
+    assert managed[0]["path"] == str(relocatable_store.target)
+    assert managed[0]["id"] != relocatable_store.managed_id, (
+        "the new row is the store now; the old one is gone"
+    )
+
+    # Every row the old store held now belongs to the new one — including the
+    # tombstone, which came across rather than being dropped with the old row:
+    # the store moving is not news about whether that file came back. (The
+    # module's own seeded folder 1 is not part of this and is excluded.)
+    rows = shelf_env.server.hub.fetchall(
+        "SELECT relpath, state FROM model_file WHERE model_folder_id = ? "
+        "ORDER BY relpath",
+        (managed[0]["id"],),
+    )
+    assert {row["relpath"]: row["state"] for row in rows} == {
+        "ghost.safetensors": "missing",
+        "one.safetensors": "present",
+        "two.safetensors": "present",
+    }
+    assert (
+        shelf_env.server.hub.fetchall(
+            "SELECT relpath FROM model_file WHERE model_folder_id = ?",
+            (relocatable_store.managed_id,),
+        )
+        == []
+    )
+
+
+def test_a_relocation_interrupted_before_the_promotion_leaves_one_managed_row(
+    shelf_env, relocatable_store, monkeypatch
+):
+    """The crash window that is specific to relocation. Every file may already
+    have moved and the promotion may not have run — and that must still leave
+    exactly one managed folder and no row naming a file that is gone."""
+    from pixlstash.routes import model_moves
+
+    monkeypatch.setattr(
+        model_moves,
+        "_finish_relocation",
+        lambda *args, **kwargs: None,  # the process died before the promotion
+    )
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{relocatable_store.managed_id}/relocate",
+        json={"path": str(relocatable_store.target)},
+    )
+    assert r.status_code == 202, r.text
+    _await_move(shelf_env)
+
+    managed = _managed_rows(shelf_env)
+    assert len(managed) == 1, "a half-done relocation must never leave two stores"
+    assert managed[0]["id"] == relocatable_store.managed_id, (
+        "the old store is still the store until the promotion commits"
+    )
+    # Every present row this relocation touched still names a file that exists.
+    # Scoped to the two folders involved: the module's seeded folder 1 is a
+    # fixture with no files behind it and is not what this asserts about.
+    for row in shelf_env.server.hub.fetchall(
+        "SELECT f.path, mf.relpath FROM model_file mf "
+        "JOIN model_folder f ON f.id = mf.model_folder_id "
+        "WHERE mf.state = 'present' AND f.path IN (?, ?)",
+        (str(relocatable_store.store), str(relocatable_store.target)),
+    ):
+        assert os.path.exists(os.path.join(row["path"], row["relpath"])), (
+            f"{row['relpath']} is registered but is not on disk"
+        )
+
+
+def test_only_the_managed_store_can_be_relocated(shelf_env, tmp_path):
+    """An ordinary folder is one the owner registered; moving it is the owner's
+    own act, and re-registering is how the shelf hears about it."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with shelf_env.server.hub.transaction() as conn:
+        plain_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, movable, created_at) "
+                "VALUES (?, 'user', 'per_item', '2026-08-09T00:00:00Z')",
+                (str(plain),),
+            ).lastrowid
+        )
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{plain_id}/relocate",
+        json={"path": str(tmp_path / "elsewhere")},
+    )
+    assert r.status_code == 409, r.text
+
+
+def test_relocate_is_owner_only_and_local_only(shelf_env, relocatable_store):
+    path = f"{API}/model-folders/{relocatable_store.managed_id}/relocate"
+    body = {"json": {"path": str(relocatable_store.target)}}
+
+    token = _mint(shelf_env.owner, "relocate probe")
+    client = _bearer(shelf_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the READ token is dead; the refusal below would prove nothing"
+    )
+    assert_real_route(shelf_env.server.api, "POST", path)
+    assert client.post(path, **body).status_code == 403
+
+    remote = shelf_env.owner.post(path, headers=_xff("8.8.8.8"), **body)
+    assert remote.status_code == 403, remote.text
+    assert "allow_remote_host_ops" in remote.text
+
+    # Positive control: the local owner is not blocked.
+    local = shelf_env.owner.post(path, headers=_xff("192.168.1.9"), **body)
+    assert "restricted to local" not in local.text, local.text
+
+
+def test_a_relocation_with_a_failed_file_does_not_promote_the_new_folder(
+    shelf_env, relocatable_store, monkeypatch
+):
+    """The promotion is the point of no return, so it must not run over a
+    half-moved store. One unverifiable file and the managed row stays exactly
+    where it was, with whatever moved catalogued under an ordinary folder."""
+    from pixlstash.services import model_mover
+
+    monkeypatch.setattr(model_mover, "same_device", lambda *_: False)
+    monkeypatch.setattr(model_mover, "file_digest", lambda path: "0" * 64)
+
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{relocatable_store.managed_id}/relocate",
+        json={"path": str(relocatable_store.target)},
+    )
+    assert r.status_code == 202, r.text
+    body = _await_move(shelf_env)
+    assert {item["status"] for item in body["results"]} == {"failed"}
+
+    managed = _managed_rows(shelf_env)
+    assert len(managed) == 1
+    assert managed[0]["id"] == relocatable_store.managed_id, (
+        "the store was promoted despite files that never arrived"
+    )
+    assert (relocatable_store.store / "one.safetensors").exists()

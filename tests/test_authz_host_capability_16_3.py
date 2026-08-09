@@ -148,10 +148,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_23_local_5_loopback():
+def test_host_capability_tier_split_is_24_local_5_loopback():
     """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 28 routes carry a
-    locality tier = 23 local + 5 loopback.
+    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 29 routes carry a
+    locality tier = 24 local + 5 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -185,6 +185,12 @@ def test_host_capability_tier_split_is_23_local_5_loopback():
     the import names a registered folder id and a run *name* — so they are on
     this tier for what they do, not for what they accept.
 
+    29 = 24 + 5 with ``POST /model-folders/{folder_id}/relocate``, which moves
+    every file the managed model store holds to a caller-supplied host path and
+    unlinks the originals. It is the ``reference-folders/{folder_id}/relocate``
+    class carrying ``POST /model-moves``' file movement, so it is the one route
+    in the shelf that is on this tier for **both** reasons at once.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -198,7 +204,7 @@ def test_host_capability_tier_split_is_23_local_5_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 23, sorted(local)
+    assert len(local) == 24, sorted(local)
 
 
 # ===========================================================================
