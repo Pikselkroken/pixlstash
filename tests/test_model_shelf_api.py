@@ -74,13 +74,78 @@ ADAPTER_NO_BASE_2 = _h("adapternobase2")
 UNKNOWN_HASH = _h("unknownfile")
 CHECKPOINT_HASHED = _h("checkpointhashed")
 
-# (sha256, file_kind, kind, display_name, filename, base_model)
+# The stack the sorting tests need. Two of the four adapters are one subject's
+# run, so "a row never sorts by a number it does not display" is assertable:
+# a stacked row must sort by the stack's total size and its newest member's
+# date, not by the cover's own.
+STACK_ID = 7
+
+# (sha256, file_kind, kind, display_name, filename, base_model, created_at,
+#  file_size, file_mtime, stack_position)
+#
+# Every sortable column is given a *different* order from every other, so a sort
+# that silently fell back to id order, or read the wrong column, cannot pass.
 _SEED_MODELS = (
-    (ADAPTER_WITH_BASE, "adapter", "lora", "Alice", "alice.safetensors", "SDXL 1.0"),
-    (ADAPTER_WITH_BASE_2, "adapter", "lokr", "Bob", "bob.safetensors", "Flux.1 dev"),
-    (ADAPTER_NO_BASE, "adapter", "lora", None, "sd_xl_noname.safetensors", None),
-    (ADAPTER_NO_BASE_2, "adapter", "lora", "Dana", "dana.safetensors", None),
-    (UNKNOWN_HASH, "unknown", None, None, "mystery.safetensors", None),
+    (
+        ADAPTER_WITH_BASE,
+        "adapter",
+        "lora",
+        "Alice",
+        "alice.safetensors",
+        "SDXL 1.0",
+        "2026-08-01T00:00:00Z",
+        1000,
+        11,
+        0,
+    ),
+    (
+        ADAPTER_WITH_BASE_2,
+        "adapter",
+        "lokr",
+        "Bob",
+        "bob.safetensors",
+        "Flux.1 dev",
+        "2026-08-02T00:00:00Z",
+        5000,
+        55,
+        None,
+    ),
+    (
+        ADAPTER_NO_BASE,
+        "adapter",
+        "lora",
+        None,
+        "sd_xl_noname.safetensors",
+        None,
+        "2026-08-03T00:00:00Z",
+        2000,
+        22,
+        None,
+    ),
+    (
+        ADAPTER_NO_BASE_2,
+        "adapter",
+        "lora",
+        "Dana",
+        "dana.safetensors",
+        None,
+        "2026-08-04T00:00:00Z",
+        3000,
+        44,
+        1,
+    ),
+    (
+        UNKNOWN_HASH,
+        "unknown",
+        None,
+        None,
+        "mystery.safetensors",
+        None,
+        "2026-08-05T00:00:00Z",
+        100,
+        5,
+        None,
+    ),
     (
         CHECKPOINT_HASHED,
         "checkpoint",
@@ -88,9 +153,24 @@ _SEED_MODELS = (
         "Base XL",
         "base_xl.safetensors",
         "SDXL 1.0",
+        "2026-08-06T00:00:00Z",
+        9000,
+        66,
+        None,
     ),
     # The one that has no hash yet: a 24 GB file the hash finder has not read.
-    (None, "checkpoint", None, None, "huge_unhashed.safetensors", None),
+    (
+        None,
+        "checkpoint",
+        None,
+        None,
+        "huge_unhashed.safetensors",
+        None,
+        "2026-08-07T00:00:00Z",
+        24000,
+        77,
+        None,
+    ),
 )
 
 
@@ -100,24 +180,53 @@ def _seed_hub(server) -> dict[str, int]:
         conn.execute("DELETE FROM model_file")
         conn.execute("DELETE FROM model")
         conn.execute("DELETE FROM model_folder")
+        conn.execute("DELETE FROM adapter_stack")
         conn.execute(
             "INSERT INTO model_folder (id, path, kind, movable, created_at) "
             "VALUES (1, '/models/loras', 'user', 'per_item', '2026-08-09T00:00:00Z')"
         )
+        conn.execute(
+            "INSERT INTO adapter_stack (id, name, created_at) "
+            "VALUES (?, 'Alice run', '2026-08-01T00:00:00Z')",
+            (STACK_ID,),
+        )
         ids: dict[str, int] = {}
-        for sha, file_kind, kind, display_name, filename, base_model in _SEED_MODELS:
+        for row in _SEED_MODELS:
+            (
+                sha,
+                file_kind,
+                kind,
+                display_name,
+                filename,
+                base_model,
+                created_at,
+                file_size,
+                file_mtime,
+                stack_position,
+            ) = row
             cursor = conn.execute(
                 "INSERT INTO model (file_kind, kind, sha256, display_name, filename, "
-                "base_model, provenance, file_size, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'external', 4096, '2026-08-09T00:00:00Z')",
-                (file_kind, kind, sha, display_name, filename, base_model),
+                "base_model, provenance, file_size, created_at, stack_id, "
+                "stack_position) VALUES (?, ?, ?, ?, ?, ?, 'external', ?, ?, ?, ?)",
+                (
+                    file_kind,
+                    kind,
+                    sha,
+                    display_name,
+                    filename,
+                    base_model,
+                    file_size,
+                    created_at,
+                    None if stack_position is None else STACK_ID,
+                    stack_position,
+                ),
             )
             model_id = int(cursor.lastrowid)
             ids[filename] = model_id
             conn.execute(
                 "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
-                "seen_at, file_mtime) VALUES (?, 1, ?, 'present', ?, 17)",
-                (model_id, filename, "2026-08-09T00:00:00Z"),
+                "seen_at, file_mtime) VALUES (?, 1, ?, 'present', ?, ?)",
+                (model_id, filename, "2026-08-09T00:00:00Z", file_mtime),
             )
     return ids
 
@@ -330,7 +439,7 @@ def test_adapter_detail_carries_locations(shelf_env):
             "folder_path": "/models/loras",
             "relpath": "alice.safetensors",
             "state": "present",
-            "file_mtime": 17,
+            "file_mtime": 11,
         }
     ]
     # An unknown is hashed on sight, so it is addressable here too.
@@ -846,3 +955,216 @@ def test_attachment_write_is_owner_only_in_both_directions(shelf_env):
         )
         r = client.put(_attachments_url(ADAPTER_WITH_BASE), json=[])
         assert r.status_code == 403, f"{description}: {r.status_code} {r.text}"
+
+
+# ===========================================================================
+# Sorting (B7) — the aggregates are in the list query, not per row
+# ===========================================================================
+
+
+def _order(shelf_env, **params) -> list[str]:
+    r = shelf_env.owner.get(f"{API}/adapters", params=params)
+    assert r.status_code == 200, r.text
+    return [row["filename"] for row in r.json()["adapters"]]
+
+
+def test_sort_keys_are_exactly_the_five_that_were_ruled():
+    """The route's ``Literal`` and the SQL builder's map are two spellings of
+    one decision. If they drift, an accepted query key builds no ORDER BY, or a
+    ruled key becomes a 422."""
+    from typing import get_args
+
+    from pixlstash.routes.model_shelf import SortKey
+    from pixlstash.services.model_shelf_service import SORT_KEYS
+
+    assert set(get_args(SortKey)) == set(SORT_KEYS)
+    assert set(SORT_KEYS) == {
+        "added_at",
+        "file_mtime",
+        "name",
+        "size",
+        "base_model",
+    }
+
+
+def test_default_sort_is_newest_added_first(shelf_env):
+    """Ruled default. Alice and Dana are one stack, so both carry the stack's
+    newest member date (Dana's, 08-04) and lead — Alice's own 08-01 would put her
+    last, which is exactly the per-row reading this must not do."""
+    assert _order(shelf_env) == [
+        "alice.safetensors",
+        "dana.safetensors",
+        "sd_xl_noname.safetensors",
+        "bob.safetensors",
+    ]
+
+
+def test_a_stacked_row_sorts_by_the_stack_total_not_the_cover(shelf_env):
+    """Size is the sum of all members and is displayed as such, because a cover
+    understates a run by about six times in the column the shelf exists to
+    answer. Alice's own file is the *smallest* of the four; her stack's total is
+    second largest, and that is where she must land."""
+    assert _order(shelf_env, sort="size") == [
+        "bob.safetensors",  # 5000, unstacked
+        "alice.safetensors",  # stack total 4000, own file 1000
+        "dana.safetensors",  # same stack, same total; tie-broken by name
+        "sd_xl_noname.safetensors",  # 2000
+    ]
+
+
+def test_stack_aggregates_are_on_the_row(shelf_env):
+    """The numbers the row displays come back with it, so the shelf never has to
+    ask a second question per row."""
+    rows = {
+        row["filename"]: row
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }
+    alice = rows["alice.safetensors"]
+    assert alice["stack_id"] == STACK_ID
+    assert alice["member_count"] == 2
+    assert alice["total_size"] == 4000
+    assert alice["newest_member_at"] == "2026-08-04T00:00:00Z"
+
+    standalone = rows["bob.safetensors"]
+    assert standalone["member_count"] is None
+    assert standalone["total_size"] is None
+    assert standalone["newest_member_at"] is None
+
+
+def test_nulls_sort_last_in_both_directions(shelf_env):
+    """Two of six rows in the design's own mock have no name and no base model,
+    and 37 % of a measured real folder records neither. A user who flips the
+    direction is not asking for 900 unnamed rows at the top."""
+    ascending = _order(shelf_env, sort="name", direction="asc")
+    descending = _order(shelf_env, sort="name", direction="desc")
+    assert ascending == [
+        "alice.safetensors",
+        "bob.safetensors",
+        "dana.safetensors",
+        "sd_xl_noname.safetensors",
+    ]
+    assert descending == [
+        "dana.safetensors",
+        "bob.safetensors",
+        "alice.safetensors",
+        "sd_xl_noname.safetensors",
+    ]
+    assert ascending[-1] == descending[-1] == "sd_xl_noname.safetensors"
+
+
+def test_file_modified_sorts_on_the_newest_present_copy(shelf_env):
+    """``file_mtime`` is per *copy*, and a model can have several. It is also the
+    one date that is NOT stack-aggregated: a stack's members were written at
+    different times and the row shows the newest of its own copies."""
+    assert _order(shelf_env, sort="file_mtime") == [
+        "bob.safetensors",  # 55
+        "dana.safetensors",  # 44
+        "sd_xl_noname.safetensors",  # 22
+        "alice.safetensors",  # 11
+    ]
+
+
+def test_a_missing_copy_contributes_no_modification_date(shelf_env):
+    """A ``missing`` row's mtime is the last thing we saw, not the last thing
+    that happened, so it must not answer "when was this modified". With no
+    present copy the row has no date and sorts last in either direction."""
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE relpath = 'bob.safetensors'"
+        )
+    rows = {
+        row["filename"]: row
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }
+    assert rows["bob.safetensors"]["newest_file_mtime"] is None
+    assert rows["dana.safetensors"]["newest_file_mtime"] == 44
+    for direction in ("asc", "desc"):
+        assert (
+            _order(shelf_env, sort="file_mtime", direction=direction)[-1]
+            == "bob.safetensors"
+        )
+
+
+def test_base_model_sort_puts_the_unrecorded_rows_last(shelf_env):
+    assert _order(shelf_env, sort="base_model", direction="asc") == [
+        "bob.safetensors",  # Flux.1 dev
+        "alice.safetensors",  # SDXL 1.0
+        "dana.safetensors",  # none; tie-broken by name, nulls last
+        "sd_xl_noname.safetensors",  # none, and no name either
+    ]
+
+
+def test_checkpoints_sort_too(shelf_env):
+    r = shelf_env.owner.get(f"{API}/checkpoints", params={"sort": "size"})
+    assert r.status_code == 200, r.text
+    assert [row["filename"] for row in r.json()["checkpoints"]] == [
+        "huge_unhashed.safetensors",
+        "base_xl.safetensors",
+    ]
+
+
+def test_an_unknown_sort_key_is_refused_before_it_reaches_the_sql(shelf_env):
+    r = shelf_env.owner.get(f"{API}/adapters", params={"sort": "id; DROP TABLE model"})
+    assert r.status_code == 422, r.text
+    assert shelf_env.owner.get(f"{API}/adapters").status_code == 200
+
+
+def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
+    """The claim B5 left standing and B7 had to keep: the list is one SELECT for
+    the rows and one for the locations, whatever the sort and *whatever the row
+    count*. 1,806 rows sorted by "the total size of the stack this row belongs
+    to" is otherwise the textbook N+1."""
+    server = shelf_env.server
+    calls: list[str] = []
+    original = server.hub.fetchall
+
+    def counting(sql, params=()):
+        calls.append(sql)
+        return original(sql, params)
+
+    server.hub.fetchall = counting
+    try:
+        assert (
+            shelf_env.owner.get(f"{API}/adapters", params={"sort": "size"}).status_code
+            == 200
+        )
+        with_four_rows = len(calls)
+
+        # Twenty more adapters, ten of them in a second stack.
+        calls.clear()
+        with server.hub.transaction() as conn:
+            conn.execute("INSERT INTO adapter_stack (id, name) VALUES (99, 'Bulk run')")
+            for index in range(20):
+                cursor = conn.execute(
+                    "INSERT INTO model (file_kind, kind, sha256, filename, "
+                    "provenance, file_size, created_at, stack_id, stack_position) "
+                    "VALUES ('adapter', 'lora', ?, ?, 'external', ?, ?, ?, ?)",
+                    (
+                        _h(f"bulk{index}z"),
+                        f"bulk_{index}.safetensors",
+                        1000 + index,
+                        f"2026-07-{index + 1:02d}T00:00:00Z",
+                        99 if index < 10 else None,
+                        index if index < 10 else None,
+                    ),
+                )
+                conn.execute(
+                    "INSERT INTO model_file (model_id, model_folder_id, relpath, "
+                    "state, seen_at, file_mtime) VALUES (?, 1, ?, 'present', ?, ?)",
+                    (
+                        int(cursor.lastrowid),
+                        f"bulk_{index}.safetensors",
+                        "2026-08-09T00:00:00Z",
+                        index,
+                    ),
+                )
+        calls.clear()
+        r = shelf_env.owner.get(f"{API}/adapters", params={"sort": "size"})
+        assert r.status_code == 200, r.text
+        assert len(r.json()["adapters"]) == 24
+        assert len(calls) == with_four_rows == 2, (
+            f"{len(calls)} hub queries for 24 rows vs {with_four_rows} for 4 — "
+            "the list has grown a per-row lookup"
+        )
+    finally:
+        server.hub.fetchall = original

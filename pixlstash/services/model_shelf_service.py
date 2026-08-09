@@ -8,10 +8,16 @@ foreign key and no SQL join can cross the two, so a filter that mixes them is tw
 queries intersected in Python — and, importantly, *two* queries no matter how
 many rows come back.
 
-Everything here is shaped so the B7 sorting work is a change to one SELECT rather
+Everything here is shaped so the sorting work is a change to one SELECT rather
 than the unpicking of an N+1: the list is one hub query, the locations for the
 whole page are one more, and the attachments for the whole page are one vault
 query. Nothing is fetched per row.
+
+**Sorting (B7) kept that promise.** A stack's size is the sum of its members and
+its date is the newest member's, and a row must never sort by a number it does
+not display — so those aggregates are two ``LEFT JOIN``s onto grouped subqueries
+inside the *same* ``SELECT`` as the rows, not a lookup per row. 1,806 rows sorted
+by an aggregate is the N+1 this shape exists to prevent.
 
 Both list blocks — adapters and checkpoints — go through :func:`fetch_models`.
 There is one content table, so there is one query; ``file_kind`` is the only
@@ -89,6 +95,93 @@ MODEL_COLUMNS = (
     "created_at",
 )
 
+# Computed per row by the two aggregate joins below, never by a second query.
+AGGREGATE_COLUMNS = (
+    "member_count",
+    "total_size",
+    "newest_member_at",
+    "newest_file_mtime",
+)
+
+# A stack's numbers, one grouped pass over ``model``. The shelf shows a stack as
+# one row whose size is the sum of every member (a cover understates by ~6x in
+# the column the shelf exists to answer) and whose date is the newest member's.
+# Sorting never reorders members: ``stack_position`` is the cover and stays put.
+_STACK_JOIN = """
+LEFT JOIN (
+    SELECT stack_id,
+           COUNT(*)        AS member_count,
+           SUM(file_size)  AS total_size,
+           MAX(created_at) AS newest_member_at
+    FROM model
+    WHERE stack_id IS NOT NULL
+    GROUP BY stack_id
+) st ON st.stack_id = m.stack_id
+"""
+
+# "File modified" is a fact about a *copy*, and a model can have several. The
+# newest ``present`` one is the honest answer: a ``missing`` row's mtime is the
+# last thing we saw, not the last thing that happened.
+_LOCATION_JOIN = """
+LEFT JOIN (
+    SELECT model_id, MAX(file_mtime) AS newest_file_mtime
+    FROM model_file
+    WHERE state = 'present'
+    GROUP BY model_id
+) loc ON loc.model_id = m.id
+"""
+
+_SELECT_LIST = ", ".join(
+    [*(f"m.{name}" for name in MODEL_COLUMNS), *(f"{c}" for c in AGGREGATE_COLUMNS)]
+)
+
+_FROM = f"FROM model m{_STACK_JOIN}{_LOCATION_JOIN}"
+
+# The five sort keys ruled 2026-08-08. ``COALESCE`` on the stack aggregate is the
+# "a row never sorts by a number it does not display" rule in SQL: a stacked row
+# displays the stack's total, a standalone row displays its own.
+#
+# ``COLLATE NOCASE`` on the two text keys because "Name A to Z" that puts every
+# lowercase name after every uppercase one is not A to Z.
+SORT_KEYS = {
+    "added_at": "COALESCE(st.newest_member_at, m.created_at)",
+    "file_mtime": "loc.newest_file_mtime",
+    "name": "m.display_name COLLATE NOCASE",
+    "size": "COALESCE(st.total_size, m.file_size)",
+    "base_model": "m.base_model COLLATE NOCASE",
+}
+
+DEFAULT_SORT = "added_at"
+DEFAULT_DIRECTION = "desc"
+
+# Fixed and implicit, never a second control: a tie-break dropdown doubles the
+# state space of a control nobody has learned. Name A to Z, falling back to
+# filename when the primary key already *is* the name.
+_TIE_BREAK = "m.filename COLLATE NOCASE"
+_DEFAULT_TIE_BREAK = "m.display_name COLLATE NOCASE"
+
+
+def _order_by(sort: str, direction: str) -> str:
+    """Build the ``ORDER BY`` clause for one sort key and direction.
+
+    Nulls last in **both** directions, spelled ``(expr) IS NULL`` rather than
+    ``NULLS LAST`` so it does not depend on the host SQLite being 3.30+. It
+    governs hundreds of rows, not an edge case: 37 % of a measured real folder
+    records no base model and none of those files carries a name either, and a
+    user who flips the direction does not want 900 unnamed rows at the top.
+
+    ``m.id`` closes the clause so the order is total. Two rows that tie on the
+    key *and* the tie-break would otherwise come back in whatever order SQLite
+    chose that run, which is a paging bug waiting to be reported as a ghost.
+    """
+    expression = SORT_KEYS[sort]
+    descending = "DESC" if direction == "desc" else "ASC"
+    tie = _TIE_BREAK if sort == "name" else _DEFAULT_TIE_BREAK
+    return (
+        f"ORDER BY ({expression}) IS NULL, {expression} {descending}, "
+        f"({tie}) IS NULL, {tie} ASC, m.id ASC"
+    )
+
 
 def fetch_models(
     hub,
@@ -97,8 +190,15 @@ def fetch_models(
     base_model: Optional[str] = None,
     kind: Optional[str] = None,
     q: Optional[str] = None,
+    sort: str = DEFAULT_SORT,
+    direction: str = DEFAULT_DIRECTION,
 ) -> list[dict]:
-    """Return the shelf rows of the given ``file_kind``s, oldest id first.
+    """Return the shelf rows of the given ``file_kind``s, sorted.
+
+    One SELECT, whatever the filter and whatever the sort. The stack and
+    location aggregates are joined in, so sorting 1,806 rows by "total size of
+    the stack this row belongs to" costs one grouped scan rather than 1,806
+    lookups.
 
     Args:
         hub: The open :class:`~pixlstash.hub.db.HubDatabase`.
@@ -112,41 +212,53 @@ def fetch_models(
         q: Substring of the display name, filename or trigger words.
             Case-insensitive for ASCII, which is what SQLite's default LIKE
             gives, and wildcard-escaped.
+        sort: One of :data:`SORT_KEYS`. Defaults to newest-added first.
+        direction: ``asc`` or ``desc``. Nulls stay last in both.
 
     Returns:
-        One dict per row, keyed by :data:`MODEL_COLUMNS`.
+        One dict per row, keyed by :data:`MODEL_COLUMNS` plus
+        :data:`AGGREGATE_COLUMNS`.
+
+    Raises:
+        KeyError: *sort* is not a known key. The routes constrain it with a
+            ``Literal`` before it reaches here, so this is the programmer-error
+            path, not the request path.
     """
-    where = [f"file_kind IN ({','.join('?' * len(file_kinds))})"]
+    where = [f"m.file_kind IN ({','.join('?' * len(file_kinds))})"]
     params: list = list(file_kinds)
 
     if base_model is not None:
         if base_model == UNSET:
-            where.append("base_model IS NULL")
+            where.append("m.base_model IS NULL")
         else:
-            where.append("base_model = ?")
+            where.append("m.base_model = ?")
             params.append(base_model)
     if kind:
-        where.append("kind = ?")
+        where.append("m.kind = ?")
         params.append(kind)
     if q and q.strip():
         term = f"%{q.strip().translate(_LIKE_ESCAPE)}%"
         where.append(
-            "(display_name LIKE ? ESCAPE '\\' OR filename LIKE ? ESCAPE '\\' "
-            "OR trigger_words LIKE ? ESCAPE '\\')"
+            "(m.display_name LIKE ? ESCAPE '\\' OR m.filename LIKE ? ESCAPE '\\' "
+            "OR m.trigger_words LIKE ? ESCAPE '\\')"
         )
         params.extend([term, term, term])
 
     sql = (
-        f"SELECT {', '.join(MODEL_COLUMNS)} FROM model "
-        f"WHERE {' AND '.join(where)} ORDER BY id"
+        f"SELECT {_SELECT_LIST} {_FROM} "
+        f"WHERE {' AND '.join(where)} {_order_by(sort, direction)}"
     )
     return [dict(row) for row in hub.fetchall(sql, tuple(params))]
 
 
 def fetch_model_by_hash(hub, sha256: str) -> Optional[dict]:
-    """Return the one model row carrying *sha256*, or None."""
+    """Return the one model row carrying *sha256*, or None.
+
+    The same SELECT as the list, so the detail response carries the stack and
+    mtime aggregates too and the two shapes cannot drift apart.
+    """
     rows = hub.fetchall(
-        f"SELECT {', '.join(MODEL_COLUMNS)} FROM model WHERE sha256 = ?",
+        f"SELECT {_SELECT_LIST} {_FROM} WHERE m.sha256 = ?",
         (sha256,),
     )
     return dict(rows[0]) if rows else None

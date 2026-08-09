@@ -27,11 +27,11 @@ explicit sentinel ``base_model=UNASSIGNED``.
 
 The queries themselves live in
 :mod:`pixlstash.services.model_shelf_service`, including the hub/vault seam the
-``character_id`` / ``set_id`` filter has to cross. Sorting by ``added_at`` /
-``file_mtime`` and by the stack aggregates is B7's half of the shelf; the list is
-ordered by ``model.id`` here, and locations and attachments each arrive in a
-single whole-page query, so adding those aggregates is a change to one SELECT
-rather than the unpicking of an N+1.
+``character_id`` / ``set_id`` filter has to cross. Locations and attachments each
+arrive in a single whole-page query, and B7's sorting went into that same one
+SELECT: ``member_count`` / ``total_size`` / ``newest_member_at`` for a stack and
+the newest ``file_mtime`` across a model's present copies are joined in, never
+looked up per row.
 
 Authorization is declared, never inline: every route here is ``OWNER_ONLY`` in
 ``pixlstash/authz/registry.py`` and takes the **default** library pin
@@ -41,7 +41,7 @@ branch). See ``docs/backend_architecture.md`` §16.1.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -49,6 +49,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_shelf_service import (
+    DEFAULT_DIRECTION,
+    DEFAULT_SORT,
     ENTITY_TYPES,
     UnknownAttachmentEntityError,
     attached_hashes,
@@ -66,6 +68,13 @@ logger = get_logger(__name__)
 # its own block because it is not addressable by hash, and folding it in here
 # would be the "unknown renders as checkpoint" defect in the other direction.
 ADAPTER_BLOCK_FILE_KINDS = (FILE_ADAPTER, FILE_UNKNOWN)
+
+# Constrained here rather than validated in the handler, so an unknown key is a
+# 422 from FastAPI and never reaches the SQL builder. The values are the five
+# ruled sort keys; keep them in step with ``model_shelf_service.SORT_KEYS``,
+# which a test pins.
+SortKey = Literal["added_at", "file_mtime", "name", "size", "base_model"]
+SortDirection = Literal["asc", "desc"]
 
 
 class ModelLocation(BaseModel):
@@ -154,6 +163,38 @@ class ModelResponse(BaseModel):
     added_at: Optional[str] = Field(
         default=None, description="``model.created_at`` — when the shelf first saw it."
     )
+    newest_file_mtime: Optional[int] = Field(
+        default=None,
+        description=(
+            "Newest ``st_mtime_ns`` across this model's **present** copies, which "
+            "is what the `file_modified` sort orders on. Null when no copy is "
+            "present, so the row sorts last in either direction."
+        ),
+    )
+    member_count: Optional[int] = Field(
+        default=None,
+        description=(
+            "How many models share this row's ``stack_id``. Null for a model "
+            "that stands alone. Computed in the list query, not per row."
+        ),
+    )
+    total_size: Optional[int] = Field(
+        default=None,
+        description=(
+            "Sum of ``file_size`` over every member of this row's stack. This is "
+            "what the shelf displays and what `size` sorts on for a stacked row, "
+            "because the cover alone understates a six-step run by about six "
+            "times, in the column the shelf exists to answer. Null when the row "
+            "is not stacked; its own ``file_size`` is then both."
+        ),
+    )
+    newest_member_at: Optional[str] = Field(
+        default=None,
+        description=(
+            "Newest ``created_at`` across the stack's members: a stack's date is "
+            "its newest member's, never its cover's. Null when not stacked."
+        ),
+    )
     locations: list[ModelLocation] = Field(
         default_factory=list,
         description="Every registered copy. Empty means every copy was forgotten.",
@@ -217,6 +258,10 @@ def _to_response(
         stack_position=row["stack_position"],
         run_key=row["run_key"],
         added_at=row["created_at"],
+        newest_file_mtime=row["newest_file_mtime"],
+        member_count=row["member_count"],
+        total_size=row["total_size"],
+        newest_member_at=row["newest_member_at"],
         locations=[ModelLocation(**loc) for loc in locations.get(int(row["id"]), [])],
         attachments=[
             ModelAttachment(**att) for att in attachments.get(row["sha256"] or "", [])
@@ -244,6 +289,8 @@ def create_router(server) -> APIRouter:
         q: Optional[str],
         character_id: Optional[int],
         set_id: Optional[int],
+        sort: str = DEFAULT_SORT,
+        direction: str = DEFAULT_DIRECTION,
     ) -> list[ModelResponse]:
         """The shared body of both list routes: three queries, whatever the size."""
         if character_id is not None and set_id is not None:
@@ -252,7 +299,13 @@ def create_router(server) -> APIRouter:
             )
 
         rows = fetch_models(
-            server.hub, file_kinds, base_model=base_model, kind=kind, q=q
+            server.hub,
+            file_kinds,
+            base_model=base_model,
+            kind=kind,
+            q=q,
+            sort=sort,
+            direction=direction,
         )
 
         if character_id is not None or set_id is not None:
@@ -313,6 +366,19 @@ def create_router(server) -> APIRouter:
             None,
             description="Substring of the display name, filename or trigger words.",
         ),
+        sort: SortKey = Query(
+            DEFAULT_SORT,
+            description=(
+                "`added_at` (default), `file_mtime`, `name`, `size` or "
+                "`base_model`. A stacked row sorts by its stack's total size and "
+                "its newest member's date, which is what it displays. Rows with "
+                "no value for the key sort last in both directions."
+            ),
+        ),
+        direction: SortDirection = Query(
+            DEFAULT_DIRECTION,
+            description="`desc` (default, newest/largest first) or `asc`.",
+        ),
     ):
         server.auth.ensure_secure_when_required(request)
         if file_kind not in ADAPTER_BLOCK_FILE_KINDS:
@@ -331,6 +397,8 @@ def create_router(server) -> APIRouter:
                 q=q,
                 character_id=character_id,
                 set_id=set_id,
+                sort=sort,
+                direction=direction,
             )
         )
 
@@ -381,6 +449,10 @@ def create_router(server) -> APIRouter:
         q: Optional[str] = Query(
             None, description="Substring of the display name or filename."
         ),
+        sort: SortKey = Query(DEFAULT_SORT, description="Same five keys as /adapters."),
+        direction: SortDirection = Query(
+            DEFAULT_DIRECTION, description="`desc` (default) or `asc`."
+        ),
     ):
         server.auth.ensure_secure_when_required(request)
         return CheckpointListResponse(
@@ -391,6 +463,8 @@ def create_router(server) -> APIRouter:
                 q=q,
                 character_id=None,
                 set_id=None,
+                sort=sort,
+                direction=direction,
             )
         )
 
