@@ -127,7 +127,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { formatModelSize } from "../../utils/modelShelf";
@@ -193,12 +193,12 @@ function rowTitle(row) {
   return [row.filename, where].filter(Boolean).join("\n");
 }
 
-onMounted(async () => {
-  await store.fetchRows();
+onMounted(() => {
   // Tab out of the sidebar lands in the shelf, the same contract the duplicate
-  // queue has.
-  await nextTick();
+  // queue has. Synchronously, like DuplicateQueue: taking focus one round trip
+  // after mount would discard wherever the user had moved in the meantime.
   rootEl.value?.focus();
+  store.fetchRows();
 });
 </script>
 

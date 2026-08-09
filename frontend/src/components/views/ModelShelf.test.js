@@ -179,6 +179,22 @@ describe("empty states", () => {
 });
 
 describe("keyboard", () => {
+  it("takes focus on mount, not one round trip later", async () => {
+    // Focusing after the fetch discarded wherever the user had moved in the
+    // meantime. DuplicateQueue, the contract this view mirrors, is synchronous.
+    listAdapters.mockReturnValue(new Promise(() => {}));
+    listCheckpoints.mockReturnValue(new Promise(() => {}));
+    const wrapper = mount(ModelShelf, {
+      ...globalOpts,
+      attachTo: document.body,
+    });
+    await wrapper.vm.$nextTick();
+
+    expect(document.activeElement).toBe(wrapper.find(".shelf").element);
+
+    wrapper.unmount();
+  });
+
   it("leaves rows out of the tab order while they have no verb", async () => {
     // 1,800 empty tab stops is a trap. Roving focus arrives with the first
     // thing a focused row can do (F2/F4).
