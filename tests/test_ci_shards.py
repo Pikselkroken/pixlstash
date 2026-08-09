@@ -249,18 +249,25 @@ DEFERRED_FROM_GATE = frozenset(
 # tolerated, so the hole is a decision instead of a silent gap. Repo-relative
 # paths here rather than bare names, because the gate also runs a subdirectory.
 #
-# EMPTY, which is the intended end state. It held 28 of 119 gated files (24%)
-# when the balance guardrail below still built its node list from the map's own
-# keys and was therefore structurally blind to exactly those files, reporting a
-# perfect 1.000 ratio over data that did not contain a quarter of the gate.
-# Regenerating the map from a real gate run recorded all 119, so there is
-# nothing left to acknowledge.
+# Empty is the intended end state. It held 28 of 119 gated files (24%) when the
+# balance guardrail below still built its node list from the map's own keys and
+# was therefore structurally blind to exactly those files, reporting a perfect
+# 1.000 ratio over data that did not contain a quarter of the gate. Regenerating
+# the map from a real gate run recorded all 119.
+#
+# One has since come back. #832 gated test_security_supported_versions.py, and
+# #838 regenerated the map from a CI run at `develop @ a66d8b99`, which predates
+# it. Each PR was green against a base that did not yet contain the other, and
+# they merged out of order, so the gate has run red on develop ever since. The
+# next durations refresh records the file and this entry then has to come out.
 #
 # Leave the mechanism in place. The list is self-cleaning in both directions: a
 # newly gated file that nobody recorded fails the guardrail until it is listed
 # here, and an entry the map has since learned about fails it until it is
 # removed. Both halves have to exist for either to work.
-UNRECORDED_IN_DURATIONS_MAP: frozenset[str] = frozenset()
+UNRECORDED_IN_DURATIONS_MAP: frozenset[str] = frozenset(
+    {"tests/test_security_supported_versions.py"}
+)
 
 
 @pytest.fixture(scope="module")
