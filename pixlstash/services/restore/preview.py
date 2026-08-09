@@ -17,7 +17,6 @@ from sqlalchemy import (
 )
 
 from pixlstash.database import (
-    _compute_picture_metadata_hash,
     _compute_picture_metadata_hashes,
 )
 from pixlstash.db_models import (
@@ -309,12 +308,18 @@ class PreviewMixin:
             ).all()
             hashes: dict[int, str | None] = {pid: h for pid, h in rows}
             to_persist: list[dict] = []
-            for pid, h in list(hashes.items()):
-                if h is None:
-                    computed = _compute_picture_metadata_hash(session, pid)
-                    if computed is not None:
-                        hashes[pid] = computed
-                        to_persist.append({"_pid": pid, "_hash": computed})
+            missing = [pid for pid, h in hashes.items() if h is None]
+            if missing:
+                # Batched, not one call per NULL row: the per-picture helper is
+                # a thin wrapper over this one, so a loop costs five queries per
+                # picture on the interactive compare path the bulk UPDATE below
+                # was already added to unblock. Ids with no picture row get no
+                # entry, which is what the per-picture ``None`` meant here.
+                for pid, computed in _compute_picture_metadata_hashes(
+                    session, missing
+                ).items():
+                    hashes[pid] = computed
+                    to_persist.append({"_pid": pid, "_hash": computed})
             if to_persist:
                 # Bulk Core UPDATE: one prepared statement, N parameter sets.
                 # Target ``Picture.__table__`` (Core ``Table``) rather than the
@@ -383,14 +388,20 @@ class PreviewMixin:
                                 Picture.id.in_(picture_ids)
                             )
                         ).all()
+                        missing_in_snapshot: list[int] = []
                         for pid, h in snap_rows:
                             if h is not None:
                                 snap_hashes[pid] = h
                             else:
-                                # Safety fallback — should not occur after backfill.
-                                snap_hashes[pid] = _compute_picture_metadata_hash(
-                                    snap_session, pid
+                                missing_in_snapshot.append(pid)
+                        if missing_in_snapshot:
+                            # Safety fallback, should not occur after backfill.
+                            # Batched for the same reason as the live side above.
+                            snap_hashes.update(
+                                _compute_picture_metadata_hashes(
+                                    snap_session, missing_in_snapshot
                                 )
+                            )
                 except Exception as exc:
                     # Last-resort path only: an out-of-date snapshot is handled
                     # by the upgrade above, so anything landing here is a real
