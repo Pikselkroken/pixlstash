@@ -148,19 +148,23 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_14_local_5_loopback():
+def test_host_capability_tier_split_is_18_local_5_loopback():
     """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 19 routes carry a
-    locality tier = 14 local + 5 loopback.
+    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 23 routes carry a
+    locality tier = 18 local + 5 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
     ``server-config/open``; 18 = 13 + 5 when the e2e test hook was declared; 19 =
     14 + 5 from 2026-08-01, when ``POST /libraries/active`` joined the local tier.
-    That last one is **not** a filesystem route and does not take a host path: it
+    That one is **not** a filesystem route and does not take a host path: it
     is local-only because switching library is the pivot that would otherwise let
     one stolen owner token reach every registered library, and because it resets
-    every connected client (plan §11 q4).
+    every connected client (plan §11 q4). 23 = 18 + 5 from 2026-08-09, when the
+    model shelf's four ``model-folders`` mutators joined the local tier (shelf
+    plan B5): three take a caller-supplied host path and the fourth walks one,
+    which is the reference-folder class exactly. The shelf's *read* routes stay
+    ``owner_only`` — they surface host paths but take none.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -175,7 +179,7 @@ def test_host_capability_tier_split_is_14_local_5_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 14, sorted(local)
+    assert len(local) == 18, sorted(local)
 
 
 # ===========================================================================
