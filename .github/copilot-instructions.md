@@ -172,6 +172,44 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 - **Build frontend:** `npm run build` (in `frontend/`)
 - **Dev frontend:** `npm run dev` (in `frontend/`)
 
+## Fixing a CI failure: update the existing PR, do not open another
+
+**One full gate run costs ~200 runner-minutes** (8 Linux shards, 4 Windows, e2e,
+checks). A PR is not free to open and it is not free to leave open — every push
+to it, and every push to anything it is stacked on, runs the whole gate again.
+On 2026-08-09 this repo had **13 PRs open at once** and opened **47 in a day**.
+Treat runner time as a budget you are spending, because you are.
+
+So, in order:
+
+1. **A CI failure on a PR is fixed on that PR's branch.** Even when the cause is
+   somewhere else entirely — a stale map, another PR's merge, an unrelated
+   flake. Pushing the fix to the red PR turns it green in the run it was already
+   going to spend. Opening a second PR to fix the first spends a second run and
+   leaves the first red until the second lands.
+2. **Check `gh pr list --state open` before opening anything.** Several agent
+   sessions run against this repository at once and cannot see each other. On
+   2026-08-09 two sessions independently fixed the same red guardrail (#848 and
+   #851), which is ~400 runner-minutes for one change. This check costs one
+   second.
+3. **Fold the unblock into the fix.** If the guardrail is wrong *and* its data is
+   stale, that is one PR, not two. Splitting them doubles the CI for no review
+   benefit — the reviewer reads the same diff either way.
+4. **Close a superseded PR the moment it is superseded**, not at merge time. A PR
+   left open after its content moved elsewhere keeps drawing runs from every push
+   to its base, and it is a live hazard: merging it can reintroduce exactly the
+   code a later fix corrected.
+5. **Prefer one PR per work step, with clean separated commits.** Split into a
+   stack only when the pieces can genuinely **merge independently** — not merely
+   because the diff is large. Review granularity comes from commits; a reviewer
+   reads commits either way. A six-PR stack whose parts must all land together
+   re-runs the gate on growing supersets and buys nothing.
+
+The corollary for anyone orchestrating parallel agents: per-agent instructions
+bound each agent's diff, and nothing bounds the *aggregate*. Counting the PRs
+across all in-flight lanes is the orchestrator's job, and it is the one that was
+not being done when the number reached 13.
+
 ## New test files must be gated in CI
 
 Every file under `tests/` must be either listed in the `backend` job's file list in `.github/workflows/ci.yml` (preferred, since it then blocks PRs) or listed in `DEFERRED_FROM_GATE` in `tests/test_ci_shards.py` with a reason if it is not green yet. `tests/test_ci_shards.py::test_every_test_file_is_classified` fails the build on anything unclassified, so a new suite that is written and passing locally still breaks CI until it is listed. Add the file in alphabetical position as part of the same change that adds the test.
