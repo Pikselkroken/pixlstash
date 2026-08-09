@@ -180,6 +180,68 @@ Every file under `tests/` must be either listed in the `backend` job's file list
 
 The deal is time-balanced, not round-robin. `_time_balanced_shard_assignment` (`tests/conftest.py`) seeds every test on its round-robin position and then re-places the ones it has timings for, longest-processing-time-first, over the committed `tests/ci_test_durations.json`; a test missing from the map keeps its seeded position and is charged the median cost. Shards therefore come out level on recorded *time* (max/min 1.000 at N=8), and `tests/test_ci_shards.py::test_recorded_durations_actually_balance_the_gate` fails the build above 1.05, reading N from the workflow so a resize has to re-prove it. CI records the data that feeds this: `PYTEST_FLAGS` carries `--durations=0 --durations-min=0`, and `scripts/record_test_durations.py` turns that output back into the committed map. Refreshing the map after adding tests is an optimisation chore, never a correctness obligation: a stale map costs a little balance and never coverage.
 
+## Tests: reuse the environment, don't rebuild it
+
+The expensive thing in this suite is **not the test, it is the environment
+rebuild**. Measured: standing up a `Server` costs ~1.35 s; the assertion it
+serves costs 0.003-0.25 s. Sixty-eight of eighty-nine `Server`-using files
+rebuilt that environment *inside every test body*, which is most of how the
+backend gate reached 45 min per shard. Converting three files to a shared
+module-scoped environment cut them 8.5x, 8.2x and 1.4x.
+
+`--durations` will not show you this. Work done in the test body is reported as
+`call`, so a test spending 2.5 s building a server reads `setup 0.00s`.
+
+**Before adding a test, look for a module whose environment already gives you
+what you need, and put your assertion there.** Stand up a new environment only
+when the state you need genuinely conflicts with what is already there. A new
+assertion in a warm module is close to free; a new `with Server(...)` block is
+not.
+
+When a file does need its own fixture:
+
+- **Module scope, not class scope.** The gate shards *individual tests* across 8
+  shards, so a class-scoped fixture is rebuilt once per shard per class and
+  barely amortises. `tests/test_authentication.py` is the reference shape;
+  `tests/test_reviews_api.py` and `tests/test_operation_log.py` are the worked
+  examples.
+- **Reset every global observable the module touches, not just the obvious one.**
+  `test_operation_log` needed the Scrapheap cleared as well as the `operation`
+  table, because `POST /pictures/scrapheap/restore` with no body restores *all*
+  soft-deleted pictures.
+- **Assert on identity, not counts.** State accumulates across a shared module, so
+  a test counting a global collection breaks — or worse, passes for the wrong
+  reason.
+- **Integrity checks belong in the autouse fixture, never a trailing "canary"
+  test.** The sharder partitions individual tests, so a trailing canary lands in
+  one shard while the tests it was meant to guard land in others.
+- **A shared server runs the background work a per-test server used to suppress.**
+  A fresh vault has nothing to backfill and no models loaded, so sweeps sit in a
+  long backoff; a warm one lands *inside* your test and overwrites hand-written
+  fixture data (`ImageEmbeddingTask` owns the embedding *and* the perceptual
+  hash; `TagTask` deletes existing `Tag` rows before writing its own). Pull the
+  conflicting finders out of the planner for the module's lifetime — waiting for
+  it to settle measured *slower* than the per-test servers it replaces. Keep the
+  planner itself running; the import endpoint refuses while workers are down.
+- **Stop the schedulers before wiping tables.** `BaseTaskFinder._claimed_picture_ids`
+  and `WorkPlanner._inflight_by_finder` drain only on a task's completion path, so
+  a cancelled task never releases its ids — and SQLite reuses picture ids from 1
+  after a wipe, so a finder then permanently refuses the next test's pictures.
+- **Wipe under `PRAGMA defer_foreign_keys = ON`**, never `foreign_keys` off/on: if
+  a delete raises in between, enforcement stays off on that pooled connection and
+  silently weakens every later test.
+- **Anything that used to die with the per-test engine now leaks** — `connect`
+  listeners, patched SQLite limits, monkeypatched globals. Undo them in a
+  `finally`.
+
+For an authz or security suite the shared environment also has to keep the
+negative assertions honest. Re-mint credentials in the autouse fixture, keep the
+in-scope positive control next to every negative one, and prove the result can
+still fail: remove one scope guard in `pixlstash/`, confirm the suite goes red,
+restore it. A negative assertion that passes because the credential was missing,
+rather than because the scope was refused, is a silent coverage loss — and it is
+the specific failure this repo has to design against.
+
 ## Reviews
 
 If asked to do a review on a branch, write the review into docs/reviews/NAME_OF_BRANCH.md
