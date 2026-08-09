@@ -691,6 +691,64 @@ def test_a_path_that_is_not_a_directory_is_refused(shelf_env, tmp_path):
         assert "not a directory" in r.json()["detail"], r.text
 
 
+def test_the_filesystem_root_is_refused(shelf_env):
+    """``/`` is absolute, is no blocklist entry and is prefixed by none, so the
+    blocklist alone admits it — and a rescan of it then stats every file on every
+    mounted volume and SHA-256s every adapter on the machine, with a server
+    restart as the only off switch. It is refused for containing the vault."""
+    assert_real_route(shelf_env.server.api, "POST", f"{API}/model-folders")
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": "/"})
+    assert r.status_code == 409, r.text
+    assert "PixlStash data folder" in r.json()["detail"], r.text
+
+
+def test_the_vault_data_folder_is_refused(shelf_env):
+    r = shelf_env.owner.post(
+        f"{API}/model-folders", json={"path": shelf_env.server.vault.image_root}
+    )
+    assert r.status_code == 409, r.text
+    assert "PixlStash data folder" in r.json()["detail"], r.text
+
+
+def test_a_folder_overlapping_a_registered_one_is_refused_in_both_directions(
+    shelf_env, tmp_path
+):
+    """Two roots over the same files give every file a ``model_file`` row per
+    root: double-counted in ``file_count`` and in a model's locations, and walked
+    twice by the scanner. Nesting is refused whichever way round it arrives."""
+    parent = _new_folder_path(str(tmp_path), "nest")
+    child = _new_folder_path(parent, "inner")
+    grandparent = str(tmp_path)
+
+    assert (
+        shelf_env.owner.post(f"{API}/model-folders", json={"path": parent}).status_code
+        == 200
+    )
+
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": child})
+    assert r.status_code == 409, r.text
+    assert "inside a registered model folder" in r.json()["detail"], r.text
+
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": grandparent})
+    assert r.status_code == 409, r.text
+    assert "is inside this path" in r.json()["detail"], r.text
+
+
+def test_a_folder_beside_a_registered_one_still_registers(shelf_env, tmp_path):
+    """The positive control for the containment rule: siblings do not overlap,
+    and refusing them would be its own regression."""
+    assert (
+        shelf_env.owner.post(
+            f"{API}/model-folders", json={"path": _new_folder_path(str(tmp_path), "a")}
+        ).status_code
+        == 200
+    )
+    r = shelf_env.owner.post(
+        f"{API}/model-folders", json={"path": _new_folder_path(str(tmp_path), "b")}
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_folder_list_counts_copies_and_reports_the_seeded_folder(shelf_env):
     r = shelf_env.owner.get(f"{API}/model-folders")
     assert r.status_code == 200, r.text

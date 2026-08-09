@@ -48,6 +48,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.managed_model_store import MANAGED_KIND
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
+from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_accessible,
     validate_reference_folder_path,
@@ -213,6 +214,41 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Model folder not found.")
         return dict(row)
 
+    def _validate_folder_conflicts(path: str) -> None:
+        """Refuse a path that overlaps the vault or an already-registered folder.
+
+        Containment, not just equality, for the same reason
+        ``_validate_reference_folder_conflicts`` checks it: two roots over the
+        same files register a ``model_file`` row per root, which double-counts
+        every file in ``file_count`` and in a model's locations, and gives the
+        scanner N walks of the same bytes. ``/`` is refused here rather than by a
+        rule of its own, since it contains the vault by construction.
+
+        Args:
+            path: The resolved candidate path.
+
+        Raises:
+            HTTPException: 409 if the path overlaps something already registered.
+        """
+        image_root = getattr(server.vault, "image_root", "") or ""
+        if path_is_within(path, image_root) or path_is_within(image_root, path):
+            raise HTTPException(
+                status_code=409,
+                detail="Path overlaps the PixlStash data folder.",
+            )
+        for row in server.hub.fetchall("SELECT path FROM model_folder"):
+            other = str(row["path"])
+            if path_is_within(path, other):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Path is inside a registered model folder: {other}",
+                )
+            if path_is_within(other, path):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"A registered model folder is inside this path: {other}",
+                )
+
     def _file_counts() -> dict[int, int]:
         """Copies per folder, in one grouped query rather than one per folder."""
         rows = server.hub.fetchall(
@@ -318,6 +354,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=409, detail="This folder is already registered."
             )
+        _validate_folder_conflicts(path)
         with server.hub.transaction() as conn:
             cursor = conn.execute(
                 "INSERT INTO model_folder (path, kind, owner, movable, host_path, "
