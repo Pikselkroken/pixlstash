@@ -103,7 +103,7 @@
               ]"
               type="button"
               role="option"
-              :aria-checked="getAriaChecked(item)"
+              :aria-selected="getAriaSelected(item)"
               :disabled="isItemDisabled(item)"
               :title="isItemLocked(item) ? 'This set is locked' : undefined"
               @click.stop="toggleItem(item)"
@@ -112,6 +112,15 @@
                 {{ getItemGlyph(item) }}
               </v-icon>
               <span class="ate-item-name">{{ item.name }}</span>
+              <!-- Partial membership is carried as text folded into the
+                   accessible name ("Vacation 2024, partially applied"), which
+                   is announced far more reliably than aria-checked="mixed" on
+                   an option. -->
+              <span
+                v-if="!isFace && getItemState(item) === 'partial'"
+                class="visually-hidden"
+                >, partially applied</span
+              >
               <span v-if="isSet" class="ate-item-meta">
                 <v-icon
                   v-if="isItemLocked(item)"
@@ -526,15 +535,14 @@ function getItemGlyph(item) {
   return "mdi-checkbox-blank-outline";
 }
 
-// The option's ARIA state. Face mode is single-select, so it is a plain
-// true/false; every other mode is a bulk membership over the selection, and a
-// partially-assigned entity is exactly what aria-checked="mixed" is for.
-function getAriaChecked(item) {
+// The option's ARIA state. `aria-selected` is what a listbox option is expected
+// to expose; `aria-checked` (and "mixed" least of all) is not reliably announced
+// on one, so partial membership is carried as text in the row instead. "false"
+// for a partial row is not a lie: clicking it adds the rest of the selection,
+// exactly like an unchecked row, because only "checked" removes.
+function getAriaSelected(item) {
   if (isFace.value) return isFaceItemSelected(item) ? "true" : "false";
-  const state = getItemState(item);
-  if (state === "checked") return "true";
-  if (state === "partial") return "mixed";
-  return "false";
+  return getItemState(item) === "checked" ? "true" : "false";
 }
 
 function getItemState(item) {
@@ -672,7 +680,12 @@ function closeMenu() {
 function navigableItems() {
   const menu = menuRef.value;
   if (!menu) return [];
-  const rows = Array.from(menu.querySelectorAll(".ate-item:not([disabled])"));
+  // Options only. The create rows share `.ate-item` but sit outside the listbox
+  // on purpose, and they are actions rather than choices, so they keep their
+  // normal Tab order instead of joining this roving focus.
+  const rows = Array.from(
+    menu.querySelectorAll('[role="option"]:not([disabled])'),
+  );
   const input = searchInputRef.value;
   return input ? [input, ...rows] : rows;
 }
