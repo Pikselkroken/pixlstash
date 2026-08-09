@@ -21,9 +21,11 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
     The query is left as the plain ``sha256 IS NULL`` all the same, so it
     matches ``ix_model_hash_queue`` exactly and cannot silently strand a row.
 
-    One task at a time (the base ``max_inflight_tasks`` of 1), so no claim
-    bookkeeping is needed: the batch this finder hands out is the only one in
-    flight, and the rows in it stop matching the moment they are hashed.
+    One task at a time (the base ``max_inflight_tasks`` of 1), but that alone is
+    not enough to stop a batch being handed out twice: the planner frees the
+    inflight slot before it tells this finder how the task went, so the rows are
+    tracked as handed out from the moment the task is built and released when
+    its result arrives.
 
     A row the task could not hash — an unreadable file, a path that has moved —
     is *deferred* for the life of the process rather than handed out again. The
@@ -43,12 +45,21 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
         super().__init__()
         self._hub = hub
         self._deferred: set[int] = set()
+        # Rows handed out whose result is not in yet.
+        # ``WorkPlanner.on_task_complete`` frees this finder's inflight slot
+        # under its lock and only then calls the finder's own callback, so the
+        # planner can run ``find_task`` in between while ``_deferred`` is still
+        # empty and re-issue the identical batch. Excluding what is already out
+        # closes that window, and it costs nothing on the happy path: a hashed
+        # row stops matching ``sha256 IS NULL`` anyway.
+        self._handed_out: set[int] = set()
 
     def finder_name(self) -> str:
         return "MissingCheckpointHashFinder"
 
     def find_task(self):
-        limit = CheckpointHashTask.BATCH_SIZE + len(self._deferred)
+        skip = self._deferred | self._handed_out
+        limit = CheckpointHashTask.BATCH_SIZE + len(skip)
         # ``state = 'present'`` is the whole path filter: a row whose only copy
         # is `missing` or `unreachable` has nothing to read, and handing it out
         # would defer it for the session over a drive that is merely unplugged.
@@ -66,16 +77,17 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
         batch = [
             (row["id"], os.path.join(row["folder_path"], row["relpath"]))
             for row in rows
-            if row["id"] not in self._deferred
+            if row["id"] not in skip
         ][: CheckpointHashTask.BATCH_SIZE]
         if not batch:
             return None
+        self._handed_out.update(model_id for model_id, _ in batch)
         return CheckpointHashTask(hub=self._hub, checkpoints=batch)
 
     def on_task_complete(self, task, error) -> None:
         """Record which rows must not be handed out again this session."""
+        ids = (getattr(task, "params", None) or {}).get("checkpoint_ids") or []
         if error is not None:
-            ids = (getattr(task, "params", None) or {}).get("checkpoint_ids") or []
             logger.warning(
                 "Checkpoint hashing failed for %s: %s. Deferring those rows for "
                 "the rest of this session.",
@@ -83,5 +95,7 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
                 error,
             )
             self._deferred.update(ids)
+            self._handed_out.difference_update(ids)
             return
         self._deferred.update((getattr(task, "result", None) or {}).get("deferred", []))
+        self._handed_out.difference_update(ids)
