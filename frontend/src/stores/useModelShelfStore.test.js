@@ -127,6 +127,106 @@ describe("adapter kinds", () => {
   });
 });
 
+describe("overlapping fetches", () => {
+  // Three checkboxes each refetch, so two flights are one double-click apart.
+  it("ignores a flight the user has already overtaken", async () => {
+    const store = useModelShelfStore();
+    let landFirst;
+    listAdapters
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            landFirst = () => resolve([adapter({ id: 1, kind: "lora" })]);
+          }),
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve([adapter({ id: 2, kind: "lokr" })]),
+      );
+
+    const overtaken = store.fetchRows();
+    const winner = store.fetchRows();
+    await winner;
+    expect(store.rows.map((r) => r.id)).toEqual([2]);
+
+    landFirst();
+    await overtaken;
+    expect(store.rows.map((r) => r.id)).toEqual([2]);
+  });
+
+  it("leaves the spinner up while the newest flight is still running", async () => {
+    const store = useModelShelfStore();
+    listAdapters
+      .mockImplementationOnce(() => Promise.resolve([adapter({ id: 1 })]))
+      .mockImplementationOnce(() => new Promise(() => {}));
+
+    const first = store.fetchRows();
+    store.fetchRows();
+    await first;
+
+    expect(store.loading).toBe(true);
+  });
+});
+
+describe("the option vocabularies", () => {
+  it("survives a fetch narrowed by the type checkboxes", async () => {
+    // Both option lists are derived from the fetched rows, so a fetch that
+    // overwrote them deleted the kind checkboxes the parent is documented to
+    // grey, and dropped base models that stayed selected and persisted.
+    const store = useModelShelfStore();
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, kind: "lokr", base_model: "sdxl" }),
+    ]);
+    listCheckpoints.mockResolvedValue([
+      adapter({
+        id: 2,
+        file_kind: "checkpoint",
+        kind: null,
+        base_model: "flux.1-dev",
+      }),
+    ]);
+    await store.fetchRows();
+
+    await store.setFilters({ adapters: false }, { refetch: true });
+    expect(store.adapterKindOptions).toEqual(["lokr"]);
+    expect(store.visibleRows.map((r) => r.id)).toEqual([2]);
+
+    await store.setFilters(
+      { adapters: true, checkpoints: false },
+      { refetch: true },
+    );
+    expect(store.baseModelOptions).toEqual(["flux.1-dev", "sdxl"]);
+    expect(store.visibleRows.map((r) => r.id)).toEqual([1]);
+  });
+
+  it("survives a refresh that fails", async () => {
+    // Clearing the rows on error emptied both vocabularies and unmounted the
+    // Show panel's nested checkboxes, which is the bug above reached down the
+    // error path. The error renders ahead of the list, so keeping them costs
+    // nothing on screen.
+    const store = useModelShelfStore();
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, kind: "lokr", base_model: "sdxl" }),
+    ]);
+    listCheckpoints.mockResolvedValue([
+      adapter({
+        id: 2,
+        file_kind: "checkpoint",
+        kind: null,
+        base_model: "flux.1-dev",
+      }),
+    ]);
+    await store.fetchRows();
+
+    listAdapters.mockRejectedValueOnce(new Error("the shelf is unreachable"));
+    await store.fetchRows();
+
+    expect(store.error).toBe("the shelf is unreachable");
+    expect(store.adapterKindOptions).toEqual(["lokr"]);
+    expect(store.baseModelOptions).toEqual(["flux.1-dev", "sdxl"]);
+    expect(store.rows.map((r) => r.id)).toEqual([1, 2]);
+  });
+});
+
 describe("the badge", () => {
   it("counts sections that deviate, not ticked boxes", async () => {
     // Counting boxes would report "9" for a mild narrowing and the number

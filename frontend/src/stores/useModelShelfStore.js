@@ -57,13 +57,28 @@ function storedFilters() {
   }
 }
 
+/** The three top-level type checkboxes, each one request and one row bucket. */
+const BLOCKS = ["adapters", "checkpoints", "unclassified"];
+
+/** Which block a row came from, so a fetch only replaces what it asked for. */
+function blockOf(row) {
+  if (row.file_kind === "checkpoint") return "checkpoints";
+  if (row.file_kind === "unknown") return "unclassified";
+  return "adapters";
+}
+
 export const useModelShelfStore = defineStore("modelShelf", () => {
   const filters = reactive(storedFilters() || defaultFilters());
+  /** Every row fetched so far, across blocks. Not the shown set. */
   const rows = ref([]);
   const loading = ref(false);
   const error = ref("");
   /** True once a fetch has completed, so "empty" and "not asked yet" differ. */
   const loaded = ref(false);
+  // Discards a list read the user has already overtaken, and one that was on
+  // the wire when the credential changed. Every fetch takes the next number,
+  // so only the newest one may write.
+  let epoch = 0;
 
   function remember() {
     try {
@@ -82,8 +97,23 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * already carries locations and attachments, so a row costs no follow-up,
    * and a base-model multi-select would otherwise be one request per option
    * with the results merged client-side anyway.
+   *
+   * A fetch REPLACES the blocks it asked for and LEAVES THE REST STANDING.
+   * `rows` is therefore everything known, not the shown set: the type
+   * checkboxes narrow in {@link visibleRows} like the other two. Overwriting
+   * the whole array with a narrowed fetch is what used to delete the option
+   * vocabularies, because both are derived from it: unticking Adapters
+   * unmounted the kind checkboxes it is documented to grey, and unticking
+   * Checkpoints dropped base models that stayed selected and persisted with
+   * no box left to untick them.
+   *
+   * `epoch` discards a flight the user has already overtaken: three
+   * checkboxes each refetch, so a slower earlier request could otherwise land
+   * last and show adapters only while Checkpoints is ticked. Same shape as
+   * `useLibrariesStore.refresh`.
    */
   async function fetchRows() {
+    const startedAt = (epoch += 1);
     loading.value = true;
     error.value = "";
     try {
@@ -94,13 +124,28 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         requests.push(listAdapters({ fileKind: "unknown" }));
       }
       const results = await Promise.all(requests);
-      rows.value = results.flat();
+      if (startedAt !== epoch) return;
+      const refreshed = new Set(
+        BLOCKS.filter((block) => filters[block]),
+      );
+      rows.value = [
+        ...rows.value.filter((row) => !refreshed.has(blockOf(row))),
+        ...results.flat(),
+      ];
       loaded.value = true;
     } catch (err) {
+      if (startedAt !== epoch) return;
       error.value = errorDetail(err) || err?.message || String(err);
-      rows.value = [];
+      // `rows` is left standing. Clearing it was consistent while a fetch
+      // replaced the whole array, but under the contract above it throws away
+      // blocks the failed request never asked for, which empties
+      // `adapterKindOptions` and `baseModelOptions` and unmounts the Show
+      // panel's nested checkboxes: the bug this store was just fixed for,
+      // reached down the error path instead. The error branch renders ahead of
+      // the row list, so nothing stale is shown, and the next successful fetch
+      // re-requests every ticked block anyway.
     } finally {
-      loading.value = false;
+      if (startedAt === epoch) loading.value = false;
     }
   }
 
@@ -136,6 +181,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const bases = filters.baseModels;
     return rows.value
       .filter((row) => {
+        // The type checkboxes narrow here as well as choosing what to fetch:
+        // a block already fetched stays in `rows` so its options survive.
+        if (!filters[blockOf(row)]) return false;
         if (row.file_kind === "adapter" && kinds.length) {
           if (!kinds.includes(String(row.kind))) return false;
         }
@@ -183,6 +231,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * the same reasoning that exempts `useUserPrefsStore`.
    */
   function resetForSession() {
+    epoch += 1;
     rows.value = [];
     loaded.value = false;
     error.value = "";
