@@ -11,6 +11,8 @@ themselves. These tests guard against:
 """
 
 import asyncio
+import concurrent.futures
+import contextlib
 import json
 import tempfile
 import threading
@@ -28,6 +30,47 @@ from pixlstash.server import Server
 API = "/api/v1"
 WS_UPDATES = f"{API}/ws/updates"
 WS_COMFYUI = f"{API}/ws/comfyui"
+
+# TestClient bridges the app to this thread through an anyio portal. When the
+# server closes a socket and the handler then returns, the portal can tear the
+# session down while this thread is still waiting on the queued close frame, so
+# the client observes a cancellation instead of the frame. That is a harness
+# artifact under load: uvicorn writes the close to a real socket and a real
+# client reads the code. Tests therefore tolerate these on the client side and
+# assert the close code where the server issues it (``_record_close_codes``).
+_HARNESS_TEARDOWN = (
+    concurrent.futures.CancelledError,
+    asyncio.CancelledError,
+    ClosedResourceError,
+)
+
+
+def _registered_ws(server, *, broadcast: bool):
+    """The server-side ``WebSocket`` of the tracked client with this role."""
+    with server._ws_clients_lock:
+        for client in server._ws_clients:
+            if client.get("ws") is not None and client.get("broadcast") is broadcast:
+                return client["ws"]
+    return None
+
+
+def _record_close_codes(monkeypatch, websocket) -> list:
+    """Record every close code a server-side ``WebSocket`` is closed with.
+
+    The drains close these sockets on the loop that owns them and their callers
+    wait for that to finish, so the recorded codes are readable as soon as the
+    triggering call returns. Unlike the client thread's view, this does not race
+    the TestClient portal, so it is what pins the ``1012`` claim.
+    """
+    codes: list[int] = []
+    original = websocket.close
+
+    async def _close(code: int = 1000, reason: str | None = None):
+        codes.append(code)
+        await original(code=code, reason=reason)
+
+    monkeypatch.setattr(websocket, "close", _close, raising=False)
+    return codes
 
 
 @pytest.fixture(scope="module")
@@ -512,20 +555,31 @@ def test_library_switch_terminates_the_comfyui_proxy(
     target = server.library_registry.create(str(tmp_path / "ws-switch"), "WS switch")
 
     try:
-        with owner_client.websocket_connect(WS_COMFYUI) as websocket:
+        context = owner_client.websocket_connect(WS_COMFYUI)
+        websocket = context.__enter__()
+        try:
             assert upstream.entered.wait(timeout=5)
-            with server._ws_clients_lock:
-                assert any(
-                    client.get("ws") is not None and client.get("broadcast") is False
-                    for client in server._ws_clients
-                )
+            proxy_ws = _registered_ws(server, broadcast=False)
+            assert proxy_ws is not None, "the proxy did not register for the drain"
+            close_codes = _record_close_codes(monkeypatch, proxy_ws)
+
             response = owner_client.post(
                 f"{API}/libraries/active", json={"uuid": target.uuid}
             )
             assert response.status_code == 200, response.text
-            with pytest.raises(WebSocketDisconnect) as excinfo:
+            # The switch closes the claimed generation before it returns, so the
+            # code the proxy socket was closed with is already recorded. The
+            # handler's own ``finally`` closes again afterwards; only the first
+            # close is the drain's.
+            assert close_codes[:1] == [1012], close_codes
+
+            with pytest.raises((WebSocketDisconnect, *_HARNESS_TEARDOWN)) as excinfo:
                 websocket.receive_text()
-            assert excinfo.value.code == 1012
+            if isinstance(excinfo.value, WebSocketDisconnect):
+                assert excinfo.value.code == 1012
+        finally:
+            with contextlib.suppress(*_HARNESS_TEARDOWN):
+                context.__exit__(None, None, None)
         assert upstream.exited.wait(timeout=5), "upstream proxy context must terminate"
     finally:
         if server.library_registry.active_library().uuid != original.uuid:
@@ -576,18 +630,31 @@ def test_restore_barrier_terminates_every_authenticated_websocket(
     updates_ws = updates_context.__enter__()
     comfyui_ws = comfyui_context.__enter__()
     try:
+        server_sockets = [
+            _registered_ws(server, broadcast=True),
+            _registered_ws(server, broadcast=False),
+        ]
+        assert all(server_sockets), "both sockets must be tracked before the barrier"
+        close_codes = [
+            _record_close_codes(monkeypatch, socket) for socket in server_sockets
+        ]
+
         thread = threading.Thread(target=_close_and_drain, daemon=True)
         thread.start()
 
-        with pytest.raises((WebSocketDisconnect, ClosedResourceError)) as updates_close:
+        with pytest.raises((WebSocketDisconnect, *_HARNESS_TEARDOWN)) as updates_close:
             updates_ws.receive_text()
-        with pytest.raises((WebSocketDisconnect, ClosedResourceError)) as comfyui_close:
+        with pytest.raises((WebSocketDisconnect, *_HARNESS_TEARDOWN)) as comfyui_close:
             comfyui_ws.receive_text()
 
         thread.join(timeout=10)
         assert not thread.is_alive(), "WebSocket admission leases did not drain"
         assert "error" not in outcome, outcome.get("error")
         assert upstream_closed.is_set(), "ComfyUI upstream survived the drain"
+        # What the barrier sent, recorded server-side: the client threads may or
+        # may not have drained the frame before the portal tore them down.
+        for codes in close_codes:
+            assert codes[:1] == [1012], close_codes
         for closed in (updates_close.value, comfyui_close.value):
             if isinstance(closed, WebSocketDisconnect):
                 assert closed.code == 1012
@@ -597,10 +664,8 @@ def test_restore_barrier_terminates_every_authenticated_websocket(
         # 1012. Starlette TestClient reflects that server-task cancellation from
         # ``__exit__`` even though the client already observed the clean close.
         for context in (comfyui_context, updates_context):
-            try:
+            with contextlib.suppress(*_HARNESS_TEARDOWN):
                 context.__exit__(None, None, None)
-            except BaseException:
-                pass
         server.auth.reopen_auth_after_restore()
 
 
