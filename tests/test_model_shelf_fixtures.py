@@ -12,8 +12,10 @@ The adapter count is small on purpose: 1,800 files prove nothing 60 do not, and
 the name generator is exercised at full scale separately without touching disk.
 """
 
+import hashlib
 import importlib.util
 import os
+import struct
 import sys
 
 import pytest
@@ -94,7 +96,16 @@ class TestAdapterFolder:
         assert len(kinds) > 1, kinds
 
     def test_both_the_metadata_rich_and_the_bare_case_are_present(self, tree):
-        """The common download carries nothing; ai-toolkit output carries plenty."""
+        """All three provenances, with the informative one in the majority.
+
+        Measured 2026-08-09 over a real 91-file folder: 57 carried trainer
+        ``ss_*`` metadata, 22 carried only ``format``, 9 carried no block at
+        all. The generator used to have that backwards, which made the shelf's
+        "you will have to name this yourself" path look like the common case
+        when it is the minority one. The direction is pinned here; the exact
+        ratio is not, because it moves with how much of a library was
+        downloaded rather than trained.
+        """
         described = [
             describe_adapter(str(path))
             for path in tree.adapter_folder.glob("*.safetensors")
@@ -102,22 +113,59 @@ class TestAdapterFolder:
         assert any(info.has_metadata for info in described)
         assert any(not info.has_metadata for info in described)
         assert any(info.trigger_words for info in described)
+        rich = sum(1 for info in described if info.has_metadata)
+        assert rich > len(described) / 2, f"{rich} of {len(described)}"
+
+    def test_more_than_one_dtype_is_emitted(self):
+        """bf16 dominates, but fp16 and fp32 files exist and weigh differently.
+
+        Two adapters of one rank can differ in size for no reason but dtype, so
+        a shelf reading size as a proxy for rank is reading it wrong.
+        """
+        dtypes = {plan.dtype for plan in generator.iter_adapters(SMALL_ADAPTER_COUNT)}
+        assert dtypes == {"BF16", "F16", "F32"}, dtypes
 
     def test_sizes_are_reported_in_full_but_not_paid_for(self, tree):
         """Real sizes, sparse payloads: that is what makes 1,800 adapters fit.
 
-        Without this the folder is either 300 GB or a folder of 4 KB files that
-        makes a size-sorted shelf meaningless.
+        Without this the folder is either hundreds of real gigabytes or a folder
+        of 4 KB files that makes a size-sorted shelf meaningless.
         """
         sizes = [
             os.path.getsize(path) for path in tree.adapter_folder.glob("*.safetensors")
         ]
-        # The spread is the point: a LoKr really is a few MB and a rank-64 SDXL
-        # LoRA really is hundreds, so a size-sorted shelf has something to sort.
-        assert min(sizes) > 500_000
-        assert max(sizes) > 100 * 1024 * 1024
+        # The spread is the point, and it is wider than it looks: the same
+        # measured folder ran from 17 MB to 20.5 GB, so a size-sorted shelf and
+        # F2's capacity meters both have something real to work with. The
+        # multi-gigabyte end is also the one B4 defers hashing for.
+        assert min(sizes) > 15 * 1024 * 1024
+        assert max(sizes) > 1024**3
         assert tree.reported_bytes == sum(sizes)
         assert tree.disk_bytes < tree.reported_bytes / 50
+
+    def test_no_two_adapters_are_the_same_file(self, tree):
+        """Every adapter is its own file, checked on the bytes that were written.
+
+        This is the regression: real adapters cluster hard on shape, so the
+        generator repeats shapes on purpose, and a sparse payload is all zeroes.
+        That made a file's SHA-256 a pure function of its header, and 1,800
+        fixtures collapsed onto 478 distinct files — the shelf then showed 478
+        rows and one model carried 202 locations. The payload slug is what fixes
+        it, so this hashes the header *and* the slug behind it, straight off
+        disk. Everything after them is a hole the header itself measures, which
+        is why reading the whole 4 GB file would prove nothing extra.
+
+        At 1,800 the same holds by construction rather than by test: the slug is
+        a pure function of the filename, and
+        :meth:`test_names_are_unique_at_full_scale` pins those at full scale.
+        """
+        digests = set()
+        for path in sorted(tree.adapter_folder.glob("*.safetensors")):
+            with open(path, "rb") as handle:
+                (header_len,) = struct.unpack("<Q", handle.read(8))
+                leading = handle.read(header_len + generator._PAYLOAD_SLUG_BYTES)
+            digests.add(hashlib.sha256(leading).hexdigest())
+        assert len(digests) == SMALL_ADAPTER_COUNT
 
     def test_names_are_unique_at_full_scale(self):
         """1,800 files in one folder; two of them cannot share a name."""
@@ -198,6 +246,22 @@ def test_the_manual_stack_has_two_adapters_and_no_samples(tree):
     assert not (tree.manual_stack / "samples").exists()
     for path in files:
         assert describe_adapter(str(path)).file_kind == FILE_ADAPTER
+
+
+def test_the_manual_stack_is_the_deliberate_duplicate_pair(tree):
+    """These two really are one file under two names, and must stay that way.
+
+    A copy that landed in two registered folders, or a move interrupted between
+    the write and the unlink, are states the shelf has to recognise, so the
+    fixture set owes it one duplicate pair. It is the only one: everything in
+    ``adapters/`` is distinct, which is what
+    :meth:`TestAdapterFolder.test_no_two_adapters_are_the_same_file` pins.
+    """
+    digests = {
+        hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(tree.manual_stack.glob("*.safetensors"))
+    }
+    assert len(digests) == 1
 
 
 def test_the_offline_mount_does_not_resolve(tree):

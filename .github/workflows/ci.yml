@@ -157,30 +157,20 @@ jobs:
   # 31023904354. Cutting to four shards bought those slots back, at the cost of
   # wall clock on every uncontended run.
   #
-  # Under a hard slot cap, jobs-per-run is the lever, not seconds-per-test.
-  # Eight shards cannot spend the parallelism they ask for, and each one pays
-  # its own setup-backend (setup-python + pip install + HuggingFace cache
-  # restore). That was ~4 min per shard when the install still pulled the CUDA
-  # torch stack (issue #796 cut it to under a minute by installing CPU-only
-  # torch); at eight shards it was ~32 min of runner
-  # time per run before a single test executed, all of it competing for the
-  # same scarce slots as real work. Halving the matrix halves that fixed cost
-  # and returns four slots per run. Together with the two Windows shards this
-  # takes ci.yml from 16 jobs to 10, so two concurrent runs now fit inside the
-  # budget where one used to fill it.
+  # At 60 slots that trade is gone, so the lever goes back to seconds-per-test.
+  # Fourteen jobs per run leaves room for ~4 concurrent PR runs, which is what
+  # this repo routinely has in flight, so eight shards can now actually spend
+  # the parallelism they ask for. Each still pays its own setup-backend
+  # (free-disk-space + setup-python + pip install + HuggingFace cache restore),
+  # now under a minute since #796 switched the install to CPU-only torch, so
+  # that fixed cost is bought out of idle capacity rather than out of the next
+  # PR's slots.
   #
-  # The trade-off is real and was taken deliberately, and the number is not
-  # small. LPT over the committed map puts 1360 s of recorded load on each of
-  # four shards (vs 680 s on each of eight); CI measures ~1.77x the recorded
-  # local time (shard 7 of run 31031336234: 1202 s in CI against a ~680 s
-  # recorded share), so expect roughly 40 min of tests per shard plus ~1 min
-  # setup, against ~20 min before. An UNCONTENDED run therefore gets slower —
-  # ~45 min instead of ~25. It wins only because runs overlap, which is the
-  # normal state here, and because a failed shard now costs one slot for 45
-  # min instead of eight slots for 20.
-  #
-  # If that is too long, 6 is the middle setting (~27 min per shard, 12 jobs
-  # per run) and the balance guardrail
+  # Measured basis for the resize: at four shards, 193 s setup + 2652 s pytest
+  # = 45.5 min per shard, ~177 min of backend test compute per run. At eight
+  # that is ~22.1 min of tests per shard. LPT over the committed map splits the
+  # recorded load dead level at N=8 (679 s per shard, max/min 1.000), and the
+  # balance guardrail
   # (test_ci_shards.py::test_recorded_durations_actually_balance_the_gate)
   # reads N from this matrix, so a future resize has to re-prove that rather
   # than inherit the claim. If the concurrency budget ever tightens again this
@@ -472,7 +462,7 @@ jobs:
   #
   # N=6. Two reasons, and the second is the binding one. (1) Concurrency: the
   # rest of this workflow queues 14 jobs (checks 1 + backend 8 + e2e 1 +
-  # backend_windows 2 + the two aggregators) against the Team plan's
+  # backend_windows 4) against the Team plan's
   # 60-concurrent-job budget, so 6 fits without the sweep queueing behind the
   # gate it is supposed to run alongside — and unlike the gate it runs only
   # during release prep, when there is rarely a queue of feature-branch runs
@@ -484,8 +474,8 @@ jobs:
   # TIME — that imbalance is the price of preserving order.
   #
   # The per-shard check name is NOT stable across a resize, by design: this job
-  # is informational and must never be a required check. Branch protection
-  # requires `build` (below), which aggregates it.
+  # is informational and must never be a required check. Nothing is a required
+  # check in this repo — see the removal note above `e2e`.
   #
   # The old "1.7.0 headline API surface" step is gone: its five files
   # (test_tag_health_api, test_reviews_api, test_tag_predictions_api,
@@ -520,72 +510,22 @@ jobs:
           tests/
 
   # ---------------------------------------------------------------------------
-  # Aggregate status for the Linux side. Exists so branch protection can require
-  # one stable check name instead of a per-shard list that would have to be
-  # re-configured every time the matrix is resized.
+  # REMOVED 2026-08-09 (#796): the `build` and `build-windows` aggregator jobs.
+  # They existed only to give branch protection one stable check name per OS,
+  # and there is no branch protection to serve: `develop` has none, `main` is
+  # protected with no required_status_checks at all, and merges are a human
+  # judgement call by design. `build` also cost real tail latency — it needed
+  # every Linux job, so it queued for its own runner after the gate finished
+  # (up to ~16 min for a 3-second job).
+  #
+  # They carried one property beyond aggregation (CSO condition F2): `skipped`
+  # counted as a FAILURE for `checks`/`backend`, so a `paths:`/`if:` filter
+  # could not leave a green required check that ran zero tests (`skipped` was a
+  # pass only for `backend_release_sweep`, which is skipped outside release
+  # prep by design). That is moot while nothing is required. Anything that
+  # reintroduces a required status check, or adds a `paths:`/`if:` filter to
+  # the gate, MUST restore the skipped-is-failure guard with it.
   # ---------------------------------------------------------------------------
-  build:
-    name: build
-    if: always()
-    needs: [checks, backend, backend_release_sweep, e2e]
-    runs-on: ubuntu-latest
-    steps:
-      # Each dependency is checked against what IT is allowed to report, not
-      # against a shared allowlist. `skipped` is a pass only for
-      # backend_release_sweep, which is skipped outside release prep by design.
-      # For checks/backend, `skipped` must fail: if someone later adds a
-      # `paths:` or `if:` filter to the gate, this check would otherwise go
-      # green having run zero tests — a required check that passes by not
-      # running is worse than no required check at all. (CSO condition F2.)
-      #
-      # `backend` and `backend_release_sweep` are both matrices, and
-      # `needs.<job>.result` collapses a matrix into ONE value: `skipped` only
-      # if every leg was skipped, `failure` if ANY leg failed, `cancelled` if
-      # any was cancelled and none failed, `success` otherwise. So the checks
-      # below already cover partial failure, and they keep working when a
-      # matrix is resized — which is the whole point of aggregating here
-      # instead of listing per-shard check names in branch protection.
-      #
-      # A `failure` from the sweep is still fatal here even though the sweep is
-      # "informational": its pytest step carries `continue-on-error`, so a
-      # failing TEST cannot produce one. A failing JOB therefore means
-      # checkout/setup died and the ordering control did not run at all, which
-      # during release prep is exactly what must not pass silently.
-      - name: Require the blocking backend jobs to have succeeded
-        env:
-          CHECKS_RESULT: ${{ needs.checks.result }}
-          BACKEND_RESULT: ${{ needs.backend.result }}
-          SWEEP_RESULT: ${{ needs.backend_release_sweep.result }}
-          E2E_RESULT: ${{ needs.e2e.result }}
-        run: |
-          set -euo pipefail
-          echo "checks=$CHECKS_RESULT backend=$BACKEND_RESULT sweep=$SWEEP_RESULT e2e=$E2E_RESULT"
-
-          failed=0
-          for job in checks backend e2e; do
-            case "$job" in
-              checks) result="$CHECKS_RESULT" ;;
-              backend) result="$BACKEND_RESULT" ;;
-              e2e) result="$E2E_RESULT" ;;
-            esac
-            if [ "$result" != "success" ]; then
-              echo "::error::Blocking job '$job' reported '$result' (must be 'success')."
-              failed=1
-            fi
-          done
-
-          case "$SWEEP_RESULT" in
-            success|skipped) ;;
-            *)
-              echo "::error::backend_release_sweep reported '$SWEEP_RESULT'."
-              failed=1
-              ;;
-          esac
-
-          if [ "$failed" -ne 0 ]; then
-            exit 1
-          fi
-          echo "All required backend jobs passed."
 
   e2e:
     # Playwright UI tests drive the real SPA against a backend booted on a
@@ -594,15 +534,6 @@ jobs:
     # its absence is a coverage failure, never permission to skip the lane.
     runs-on: ubuntu-latest
     steps:
-      - name: Remove unused tools
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-
       - uses: actions/checkout@v6
 
       - name: Require committed e2e fixture
@@ -624,14 +555,67 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/pip
-          key: pip-${{ runner.os }}-py3.12-${{ hashFiles('setup.py', 'requirements.txt') }}
-          restore-keys: pip-${{ runner.os }}-py3.12-
+          # Deliberately the SAME key as the setup-backend composite, so this
+          # job and the backend shards share one pip download cache instead of
+          # keeping two near-identical copies per ref.
+          #
+          # The trade-off is real and was decided on a measurement, not a
+          # guess. This job installs `pip install .` while the composite
+          # installs `.[test,dev]`, and actions/cache only writes on a key
+          # miss — so whichever job races to the miss first fixes the contents
+          # for both, and the loser re-downloads its delta on every run
+          # without ever getting a miss to re-save. That delta was the whole
+          # question, so it was measured: a separate `pip-e2e-cpu-` namespace
+          # saved 494 MB against the composite's 507 MB. The test/dev extras
+          # are ~13 MB of small pure-Python wheels; that is the entire cost of
+          # losing the race. Against it, a second namespace costs ~494 MB on
+          # every active ref, in a repo already evicting entries against
+          # GitHub's 10 GB limit — which is what makes runs miss cache and
+          # install cold in the first place. 13 MB per run beats 494 MB per
+          # ref. Contents cannot diverge dangerously either way: pip's HTTP
+          # cache is keyed by URL, so a subset or superset just means pip
+          # downloads whatever is not there.
+          #
+          # `-cpu-` is not optional in either design: restore-keys is a prefix
+          # match, so the old `pip-` prefix would restore the 2.79 GB CUDA-fat
+          # cache and re-save those nvidia wheels forever.
+          key: pip-cpu-${{ runner.os }}-py3.12-${{ hashFiles('setup.py', 'requirements.txt') }}
+          restore-keys: pip-cpu-${{ runner.os }}-py3.12-
 
       - name: Install backend
         if: steps.fixture.outputs.present == 'true'
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
+          # CPU-only torch, CI ONLY — same treatment the setup-backend
+          # composite got, which this job cannot share because it has its own
+          # inline Python setup. This runner only drives Chromium against a
+          # browse-only backend (workers disabled, no ML models), so the CUDA
+          # payload PyPI's torch drags in (nvidia-*-cu13, triton, ~2.5 GB
+          # unpacked) is pure cost: it was most of the 92 s install and the
+          # reason this job's pip cache was 2.79 GB.
+          # The specifiers are pyproject.toml's own, so CI resolves exactly
+          # the version it resolves today and just takes the +cpu build of it;
+          # `pip install .` below then finds the requirement already satisfied
+          # and leaves it alone. --index-url, not --extra-index-url: it
+          # confines this one invocation to PyTorch's own index instead of
+          # letting a second index shadow PyPI names. Nothing a user installs
+          # changes — `pip install -e .` still resolves the GPU build.
+          pip install --index-url https://download.pytorch.org/whl/cpu \
+            "torch~=2.12" "torchvision~=0.27"
           pip install .
+          df -h /
+          # Fail loudly if a pin change ever lets PyPI's CUDA torch win again.
+          # sed, not `grep -q`: under `pipefail` an early-exiting grep SIGPIPEs
+          # pip and the guard fires on its own plumbing instead of the version.
+          torch_version="$(pip show torch | sed -n 's/^Version: //p')"
+          case "$torch_version" in
+            *+cpu) echo "torch $torch_version" ;;
+            *)
+              echo "::error::torch is $torch_version, not a +cpu build; the CUDA wheels are back."
+              exit 1
+              ;;
+          esac
 
       - name: Set up Node
         if: steps.fixture.outputs.present == 'true'
@@ -647,6 +631,12 @@ jobs:
           cd frontend
           npm ci
           npx playwright install --with-deps chromium
+          # This job used to reclaim runner disk with jlumbroso/free-disk-space
+          # (88 s) before installing anything. That step is gone; this `df` is
+          # what replaces the assumption with a measurement, on the fullest
+          # point of the job — after Python, Node, npm deps and Chromium are
+          # all on disk. If it ever gets tight, put the reclaim step back.
+          df -h /
 
       - name: Run Playwright e2e
         if: steps.fixture.outputs.present == 'true'
@@ -677,15 +667,32 @@ jobs:
   # intra-process concurrency, so it introduces no new flake surface on the
   # platform that is hardest to debug remotely.
   #
-  # Two shards, and this one does NOT track the Linux gate's count. Windows
-  # pays the worst fixed cost per shard of any job here — `pip install
-  # .[test,dev]` alone was ~3-4 min on every one of the four it used to run
-  # (run 31031336234: 3m09s, 3m22s, 2m57s, 3m17s) — so an extra runner here
-  # spends most of its life installing rather than testing. That arithmetic is
-  # about setup cost, not about the concurrency budget, so raising the cap did
-  # not change it. This is also a deliberate SUBSET rather than a gate, so it
-  # is the cheaper place to give up parallelism: the completeness guarantee
-  # lives on Linux.
+  # Four shards, and this one does NOT track the Linux gate's count. Windows
+  # pays the worst fixed cost per shard of any job here: measured on run
+  # 31296192128 (`backend-windows shard 2`), checkout + Node + Python + caches
+  # is 41 s and `pip install .[test,dev]` another 160 s, so ~3.6 min of every
+  # shard is spent before a test runs. That is what caps this at 4 rather than
+  # the gate's 8 — ~35 min of Windows test compute over 4 shards is 8.75 min of
+  # tests + 3.6 min setup = ~12 min per shard, and doubling again would buy ~4
+  # min of test time per runner while paying 3.6 min of setup for it. Measured
+  # after the resize (run 31302551327): 12.3 / 13.2 / 13.7 / 13.9 min.
+  #
+  # Note that #801's CPU-only-torch install fix does NOT apply here: the
+  # `nvidia-*-cu13` / `cuda-toolkit` wheels are gated `platform_system ==
+  # "Linux"`, and the caches agree (pip-Windows-py3.12 0.37 GB against
+  # pip-Linux-py3.12 2.79 GB). There is no CUDA payload on this runner to
+  # remove, so the 160 s install above is the floor.
+  #
+  # It was 2 until 2026-08-09. Half of that argument was the 20-slot
+  # concurrency cap; the move to the GitHub Team plan (60 concurrent jobs)
+  # removed that half, and only the fixed-cost arithmetic above still holds.
+  # The resize saves nothing today — that same run had this job at 21.2 min
+  # against the Linux gate's ~21.3 min, i.e. tied. It is pre-emptive: the
+  # in-flight test-fixture work takes Linux to roughly 16 min, at which point
+  # an unshrunk Windows job becomes the critical path on its own.
+  #
+  # This is also a deliberate SUBSET rather than a gate, so it is the cheaper
+  # place to give up parallelism: the completeness guarantee lives on Linux.
   # ---------------------------------------------------------------------------
   backend_windows:
     name: backend-windows shard ${{ matrix.shard }}
@@ -693,7 +700,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     # See the `backend` job for the rationale and the read-only token requirement.
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -744,12 +751,12 @@ jobs:
           key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/tagger_plugins/wd14.py', 'pixlstash/tagger_plugins/pixlstash_tagger.py', 'pixlstash/tagger_plugins/florence2.py') }}
           restore-keys: hf-models-${{ runner.os }}-
 
-      - name: OS-sensitive backend tests (shard ${{ matrix.shard }} of 2)
+      - name: OS-sensitive backend tests (shard ${{ matrix.shard }} of 4)
         shell: bash
         env:
           CI_SHARD: ${{ matrix.shard }}
         run: >-
-          python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/2"
+          python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/4"
           tests/test_migrations.py
           tests/test_snapshots.py
           tests/test_restore.py
@@ -773,26 +780,5 @@ jobs:
           tests/test_watch_folder_worker.py
           tests/test_work_planner.py
 
-  # Aggregate status for Windows, for the same branch-protection reason as
-  # `build`.
-  build-windows:
-    name: build-windows
-    if: always()
-    needs: [backend_windows]
-    runs-on: ubuntu-latest
-    steps:
-      # `success` only — `skipped` must fail here for the same reason as in
-      # `build`: this is a blocking gate, so a filter that stopped the shards
-      # from running must not leave a green required check behind. (CSO
-      # condition F2.)
-      - name: Require every Windows shard to have succeeded
-        env:
-          RESULT: ${{ needs.backend_windows.result }}
-        run: |
-          set -euo pipefail
-          echo "backend-windows result: $RESULT"
-          if [ "$RESULT" != "success" ]; then
-            echo "::error::backend-windows reported '$RESULT' (must be 'success')."
-            exit 1
-          fi
-          echo "Windows shards passed."
+  # The `build-windows` aggregator over this job was removed with `build` in
+  # #796 — see the note where `build` used to be, above `e2e`.

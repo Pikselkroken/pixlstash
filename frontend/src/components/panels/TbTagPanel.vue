@@ -197,7 +197,7 @@
           role="combobox"
           aria-autocomplete="list"
           aria-controls="tb-tag-suggestions"
-          :aria-expanded="suggestionsOpen ? 'true' : 'false'"
+          :aria-expanded="suggestionsVisible ? 'true' : 'false'"
           :aria-activedescendant="activeSuggestionId"
           @keydown.enter.prevent="applyTag"
           @keydown="handleTagKey"
@@ -294,7 +294,7 @@
   <!-- Autocomplete dropdown (teleported to body) -->
   <Teleport to="body">
     <div
-      v-if="suggestionsOpen && tagInputRect"
+      v-if="suggestionsVisible"
       id="tb-tag-suggestions"
       class="sb-tag-autocomplete-dropdown"
       role="listbox"
@@ -305,6 +305,9 @@
         width: `${tagInputRect.width}px`,
       }"
     >
+      <!-- mousedown only keeps the input from blurring; selection happens on
+           click, so a tap works on touch and a press-and-drag-away does not
+           write the tag. -->
       <div
         v-for="(item, i) in tagSuggestions"
         :id="`tb-tag-suggestion-${i}`"
@@ -315,7 +318,8 @@
         ]"
         role="option"
         :aria-selected="i === tagSuggestionIndex"
-        @mousedown.prevent="selectTagSuggestion(item)"
+        @mousedown.prevent
+        @click="selectTagSuggestion(item)"
       >
         {{ item.tag }}
         <span v-if="i === 0" class="sb-tag-autocomplete-tab-hint">TAB</span>
@@ -800,8 +804,16 @@ const suggestionsOpen = computed(
     tagSuggestions.value.length > 0 && dismissedFor.value !== tagInput.value,
 );
 
+// What the combobox is allowed to claim. `tagInputRect` only lands on the next
+// tick, so gating the ARIA on `suggestionsOpen` alone told assistive tech the
+// list was expanded, and pointed `aria-activedescendant` at an option id, for a
+// tick in which no listbox existed in the DOM.
+const suggestionsVisible = computed(
+  () => suggestionsOpen.value && Boolean(tagInputRect.value),
+);
+
 const activeSuggestionId = computed(() =>
-  suggestionsOpen.value && tagSuggestionIndex.value >= 0
+  suggestionsVisible.value && tagSuggestionIndex.value >= 0
     ? `tb-tag-suggestion-${tagSuggestionIndex.value}`
     : null,
 );
