@@ -225,24 +225,47 @@ def test_planner_thread_survives_concurrent_finder_mutation(caplog):
 
 
 def test_a_raising_finder_does_not_silently_kill_the_planner(caplog):
-    """A cycle that raises must be reported and the loop must keep running."""
+    """A raising finder must be reported, and cost only its own turn.
+
+    Three finders, not one: a single-finder planner cannot see the real damage.
+    ``_finder_order_idx`` advances only on a successful submit or in the
+    ``not submitted_any`` tail, so catching the exception around the whole cycle
+    parked the order index on the raiser and every finder behind it stopped
+    being swept for the life of the process, while ``is_running()`` went on
+    answering True.
+    """
+    swept = []
 
     class _ExplodingFinder(_IdleFinder):
         def find_task(self):
+            swept.append(self.finder_name())
             raise RuntimeError("finder blew up")
 
+    class _SweptFinder(_IdleFinder):
+        def find_task(self):
+            swept.append(self.finder_name())
+            return None
+
     planner = WorkPlanner(
-        task_runner=_NullRunner(), task_finders=[_ExplodingFinder("Boom")]
+        task_runner=_NullRunner(),
+        task_finders=[
+            _ExplodingFinder("Boom"),
+            _SweptFinder("Behind1"),
+            _SweptFinder("Behind2"),
+        ],
     )
     planner.MIN_INTERVAL_S = 0.01
     planner.MAX_INTERVAL_S = 0.01
     planner.start()
     try:
         deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline and "finder blew up" not in caplog.text:
+        while time.monotonic() < deadline and not {"Behind1", "Behind2"} <= set(swept):
             time.sleep(0.05)
         assert planner.is_running(), "the planner thread died on a finder exception"
         assert "finder blew up" in caplog.text, "the failure was never reported"
+        assert {"Behind1", "Behind2"} <= set(swept), (
+            f"the finders behind the raiser were never swept: {sorted(set(swept))}"
+        )
     finally:
         _stopped(planner)
 
@@ -320,6 +343,130 @@ def test_detach_finders_prunes_every_structure_and_marks_exhausted():
     # depends_on() it would block for ever unless it counts as exhausted.
     assert planner._finder_exhausted["TagFinder"] is True
     assert planner.detach_finders([TaskType.TAGGER]) == set(), "detach is idempotent"
+
+
+def test_a_dependent_finder_unblocks_when_its_blocker_is_detached():
+    """The outcome the exhausted-marking promises, not just the flag being written.
+
+    ``detach_finders`` used to pop the TaskType to name mapping before writing
+    ``_finder_exhausted[name]``, so ``depends_on()`` resolution fell through to
+    its ``str(task_type)`` default, never found the flag, and blocked the
+    dependent finder for ever.
+    """
+
+    class _DependentFinder(_IdleFinder):
+        def depends_on(self) -> list:
+            return [TaskType.TAGGER]
+
+    swept = []
+    tagger = _IdleFinder("TagFinder")
+    dependent = _DependentFinder("DependentFinder")
+    dependent.find_task = lambda: swept.append("DependentFinder") and None
+
+    planner = WorkPlanner(
+        task_runner=_NullRunner(),
+        task_finders={
+            TaskType.TAGGER: tagger,
+            TaskType.DESCRIPTION: dependent,
+        },
+    )
+
+    # A blocker with work in flight blocks its dependent.
+    planner._inflight_by_finder["TagFinder"] = 1
+    assert planner._run_finders_once() is False
+    assert swept == [], "the dependent ran while its blocker still had work"
+
+    assert planner.detach_finders([TaskType.TAGGER]) == {"TagFinder"}
+    planner._inflight_by_finder["TagFinder"] = 0
+
+    assert planner._run_finders_once() is False
+    assert swept == ["DependentFinder"], (
+        "the dependent stayed blocked on a finder that will never report again"
+    )
+
+
+class _TwoSlotOneTaskFinder(_OneShotFinder):
+    """One task, two in-flight slots, so one cycle both submits and runs dry."""
+
+    def max_inflight_tasks(self) -> int:
+        return 2
+
+
+def test_the_drain_fires_when_the_last_task_finishes_before_the_finder_runs_dry():
+    """``on_all_tasks_complete()`` must not depend on which edge comes first.
+
+    ``exhausted`` is set only when ``find_task()`` returns None, which is after
+    the in-flight count reaches zero whenever the last task completes quickly.
+    The completion edge then computed ``all_done`` as ``(0 == 0) and False`` and
+    the drain was missed entirely, so the tagger's CUDA arena stayed held.
+    """
+    runner = _FastCompleteRunner()
+    finder = _OneShotFinder()
+    drained = []
+    finder.on_all_tasks_complete = lambda: drained.append("drained")
+    planner = WorkPlanner(task_runner=runner, task_finders=[finder])
+    # Complete the task inside submit(), so in-flight hits zero while the finder
+    # has not yet reported that it is out of work.
+    runner.on_submit = lambda task: planner.on_task_complete(task, None)
+
+    assert planner._run_finders_once() is True
+    assert drained == ["drained"], "the drain was missed on this edge ordering"
+
+    assert planner._run_finders_once() is False
+    assert drained == ["drained"], "the drain fired more than once per burst"
+
+
+def test_the_drain_still_fires_on_the_last_task_completing():
+    """Positive control for the other edge ordering, which already worked."""
+    runner = _FastCompleteRunner()
+    finder = _TwoSlotOneTaskFinder()
+    drained = []
+    finder.on_all_tasks_complete = lambda: drained.append("drained")
+    planner = WorkPlanner(task_runner=runner, task_finders=[finder])
+    submitted_tasks = []
+    runner.on_submit = submitted_tasks.append
+
+    # The spare slot lets the same cycle submit the one task and then see the
+    # finder run dry, so exhausted is set while the task is still in flight.
+    assert planner._run_finders_once() is True
+    assert drained == [], "the drain fired while a task was still in flight"
+
+    planner.on_task_complete(submitted_tasks[0], None)
+    assert drained == ["drained"], "the drain was missed on the completion edge"
+
+
+def test_the_drain_is_skipped_when_a_new_task_lands_while_the_claims_release():
+    """Releasing the claims is what lets the loop thread take the next task.
+
+    ``all_done`` was computed at the top of ``on_task_complete``, the lock was
+    dropped, the finder released its claims, and only then was
+    ``on_all_tasks_complete()`` called. For MissingTagFinder that is a GPU
+    session teardown, and it landed on the task the loop thread had taken in
+    between.
+    """
+    runner = _FastCompleteRunner()
+    finder = _TwoSlotOneTaskFinder()
+    drained = []
+    finder.on_all_tasks_complete = lambda: drained.append("drained")
+    planner = WorkPlanner(task_runner=runner, task_finders=[finder])
+    submitted_tasks = []
+    runner.on_submit = submitted_tasks.append
+
+    assert planner._run_finders_once() is True
+    assert drained == []
+
+    def take_a_new_task_while_releasing(task, error):
+        # Exactly the bookkeeping the loop thread does when it submits, run in
+        # the window the re-validation exists to cover.
+        with planner._lock:
+            planner._inflight_by_finder["TestFinder"] = 1
+            planner._finder_exhausted["TestFinder"] = False
+            planner._all_done_pending["TestFinder"] = True
+
+    finder.on_task_complete = take_a_new_task_while_releasing
+
+    planner.on_task_complete(submitted_tasks[0], None)
+    assert drained == [], "the drain tore the engine down under a live task"
 
 
 class _ClaimedTask(BaseTask):
@@ -684,3 +831,40 @@ def test_snapshot_scrub_progress_is_counted_in_archives_not_pictures(tmp_path):
 
     assert (total, remaining) == (5, 3)
     assert max(total - remaining, 0) == 2, "two archives are genuinely done"
+
+
+class _SubmitRaisesRunner:
+    """A runner whose ``submit()`` always fails, with the planner still live."""
+
+    def submit(self, task):
+        raise RuntimeError("runner refused the task")
+
+
+def test_a_failed_submit_does_not_arm_the_drain_for_work_that_never_ran():
+    """`on_all_tasks_complete()` is a burst-ended signal, not a cycle-ended one.
+
+    `_all_done_pending` is armed *before* `submit()`, because a runner that
+    completes synchronously calls back before `submit()` returns. That arming
+    has to be undone when the submit fails: nothing ran, so the burst never
+    earned its callback. Left armed, the flag is claimed by the next
+    `find_task() -> None` — the finder reports no work, in-flight is zero,
+    exhausted is true — and the drain fires for a task that was never submitted.
+    For the tagger that means tearing down a CUDA arena that was never built.
+    """
+    finder = _OneShotFinder()
+    drained = []
+    finder.on_all_tasks_complete = lambda: drained.append("drained")
+    planner = WorkPlanner(task_runner=_SubmitRaisesRunner(), task_finders=[finder])
+
+    # The sweep catches the finder's failure and carries on -- that is this
+    # PR's subject -- so nothing propagates here.
+    planner._run_finders_once()
+
+    assert planner._all_done_pending.get("TestFinder", False) is False, (
+        "a failed submit left the drain armed"
+    )
+
+    # The next sweep finds no work. Nothing was ever submitted, so nothing is
+    # owed a completion callback.
+    assert planner._run_finders_once() is False
+    assert drained == [], f"drain fired for work that never ran: {drained}"

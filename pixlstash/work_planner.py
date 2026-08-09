@@ -10,6 +10,14 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+class _PlannerStopping(Exception):
+    """Raised inside a finder's turn when shutdown began part-way through it.
+
+    Distinguishes "abandon the whole cycle" from the finder failures the cycle
+    is meant to survive, which are logged and skipped so the sweep continues.
+    """
+
+
 class WorkPlanner:
     """Central planner that discovers tasks through registered task finders."""
 
@@ -186,6 +194,12 @@ class WorkPlanner:
         # dependent finders are blocked until the finder has been given a chance
         # to run and confirmed it has nothing to do.
         self._finder_exhausted: dict[str, bool] = {}
+        # Armed when a finder's task is submitted, disarmed by whichever edge
+        # first sees the finder both exhausted and idle. Without it,
+        # on_all_tasks_complete() was announced only from the task-completion
+        # edge and was missed entirely whenever the last task finished before
+        # the finder reported that it had run out of work.
+        self._all_done_pending: dict[str, bool] = {}
         self._lock = threading.Lock()
         # Serialises start()/stop() so a restart cannot interleave with a
         # shutdown that is still joining the outgoing thread.
@@ -251,11 +265,16 @@ class WorkPlanner:
         used to race the loop's own read. Detached finders are marked exhausted
         so a finder that `depends_on()` one of them is not blocked for ever
         waiting for a report that will never come again.
+
+        The `_finder_name_by_task_type` entry is deliberately kept: it is how
+        `depends_on()` resolves a TaskType to the name `_finder_exhausted` is
+        keyed by. Popping it made the exhausted flag written below unreachable,
+        so the dependent finder blocked for ever anyway.
         """
         removed = set()
         with self._lock:
             for task_type in task_types:
-                name = self._finder_name_by_task_type.pop(task_type, None)
+                name = self._finder_name_by_task_type.get(task_type)
                 if not name:
                     continue
                 finder = self._task_finders_by_name.pop(name, None)
@@ -283,7 +302,6 @@ class WorkPlanner:
 
     def on_task_complete(self, task, error):
         finder_name = None
-        all_done = False
         with self._lock:
             finder_name = self._finder_by_task_id.pop(getattr(task, "id", None), None)
             if finder_name:
@@ -291,7 +309,6 @@ class WorkPlanner:
                 new_inflight = max(0, inflight_count - 1)
                 self._inflight_by_finder[finder_name] = new_inflight
                 is_exhausted = self._finder_exhausted.get(finder_name, False)
-                all_done = new_inflight == 0 and is_exhausted
         if finder_name:
             _GPU_FINDERS = {"MissingTagFinder", "MissingFaceExtractionFinder"}
             if new_inflight == 0 and not is_exhausted and finder_name in _GPU_FINDERS:
@@ -311,15 +328,14 @@ class WorkPlanner:
                         finder_name,
                         exc,
                     )
-                if all_done:
-                    try:
-                        finder.on_all_tasks_complete()
-                    except Exception as exc:
-                        logger.warning(
-                            "Finder all-complete callback failed for %s: %s",
-                            finder_name,
-                            exc,
-                        )
+                # Re-read the state under the lock rather than trusting the
+                # value computed at the top: releasing the claims above is what
+                # makes this finder's pictures selectable again, so the loop
+                # thread can have taken a new task in between and the drain
+                # callback (a GPU session teardown for MissingTagFinder) would
+                # land on it.
+                if self._claim_drain(finder_name):
+                    self._notify_all_tasks_complete(finder, finder_name)
         self._wake.set()
 
     def _run(self):
@@ -370,98 +386,178 @@ class WorkPlanner:
         for offset in range(finder_count):
             idx = (order_idx + offset) % finder_count
             finder = finders[idx]
-            finder_name = finder.finder_name()
-            max_inflight = max(1, int(finder.max_inflight_tasks()))
+            try:
+                submitted_any = self._sweep_finder(
+                    finder, idx, finder_count, submitted_any
+                )
+            except _PlannerStopping:
+                return submitted_any
+            except Exception:
+                # A finder that raises must cost only its own turn. Catching
+                # this around the whole cycle instead abandoned the rest of the
+                # sweep, and _finder_order_idx advances only on a successful
+                # submit or in the tail below, so it stayed parked on the raiser
+                # and every finder behind it stopped being swept for the life of
+                # the process while is_running() went on reporting healthy.
+                logger.exception(
+                    "WorkPlanner finder %s raised; skipping it for this cycle "
+                    "and continuing with the rest.",
+                    type(finder).__name__,
+                )
 
-            blocking_finders = finder.depends_on()
-            if blocking_finders:
+        if not submitted_any:
+            with self._lock:
+                self._finder_order_idx = (self._finder_order_idx + 1) % finder_count
+        return submitted_any
+
+    def _sweep_finder(
+        self, finder, idx: int, finder_count: int, submitted_any: bool
+    ) -> bool:
+        """Give one finder its turn and return the updated *submitted_any*.
+
+        Raises:
+            _PlannerStopping: Shutdown began mid-turn; the caller must abandon
+                the whole cycle rather than move on to the next finder.
+        """
+        finder_name = finder.finder_name()
+        max_inflight = max(1, int(finder.max_inflight_tasks()))
+
+        blocking_finders = finder.depends_on()
+        if blocking_finders:
+            with self._lock:
                 blocking_names = [
                     self._finder_name_by_task_type.get(tt, str(tt))
                     for tt in blocking_finders
                 ]
-                with self._lock:
-                    if any(
-                        self._inflight_by_finder.get(name, 0) > 0
-                        or not self._finder_exhausted.get(name, False)
-                        for name in blocking_names
-                    ):
-                        continue
-
-            # Fill all available inflight slots for this finder in one pass so
-            # that fast-completing tasks (e.g. custom tagger at ~100ms) don't
-            # leave the GPU idle while the planner sleeps MIN_INTERVAL_S between
-            # cycles.  Previously, a single submit + return True meant inflight
-            # was always 1 regardless of max_inflight.
-            while True:
-                with self._lock:
-                    inflight_count = int(self._inflight_by_finder.get(finder_name, 0))
-                if inflight_count >= max_inflight:
-                    break
-
-                task = finder.find_task()
-                if task is None:
-                    with self._lock:
-                        self._finder_exhausted[finder_name] = True
-                    break
-                # A finder may block in database or filesystem work long enough
-                # for stop()'s bounded join to return. Do not submit the task it
-                # found after shutdown has begun and the runner may already be
-                # stopped by Vault.stop().
-                if self._stop.is_set():
-                    self._release_unsubmitted(
-                        finder, task, "the planner stopped before it could submit"
-                    )
+                if any(
+                    self._inflight_by_finder.get(name, 0) > 0
+                    or not self._finder_exhausted.get(name, False)
+                    for name in blocking_names
+                ):
                     return submitted_any
 
-                task_id = getattr(task, "id", None)
+        # Fill all available inflight slots for this finder in one pass so
+        # that fast-completing tasks (e.g. custom tagger at ~100ms) don't
+        # leave the GPU idle while the planner sleeps MIN_INTERVAL_S between
+        # cycles.  Previously, a single submit + return True meant inflight
+        # was always 1 regardless of max_inflight.
+        while True:
+            with self._lock:
+                inflight_count = int(self._inflight_by_finder.get(finder_name, 0))
+            if inflight_count >= max_inflight:
+                break
+
+            task = finder.find_task()
+            if task is None:
+                with self._lock:
+                    self._finder_exhausted[finder_name] = True
+                # The other edge into "exhausted and idle". When the last task
+                # completed before the finder ran out of work, the completion
+                # edge saw exhausted=False and nobody ever announced the drain,
+                # so the GPU arena stayed held until a later full cycle.
+                if self._claim_drain(finder_name):
+                    self._notify_all_tasks_complete(finder, finder_name)
+                break
+            # A finder may block in database or filesystem work long enough
+            # for stop()'s bounded join to return. Do not submit the task it
+            # found after shutdown has begun and the runner may already be
+            # stopped by Vault.stop().
+            if self._stop.is_set():
+                self._release_unsubmitted(
+                    finder, task, "the planner stopped before it could submit"
+                )
+                raise _PlannerStopping
+
+            task_id = getattr(task, "id", None)
+            with self._lock:
+                current_inflight = int(self._inflight_by_finder.get(finder_name, 0))
+                self._inflight_by_finder[finder_name] = current_inflight + 1
+                self._finder_exhausted[finder_name] = False
+                # Armed *before* submit, because a runner that completes the
+                # task synchronously calls back before submit() returns and the
+                # flag has to be visible by then. Captured so the failure path
+                # can put it back: see the rollback below.
+                previous_all_done_pending = self._all_done_pending.get(
+                    finder_name, False
+                )
+                self._all_done_pending[finder_name] = True
+                if task_id:
+                    self._finder_by_task_id[task_id] = finder_name
+
+            try:
+                submitted_task_id = self._task_runner.submit(task)
+            except Exception as submit_exc:
                 with self._lock:
                     current_inflight = int(self._inflight_by_finder.get(finder_name, 0))
-                    self._inflight_by_finder[finder_name] = current_inflight + 1
-                    self._finder_exhausted[finder_name] = False
-                    if task_id:
-                        self._finder_by_task_id[task_id] = finder_name
-
-                try:
-                    submitted_task_id = self._task_runner.submit(task)
-                except Exception as submit_exc:
-                    with self._lock:
-                        current_inflight = int(
-                            self._inflight_by_finder.get(finder_name, 0)
-                        )
-                        self._inflight_by_finder[finder_name] = max(
-                            0,
-                            current_inflight - 1,
-                        )
-                        if task_id:
-                            self._finder_by_task_id.pop(task_id, None)
-                    self._release_unsubmitted(
-                        finder, task, f"submit() raised: {submit_exc}"
+                    self._inflight_by_finder[finder_name] = max(
+                        0,
+                        current_inflight - 1,
                     )
-                    # Close the remaining race between the stop check above and
-                    # TaskRunner.submit(). A stopped runner is expected during
-                    # vault teardown; any submission failure while still live
-                    # remains a real error and is re-raised.
-                    if self._stop.is_set():
-                        return submitted_any
-                    raise
-
-                if submitted_task_id and submitted_task_id != task_id:
-                    with self._lock:
-                        if task_id:
-                            self._finder_by_task_id.pop(task_id, None)
-                        self._finder_by_task_id[submitted_task_id] = finder_name
-
-                self._finder_order_idx = (idx + 1) % finder_count
-                logger.debug(
-                    "WorkPlanner submitted task id=%s via finder=%s",
-                    submitted_task_id,
-                    finder_name,
+                    # Disarm, or leave it as it was. Nothing was submitted, so
+                    # this burst never earned an `on_all_tasks_complete()`; a
+                    # flag left armed here is claimed later by the first
+                    # `find_task() -> None`, firing the callback for work that
+                    # never ran. Restoring rather than clearing keeps a burst
+                    # that was already legitimately armed by an earlier task.
+                    self._all_done_pending[finder_name] = previous_all_done_pending
+                    if task_id:
+                        self._finder_by_task_id.pop(task_id, None)
+                self._release_unsubmitted(
+                    finder, task, f"submit() raised: {submit_exc}"
                 )
-                submitted_any = True
+                # Close the remaining race between the stop check above and
+                # TaskRunner.submit(). A stopped runner is expected during
+                # vault teardown; any submission failure while still live
+                # remains a real error and is re-raised.
+                if self._stop.is_set():
+                    raise _PlannerStopping from submit_exc
+                raise
 
-        if not submitted_any:
-            self._finder_order_idx = (self._finder_order_idx + 1) % finder_count
+            if submitted_task_id and submitted_task_id != task_id:
+                with self._lock:
+                    if task_id:
+                        self._finder_by_task_id.pop(task_id, None)
+                    self._finder_by_task_id[submitted_task_id] = finder_name
+
+            with self._lock:
+                self._finder_order_idx = (idx + 1) % finder_count
+            logger.debug(
+                "WorkPlanner submitted task id=%s via finder=%s",
+                submitted_task_id,
+                finder_name,
+            )
+            submitted_any = True
+
         return submitted_any
+
+    def _claim_drain(self, finder_name: str) -> bool:
+        """Whether this caller owns the finder's ``on_all_tasks_complete()`` call.
+
+        True at most once per burst of work: armed when a task is submitted,
+        and claimed by whichever of the two edges -- the last task completing,
+        or the finder reporting no more work -- first observes the finder both
+        exhausted and idle. The whole decision is made under ``_lock`` so the
+        two edges cannot both fire it.
+        """
+        with self._lock:
+            if not self._all_done_pending.get(finder_name, False):
+                return False
+            if int(self._inflight_by_finder.get(finder_name, 0)) != 0:
+                return False
+            if not self._finder_exhausted.get(finder_name, False):
+                return False
+            self._all_done_pending[finder_name] = False
+            return True
+
+    def _notify_all_tasks_complete(self, finder, finder_name: str):
+        try:
+            finder.on_all_tasks_complete()
+        except Exception as exc:
+            logger.warning(
+                "Finder all-complete callback failed for %s: %s",
+                finder_name,
+                exc,
+            )
 
     def _release_unsubmitted(self, finder, task, reason: str):
         """Hand a task the planner will never submit back to its finder.
