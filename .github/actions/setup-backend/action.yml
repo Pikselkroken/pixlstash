@@ -6,6 +6,9 @@ description: >-
   in particular so they all compute the same cache keys and therefore all hit
   the same warm caches.
 
+  The model cache is restored, never written, here — see ./model-cache. Exactly
+  one job writes it: `warm_models` in ci.yml.
+
 runs:
   using: composite
   steps:
@@ -64,24 +67,5 @@ runs:
             ;;
         esac
 
-    - name: Cache HuggingFace models
-      uses: actions/cache@v4
-      with:
-        # Two distinct on-disk locations, both required:
-        #  * ~/.cache/huggingface — the HF hub cache used by CLIP/SBert/
-        #    Florence via from_pretrained_local_first.
-        #  * ~/.local/share/pixlstash/downloaded_models — platformdirs
-        #    user_data_dir, where the WD14 and PixlStash taggers land because
-        #    they call hf_hub_download(local_dir=...), which bypasses the hub
-        #    cache entirely. The old key cached only the hub dir and was thus
-        #    a no-op for the taggers that actually 429'd.
-        # A warm cache makes needs_download() (a pure file-existence check)
-        # return False, so download() — and its HEAD revalidation, the call
-        # that returns 429 — is never issued. Key off the tagger plugins so a
-        # model/revision bump busts the cache; restore-keys keeps it warm
-        # across unrelated commits.
-        path: |
-          ~/.cache/huggingface
-          ~/.local/share/pixlstash/downloaded_models
-        key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/tagger_plugins/wd14.py', 'pixlstash/tagger_plugins/pixlstash_tagger.py', 'pixlstash/tagger_plugins/florence2.py') }}
-        restore-keys: hf-models-${{ runner.os }}-
+    - name: Restore the HuggingFace model cache
+      uses: ./.github/actions/model-cache
