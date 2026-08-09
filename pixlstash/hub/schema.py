@@ -433,6 +433,90 @@ SCHEMA_MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
 )
 
 
+def _rebuild_model_with_kind_check(conn: sqlite3.Connection) -> None:
+    """Add the adapter-kind CHECK to an existing ``model`` table, rows and all.
+
+    SQLite has no ``ALTER TABLE ADD CONSTRAINT``, so the constraint can only
+    arrive by rebuilding: create the new shape, copy every row into it, drop the
+    old table, rename. The copy is what makes this cheap: ``model.id`` and
+    ``sha256`` come across unchanged, so every ``model_file`` row still points
+    at its content row and nothing has to be re-derived. Dropping the shelf
+    instead would re-hash every adapter and re-queue every checkpoint through
+    ``MissingCheckpointHashFinder`` at up to 24 GB each, to recover digests the
+    hub already had.
+
+    ``model_file`` is carried out and back in Python rather than left in place
+    because foreign keys are on for the whole migration
+    (``HubDatabase._configure``): ``DROP TABLE model`` runs an implicit DELETE
+    whose FK violations are checked immediately, so a child row referencing it
+    aborts the drop. ``PRAGMA defer_foreign_keys`` does not help, because
+    re-creating the parent by rename never decrements the counter that delete
+    increments, and ``PRAGMA foreign_keys=OFF`` is a silent no-op inside a
+    transaction.
+
+    One SAVEPOINT around the lot, because this runs both inside the migration's
+    transaction and (via the tail re-run) outside one. That is the difference
+    between a crash mid-rebuild and a hub whose ``model_file`` rows are gone.
+
+    Raises:
+        sqlite3.IntegrityError: A stored adapter row has no ``kind`` and the new
+            CHECK rejects it. No producer emits that row, so it is a genuine
+            surprise and is left to surface rather than worked around.
+    """
+    # Columns are named from the *stored* tables, not assumed to line up
+    # positionally with the DDL above: a column this build does not know about
+    # fails the copy loudly instead of being silently dropped.
+    model_columns = ", ".join(
+        row[1] for row in conn.execute("PRAGMA table_info(model)").fetchall()
+    )
+    file_columns = [
+        row[1] for row in conn.execute("PRAGMA table_info(model_file)").fetchall()
+    ]
+    file_names = ", ".join(file_columns)
+    saved_files = conn.execute(f"SELECT {file_names} FROM model_file").fetchall()
+
+    offenders = conn.execute(
+        "SELECT COUNT(*) FROM model WHERE file_kind = 'adapter' AND kind IS NULL"
+    ).fetchone()[0]
+    if offenders:
+        logger.error(
+            "%d adapter row(s) in this hub have no kind, which the new CHECK "
+            "rejects, so the model table cannot be rebuilt. Nothing writes that "
+            "row, so this is unexpected: inspect them with SELECT id, filename "
+            "FROM model WHERE file_kind = 'adapter' AND kind IS NULL.",
+            offenders,
+        )
+
+    logger.info(
+        "Rebuilding the model table to add the adapter-kind CHECK, carrying "
+        "%d model row(s) and %d location row(s) across.",
+        conn.execute("SELECT COUNT(*) FROM model").fetchone()[0],
+        len(saved_files),
+    )
+    conn.execute("SAVEPOINT model_kind_check")
+    try:
+        conn.execute("DROP TABLE model_file")
+        conn.execute(
+            _V2_MODEL.replace("IF NOT EXISTS model", "IF NOT EXISTS model_new")
+        )
+        conn.execute(
+            f"INSERT INTO model_new ({model_columns}) SELECT {model_columns} FROM model"
+        )
+        conn.execute("DROP TABLE model")
+        conn.execute("ALTER TABLE model_new RENAME TO model")
+        conn.execute(_V2_MODEL_FILE)
+        conn.executemany(
+            f"INSERT INTO model_file ({file_names}) "
+            f"VALUES ({', '.join('?' * len(file_columns))})",
+            saved_files,
+        )
+    except sqlite3.Error:
+        conn.execute("ROLLBACK TO model_kind_check")
+        conn.execute("RELEASE model_kind_check")
+        raise
+    conn.execute("RELEASE model_kind_check")
+
+
 def _apply_v2(conn: sqlite3.Connection) -> None:
     """Add v2 library bootstrap state without rewriting an existing hub."""
     columns = {row[1] for row in conn.execute("PRAGMA table_info(library)").fetchall()}
@@ -502,21 +586,15 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         for table in _V2_SUPERSEDED_SHELF_TABLES:
             conn.execute(f"DROP TABLE IF EXISTS {table}")
 
-    # The `kind` CHECK was added after the reshape and SQLite has no
-    # ALTER TABLE ADD CONSTRAINT, so a hub that already holds the pre-CHECK
-    # `model` table needs the same drop-and-rescan treatment. Legitimate for
-    # the same reason and only while v2 is unreleased: nothing a person typed
-    # lives in these two tables yet (the shelf UI is unbuilt), `model_folder`
-    # survives, and the next scan refills them from disk. Child first, so the
-    # FK the drop enforces has nothing pointing at it.
+    # The `kind` CHECK was added after the reshape, and unlike the tables above
+    # `model` holds rows worth keeping by then, so it is rebuilt rather than
+    # dropped. Keyed on the stored DDL, so it is false on a fresh hub (the
+    # CREATE below already carries the CHECK) and false on every re-run after
+    # the rebuild. The indexes the drops take with them are recreated by the
+    # statement loop that follows.
     model_ddl = existing.get("model")
     if model_ddl is not None and "kind IS NOT NULL" not in model_ddl:
-        logger.info(
-            "Rebuilding the model table to pick up the adapter-kind CHECK; "
-            "the next folder scan refills it from disk."
-        )
-        conn.execute("DROP TABLE IF EXISTS model_file")
-        conn.execute("DROP TABLE IF EXISTS model")
+        _rebuild_model_with_kind_check(conn)
 
     for statement in _V2_MODEL_SHELF_TABLES:
         conn.execute(statement)
