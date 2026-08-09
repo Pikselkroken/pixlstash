@@ -1,3 +1,4 @@
+import threading
 import time
 
 import pytest
@@ -102,6 +103,10 @@ class _IdleFinder:
     def __init__(self, name: str, find_delay_s: float = 0.0):
         self._name = name
         self._find_delay_s = find_delay_s
+        # Interruptible delay. The wedged-thread tests use delays far longer
+        # than the join they are testing, so a plain sleep() left the planner
+        # thread alive for the rest of the pytest session — see _stopped().
+        self._release = threading.Event()
 
     def finder_name(self) -> str:
         return self._name
@@ -114,7 +119,7 @@ class _IdleFinder:
 
     def find_task(self):
         if self._find_delay_s:
-            time.sleep(self._find_delay_s)
+            self._release.wait(self._find_delay_s)
         return None
 
     def on_task_complete(self, task, error):
@@ -132,8 +137,19 @@ class _NullRunner:
 def _stopped(planner):
     planner._stop.set()
     planner._wake.set()
+    # Release any finder still parked in its artificial delay. The wedged
+    # cases deliberately outlast stop()'s bounded join, and a 30-second sleep
+    # the join cannot reach is a daemon thread that survives the whole session
+    # into interpreter finalization.
+    for finder in list(planner._task_finders):
+        release = getattr(finder, "_release", None)
+        if release is not None:
+            release.set()
     if planner._thread is not None:
         planner._thread.join(timeout=10)
+        assert not planner._thread.is_alive(), (
+            f"WorkPlanner thread outlived the test: {planner._thread!r}"
+        )
 
 
 def test_finder_removed_mid_cycle_does_not_kill_the_loop():

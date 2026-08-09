@@ -7,10 +7,14 @@ import json
 import math
 import socket
 import statistics
+import sys
+import threading
+import traceback
 import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+import pixlstash
 import pytest
 from _pytest.config.exceptions import UsageError
 from fastapi.testclient import TestClient
@@ -465,6 +469,120 @@ def _enforce_test_time_budget(session) -> None:
     session.exitstatus = 1
 
 
+# Both roots are needed. CI installs the package non-editable
+# (`pip install .[test,dev]`), so `pixlstash` runs from site-packages while
+# `tests/` runs from the checkout: a thread started inside product code has no
+# frame under the repo root at all, and matching only there would call it
+# third-party and let it through.
+_OWNED_ROOTS = (
+    Path(__file__).resolve().parent.parent,
+    Path(pixlstash.__file__).resolve().parent,
+)
+
+
+def _thread_stack(thread: threading.Thread) -> list:
+    """This thread's current stack, outermost frame first, or []."""
+    frame = sys._current_frames().get(thread.ident)
+    if frame is None:
+        return []
+    return traceback.extract_stack(frame)
+
+
+def _owned(filename: str) -> bool:
+    """Whether a frame's file is ours (the checkout or the installed package)."""
+    path = Path(filename).resolve()
+    return any(path.is_relative_to(root) for root in _OWNED_ROOTS)
+
+
+def _is_ours(stack: list) -> bool:
+    """Whether any frame in the stack belongs to code we own.
+
+    Ownership has to be read from the WHOLE stack, not the innermost frame:
+    a leaked database worker parked in ``queue.get()`` reports a stdlib
+    ``queue.py`` frame, while its entry point is ``pixlstash/database.py``.
+    """
+    return any(_owned(entry.filename) for entry in stack)
+
+
+def _enforce_no_leaked_threads(session) -> None:
+    """Fail the session on any thread of ours still alive when it ends.
+
+    A worker thread that outlives the session is a defect on its own: the
+    object that owns it was never closed, so whatever that object held —
+    a SQLAlchemy engine, pooled SQLite connections, an fd on vault.db — is
+    still live too. It is also the leading suspect for the Windows-only
+    SIGSEGV that fires *seconds after* a fully green pytest summary: CPython
+    kills surviving daemon threads mid-instruction during ``Py_FinalizeEx``,
+    and one that is inside ``sqlite3`` C code at that moment takes the process
+    down with an access violation, long after pytest has stopped watching.
+
+    Threads with no frame of ours anywhere in their stack are reported but not
+    failed on — a third-party pool we do not own is not ours to close.
+    """
+    survivors = [
+        (thread, _thread_stack(thread))
+        for thread in threading.enumerate()
+        if thread is not threading.main_thread() and thread.is_alive()
+    ]
+    if not survivors:
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is None:
+        return
+
+    ours = [(thread, stack) for thread, stack in survivors if _is_ours(stack)]
+    reporter.write_sep(
+        "=",
+        f"{len(survivors)} thread(s) still alive at session end",
+        red=bool(ours),
+        bold=bool(ours),
+    )
+    for thread, stack in survivors:
+        top = stack[-1] if stack else None
+        where = f"{top.filename}:{top.lineno} in {top.name}" if top else "<no frame>"
+        owner = "OURS" if _is_ours(stack) else "third-party"
+        reporter.write_line(f"  [{owner}] {thread.name} daemon={thread.daemon} {where}")
+        if _is_ours(stack):
+            for entry in stack:
+                if _owned(entry.filename):
+                    reporter.write_line(
+                        f"      {entry.filename}:{entry.lineno} in {entry.name}"
+                    )
+
+    if not ours:
+        return
+    reporter.write_line(
+        "Close the object that owns each thread above before the test that "
+        "created it returns. A daemon thread left running is killed "
+        "mid-instruction during interpreter finalization, which is how a green "
+        "run still exits 139 on Windows."
+    )
+    session.exitstatus = 1
+
+
+def _stop_tqdm_monitors() -> None:
+    """Shut down tqdm's background monitor threads.
+
+    tqdm starts a ``TMonitor`` daemon per tqdm class the moment any progress
+    bar exists, and never stops it — a full Windows-shard run ends with two of
+    them still ticking on a 10-second interval. They are third-party, so the
+    leak gate above does not fail on them, but a daemon thread that wakes
+    periodically is precisely what ``Py_FinalizeEx`` kills mid-instruction.
+    Reached through ``threading.enumerate()`` rather than ``tqdm.tqdm.monitor``
+    because each tqdm class (std, auto, the copies vendored by transformers and
+    huggingface_hub) keeps its own.
+    """
+    for thread in threading.enumerate():
+        if type(thread).__name__ != "TMonitor":
+            continue
+        try:
+            thread.exit()
+        except Exception as exc:
+            print(
+                f"Could not stop tqdm monitor {thread.name}: {exc!r}", file=sys.stderr
+            )
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
     """Release native model/session resources before interpreter teardown.
@@ -497,6 +615,10 @@ def pytest_sessionfinish(session, exitstatus):
         # Best-effort teardown: ignore cleanup failures during session shutdown.
         pass
 
+    _stop_tqdm_monitors()
+
     gc.collect()
+
+    _enforce_no_leaked_threads(session)
 
     _enforce_test_time_budget(session)
