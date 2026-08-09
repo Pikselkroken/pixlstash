@@ -24,179 +24,40 @@ entity's membership.
 
 Fixture shape (deliberately three projects, not two): set ``S`` and character
 ``C`` belong to ``{P1, P2}``; ``P3`` exists solely as the out-of-scope probe, so
-"403" can never be an artefact of the resource simply not existing.
+"403" can never be an artefact of the resource simply not existing. It is built
+by the autouse ``env`` fixture in this package's ``conftest.py``, which
+``test_generic_field_reader_allowlist.py`` next door asserts against too.
 """
 
-import contextlib
-import gc
 import io
-import json
-import os
-import tempfile
 import time
+import zlib
 
 import numpy as np
 import pytest
 from PIL import Image
-from sqlalchemy import func
-from sqlmodel import select
-from starlette.testclient import TestClient
+from sqlmodel import delete, select
 
-from pixlstash.db_models import Face, Picture, PictureLikeness
-from pixlstash.server import Server
-from tests.authz_guard import (  # noqa: F401
-    assert_real_route,
-    no_spa_fallback,
-    resolves_to_real_route,
+from pixlstash.db_models import (
+    Face,
+    Picture,
+    PictureLikeness,
 )
-from tests.utils import seed_likeness_stable, upload_pictures_and_wait
-
-API = "/api/v1"
+from pixlstash.db_models.picture_likeness import PictureLikenessQueue
+from tests.authz_guard import assert_real_route
+from tests.multi_project_authz.shared_env import (
+    API,
+    _bearer,
+    _enforcing,
+    _make_face,
+    _wait_faces_extracted,
+)
 
 # Every positive assertion here must reach a real route: the SPA catch-all answers
 # unmatched GETs with 200, which once made a whole-library BOLA vector's test
-# vacuous. See tests/authz_guard.py.
+# vacuous. See tests/authz_guard.py. The fixture itself is registered by this
+# package's conftest.
 pytestmark = pytest.mark.usefixtures("no_spa_fallback")
-
-
-@contextlib.contextmanager
-def _enforcing(server):
-    prev = server.authz._enforcing
-    server.authz._enforcing = True
-    try:
-        yield
-    finally:
-        server.authz._enforcing = prev
-
-
-def _bearer(token: str) -> dict:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _good_picture_files():
-    pictures_dir = os.path.join(os.path.dirname(__file__), "..", "pictures", "good")
-    results = []
-    for name in sorted(os.listdir(pictures_dir)):
-        path = os.path.join(pictures_dir, name)
-        ext = os.path.splitext(name)[1].lower()
-        if ext in {".png", ".jpg", ".jpeg", ".webp"}:
-            ct = "image/png" if ext == ".png" else "image/jpeg"
-            with open(path, "rb") as fh:
-                results.append((name, fh.read(), ct))
-    return results
-
-
-@pytest.fixture
-def env():
-    """Live server with 3 projects, a set and a character shared by P1+P2, and a
-    project-scoped READ token for each project."""
-    temp_dir = tempfile.TemporaryDirectory()
-    config_path = os.path.join(temp_dir.name, "server-config.json")
-    with open(config_path, "w") as fh:
-        fh.write(json.dumps({"port": 8000}))
-    server = Server(config_path)
-    server.__enter__()
-    try:
-        client = TestClient(server.api, raise_server_exceptions=True)
-        anon = TestClient(server.api, raise_server_exceptions=True)
-        r = client.post(
-            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
-        )
-        assert r.status_code == 200, r.text
-
-        files = [("file", (n, d, c)) for n, d, c in _good_picture_files()[:2]]
-        assert len(files) >= 2, "need >=2 test pictures"
-        # 120 s, not 30: this is the first import after a cold Server boot in
-        # this file, and on the shared Windows CI runner that start-up cost
-        # (ONNX session init, thumbnailing) blew a 30 s wall-clock bound while
-        # the import itself was healthy. Same reasoning as the recorded
-        # test_florence skip: a tight wall-clock bound on contended CI hardware
-        # is a flake generator, not a signal.
-        st = upload_pictures_and_wait(client, files, timeout_s=120)
-        assert st["status"] == "completed", st
-        pic_ids = [p["id"] for p in client.get(f"{API}/pictures").json()]
-        assert len(pic_ids) >= 2
-        pic_a, pic_b = pic_ids[0], pic_ids[1]
-
-        projects = {}
-        for label in ("P1", "P2", "P3"):
-            r = client.post(f"{API}/projects", json={"name": label})
-            assert r.status_code in (200, 201), r.text
-            projects[label] = r.json()["id"]
-
-        # Set S holds picture A and belongs to BOTH P1 and P2. The member is added
-        # before the project assignment so the PATCH reconciles picture-project
-        # membership for both projects in one pass.
-        r = client.post(f"{API}/picture_sets", json={"name": "SharedSet"})
-        assert r.status_code in (200, 201), r.text
-        set_id = r.json()["picture_set"]["id"]
-        r = client.post(f"{API}/picture_sets/{set_id}/members/{pic_a}")
-        assert r.status_code in (200, 201), r.text
-        r = client.patch(
-            f"{API}/picture_sets/{set_id}",
-            json={"project_ids": [projects["P1"], projects["P2"]]},
-        )
-        assert r.status_code == 200, r.text
-
-        # Character C belongs to BOTH P1 and P2 (created multi-project directly).
-        r = client.post(
-            f"{API}/characters",
-            json={
-                "name": "SharedChar",
-                "project_ids": [projects["P1"], projects["P2"]],
-            },
-        )
-        assert r.status_code == 200, r.text
-        char_id = r.json()["character"]["id"]
-
-        # Single-project control: belongs to P1 only, so a P2 token must be
-        # refused it — proving the widening did not become "any project wins".
-        r = client.post(
-            f"{API}/picture_sets",
-            json={"name": "P1OnlySet", "project_ids": [projects["P1"]]},
-        )
-        assert r.status_code in (200, 201), r.text
-        p1_only_set_id = r.json()["picture_set"]["id"]
-        r = client.post(
-            f"{API}/characters",
-            json={"name": "P1OnlyChar", "project_ids": [projects["P1"]]},
-        )
-        assert r.status_code == 200, r.text
-        p1_only_char_id = r.json()["character"]["id"]
-
-        def mint(resource_type, resource_id):
-            r = client.post(
-                f"{API}/users/me/token",
-                json={
-                    "description": f"{resource_type}:{resource_id}",
-                    "scope": "READ",
-                    "resource_type": resource_type,
-                    "resource_id": resource_id,
-                },
-            )
-            assert r.status_code == 200, r.text
-            return r.json()["token"]
-
-        yield {
-            "server": server,
-            "owner": client,
-            "anon": anon,
-            "pic_a": pic_a,
-            "pic_b": pic_b,
-            "projects": projects,
-            "set_id": set_id,
-            "char_id": char_id,
-            "p1_only_set_id": p1_only_set_id,
-            "p1_only_char_id": p1_only_char_id,
-            "tokens": {label: mint("project", pid) for label, pid in projects.items()},
-            # Exposed so a test can mint a character- / set-scoped token too: the
-            # `project_ids` narrowing (R1) has a different rung for those.
-            "mint": mint,
-        }
-    finally:
-        server.__exit__(None, None, None)
-        temp_dir.cleanup()
-        gc.collect()
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +169,12 @@ def test_picture_scope_follows_the_shared_set(env):
     """PICTURE_SCOPED consequence: the set's member picture is anchored in BOTH
     projects, so the P2 token reaches it; a non-member picture is still 403."""
     anon, tokens = env["anon"], env["tokens"]
+    # A refusal is only evidence of scope enforcement if the route exists: the
+    # scope checks sit ahead of routing, so a renamed or misspelled path answers
+    # a scoped token with the same 403 an in-scope refusal does.
+    assert_real_route(
+        env["server"].api, "GET", f"{API}/pictures/{env['pic_a']}/metadata"
+    )
     with _enforcing(env["server"]):
         r = anon.get(
             f"{API}/pictures/{env['pic_a']}/metadata", headers=_bearer(tokens["P2"])
@@ -893,6 +760,9 @@ def test_project_token_keeps_filtering_by_its_own_project(env):
         env["projects"],
     )
 
+    for path in _project_filter_routes(env):
+        assert_real_route(env["server"].api, "GET", path)
+
     for probe in (str(projects["P1"]), "UNASSIGNED"):
         for path in _project_filter_routes(env):
             r = owner.get(f"{path}?project_id={probe}")
@@ -1213,6 +1083,15 @@ def test_picture_search_and_likeness_group_rows_are_narrowed(env):
     ), "the scalar must be backfilled, or every assertion below is vacuous"
 
     def seed(session):
+        # The reset already emptied both tables; re-emptying them inside the
+        # seed transaction keeps the invariant local to the code that depends on
+        # it. There is deliberately no wait for the likeness pipeline to
+        # quiesce first: the finders that write this table are detached for the
+        # module's lifetime (`_detach_volatile_finders`), so there is nothing
+        # left to race with — and polling for quiescence is far slower than the
+        # per-test Server it replaced.
+        session.exec(delete(PictureLikeness))
+        session.exec(delete(PictureLikenessQueue))
         low, high = sorted([pic_a, pic_b])
         session.add(
             PictureLikeness(
@@ -1221,7 +1100,7 @@ def test_picture_search_and_likeness_group_rows_are_narrowed(env):
         )
         session.commit()
 
-    seed_likeness_stable(env["server"], seed)
+    env["server"].vault.db.run_task(seed)
 
     for path in (f"{API}/pictures/likeness-groups", f"{API}/pictures/search"):
         assert_real_route(env["server"].api, "GET", path)
@@ -1261,40 +1140,6 @@ def test_picture_search_and_likeness_group_rows_are_narrowed(env):
         set_headers = _bearer(mint("picture_set", env["set_id"]))
         assert groups(anon, set_headers) is None
         assert search(anon, set_headers) is None
-
-
-def _wait_faces_extracted(server, picture_ids, timeout_s=60.0):
-    """Block until background face extraction has finished with *picture_ids*.
-
-    Uploading a picture queues an extraction pass that ends by writing either
-    the detected faces or a ``face_index=-1`` sentinel, so "the picture has at
-    least one face row" is the signal that the pass is done. Waiting for it is
-    not optional: a face seeded *before* the pass lands is deleted underneath
-    the test (``Picture.faces`` cascades ``delete-orphan``), which was observed
-    here as the reference face vanishing between two requests in the same test.
-    """
-
-    def _counts(session):
-        return {
-            int(pid): int(count)
-            for pid, count in session.exec(
-                select(Face.picture_id, func.count())
-                .where(Face.picture_id.in_([int(p) for p in picture_ids]))
-                .group_by(Face.picture_id)
-            ).all()
-        }
-
-    start = time.time()
-    counts = {}
-    while time.time() - start < timeout_s:
-        counts = server.vault.db.run_immediate_read_task(_counts)
-        if all(counts.get(int(pid), 0) > 0 for pid in picture_ids):
-            return
-        time.sleep(0.25)
-    raise AssertionError(
-        f"face extraction did not finish for {list(picture_ids)} in {timeout_s}s; "
-        f"rows per picture: {counts}"
-    )
 
 
 def _seed_set_sort_inputs(server, picture_ids, character_id):
@@ -1368,6 +1213,10 @@ def _seed_set_sort_inputs(server, picture_ids, character_id):
             )
         ).all()
 
+    # These two readbacks were the guard against a background stage rewriting
+    # the seed mid-test. `_detach_volatile_finders` now removes those stages for
+    # the module's lifetime, so they can no longer fail on that account; they are
+    # kept as a plain "the write landed" check.
     faces, scored = server.vault.db.run_immediate_read_task(_readback)
     assert len(faces) >= len(picture_ids), (
         f"the seeded reference faces did not survive; a background stage most "
@@ -1578,6 +1427,10 @@ def test_project_token_is_not_told_which_other_projects_exist(env):
                 ("missing project (name)", "NoSuchProjectHere"),
             ):
                 path = f"{API}{template.format(project=segment)}"
+                # Same reason as the sibling test above: the uniform 403 these
+                # routes answer with is also what a nonexistent path would
+                # produce, so the route has to be proven real first.
+                assert_real_route(env["server"].api, "GET", path)
                 r = anon.get(path, headers=headers)
                 assert r.status_code == 403, (
                     f"P1 token on {path} got {r.status_code}: {r.text[:200]}"
@@ -1679,6 +1532,9 @@ def _assert_picture_reaches_both_projects(env, picture_id, where):
         env["tokens"],
         env["projects"],
     )
+    # The P3 leg below asserts a 403, which a nonexistent path answers with
+    # identically, so the route is proven real before it is trusted.
+    assert_real_route(env["server"].api, "GET", f"{API}/pictures/{picture_id}/metadata")
     for label in ("P1", "P2"):
         r = owner.get(f"{API}/pictures?project_id={projects[label]}")
         assert r.status_code == 200, r.text
@@ -1746,32 +1602,6 @@ def test_bulk_replace_members_joins_every_project(env):
         )
 
 
-def _make_face(server, picture_id: int) -> int:
-    """Insert a synthetic face row on *picture_id*.
-
-    The face-assign path is exercised through its ``face_ids`` branch so the test
-    does not depend on the detector finding a face in the CPU test profile (the
-    reviewer's own probe failed twice for exactly that reason). ``face_index`` is
-    deliberately far outside the detector's range so a real extraction running in
-    the background cannot collide with the (picture, frame, face) unique
-    constraint.
-    """
-
-    def _do(session):
-        face = Face(
-            picture_id=int(picture_id),
-            frame_index=0,
-            face_index=900,
-            bbox=[0, 0, 16, 16],
-        )
-        session.add(face)
-        session.commit()
-        session.refresh(face)
-        return int(face.id)
-
-    return server.vault.db.run_task(_do)
-
-
 def test_face_assignment_to_shared_character_joins_every_project(env):
     """``POST /characters/{id}/faces`` — the character twin of the set paths."""
     face_id = _make_face(env["server"], env["pic_b"])
@@ -1784,20 +1614,38 @@ def test_face_assignment_to_shared_character_joins_every_project(env):
     )
 
 
-def _png_bytes(color=(11, 99, 200)) -> bytes:
+def _png_bytes(filename: str) -> bytes:
+    """A PNG whose pixels are derived from *filename*.
+
+    Content-distinct per caller on purpose: the imported pictures outlive the
+    test that made them (the shared library keeps its picture rows so no finder
+    is left claiming an id SQLite would hand to a different row), and two
+    byte-identical uploads would be deduplicated rather than imported.
+
+    The seed is therefore a checksum of the whole name, not a sum of its bytes:
+    a byte sum collides on any reordering, so two differently-named uploads
+    could produce identical PNGs, dedupe into one picture, and fail the caller
+    that expected its own. ``zlib.crc32`` is order-sensitive and stable across
+    runs and interpreters, which ``hash()`` is not.
+    """
+    seed = zlib.crc32(filename.encode())
+    color = (seed & 0xFF, (seed >> 8) & 0xFF, (seed >> 16) & 0xFF)
     buf = io.BytesIO()
     Image.new("RGB", (48, 48), color=color).save(buf, format="PNG")
     return buf.getvalue()
 
 
-def _staged_import(client, open_body, filename, timeout_s=60) -> None:
-    """Run one staging import (open → stream → commit → wait) to completion."""
+def _staged_import(env, open_body, filename, timeout_s=60) -> int:
+    """Run one staging import (open → stream → commit → wait) and return the id
+    of the picture it created."""
+    client = env["owner"]
+    before = {p["id"] for p in client.get(f"{API}/pictures").json()}
     r = client.post(f"{API}/pictures/import/staging", json=open_body)
     assert r.status_code == 200, r.text
     staging_id = r.json()["staging_id"]
     r = client.post(
         f"{API}/pictures/import/staging/{staging_id}/files",
-        files=[("file", (filename, _png_bytes(), "image/png"))],
+        files=[("file", (filename, _png_bytes(filename), "image/png"))],
     )
     assert r.status_code == 200, r.text
     r = client.post(f"{API}/pictures/import/staging/{staging_id}/commit")
@@ -1808,33 +1656,29 @@ def _staged_import(client, open_body, filename, timeout_s=60) -> None:
         last = client.get(f"{API}/pictures/import/staging/{staging_id}/status").json()
         if last["stage"] in ("completed", "failed"):
             assert last["stage"] == "completed", last
-            return
+            fresh = {p["id"] for p in client.get(f"{API}/pictures").json()} - before
+            assert len(fresh) == 1, (
+                f"expected exactly one newly imported picture, got {sorted(fresh)}"
+            )
+            return fresh.pop()
         time.sleep(0.1)
     raise AssertionError(f"staging {staging_id} never finished: {last}")
-
-
-def _imported_picture_id(env):
-    """The one picture id that is not part of the fixture's two uploads."""
-    ids = {p["id"] for p in env["owner"].get(f"{API}/pictures").json()}
-    fresh = ids - {env["pic_a"], env["pic_b"]}
-    assert len(fresh) == 1, f"expected exactly one newly imported picture, got {fresh}"
-    return fresh.pop()
 
 
 def test_import_into_shared_set_joins_every_project(env):
     """``PictureImportTask._apply_set`` — the drop-target import path must read the
     same membership as the route it mirrors."""
-    _staged_import(env["owner"], {"set_id": env["set_id"]}, "import-into-set.png")
+    picture_id = _staged_import(env, {"set_id": env["set_id"]}, "import-into-set.png")
     _assert_picture_reaches_both_projects(
-        env, _imported_picture_id(env), "import with set_id drop target"
+        env, picture_id, "import with set_id drop target"
     )
 
 
 def test_import_into_shared_character_joins_every_project(env):
     """``PictureImportTask._apply_character`` — the character drop target."""
-    _staged_import(
-        env["owner"], {"character_id": env["char_id"]}, "import-into-char.png"
+    picture_id = _staged_import(
+        env, {"character_id": env["char_id"]}, "import-into-char.png"
     )
     _assert_picture_reaches_both_projects(
-        env, _imported_picture_id(env), "import with character_id drop target"
+        env, picture_id, "import with character_id drop target"
     )

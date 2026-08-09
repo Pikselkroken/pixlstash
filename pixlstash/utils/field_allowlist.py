@@ -62,9 +62,9 @@ logger = get_logger(__name__)
 # Names that are servable even though they are not columns of the model.
 #
 # Every member is a deliberate, reviewed exception, and the guardrail test
-# ``tests/test_generic_field_reader_allowlist.py`` fails the build if this set
-# grows without one. Keep it tiny; the point of the allowlist is that the default
-# answer is "no".
+# ``tests/multi_project_authz/test_generic_field_reader_allowlist.py`` fails the
+# build if this set grows without one. Keep it tiny; the point of the allowlist
+# is that the default answer is "no".
 
 #: Empty, and that is the goal state: every ``Picture`` relationship is refused.
 #:
