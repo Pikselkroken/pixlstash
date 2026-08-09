@@ -138,6 +138,61 @@ jobs:
         run: npm run check:config
 
   # ---------------------------------------------------------------------------
+  # The single writer of the HuggingFace model cache. Every other job restores
+  # it read-only (see .github/actions/setup-backend).
+  #
+  # Why a job and not a step in the shards: `actions/cache` writes only on a key
+  # MISS, so a model missing from an entry that keeps hitting its primary key can
+  # never be added to it. CLIP was missing from the 1.77 GB entry for exactly
+  # that reason, so all eight shards re-fetched ~600 MB of weights on every run
+  # until HuggingFace 429'd `backend shard 8` (run 31304213276). Adding the
+  # missing files to the key alone would not fix it: the first run after a bust
+  # would have eight runners cold-downloading the same weights at the same
+  # moment, which is the same stampede. One job downloads the set once, and the
+  # eight shards then start against a cache that is complete by construction.
+  #
+  # Cost to the blocking gate: this sits in front of the shards, so it is pure
+  # critical path. On the normal warm path that is only checkout + a cache
+  # restore (~1 min) — the Python install is skipped, because nothing needs to
+  # be downloaded. The shards get that back by no longer downloading models.
+  #
+  # restore + explicit save, rather than `actions/cache`, so the write happens
+  # ONLY when the prefetch succeeded. An auto-save post-step runs even after a
+  # failed step, which would freeze a half-downloaded model set under the
+  # primary key and recreate the bug this job exists to fix.
+  # ---------------------------------------------------------------------------
+  warm_models:
+    name: warm model cache
+    runs-on: ubuntu-latest
+    # See the `backend` job for the rationale and the read-only token
+    # requirement. Absent on fork PRs by design; the prefetch then runs
+    # anonymously, which one sequential job is far more likely to survive than
+    # eight parallel ones were.
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: models
+        uses: ./.github/actions/model-cache
+
+      # Only needed to run the prefetch, so it is skipped whenever the cache is
+      # already complete — which is every run that does not change the model set.
+      - if: steps.models.outputs.hit != 'true'
+        uses: ./.github/actions/setup-backend
+
+      - name: Download every model the gate loads
+        if: steps.models.outputs.hit != 'true'
+        run: python scripts/prefetch_ci_models.py
+
+      - name: Save the model cache
+        if: success() && steps.models.outputs.hit != 'true'
+        uses: ./.github/actions/model-cache
+        with:
+          mode: save
+          key: ${{ steps.models.outputs.key }}
+
+  # ---------------------------------------------------------------------------
   # The backend gate. Split across 8 runners instead of one job with 22
   # sequential steps.
   #
@@ -270,6 +325,19 @@ jobs:
   backend:
     name: backend shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
+    # The shards only read the model cache; `warm_models` is what fills it.
+    # Waiting on it is the serialisation that stops eight runners cold-fetching
+    # the same weights at once.
+    #
+    # `needs:` alone would turn a failed warming job into eight SKIPPED shards,
+    # not eight failed ones — the skipped-is-not-failed ambiguity this repo
+    # already had to design against once (see the removed `build` aggregator
+    # note below). Warming is an optimisation, never a correctness gate, so
+    # `!cancelled()` keeps the ordering and drops the veto: if warming breaks,
+    # the shards still run, still report red or green on their own merits, and
+    # `warm model cache` is the red check that says why they were slow.
+    needs: warm_models
+    if: ${{ !cancelled() }}
     strategy:
       # Every shard must report: one shard failing tells you nothing about the
       # other seven, and a partial picture costs another full round trip.
@@ -485,8 +553,11 @@ jobs:
   # ---------------------------------------------------------------------------
   backend_release_sweep:
     name: backend-full block ${{ matrix.shard }} (informational, release-prep only)
-    if: startsWith(github.head_ref || github.ref_name, 'rc-prep') || startsWith(github.head_ref || github.ref_name, 'release') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: ${{ !cancelled() && (startsWith(github.head_ref || github.ref_name, 'rc-prep') || startsWith(github.head_ref || github.ref_name, 'release') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
+    # Same reason as the gate: read the model cache, never fill it, and never
+    # let a failed warming job silently skip the sweep instead of running it.
+    needs: warm_models
     strategy:
       # Every block must report, for the same reason as the gate: one red block
       # says nothing about the other five, and release prep cannot afford
@@ -736,8 +807,11 @@ jobs:
           pip install .[test,dev]
 
       - name: Cache HuggingFace models
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
+          # Read/write, unlike Linux: these four shards run a small OS-sensitive
+          # subset that loads no CLIP or SBert, so there is no eight-way
+          # stampede to serialise and this cache self-heals on its own key bust.
           # See the Linux setup-backend action for the rationale. The taggers
           # download via hf_hub_download(local_dir=...) into platformdirs'
           # Windows user_data_dir —
