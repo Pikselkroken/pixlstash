@@ -1446,10 +1446,12 @@ class Server(
             prefix=API_V1_PREFIX,
             dependencies=gate,
         )
+        # No router-level ``tags=``: every route in this module declares
+        # ``tags=["model_shelf"]`` itself, and FastAPI concatenates the two into
+        # a duplicated tag that reaches OpenAPI and the generated route table.
         self.api.include_router(
             create_model_shelf_router(self),
             prefix=API_V1_PREFIX,
-            tags=["model_shelf"],
             dependencies=gate,
         )
         self.api.include_router(

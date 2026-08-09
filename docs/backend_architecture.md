@@ -465,6 +465,8 @@ Public guest scoring and shared-link endpoints.
 <!-- AUTOGEN:start name="routes" -->
 | Method | Path                                                                          | Tags            | Summary                                                    |
 | ------ | ----------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------- |
+| GET    | /api/v1/adapters                                                              | model_shelf     | List adapters on the shelf                                 |
+| GET    | /api/v1/adapters/{sha256}                                                     | model_shelf     | One adapter by hash                                        |
 | GET    | /api/v1/characters                                                            | characters      | List characters                                            |
 | POST   | /api/v1/characters                                                            | characters      | Create character                                           |
 | POST   | /api/v1/characters/likeness-search                                            | characters      | Search characters by face likeness                         |
@@ -479,6 +481,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                             |
 | GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                        |
 | GET    | /api/v1/check-session                                                         | auth            | Check Session                                              |
+| GET    | /api/v1/checkpoints                                                           | model_shelf     | List checkpoints on the shelf                              |
 | POST   | /api/v1/dedup/auto-stack                                                      | dedup           | Bulk auto-stack the exact tier                             |
 | POST   | /api/v1/dedup/counts                                                          | dedup           | Live duplicate counts, global and scoped                   |
 | GET    | /api/v1/dedup/groups                                                          | dedup           | One page of the duplicate queue                            |
