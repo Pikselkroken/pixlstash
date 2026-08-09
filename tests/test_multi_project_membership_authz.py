@@ -191,6 +191,14 @@ def _detach_volatile_finders(server):
         planner._finder_exhausted[name] = True
     planner._finder_order_idx = 0
     planner.start()
+    # `stop()` joins with a 5 s timeout and only *logs* if the thread outlives
+    # it, and `start()` then returns early on a still-live thread while `_stop`
+    # stays set — which would leave the planner dead for the module's lifetime
+    # and the staging-import tests answering 503.
+    assert planner.is_running(), (
+        "the WorkPlanner did not restart after detaching finders; the import "
+        "tests in this module need a live worker"
+    )
 
 
 def _picture_baseline(server, picture_ids):
@@ -220,10 +228,21 @@ def _reset_domain_state(server, baseline):
     and no finder can be left holding a claim on an id SQLite then hands to a
     different row.
 
-    `PRAGMA defer_foreign_keys` (rather than switching `foreign_keys` off and
-    back on) is what makes the ordering safe: if a statement here raises, the
-    pragma dies with the transaction instead of leaving enforcement disabled on
-    a pooled connection for every later test.
+    The deletes are ordered children-before-parents so that foreign keys stay
+    satisfied statement by statement; that, not the pragma, is what makes this
+    correct. `PRAGMA defer_foreign_keys` is kept on top of it for the FK edges
+    nobody enumerated, and preferred over switching `foreign_keys` off and back
+    on because it dies with the transaction rather than leaving enforcement
+    disabled on a pooled connection for every later test. It is *asserted* live
+    rather than assumed: issued before any DML it would silently run in
+    autocommit and be gone by the time it was needed.
+
+    Tokens are deleted from the **hub** database, not the vault. `usertoken` is a
+    hub table (``pixlstash/hub/schema.py``) and ``AuthService`` reads it through
+    its own handle; the vault carries an empty, never-read copy only because the
+    baseline migration creates every model's table. Deleting the vault's copy
+    revokes nothing, which is worth stating explicitly: it looks right, it runs
+    without error, and it leaves every previous test's token live.
     """
 
     def _do(session):
@@ -240,6 +259,21 @@ def _reset_domain_state(server, baseline):
         )
         session.exec(delete(PictureLikeness))
         session.exec(delete(PictureLikenessQueue))
+        # Children before parents, so the statement order alone leaves every
+        # foreign key satisfied and the pragma above is a safety net rather than
+        # the thing correctness rests on. Removing the pragma from this exact
+        # order was tried: it stays green, whereas deleting `project` while a
+        # picture still pointed at it failed outright.
+        # `pending_character_id` is nulled here for the pictures the
+        # staging-import tests leave behind: the vault turns it into a
+        # `Face.character_id` on a later pass, and character ids recycle, so a
+        # survivor would re-target the *next* test's SharedChar.
+        session.exec(
+            update(Picture).values(
+                stack_id=None, project_id=None, pending_character_id=None
+            )
+        )
+        session.exec(delete(PictureStack))
         session.exec(delete(PictureProjectMember))
         session.exec(delete(CharacterProjectMember))
         session.exec(delete(PictureSetProjectMember))
@@ -247,9 +281,6 @@ def _reset_domain_state(server, baseline):
         session.exec(delete(Character))
         session.exec(delete(PictureSet))
         session.exec(delete(Project))
-        session.exec(delete(UserToken))
-        session.exec(update(Picture).values(stack_id=None, project_id=None))
-        session.exec(delete(PictureStack))
         for picture_id, columns in baseline.items():
             picture = session.get(Picture, picture_id)
             assert picture is not None, (
@@ -262,9 +293,18 @@ def _reset_domain_state(server, baseline):
         session.commit()
 
     server.vault.db.run_task(_do)
+
+    def _revoke_tokens(session):
+        session.exec(delete(UserToken))
+        session.commit()
+
+    server.auth._db.run_task(_revoke_tokens)
     # The token cache mirrors the rows just deleted, and a bare `.clear()` skips
     # the revocation epoch bump (see AuthService._flush_token_cache).
     server.auth._flush_token_cache()
+    assert server.auth._db.run_immediate_read_task(
+        lambda session: session.exec(select(func.count()).select_from(UserToken)).one()
+    ) in (0, (0,)), "token rows survived the reset; a stale credential stays live"
 
 
 def _build_fixture_entities(client, pic_a):
@@ -479,11 +519,19 @@ def _module_env():
 
 
 @pytest.fixture(autouse=True)
-def env(_module_env):
+def env(_module_env, request):
     """Fresh projects, entities and credentials for every test.
 
     Autouse rather than opt-in: a test added later that forgets to request
     ``env`` would otherwise inherit whatever the previous one left behind.
+
+    ``no_spa_fallback`` is pulled in explicitly below, and that is not
+    decoration: pytest sets autouse fixtures up *before* the
+    ``usefixtures``-requested ones of the same scope, so making this fixture
+    autouse moved its own ~25 HTTP calls — including the bare
+    ``status_code == 200`` positive control at the end — out from under the
+    anti-vacuity guard, where the SPA catch-all could have satisfied them
+    (tests/authz_guard.py). Requesting it here puts them back under it.
 
     What is reset, and why each one is not optional in a *security* suite where
     almost every assertion is a refusal:
@@ -494,15 +542,18 @@ def env(_module_env):
       deletes P2 outright, ``test_locked_members_listing_both_directions`` locks
       the shared set, and half a dozen tests file extra pictures into projects.
       Every one of those would leave a later test proving nothing.
-    * **The credentials.** Tokens are re-minted per test, against ids that are
-      themselves new, so a revoked or stale token can never masquerade as a
-      scope refusal. The owner session is re-established for the same reason,
-      and the deleted token rows also keep token verification honest: it is a
-      bcrypt call per candidate row, so leaving them to pile up would make the
-      file quadratic as well as vague.
+    * **The credentials.** Every token row is deleted and re-minted per test, so
+      a revoked or stale token can never masquerade as a scope refusal. Note
+      that the ids themselves recycle — SQLite hands project 1 straight back
+      after a whole-table delete — so a surviving token from a previous test
+      would still *authenticate*, and against whatever now occupies its id.
+      Deleting the rows is therefore the only thing standing between this suite
+      and an isolation guarantee resting on rowid reuse. It also keeps token
+      verification cheap: it is a bcrypt call per candidate row.
     * **The shape** (``_assert_fixture_shape``), which re-proves by identity
       that the world the assertions describe is actually there.
     """
+    request.getfixturevalue("no_spa_fallback")
     m = _module_env
     server, client, anon = m.server, m.owner, m.anon
 
@@ -671,6 +722,12 @@ def test_picture_scope_follows_the_shared_set(env):
     """PICTURE_SCOPED consequence: the set's member picture is anchored in BOTH
     projects, so the P2 token reaches it; a non-member picture is still 403."""
     anon, tokens = env["anon"], env["tokens"]
+    # A refusal is only evidence of scope enforcement if the route exists: the
+    # scope checks sit ahead of routing, so a renamed or misspelled path answers
+    # a scoped token with the same 403 an in-scope refusal does.
+    assert_real_route(
+        env["server"].api, "GET", f"{API}/pictures/{env['pic_a']}/metadata"
+    )
     with _enforcing(env["server"]):
         r = anon.get(
             f"{API}/pictures/{env['pic_a']}/metadata", headers=_bearer(tokens["P2"])
@@ -1256,6 +1313,9 @@ def test_project_token_keeps_filtering_by_its_own_project(env):
         env["projects"],
     )
 
+    for path in _project_filter_routes(env):
+        assert_real_route(env["server"].api, "GET", path)
+
     for probe in (str(projects["P1"]), "UNASSIGNED"):
         for path in _project_filter_routes(env):
             r = owner.get(f"{path}?project_id={probe}")
@@ -1740,6 +1800,10 @@ def _seed_set_sort_inputs(server, picture_ids, character_id):
             )
         ).all()
 
+    # These two readbacks were the guard against a background stage rewriting
+    # the seed mid-test. `_detach_volatile_finders` now removes those stages for
+    # the module's lifetime, so they can no longer fail on that account; they are
+    # kept as a plain "the write landed" check.
     faces, scored = server.vault.db.run_immediate_read_task(_readback)
     assert len(faces) >= len(picture_ids), (
         f"the seeded reference faces did not survive; a background stage most "
@@ -1950,6 +2014,10 @@ def test_project_token_is_not_told_which_other_projects_exist(env):
                 ("missing project (name)", "NoSuchProjectHere"),
             ):
                 path = f"{API}{template.format(project=segment)}"
+                # Same reason as the sibling test above: the uniform 403 these
+                # routes answer with is also what a nonexistent path would
+                # produce, so the route has to be proven real first.
+                assert_real_route(env["server"].api, "GET", path)
                 r = anon.get(path, headers=headers)
                 assert r.status_code == 403, (
                     f"P1 token on {path} got {r.status_code}: {r.text[:200]}"
@@ -2051,6 +2119,9 @@ def _assert_picture_reaches_both_projects(env, picture_id, where):
         env["tokens"],
         env["projects"],
     )
+    # The P3 leg below asserts a 403, which a nonexistent path answers with
+    # identically, so the route is proven real before it is trusted.
+    assert_real_route(env["server"].api, "GET", f"{API}/pictures/{picture_id}/metadata")
     for label in ("P1", "P2"):
         r = owner.get(f"{API}/pictures?project_id={projects[label]}")
         assert r.status_code == 200, r.text
