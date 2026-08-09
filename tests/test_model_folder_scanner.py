@@ -17,7 +17,6 @@ about the claims the rest of the feature is built on:
 4. **A scan re-derives facts and never overwrites choices.**
 """
 
-import hashlib
 import json
 import os
 import struct
@@ -31,6 +30,7 @@ from pixlstash.services.model_folder_scanner import (
     STATE_PRESENT,
     STATE_UNREACHABLE,
     ModelFolderScanner,
+    sha256_file,
 )
 
 SKIP_AS_ROOT = pytest.mark.skipif(
@@ -139,7 +139,7 @@ class TestAdapters:
 
         scanner.scan_folder(folder_id, str(folder), "user")
 
-        expected = hashlib.sha256(open(path, "rb").read()).hexdigest()
+        expected = sha256_file(path)
         rows = adapters(hub)
         assert set(rows) == {expected}
         assert rows[expected]["file_kind"] == "adapter"
@@ -557,9 +557,43 @@ class TestScanCost:
         assert os.path.getsize(path) == next(iter(models(hub).values()))["file_size"]
         scanner.scan_folder(folder_id, str(folder), "user")
 
-        on_disk = hashlib.sha256(open(path, "rb").read()).hexdigest()
+        on_disk = sha256_file(str(path))
         assert on_disk != stale
         assert digest_at(hub, "a.safetensors") == on_disk
+
+    def test_a_returning_file_is_rehashed_even_when_size_and_mtime_match(
+        self, hub, scanner, tmp_path
+    ):
+        # A restore that preserves timestamps (`cp -p`, `rsync -a`) can put
+        # different bytes back under the same name with the same size and the
+        # same mtime. Nothing watched the file while it was missing, so the fast
+        # path must not trust the digest it recorded before it vanished.
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        path = folder / "a.safetensors"
+        write_adapter(path, name="AAAA")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        stale = digest_at(hub, "a.safetensors")
+        mtime_ns = os.stat(path).st_mtime_ns
+
+        os.remove(path)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        assert located(hub)["a.safetensors"]["state"] == STATE_MISSING
+
+        write_adapter(path, name="BBBB")
+        os.utime(path, ns=(mtime_ns, mtime_ns))
+        # Both halves of the fast-path comparison still match, which is exactly
+        # what makes this the case the previous state has to veto.
+        assert located(hub)["a.safetensors"]["file_mtime"] == os.stat(path).st_mtime_ns
+        assert next(iter(models(hub).values()))["file_size"] == os.path.getsize(path)
+
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        on_disk = sha256_file(str(path))
+        assert on_disk != stale
+        assert digest_at(hub, "a.safetensors") == on_disk
+        assert located(hub)["a.safetensors"]["state"] == STATE_PRESENT
 
 
 class TestFolderKinds:

@@ -17,12 +17,15 @@ Two rules under test throughout:
    could not do.
 """
 
+import re
 import sqlite3
 
 import pytest
 
 from pixlstash.hub.schema import (
     CURRENT_SCHEMA_VERSION,
+    _V2_MODEL,
+    _V2_MODEL_FILE,
     apply_migrations,
     read_schema_version,
 )
@@ -66,10 +69,17 @@ def ddl_for(conn, name):
 
 
 def add_model(conn, *, file_kind="adapter", sha256="h", **columns):
-    """Insert one content row and return its id."""
+    """Insert one content row and return its id.
+
+    ``kind`` defaults the way the scanner writes it, an algorithm for an
+    adapter and NULL for anything else, so the suite's rows are shaped the way
+    real ones are. A helper that left it NULL on an adapter would be the one
+    thing that lets a constraint or query regression pass unnoticed.
+    """
     columns = {
         "file_kind": file_kind,
         "sha256": sha256,
+        "kind": "lora" if file_kind == "adapter" else None,
         "provenance": "external",
         **columns,
     }
@@ -79,6 +89,25 @@ def add_model(conn, *, file_kind="adapter", sha256="h", **columns):
         tuple(columns.values()),
     )
     return int(cursor.lastrowid)
+
+
+def _install_pre_check_model_table(conn):
+    """Put back the `model` shape a hub opened on an earlier develop still has.
+
+    Derived from the shipped DDL with the adapter-kind CHECK cut out, so it
+    stays the real pre-CHECK shape column for column instead of drifting from
+    it. Both tables go, because `model_file`'s foreign key would block the drop.
+    """
+    ddl = re.sub(
+        r",\s*(--[^\n]*\n\s*)*CHECK \(file_kind <> 'adapter' OR kind IS NOT NULL\)",
+        "",
+        _V2_MODEL,
+    )
+    assert "kind IS NOT NULL" not in ddl, "the pre-CHECK DDL still carries the CHECK"
+    conn.execute("DROP TABLE model_file")
+    conn.execute("DROP TABLE model")
+    conn.execute(ddl)
+    conn.execute(_V2_MODEL_FILE)
 
 
 def add_folder(conn, path):
@@ -208,6 +237,83 @@ class TestReRunIsSafe:
         assert not (set(SUPERSEDED_TABLES) & table_names(hub))
         assert {"model", "model_file"} <= table_names(hub)
 
+    def test_a_hub_with_the_pre_check_model_table_keeps_its_rows(self, hub):
+        """The adapter-kind CHECK reaches a populated hub without costing it data.
+
+        SQLite has no ``ALTER TABLE ADD CONSTRAINT``, so the table is rebuilt:
+        new shape, copy, drop, rename. The copy is the point: ``model.id`` and
+        ``sha256`` come across unchanged, so the shelf is not re-hashed and no
+        checkpoint is re-queued at 24 GB to recover a digest the hub had.
+        """
+        apply_migrations(hub)
+        _install_pre_check_model_table(hub)
+        folder_id = add_folder(hub, "/models")
+        adapter_id = add_model(hub, sha256="abc", kind="lora", display_name="Clem v3")
+        checkpoint_id = add_model(hub, file_kind="checkpoint", sha256=None, kind=None)
+        add_file(hub, adapter_id, folder_id, "clem.safetensors")
+        add_file(hub, checkpoint_id, folder_id, "flux.safetensors")
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert hub.execute(
+            "SELECT id, sha256, display_name FROM model ORDER BY id"
+        ).fetchall() == [(adapter_id, "abc", "Clem v3"), (checkpoint_id, None, None)]
+        assert hub.execute(
+            "SELECT model_id, relpath, state FROM model_file ORDER BY relpath"
+        ).fetchall() == [
+            (adapter_id, "clem.safetensors", "present"),
+            (checkpoint_id, "flux.safetensors", "present"),
+        ]
+        assert hub.execute("SELECT id FROM model_folder").fetchall() == [(folder_id,)]
+        assert hub.execute("PRAGMA foreign_key_check").fetchall() == []
+        # And the constraint the rebuild was for is now live.
+        with pytest.raises(sqlite3.IntegrityError):
+            add_model(hub, file_kind="adapter", sha256="new", kind=None)
+
+    def test_the_rebuild_leaves_the_indexes_where_they_belong(self, hub):
+        # Dropping `model` takes its indexes with it and the rename carries
+        # nothing stale over, so the CREATE INDEX block is what puts them back.
+        apply_migrations(hub)
+        _install_pre_check_model_table(hub)
+        hub.commit()
+
+        apply_migrations(hub)
+
+        indexes = {
+            row[0]: (row[1], row[2])
+            for row in hub.execute(
+                "SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        assert indexes["ix_model_stack_member"][0] == "model"
+        assert indexes["ix_model_file_model"][0] == "model_file"
+        assert indexes["ix_model_file_folder"][0] == "model_file"
+        # The partial hash-queue index in particular: a full one would be almost
+        # entirely rows MissingCheckpointHashFinder never wants.
+        table, sql = indexes["ix_model_hash_queue"]
+        assert table == "model"
+        assert "WHERE sha256 IS NULL" in sql
+
+    def test_an_adapter_with_no_kind_stops_the_rebuild_loudly(self, hub):
+        # Nothing emits that row. If one exists anyway the copy must fail rather
+        # than fall back to dropping the table, which is how the rows would be
+        # lost quietly.
+        apply_migrations(hub)
+        _install_pre_check_model_table(hub)
+        folder_id = add_folder(hub, "/models")
+        model_id = add_model(hub, sha256="abc", kind=None)
+        add_file(hub, model_id, folder_id, "clem.safetensors")
+        hub.commit()
+
+        with pytest.raises(sqlite3.IntegrityError):
+            apply_migrations(hub)
+
+        assert hub.execute("SELECT id, sha256 FROM model").fetchall() == [
+            (model_id, "abc")
+        ]
+        assert hub.execute("SELECT COUNT(*) FROM model_file").fetchone() == (1,)
+
     def test_the_drop_guard_is_idempotent_and_loses_nothing_after_the_first_open(
         self, hub
     ):
@@ -247,6 +353,21 @@ class TestConstraints:
         apply_migrations(hub)
         with pytest.raises(sqlite3.IntegrityError):
             add_model(hub, file_kind="adapter", sha256=None)
+
+    def test_an_adapter_may_not_be_stored_without_a_kind(self, hub):
+        # No producer emits it: AdapterInfo.kind is typed str and
+        # detect_adapter_kind returns 'unknown' rather than None on every path.
+        # The CHECK is what keeps it that way once something else writes rows.
+        apply_migrations(hub)
+        with pytest.raises(sqlite3.IntegrityError):
+            add_model(hub, file_kind="adapter", kind=None)
+
+    def test_a_checkpoint_needs_no_kind(self, hub):
+        # The other direction: `kind` names an adapter algorithm, so demanding
+        # one of a checkpoint would be its own bug.
+        apply_migrations(hub)
+        add_model(hub, file_kind="checkpoint", sha256=None, kind=None)
+        assert hub.execute("SELECT kind FROM model").fetchone() == (None,)
 
     def test_a_checkpoint_may_be_registered_before_it_is_hashed(self, hub):
         # Deliberately different from an adapter: a checkpoint can be many

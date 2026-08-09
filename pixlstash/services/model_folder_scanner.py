@@ -286,6 +286,11 @@ class ModelFolderScanner:
         ``model.sha256`` naming bytes that are no longer on disk, in the column
         Civitai lookup and the public ``{sha256}/file`` route both resolve on.
 
+        Only a row that was ``present`` last time is eligible, which is why
+        ``_known_files`` filters on that state: a file that went ``missing`` and
+        came back is a file we did not watch, so size and mtime prove nothing
+        about it (``cp -p`` of different bytes onto the name preserves both).
+
         The comparison is against *this folder's* row. Trusting another folder's
         row for the same relpath would file one file under another's digest.
         """
@@ -365,12 +370,18 @@ class ModelFolderScanner:
     def _known_files(
         self, folder_id: int
     ) -> dict[str, tuple[int, Optional[int], Optional[int]]]:
-        """Return ``{relpath: (model_id, file_size, file_mtime)}`` for this folder."""
+        """Return ``{relpath: (model_id, file_size, file_mtime)}`` for this folder.
+
+        ``present`` rows only. These feed ``_describe``'s unchanged-file fast
+        path, and a row that was ``missing`` or ``unreachable`` last time is a
+        file whose bytes nobody watched, so its recorded size and mtime are not
+        evidence that its digest still names what is on disk.
+        """
         rows = self._hub.fetchall(
             "SELECT mf.relpath, mf.model_id, mf.file_mtime, m.file_size "
             "FROM model_file mf JOIN model m ON m.id = mf.model_id "
-            "WHERE mf.model_folder_id = ?",
-            (folder_id,),
+            "WHERE mf.model_folder_id = ? AND mf.state = ?",
+            (folder_id, STATE_PRESENT),
         )
         return {
             row["relpath"]: (row["model_id"], row["file_size"], row["file_mtime"])
