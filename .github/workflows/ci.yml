@@ -369,6 +369,7 @@ jobs:
           tests/test_metadata_hash_batching.py
           tests/test_migrations.py
           tests/test_model_file_classification.py
+          tests/test_model_folder_scanner.py
           tests/test_model_shelf_fixtures.py
           tests/test_model_shelf_library_fixture.py
           tests/test_model_unload_race.py
