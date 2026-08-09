@@ -294,6 +294,7 @@ jobs:
           CI_SHARD: ${{ matrix.shard }}
         run: >-
           python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/4"
+          tests/test_adapter_header.py
           tests/test_aitoolkit_run.py
           tests/test_anomaly_region_scope.py
           tests/test_architecture_guardrails.py
@@ -334,6 +335,7 @@ jobs:
           tests/test_generic_field_reader_allowlist.py
           tests/test_hub_bootstrap.py
           tests/test_hub_engine.py
+          tests/test_hub_model_shelf_schema.py
           tests/test_hub_registry.py
           tests/test_identity_storage_guardrail.py
           tests/test_image_embedding_worker.py
@@ -354,10 +356,12 @@ jobs:
           tests/test_metadata_hash.py
           tests/test_metadata_hash_batching.py
           tests/test_migrations.py
+          tests/test_model_file_classification.py
           tests/test_model_unload_race.py
           tests/test_multi_project_membership_authz.py
           tests/test_openapi_response_schemas.py
           tests/test_operation_log.py
+          tests/test_path_containment.py
           tests/test_pending_score_invalidation.py
           tests/test_picture_is_video.py
           tests/test_picture_mutation_scope.py

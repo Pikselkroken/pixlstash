@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -115,11 +116,65 @@ def clean_asset_name(filename: str) -> str:
 
     Used to produce human-readable model and LoRA names for text embedding.
     Example: 'z_image_turbo_bf16.safetensors' -> 'z image turbo bf16'
+
+    Note:
+        This feeds sentence embeddings (``inference/workflows/text_embedding``),
+        so its output is baked into stored vectors. Changing it would silently
+        invalidate every embedding built from ComfyUI metadata. The shelf's
+        display name therefore layers on top in :func:`derive_model_name`
+        instead of altering this.
     """
     name = os.path.basename(filename or "")
     name = os.path.splitext(name)[0]
     name = name.replace("_", " ").replace("-", " ")
     return name.strip()
+
+
+# Trailing tokens that record where in a training run a checkpoint was saved.
+# `JimmyCarr_000002750` and `ohwx_woman-step00004500` are one subject each, not
+# a subject called "JimmyCarr 000002750".
+#
+# The bare-digit rule needs five digits or more on purpose: ai-toolkit
+# zero-pads its step counts, while a genuine version suffix is short. So
+# `000002750` goes and the `2` in `portrait mix v2` stays.
+_TRAINING_SUFFIX_RE = re.compile(
+    r"^(?:step\d+|epoch\d+|\d+ep|\d{5,})$",
+    re.IGNORECASE,
+)
+
+
+def derive_model_name(filename: str) -> str:
+    """Return a display name for a model file that never said what it is called.
+
+    Builds on :func:`clean_asset_name` and additionally drops trailing training
+    bookkeeping, because the step and epoch are parsed into their own fields and
+    repeating them in the name turns six checkpoints of one run into six
+    unrelated-looking rows.
+
+    This is a *derived* name and the caller must treat it as one: the shelf
+    stores ``display_name`` as NULL and computes this at render, so
+    ``WHERE display_name IS NULL`` stays an exact "nobody has named this" queue
+    and a guess is never mistaken for a choice.
+
+    Args:
+        filename: File name or path.
+
+    Returns:
+        A human-readable name, or ``""`` when nothing survives. Callers decide
+        what an empty result looks like; the shelf shows "no name in file".
+
+    Examples:
+        >>> derive_model_name("JimmyCarr_000002750.safetensors")
+        'JimmyCarr'
+        >>> derive_model_name("ohwx_woman-step00004500.safetensors")
+        'ohwx woman'
+        >>> derive_model_name("portrait_mix_v2.safetensors")
+        'portrait mix v2'
+    """
+    tokens = clean_asset_name(filename).split()
+    while tokens and _TRAINING_SUFFIX_RE.match(tokens[-1]):
+        tokens.pop()
+    return " ".join(tokens)
 
 
 def trim_process_memory() -> None:

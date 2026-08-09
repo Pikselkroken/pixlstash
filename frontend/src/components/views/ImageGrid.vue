@@ -423,7 +423,7 @@
 
     <ProgressOverlay
       :visible="smartScoreLoadingVisible"
-      status="running"
+      :status="smartScoreProgress.status"
       :message="smartScoreProgressMessage"
       :percent="smartScoreProgressPercent"
       :indeterminate="false"
@@ -1639,6 +1639,10 @@ const smartScoreProgress = reactive({
   visible: false,
   percent: 0,
   message: "Calculating smart scores",
+  // Real status, not a hardcoded "running": ProgressOverlay derives both its
+  // aria-busy and its completion announcement from this, so a sort that never
+  // leaves "running" ends in silence for a screen-reader user (#758).
+  status: "idle",
 });
 const SORT_PROGRESS_ESTIMATE_DEFAULT_MS = 2500;
 const SORT_PROGRESS_ESTIMATE_SMART_SCORE_MS = 9000;
@@ -2026,6 +2030,7 @@ function startSmartScoreProgress(loadId, sortKey) {
   smartScoreProgressLoadId = Number(loadId) || 0;
   smartScoreProgressSortKey.value = incomingSortKey;
   smartScoreProgress.visible = true;
+  smartScoreProgress.status = "running";
 
   const estimateMs = clampSmartScoreEstimate(
     sortEstimatedDurationMsByKey[smartScoreProgressSortKey.value] ??
@@ -2083,6 +2088,7 @@ function completeSmartScoreProgress(loadId, measuredDurationMs, wasSuccessful) {
       );
     }
     setSmartScoreProgressPercent(100);
+    smartScoreProgress.status = "completed";
     smartScoreProgress.message =
       searchStore.searchQuery && searchStore.searchQuery.trim()
         ? "Search complete"
@@ -2090,12 +2096,18 @@ function completeSmartScoreProgress(loadId, measuredDurationMs, wasSuccessful) {
     setTimeout(() => {
       if (Number(loadId) !== smartScoreProgressLoadId) return;
       smartScoreProgress.visible = false;
+      smartScoreProgress.status = "idle";
       setSmartScoreProgressPercent(0, { allowReset: true });
       smartScoreProgress.message = "Calculating smart scores";
       smartScoreProgressSortKey.value = "";
     }, SORT_PROGRESS_COMPLETION_HOLD_MS);
     return;
   }
+  // Deliberately not "failed". This branch is reached for a superseded fetch
+  // as often as for a real error (useGridFetch passes wasSuccessful false
+  // whenever `lastRequestId` has moved on), and announcing a failure every
+  // time a user re-sorts quickly is a worse lie than saying nothing.
+  smartScoreProgress.status = "idle";
   smartScoreProgress.visible = false;
   setSmartScoreProgressPercent(0, { allowReset: true });
   smartScoreProgress.message = "Calculating smart scores";

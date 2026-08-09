@@ -1,0 +1,288 @@
+"""Containment of stored paths before they reach a destructive operation (#776).
+
+A snapshot's ``relative_path`` and a ``Picture.file_path`` are database values.
+A wrong one, written by a faulty import or a bug, previously reached an
+unattended ``os.remove``. These tests assert BOTH directions at every sink that
+deletes or overwrites:
+
+- a stored path that escapes the vault root is refused at snapshot delete, GFS
+  retention and the scrapheap purge, and a fabricated sidecar column cannot
+  redirect a write; and
+- ordinary in-root paths are still deleted and written, and a picture under a
+  reference folder OUTSIDE the image root is still purged, because
+  over-blocking a delete strands files and is its own regression.
+
+Reads are deliberately not contained. Whoever can write the vault DB can read
+those files directly, so refusing to serve them buys little, while a false
+refusal presents to a desktop user as their pictures failing to load.
+"""
+
+import json
+import os
+import tempfile
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from PIL import Image
+from sqlmodel import delete, select
+
+from pixlstash.db_models import Picture
+from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
+from pixlstash.db_models.snapshot import Snapshot
+from pixlstash.server import Server
+from pixlstash.services.scrapheap_service import remove_picture_files
+from pixlstash.utils.caption_file_utils import SIDECAR_TYPE_TAGS, writeback_path
+from pixlstash.utils.path_utils import path_is_within
+
+
+@pytest.fixture(scope="module")
+def server():
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = os.path.join(tmp, "server-config.json")
+        with open(config_path, "w") as fh:
+            json.dump({"disable_background_workers": True}, fh)
+        with Server(server_config_path=config_path) as srv:
+            yield srv
+
+
+@pytest.fixture(autouse=True)
+def clean_db(server):
+    def _wipe(session):
+        session.exec(delete(Snapshot))
+        session.exec(delete(Picture))
+        session.exec(delete(ReferenceFolder))
+        session.commit()
+
+    server.vault.db.run_task(_wipe)
+    yield
+    server.vault.db.run_task(_wipe)
+
+
+def _add_reference_folder(server, folder: str) -> int:
+    def _do(session):
+        rf = ReferenceFolder(
+            folder=folder, label="ext", status=ReferenceFolderStatus.ACTIVE
+        )
+        session.add(rf)
+        session.commit()
+        return rf.id
+
+    return server.vault.db.run_task(_do)
+
+
+def _write_png(path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    Image.new("RGB", (8, 8), (200, 30, 30)).save(path, format="PNG")
+
+
+# ---------------------------------------------------------------------------
+# path_is_within
+# ---------------------------------------------------------------------------
+
+
+def test_path_is_within_accepts_containment_and_refuses_escape(tmp_path):
+    base = str(tmp_path / "root")
+    os.makedirs(base)
+    assert path_is_within(os.path.join(base, "a", "b.png"), base)
+    assert path_is_within(base, base)
+    assert not path_is_within(str(tmp_path / "elsewhere.png"), base)
+    assert not path_is_within(os.path.join(base, "..", "escape.png"), base)
+    # An empty side is never contained, rather than matching everything.
+    assert not path_is_within("", base)
+    assert not path_is_within(str(tmp_path / "x.png"), "")
+
+
+def test_path_is_within_follows_a_symlinked_root(tmp_path):
+    real = tmp_path / "real-root"
+    real.mkdir()
+    link = tmp_path / "linked-root"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+    # The same directory spelled through its alias is still contained.
+    assert path_is_within(str(real / "pic.png"), str(link))
+
+
+# ---------------------------------------------------------------------------
+# Snapshot retention + delete
+# ---------------------------------------------------------------------------
+
+
+def _add_snapshot_row(server, kind, created_at, rel_path, manifest_rel):
+    def _do(session):
+        session.add(
+            Snapshot(
+                kind=kind,
+                created_at=created_at,
+                relative_path=rel_path,
+                manifest_relative_path=manifest_rel,
+                byte_size=1,
+                picture_count=0,
+                schema_version="test",
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_do)
+
+
+def test_gfs_retention_refuses_deletes_outside_the_vault_root(server, tmp_path):
+    vault_root = server.vault.image_root
+    now = datetime.now(timezone.utc)
+
+    victim = tmp_path / "victim-gfs.sqlite"
+    victim.write_bytes(b"keep me")
+    victim_manifest = tmp_path / "victim-gfs.manifest.json"
+    victim_manifest.write_bytes(b"keep me too")
+    hostile_rel = os.path.relpath(str(victim), vault_root)
+    hostile_manifest_rel = os.path.relpath(str(victim_manifest), vault_root)
+    assert hostile_rel.startswith("..")
+
+    # Oldest row is hostile; second-oldest is a legitimate in-root snapshot
+    # whose files retention MUST still clean up (the positive direction).
+    legit_rel = "snapshots/legit-old.sqlite.zst"
+    legit_manifest_rel = "snapshots/legit-old.manifest.json"
+    legit_abs = os.path.join(vault_root, legit_rel)
+    legit_manifest_abs = os.path.join(vault_root, legit_manifest_rel)
+    os.makedirs(os.path.dirname(legit_abs), exist_ok=True)
+    for p in (legit_abs, legit_manifest_abs):
+        with open(p, "wb") as fh:
+            fh.write(b"old snapshot bits")
+
+    _add_snapshot_row(
+        server, "DAILY", now - timedelta(days=30), hostile_rel, hostile_manifest_rel
+    )
+    _add_snapshot_row(
+        server, "DAILY", now - timedelta(days=20), legit_rel, legit_manifest_rel
+    )
+    for i in range(7):
+        _add_snapshot_row(
+            server,
+            "DAILY",
+            now - timedelta(days=i),
+            f"snapshots/recent-{i}.sqlite.zst",
+            f"snapshots/recent-{i}.manifest.json",
+        )
+
+    server.vault.snapshot_service._apply_gfs_retention(now)
+
+    # Hostile files survived; the legitimate pruned snapshot's files are gone.
+    assert victim.read_bytes() == b"keep me"
+    assert victim_manifest.read_bytes() == b"keep me too"
+    assert not os.path.exists(legit_abs)
+    assert not os.path.exists(legit_manifest_abs)
+    remaining = server.vault.db.run_immediate_read_task(
+        lambda s: s.exec(select(Snapshot)).all()
+    )
+    assert len(remaining) == 7
+
+
+def test_delete_snapshot_refuses_files_outside_the_vault_root(server, tmp_path):
+    vault_root = server.vault.image_root
+    victim = tmp_path / "victim-delete.sqlite"
+    victim.write_bytes(b"still here")
+    hostile_rel = os.path.relpath(str(victim), vault_root)
+    _add_snapshot_row(
+        server,
+        "MANUAL",
+        datetime.now(timezone.utc),
+        hostile_rel,
+        hostile_rel + ".manifest.json",
+    )
+    snap_id = server.vault.db.run_immediate_read_task(
+        lambda s: s.exec(select(Snapshot.id)).one()
+    )
+    assert server.vault.snapshot_service.delete_snapshot(snap_id) is True
+    assert victim.read_bytes() == b"still here"
+
+
+def test_delete_snapshot_still_removes_in_root_files(server):
+    vault_root = server.vault.image_root
+    rel = "snapshots/deletable.sqlite.zst"
+    manifest_rel = "snapshots/deletable.manifest.json"
+    abs_path = os.path.join(vault_root, rel)
+    abs_manifest = os.path.join(vault_root, manifest_rel)
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    for p in (abs_path, abs_manifest):
+        with open(p, "wb") as fh:
+            fh.write(b"snapshot bits")
+    _add_snapshot_row(server, "MANUAL", datetime.now(timezone.utc), rel, manifest_rel)
+    snap_id = server.vault.db.run_immediate_read_task(
+        lambda s: s.exec(select(Snapshot.id)).one()
+    )
+    assert server.vault.snapshot_service.delete_snapshot(snap_id) is True
+    assert not os.path.exists(abs_path)
+    assert not os.path.exists(abs_manifest)
+
+
+# ---------------------------------------------------------------------------
+# Scrapheap purge delete
+# ---------------------------------------------------------------------------
+
+
+def test_scrapheap_purge_refuses_out_of_root_targets(tmp_path):
+    image_root = str(tmp_path / "library")
+    os.makedirs(image_root)
+    victim = tmp_path / "victim-purge.png"
+    victim.write_bytes(b"precious")
+    unconfirmed = remove_picture_files(image_root, [(1, str(victim), False)])
+    unconfirmed += remove_picture_files(image_root, [(2, "../victim-purge.png", False)])
+    assert victim.read_bytes() == b"precious"
+    # Refused is reported as not-confirmed-gone, so the ledger is corrected and
+    # restore can still resurrect the row.
+    assert len(unconfirmed) == 2
+
+
+def test_scrapheap_purge_still_removes_in_root_files(tmp_path):
+    image_root = str(tmp_path / "library")
+    doomed = os.path.join(image_root, "doomed.png")
+    _write_png(doomed)
+    unconfirmed = remove_picture_files(image_root, [(1, "doomed.png", False)])
+    assert not os.path.exists(doomed)
+    assert unconfirmed == []
+
+
+def test_scrapheap_purge_still_removes_reference_folder_files(tmp_path):
+    """Over-blocking regression: reference-folder pictures live outside the
+    image root and must still be deleted by delete-forever."""
+    image_root = str(tmp_path / "library")
+    ref_root = str(tmp_path / "external-refs")
+    os.makedirs(image_root)
+    doomed = os.path.join(ref_root, "sub", "ref.png")
+    _write_png(doomed)
+    unconfirmed = remove_picture_files(image_root, [(1, doomed, True)], (ref_root,))
+    assert not os.path.exists(doomed)
+    assert unconfirmed == []
+
+
+def test_vault_supplies_the_reference_roots_the_purge_needs(server, tmp_path):
+    """The wiring: the roots the purge is handed come from the folder table."""
+    ref_root = str(tmp_path / "vault-refs")
+    os.makedirs(ref_root)
+    _add_reference_folder(server, ref_root)
+    assert ref_root in server.vault.reference_folder_roots()
+
+
+# ---------------------------------------------------------------------------
+# Caption sidecar write-back
+# ---------------------------------------------------------------------------
+
+
+def test_writeback_ignores_fabricated_existing_path(tmp_path):
+    image_root = str(tmp_path / "library")
+    os.makedirs(image_root)
+    image = os.path.join(image_root, "img.png")
+    # A tags_file column pointing anywhere else must not become a write target;
+    # the suffix-derived sidecar path is used instead.
+    assert writeback_path(
+        image, SIDECAR_TYPE_TAGS, "_tags.txt", str(tmp_path / "authorized_keys")
+    ) == os.path.join(image_root, "img_tags.txt")
+
+
+def test_writeback_honours_a_legitimate_existing_path(tmp_path):
+    image_root = str(tmp_path / "library")
+    os.makedirs(image_root)
+    image = os.path.join(image_root, "img.png")
+    recorded = os.path.join(image_root, "img_tags.txt")
+    assert writeback_path(image, SIDECAR_TYPE_TAGS, None, recorded) == recorded

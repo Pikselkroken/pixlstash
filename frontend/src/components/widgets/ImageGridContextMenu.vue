@@ -935,9 +935,20 @@ async function clampPosition() {
 // mouse-driven, focus-neutral behaviour).
 let previouslyFocused = null;
 
+// The Project / Person / Set triggers are `.ate-btn`, not `.ctx-item`. Left out
+// of this selector they were unreachable by arrow keys, which made assignment a
+// pointer-only action in the grid (#759).
+const MENU_ITEM_SELECTOR =
+  ".ctx-item:not([disabled]), .ate-btn:not([disabled])";
+
+// A trigger's own flyout holds `.ate-item` buttons, never `.ate-btn`, so nothing
+// inside an open flyout can leak into this outer roving order.
+function menuItems() {
+  return Array.from(menuRef.value?.querySelectorAll(MENU_ITEM_SELECTOR) || []);
+}
+
 function focusFirstItem() {
-  const first = menuRef.value?.querySelector(".ctx-item:not([disabled])");
-  first?.focus();
+  menuItems()[0]?.focus();
 }
 
 watch(
@@ -978,7 +989,29 @@ watch(
 // would otherwise navigate prev/next on arrows or toggle chrome on Space while
 // the user is driving the menu. (Escape is intercepted earlier, in the
 // capture-phase document handler.)
-function onMenuKeydown(event) {
+async function onMenuKeydown(event) {
+  // Inside an open Add-to flyout the control owns the keyboard (it has to: with
+  // `floatMenu` its menu is teleported and never bubbles here at all). Only stop
+  // the keystroke from leaking to the overlay's global handlers.
+  if (event.target?.closest?.(".ate-menu")) {
+    event.stopPropagation();
+    return;
+  }
+  // ArrowRight opens the focused Add-to trigger's flyout and puts the caret in
+  // its search box; ArrowLeft back out is the control's own job. Mirrors
+  // SelectionMenu.vue, which already drives these controls this way.
+  if (
+    event.key === "ArrowRight" &&
+    event.target?.classList?.contains("ate-btn")
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const ateRoot = event.target.closest(".ate");
+    if (!ateRoot?.classList.contains("open")) event.target.click();
+    await nextTick();
+    ateRoot?.querySelector(".ate-menu.open input")?.focus();
+    return;
+  }
   if (
     props.overlayMode &&
     (event.ctrlKey || event.metaKey) &&
@@ -1001,9 +1034,7 @@ function onMenuKeydown(event) {
     }
   }
   if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-    const items = Array.from(
-      menuRef.value?.querySelectorAll(".ctx-item:not([disabled])") || [],
-    );
+    const items = menuItems();
     if (items.length) {
       event.preventDefault();
       const current = items.indexOf(document.activeElement);
@@ -1151,6 +1182,12 @@ function onDocumentMousedown(event) {
 
 function onDocumentKeydown(event) {
   if (!props.visible) return;
+  // Escape inside an open Add-to flyout dismisses that flyout, not this menu —
+  // same exemption `onDocumentMousedown` already makes for clicks. Without it
+  // this capture-phase handler tore the whole menu down on the first Escape
+  // while the user was typing in the flyout's search box (#759). The control
+  // returns focus to its trigger, so a second Escape lands here and closes.
+  if (event.target?.closest?.(".ate-menu")) return;
   if (event.key === "Escape") {
     event.stopImmediatePropagation();
     emit("close");

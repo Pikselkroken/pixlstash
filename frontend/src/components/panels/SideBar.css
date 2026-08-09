@@ -1273,6 +1273,48 @@
   color: rgb(var(--v-theme-on-primary));
 }
 
+/* Rejected drop target — the row is under the pointer but will not take the
+   payload being dragged (a face bbox over a picture set, say). It must not be
+   mistaken for `.droppable`, and it must not rely on colour alone: the hatch
+   texture carries the state, the mdi-cancel glyph names it, and the disabled
+   fade (the one legal fade, visual-language.md §11) drops the row's own
+   content back. Shared by character/set rows, project rows and folder rows. */
+.sidebar-list-item.not-droppable,
+.sidebar-project-tree-row.not-droppable,
+.sidebar-folder-row.not-droppable {
+  position: relative;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent 0 var(--space-2),
+    rgba(var(--v-theme-border), 0.45) var(--space-2) var(--space-3)
+  );
+  outline: 1px dashed rgba(var(--v-theme-border), 0.7);
+  outline-offset: -1px;
+  border-radius: var(--radius-sm);
+  cursor: no-drop;
+}
+
+.sidebar-list-item.not-droppable > *,
+.sidebar-project-tree-row.not-droppable > *,
+.sidebar-folder-row.not-droppable > * {
+  opacity: var(--opacity-disabled);
+}
+
+.sidebar-list-item.not-droppable::after,
+.sidebar-project-tree-row.not-droppable::after,
+.sidebar-folder-row.not-droppable::after {
+  content: "\F073A"; /* mdi-cancel */
+  font-family: "Material Design Icons";
+  font-size: var(--text-sm);
+  line-height: 1;
+  position: absolute;
+  top: 50%;
+  right: var(--space-3);
+  transform: translateY(-50%);
+  color: rgb(var(--v-theme-sidebar-text));
+  pointer-events: none;
+}
+
 .sidebar-header-spacer {
   flex: 1 1 auto;
 }
