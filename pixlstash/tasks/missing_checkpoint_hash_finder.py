@@ -57,6 +57,32 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
     def finder_name(self) -> str:
         return "MissingCheckpointHashFinder"
 
+    def progress(self) -> tuple[int, int]:
+        """``(models this worker owns, how many still await a hash)``.
+
+        The task manager needs a denominator that is the model shelf, not the
+        picture library, and a "remaining" that cannot disagree with the work
+        actually left. Both counts therefore come from one query over one row
+        set, and the pending count is the finder's own ``sha256 IS NULL``
+        predicate rather than a ``file_kind`` guess: a row this finder would
+        hand out must never be reported as nothing left to do.
+
+        Deferred rows still count as pending. They are work this session has
+        refused to retry, not work that finished, and hiding them would make a
+        broken path look like a completed one.
+        """
+        row = self._hub.fetchone(
+            "SELECT COUNT(*) AS total, "
+            "SUM(CASE WHEN m.sha256 IS NULL THEN 1 ELSE 0 END) AS pending "
+            "FROM model m "
+            "WHERE (m.sha256 IS NULL OR m.file_kind = 'checkpoint') "
+            "AND EXISTS (SELECT 1 FROM model_file mf "
+            "WHERE mf.model_id = m.id AND mf.state = 'present')"
+        )
+        if row is None:
+            return 0, 0
+        return int(row["total"] or 0), int(row["pending"] or 0)
+
     def find_task(self):
         skip = self._deferred | self._handed_out
         limit = CheckpointHashTask.BATCH_SIZE + len(skip)
