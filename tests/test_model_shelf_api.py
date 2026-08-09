@@ -1543,3 +1543,76 @@ def test_remote_owner_is_refused_on_every_import_route_naming_the_flag(shelf_env
             f"{method} {path} denied without naming the setting that enables it: "
             f"{r.text}"
         )
+
+
+# ===========================================================================
+# The managed store (B7) — it is always there, and it does not go away
+# ===========================================================================
+
+
+@pytest.fixture
+def managed_folder(shelf_env, tmp_path):
+    """A managed row and a plain user row, so both delete directions are live.
+
+    Registered here rather than relied on from server start, because the autouse
+    re-seed wipes ``model_folder`` before every test — which is what keeps the
+    shelf assertions above deterministic.
+    """
+    store = tmp_path / "managed"
+    plain = tmp_path / "plain"
+    store.mkdir()
+    plain.mkdir()
+    with shelf_env.server.hub.transaction() as conn:
+        managed_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, owner, movable, created_at) "
+                "VALUES (?, 'managed', 'pixlstash', 'root_only', "
+                "'2026-08-09T00:00:00Z')",
+                (str(store),),
+            ).lastrowid
+        )
+        plain_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, movable, created_at) "
+                "VALUES (?, 'user', 'per_item', '2026-08-09T00:00:00Z')",
+                (str(plain),),
+            ).lastrowid
+        )
+    return SimpleNamespace(managed_id=managed_id, plain_id=plain_id)
+
+
+def test_the_managed_store_cannot_be_forgotten(shelf_env, managed_folder):
+    """409, not 403: the owner is fully authorized and the request is well
+    formed. What refuses it is the state of the target row."""
+    r = shelf_env.owner.delete(f"{API}/model-folders/{managed_folder.managed_id}")
+    assert r.status_code == 409, r.text
+    assert (
+        shelf_env.server.hub.fetchone(
+            "SELECT id FROM model_folder WHERE id = ?", (managed_folder.managed_id,)
+        )
+        is not None
+    )
+
+
+def test_forgetting_an_ordinary_folder_still_works(shelf_env, managed_folder):
+    """The other direction. Over-blocking is its own regression, and a refusal
+    that also caught `user` folders would break the shelf's only tombstone."""
+    r = shelf_env.owner.delete(f"{API}/model-folders/{managed_folder.plain_id}")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success"
+    assert (
+        shelf_env.server.hub.fetchone(
+            "SELECT id FROM model_folder WHERE id = ?", (managed_folder.plain_id,)
+        )
+        is None
+    )
+
+
+def test_the_managed_kind_cannot_be_created_over_http(shelf_env, tmp_path):
+    """The refusal above is only worth anything if a second managed row cannot
+    be made in the first place."""
+    r = shelf_env.owner.post(
+        f"{API}/model-folders",
+        json={"path": str(tmp_path / "second-store"), "kind": "managed"},
+    )
+    assert r.status_code == 400, r.text

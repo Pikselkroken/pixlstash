@@ -424,6 +424,7 @@ jobs:
           tests/test_library_switch.py
           tests/test_likeness_and_face_search.py
           tests/test_likeness_worker.py
+          tests/test_managed_model_store.py
           tests/test_many_to_many_face_data.py
           tests/test_metadata_hash.py
           tests/test_metadata_hash_batching.py
