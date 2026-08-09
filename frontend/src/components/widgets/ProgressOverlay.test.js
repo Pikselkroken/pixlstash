@@ -87,6 +87,21 @@ describe("ProgressOverlay accessibility", () => {
     expect(live(w)).toBe("Exporting: 0% complete.");
   });
 
+  it("draws the fill at the clamped percentage, so the bar agrees with what it says", async () => {
+    // The fill used to bind the raw prop: NaN rendered `width: NaN%` and
+    // anything over 100 overflowed the track (#782).
+    const fill = (w) => w.find(".progress-overlay__fill").attributes("style");
+    const w = mountOverlay({ percent: 42 });
+    expect(fill(w)).toContain("width: 42%");
+    await w.setProps({ percent: 150 });
+    expect(fill(w)).toContain("width: 100%");
+    await w.setProps({ percent: -5 });
+    expect(fill(w)).toContain("width: 0%");
+    await w.setProps({ percent: NaN });
+    expect(fill(w)).toContain("width: 0%");
+    expect(fill(w)).not.toContain("NaN");
+  });
+
   it("announces failure and cancellation", async () => {
     const w = mountOverlay({ status: "failed", percent: 33 });
     expect(live(w)).toBe("Exporting: failed.");

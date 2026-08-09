@@ -463,7 +463,7 @@ describe("face mode", () => {
   it("marks exactly the assigned person with a radio glyph", async () => {
     const wrapper = await mountFace();
     const rows = wrapper.findAll(".ate-list .ate-item");
-    expect(rows.map((r) => r.attributes("aria-checked"))).toEqual([
+    expect(rows.map((r) => r.attributes("aria-selected"))).toEqual([
       "false",
       "true",
       "false",
@@ -729,19 +729,32 @@ describe("keyboard operation and ARIA structure", () => {
     expect(listbox.findAll(".ate-item")).toHaveLength(rows(wrapper).length);
   });
 
-  it("reports partial bulk membership as aria-checked=mixed", async () => {
+  it("reports partial bulk membership in the option's name, not aria-checked", async () => {
     const wrapper = await openSet();
+    // `aria-checked` on an option is not reliably announced; the state a
+    // listbox exposes is `aria-selected`, and partial rides in the name.
     expect(rows(wrapper).map((r) => r.attributes("aria-checked"))).toEqual([
-      "mixed",
+      undefined,
+      undefined,
+    ]);
+    expect(rows(wrapper).map((r) => r.attributes("aria-selected"))).toEqual([
+      "false",
       "false",
     ]);
+    expect(rows(wrapper)[0].text()).toContain(", partially applied");
+    expect(rows(wrapper)[1].text()).not.toContain("partially applied");
+    expect(
+      rows(wrapper)[0].find(".visually-hidden").exists(),
+      "the supplementary text must not be visible",
+    ).toBe(true);
 
-    // A full membership is plain checked, not mixed.
+    // A full membership is selected, and says nothing extra.
     getPictureSetMembership.mockResolvedValue({ 7: ["10", "11"] });
     mounted.unmount();
     mounted = null;
     const full = await openSet();
-    expect(rows(full)[0].attributes("aria-checked")).toBe("true");
+    expect(rows(full)[0].attributes("aria-selected")).toBe("true");
+    expect(rows(full)[0].text()).not.toContain("partially applied");
   });
 
   it("walks the search box and rows with the arrow keys, without wrapping", async () => {
@@ -781,6 +794,40 @@ describe("keyboard operation and ARIA structure", () => {
     expect(document.activeElement).toBe(landscapes);
     await wrapper.findAll(".ate-item")[1].trigger("keydown", { key: "Home" });
     expect(document.activeElement).toBe(portraits);
+  });
+
+  it("keeps roving focus on the options, never on a create row (#782)", async () => {
+    // The create rows share `.ate-item` but sit outside the listbox, so the old
+    // class-based query let End land on an action button instead of an option.
+    mounted = mount(AddToEntityControl, {
+      props: {
+        type: "character",
+        backendUrl: "http://x",
+        pictureIds: ["10", "11"],
+        allowCreate: true,
+      },
+      attachTo: document.body,
+      global: { plugins: [pinia], stubs: { "v-icon": true } },
+    });
+    await mounted.find(".ate-btn").trigger("click");
+    await flushPromises();
+    await nextTick();
+
+    const pinned = mounted.find(".ate-create-pinned .ate-item--create");
+    expect(pinned.exists()).toBe(true);
+    const options = mounted.findAll('[role="option"]').map((o) => o.element);
+    expect(options.length).toBeGreaterThan(1);
+
+    await press(mounted, ".ate-search input", "ArrowDown");
+    await press(mounted, '[role="option"]', "End");
+    expect(document.activeElement).toBe(options[options.length - 1]);
+
+    // ArrowDown off the last option stops there too.
+    await press(mounted, '[role="option"]', "ArrowDown");
+    expect(document.activeElement).toBe(options[options.length - 1]);
+
+    await press(mounted, '[role="option"]', "Home");
+    expect(document.activeElement).toBe(options[0]);
   });
 
   it("closes on Escape and hands focus back to the trigger", async () => {
