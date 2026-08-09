@@ -274,3 +274,46 @@ def test_the_offline_mount_does_not_resolve(tree):
     assert not tree.offline_mount.exists()
     with pytest.raises(NotADirectoryError):
         read_run(str(tree.offline_mount))
+
+
+class TestTheAdapterFolderIsOnlyCleanedWhenItIsOurs:
+    """`root` is a positional CLI argument, so the cleanup needs a leash.
+
+    Regenerating deletes the previous run's adapters, which is required for
+    idempotency: the names come from a seeded list, so a shorter second run
+    would otherwise leave the first run's tail behind. The danger is that the
+    same code, pointed at a real model library, deletes it. The marker file is
+    what separates the two cases.
+    """
+
+    def test_a_folder_we_generated_is_cleaned_and_regenerated(self, tmp_path):
+        folder = tmp_path / "adapters"
+        generator.generate_adapter_folder(folder, count=6)
+        (folder / "MANUALLY_ADDED.safetensors").write_bytes(b"stray")
+
+        generator.generate_adapter_folder(folder, count=4)
+
+        names = sorted(p.name for p in folder.glob("*.safetensors"))
+        assert len(names) == 4, names
+        assert "MANUALLY_ADDED.safetensors" not in names
+        assert (folder / generator._FIXTURE_MARKER).exists()
+
+    def test_an_unmarked_folder_holding_models_is_refused_untouched(self, tmp_path):
+        """The mistyped-path case: someone else's models, left alone."""
+        folder = tmp_path / "real-loras"
+        folder.mkdir()
+        (folder / "precious.safetensors").write_bytes(b"somebody's 4090-hours")
+
+        with pytest.raises(RuntimeError, match="did not create it"):
+            generator.generate_adapter_folder(folder, count=2)
+
+        assert (
+            folder / "precious.safetensors"
+        ).read_bytes() == b"somebody's 4090-hours"
+        assert not (folder / generator._FIXTURE_MARKER).exists()
+
+    def test_an_empty_unmarked_folder_is_adopted(self, tmp_path):
+        """Nothing to lose, so generating into a fresh directory still works."""
+        folder = tmp_path / "fresh"
+        generator.generate_adapter_folder(folder, count=3)
+        assert len(list(folder.glob("*.safetensors"))) == 3

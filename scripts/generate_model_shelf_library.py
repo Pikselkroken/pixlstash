@@ -38,7 +38,8 @@ from PIL import Image
 from sqlmodel import Session, create_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from pixlstash.database import VaultDatabase  # noqa: E402
 from pixlstash.db_models.character import Character  # noqa: E402
@@ -230,6 +231,10 @@ def generate_library(
     Returns:
         A :class:`LibraryFixture` naming the database and the two odd rows.
     """
+    if pictures <= 6:
+        raise ValueError(
+            f"pictures must exceed the largest set span (6), got {pictures}"
+        )
     root.mkdir(parents=True, exist_ok=True)
     db_path = root / "vault.db"
 
