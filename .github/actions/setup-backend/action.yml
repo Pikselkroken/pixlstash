@@ -50,14 +50,19 @@ runs:
         pip install --index-url https://download.pytorch.org/whl/cpu \
           "torch~=2.12" "torchvision~=0.27"
         pip install .[test,dev]
-        # Fail loudly if a pin change ever lets PyPI's CUDA torch win again,
-        # rather than silently paying the install time and disk back.
-        pip show torch | grep -qE '^Version: .*\+cpu$' || {
-          echo "::error::torch is not a +cpu build; the CUDA wheels are back."
-          pip show torch | grep '^Version:'
-          exit 1
-        }
         df -h /
+        # Fail loudly if a pin change ever lets PyPI's CUDA torch win again,
+        # rather than silently paying the install time and disk back. sed, not
+        # `grep -q`: under `pipefail` an early-exiting grep SIGPIPEs pip and
+        # the guard fires on its own plumbing instead of on the version.
+        torch_version="$(pip show torch | sed -n 's/^Version: //p')"
+        case "$torch_version" in
+          *+cpu) echo "torch $torch_version" ;;
+          *)
+            echo "::error::torch is $torch_version, not a +cpu build; the CUDA wheels are back."
+            exit 1
+            ;;
+        esac
 
     - name: Cache HuggingFace models
       uses: actions/cache@v4
