@@ -12,6 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import { nextTick } from "vue";
 
 const tagsApi = vi.hoisted(() => ({
   listTags: vi.fn(async () => []),
@@ -182,6 +183,59 @@ describe("the tag suggestion combobox", () => {
     await press(wrapper, "ArrowDown");
     expect(el.attributes("aria-activedescendant")).toBe("tb-tag-suggestion-0");
     expect(suggestions()[0].getAttribute("aria-selected")).toBe("true");
+    wrapper.unmount();
+  });
+
+  // #782 item 3: the popup only renders once `tagInputRect` lands, a tick after
+  // `suggestionsOpen` flips, so ARIA driven by `suggestionsOpen` alone claimed
+  // an expanded listbox, and an activedescendant id, that was not in the DOM.
+  it("never claims to be expanded before the listbox is in the DOM", async () => {
+    const wrapper = await mountPanel();
+    input(wrapper).element.value = "suns";
+    input(wrapper).element.dispatchEvent(new Event("input", { bubbles: true }));
+
+    for (let tick = 0; tick < 4; tick += 1) {
+      const el = input(wrapper);
+      if (el.attributes("aria-expanded") === "true") {
+        expect(suggestions().length).toBeGreaterThan(0);
+      }
+      const active = el.attributes("aria-activedescendant");
+      if (active) expect(document.getElementById(active)).not.toBeNull();
+      await nextTick();
+    }
+
+    await flushPromises();
+    expect(input(wrapper).attributes("aria-expanded")).toBe("true");
+    expect(suggestions()).toHaveLength(2);
+    wrapper.unmount();
+  });
+
+  // #782 item 2: mousedown does not fire on touch, and committing on press-down
+  // means a press-and-drag-away still writes the tag.
+  it("commits a clicked suggestion, not a pressed one, without blurring the field", async () => {
+    const wrapper = await mountPanel();
+    input(wrapper).element.focus();
+    await type(wrapper, "suns");
+    const option = suggestions()[0];
+
+    const down = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+    });
+    option.dispatchEvent(down);
+    await flushPromises();
+    // Press-down only keeps the input from blurring; nothing is written.
+    expect(down.defaultPrevented).toBe(true);
+    expect(tagsApi.addPictureTag).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(input(wrapper).element);
+
+    option.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    expect(tagsApi.addPictureTag.mock.calls.map((args) => args[1])).toEqual([
+      "sunset",
+      "sunset",
+    ]);
+    expect(document.activeElement).toBe(input(wrapper).element);
     wrapper.unmount();
   });
 });
