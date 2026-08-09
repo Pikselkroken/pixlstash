@@ -2,6 +2,7 @@ import threading
 from typing import TYPE_CHECKING
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.task_runner import TaskCancelledError
 
 if TYPE_CHECKING:
     from pixlstash.tasks.task_type import TaskType
@@ -567,6 +568,12 @@ class WorkPlanner:
         dropped between finding and submitting leaks its claims for the life of
         the process and those pictures can never be selected again.
 
+        The error is a ``TaskCancelledError`` rather than a bare
+        ``RuntimeError`` because a finder that records permanent state on
+        failure must be able to tell "this work was attempted and failed" from
+        "this work never ran". The task did not run here, so deferring its rows
+        for the rest of the session would strand them over a plain shutdown.
+
         Args:
             finder: The finder that produced *task* and holds its claims.
             task: The task that will not be submitted.
@@ -574,7 +581,7 @@ class WorkPlanner:
         """
         task_id = getattr(task, "id", None)
         finder_name = finder.finder_name()
-        error = RuntimeError(
+        error = TaskCancelledError(
             f"Task {task_id} was dropped before submission: {reason}",
         )
         released = True
