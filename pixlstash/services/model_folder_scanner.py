@@ -180,6 +180,16 @@ class ModelFolderScanner:
     def scan_folder(self, folder_id: int, path: str, kind: str) -> FolderScanResult:
         """Scan one registered folder and reconcile its rows with what is on disk.
 
+        A scan of a folder of 1,800 adapters is minutes long, and
+        ``DELETE /model-folders/{id}`` can land inside it. ``model_file
+        .model_folder_id`` is ``NOT NULL REFERENCES`` and the hub runs with
+        ``PRAGMA foreign_keys=ON``, so the next batch then fails against a
+        parent that is gone. Nothing is lost (SQLite serialises writers, so the
+        DELETE always wins outright) and the right answer is a message rather
+        than a stack trace, so the deletion is confirmed and reported. An
+        ``IntegrityError`` raised while the row is still there is a real defect
+        and is re-raised untouched.
+
         Args:
             folder_id: ``model_folder.id``.
             path: The folder as registered. Owner-chosen and therefore trusted;
@@ -187,8 +197,37 @@ class ModelFolderScanner:
             kind: ``model_folder.kind``. ``source`` folders are skipped.
 
         Returns:
-            A :class:`FolderScanResult` describing what was found.
+            A :class:`FolderScanResult` describing what was found, or one with
+            ``skipped=True`` if the folder was forgotten mid-scan.
+
+        Raises:
+            sqlite3.IntegrityError: If a write failed for any reason other than
+                the folder having been forgotten.
         """
+        try:
+            return self._scan_folder(folder_id, path, kind)
+        except sqlite3.IntegrityError as exc:
+            if self._folder_exists(folder_id):
+                raise
+            logger.info(
+                "Model folder %s (id=%s) was forgotten while it was being "
+                "scanned; abandoning the scan. Its location rows went with the "
+                "folder. (%s)",
+                path,
+                folder_id,
+                exc,
+            )
+            return FolderScanResult(
+                folder_id=folder_id, path=path, state=STATE_MISSING, skipped=True
+            )
+
+    def _folder_exists(self, folder_id: int) -> bool:
+        return (
+            self._hub.fetchone("SELECT 1 FROM model_folder WHERE id = ?", (folder_id,))
+            is not None
+        )
+
+    def _scan_folder(self, folder_id: int, path: str, kind: str) -> FolderScanResult:
         if kind == SOURCE_FOLDER_KIND:
             return FolderScanResult(
                 folder_id=folder_id, path=path, state=STATE_PRESENT, skipped=True
