@@ -15,8 +15,8 @@ concurrency:
 # `push:` used to be unfiltered, so every commit on a PR branch started the
 # workflow twice — once for the push and once for the pull_request — running
 # the same tests on the same SHA. That was ~2x waste when CI was three jobs;
-# with the sharded matrix below it is the difference between fitting in the
-# account's 20-concurrent-job budget and queueing behind a redundant copy of
+# with the sharded matrix below it doubles the run's whole 14-job footprint
+# against the concurrency budget, to queue behind a redundant copy of
 # yourself. PR branches are covered by `pull_request`; the branches that get
 # pushed to without a PR (protected, release-prep) and release tags are listed
 # explicitly.
@@ -138,53 +138,54 @@ jobs:
         run: npm run check:config
 
   # ---------------------------------------------------------------------------
-  # The backend gate. Split across 4 runners instead of one job with 22
+  # The backend gate. Split across 8 runners instead of one job with 22
   # sequential steps.
   #
-  # Four, not eight. The binding constraint is the account's 20-concurrent-job
-  # budget, and it binds ACROSS RUNS, not within one. Measured on 2026-08-05
-  # between 16:09 and 18:35, seven CI runs were in flight simultaneously at
-  # 17:47; at the then-current 17 jobs per run that is ~119 jobs demanded
-  # against 20 slots. The cap was directly observable in run 30981632678
-  # (tag v1.9.0rc1): exactly 20 jobs started at +0-4 min and the 21st,
-  # `backend shard 1`, waited 8.2 min for a slot. In run 30981629822 every one
-  # of the 14 test jobs was created at 06:40:28 and started between 06:48:14
-  # and 06:57:20 — an 8-17 min queue before any test ran. The same saturation
-  # shows up at the other end of a run: the trivial `build` aggregator queued
-  # 13m 00s in run 31031336234 and `build-windows` 16m 47s in run 31023904354,
-  # and both runs ended within 3 seconds of that job finally starting.
+  # Eight, restored 2026-08-09 when the org moved to the GitHub Team plan and
+  # the concurrency cap went from 20 concurrent jobs to 60. This number went
+  # 8 -> 4 -> 8, and the middle step was correct while it stood: under a
+  # 20-slot cap the budget bound ACROSS RUNS, not within one. Measured on
+  # 2026-08-05 between 16:09 and 18:35, seven CI runs were in flight
+  # simultaneously at 17:47; at the then-current 17 jobs per run that is ~119
+  # jobs demanded against 20 slots. The cap was directly observable in run
+  # 30981632678 (tag v1.9.0rc1): exactly 20 jobs started at +0-4 min and the
+  # 21st, `backend shard 1`, waited 8.2 min for a slot. In run 30981629822
+  # every one of the 14 test jobs was created at 06:40:28 and started between
+  # 06:48:14 and 06:57:20 — an 8-17 min queue before any test ran. The same
+  # saturation showed up at the other end: the trivial `build` aggregator
+  # queued 13m 00s in run 31031336234 and `build-windows` 16m 47s in run
+  # 31023904354. Cutting to four shards bought those slots back, at the cost of
+  # wall clock on every uncontended run.
   #
-  # Under a hard slot cap, jobs-per-run is the lever, not seconds-per-test.
-  # Eight shards cannot spend the parallelism they ask for, and each one pays
-  # its own ~4 min of setup-backend (free-disk-space + setup-python + pip
-  # install + HuggingFace cache restore). At eight that is ~32 min of runner
-  # time per run before a single test executes, all of it competing for the
-  # same scarce slots as real work. Halving the matrix halves that fixed cost
-  # and returns four slots per run. Together with the two Windows shards this
-  # takes ci.yml from 16 jobs to 10, so two concurrent runs now fit inside the
-  # budget where one used to fill it.
+  # At 60 slots that trade is gone, so the lever goes back to seconds-per-test.
+  # Twelve jobs per run leaves room for ~5 concurrent PR runs, which is what
+  # this repo routinely has in flight, so eight shards can now actually spend
+  # the parallelism they ask for. Each still pays its own ~3.2 min of
+  # setup-backend (free-disk-space + setup-python + pip install + HuggingFace
+  # cache restore), so ~26 min of runner time per run goes before a test
+  # executes, but that is now bought out of idle capacity instead of out of the
+  # next PR's slots.
   #
-  # The trade-off is real and was taken deliberately, and the number is not
-  # small. LPT over the committed map puts 1360 s of recorded load on each of
-  # four shards (vs 680 s on each of eight); CI measures ~1.77x the recorded
-  # local time (shard 7 of run 31031336234: 1202 s in CI against a ~680 s
-  # recorded share), so expect roughly 40 min of tests per shard plus ~4 min
-  # setup, against ~20 min before. An UNCONTENDED run therefore gets slower —
-  # ~45 min instead of ~25. It wins only because runs overlap, which is the
-  # normal state here, and because a failed shard now costs one slot for 45
-  # min instead of eight slots for 20.
-  #
-  # If that is too long, 6 is the middle setting (~27 min per shard, 12 jobs
-  # per run) and the balance guardrail
+  # Measured basis for the resize: at four shards, 193 s setup + 2652 s pytest
+  # = 45.5 min per shard, ~177 min of backend test compute per run. At eight
+  # that is ~22.1 min of tests + 3.2 min setup = ~25 min per shard. LPT over
+  # the committed map splits the recorded load dead level at N=8 (679 s per
+  # shard, max/min 1.000), and the balance guardrail
   # (test_ci_shards.py::test_recorded_durations_actually_balance_the_gate)
-  # reads N from this matrix, so it re-proves the split on any resize. If the
-  # concurrency budget is ever raised, revisit this number FIRST — it is the
-  # cheapest thing here to tune.
+  # reads N from this matrix, so a future resize has to re-prove that rather
+  # than inherit the claim. If the concurrency budget ever tightens again this
+  # is still the cheapest number here to tune, and 6 is the middle setting.
   #
-  # The durable fix is not the shard count: 43 files boot a full Server with
-  # the ML worker fleet per test function and account for ~73% of suite time
-  # (~5.6 s/test against ~1.5 s/test for the files that pass
-  # disable_background_workers). Bring that down and both the shard count and
+  # The durable fix is not the shard count, but it is not the worker fleet
+  # either, which is where this comment used to point. Measured 2026-08-09, the
+  # ML worker fleet costs 0.05 s per Server boot (0.46 s with it against 0.41 s
+  # without), so rolling `disable_background_workers` across the suite is worth
+  # ~36 s out of 5432 s. Models load lazily through `ensure_ready` in
+  # pixlstash/vault.py, which only the lifespan calls, so booting a Server does
+  # not load them. The real cost is that 68 of the 89 Server-using test files
+  # rebuild the whole environment INSIDE each test body instead of once in a
+  # shared fixture; tests/test_authentication.py shows the fixed pattern at
+  # 0.43 s/test. Move those onto shared fixtures and both the shard count and
   # its wall clock stop mattering.
   #
   # The list below is the GATED set. The ~52 files that are not in it are not
@@ -212,8 +213,8 @@ jobs:
   # Cost of gating them, measured rather than assumed (2026-07-26): the seven
   # files are 151 tests in 182 s wall clock on a machine calibrated against this
   # runner (gate shard 6/8 = 238 s locally vs 257 s in CI, so ~1.08x). That is
-  # ~3.3 min of extra test time; spread over the four shards below it is
-  # roughly +50 s per shard, not the ~20 min the block was previously assumed
+  # ~3.3 min of extra test time; spread over the eight shards below it is
+  # roughly +25 s per shard, not the ~20 min the block was previously assumed
   # to cost. This does NOT approach the widened release-prep budget, and it
   # must not: regular PRs stay fast.
   #
@@ -239,13 +240,13 @@ jobs:
   # (longest-processing-time-first over the committed
   # tests/ci_test_durations.json). It used to deal round-robin by position:
   # that equalises test count perfectly and test time not at all, and the
-  # measured result on run 30925279472 was 744 s to 1205 s across the then
-  # eight shards — a 1.62x spread, with the gate waiting on shard 7 while
-  # shard 6 had been idle for ~460 s. Time balancing matters MORE at four
-  # shards than at eight: with fewer, larger buckets a single misplaced slow
-  # file moves the critical path further.
+  # measured result on run 30925279472 was 744 s to 1205 s across eight
+  # positionally dealt shards — a 1.62x spread, with the gate waiting on shard
+  # 7 while shard 6 had been idle for ~460 s. LPT over the committed map closes
+  # that: max/min is 1.000 at the eight shards below, and the guardrail holds
+  # any assignment under 1.05.
   #
-  # The durations map is committed rather than cached because all four shards
+  # The durations map is committed rather than cached because all eight shards
   # must compute the SAME partition without communicating; see the module
   # docstring of scripts/record_test_durations.py, which also regenerates it.
   # A test missing from the map keeps its old round-robin position and a
@@ -271,10 +272,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       # Every shard must report: one shard failing tells you nothing about the
-      # other three, and a partial picture costs another full round trip.
+      # other seven, and a partial picture costs another full round trip.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     # HF_TOKEN lifts HuggingFace's anonymous-download rate limit, which was
     # throttling cold model fetches past the import tests' 10s timeout. Use a
     # READ-ONLY, public-scope fine-grained token: that minimal scope is the
@@ -289,11 +290,11 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-backend
 
-      - name: Backend tests (shard ${{ matrix.shard }} of 4)
+      - name: Backend tests (shard ${{ matrix.shard }} of 8)
         env:
           CI_SHARD: ${{ matrix.shard }}
         run: >-
-          python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/4"
+          python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/8"
           tests/test_adapter_attachment.py
           tests/test_adapter_header.py
           tests/test_aitoolkit_run.py
@@ -455,9 +456,9 @@ jobs:
   #    build's critical path.
   #
   # N=6. Two reasons, and the second is the binding one. (1) Concurrency: the
-  # rest of this workflow queues 10 jobs (checks 1 + backend 4 + e2e 1 +
-  # backend_windows 2 + the two aggregators) against the account's
-  # 20-concurrent-job budget, so 6 fits without the sweep queueing behind the
+  # rest of this workflow queues 14 jobs (checks 1 + backend 8 + e2e 1 +
+  # backend_windows 2 + the two aggregators) against the Team plan's
+  # 60-concurrent-job budget, so 6 fits without the sweep queueing behind the
   # gate it is supposed to run alongside — and unlike the gate it runs only
   # during release prep, when there is rarely a queue of feature-branch runs
   # competing. (2) Diminishing returns: the fixed per-runner cost here (disk
@@ -661,14 +662,15 @@ jobs:
   # intra-process concurrency, so it introduces no new flake surface on the
   # platform that is hardest to debug remotely.
   #
-  # Two shards, not four, for the concurrency reason spelled out on the
-  # `backend` job above. Windows pays the worst fixed cost per shard of any
-  # job here — `pip install .[test,dev]` alone was ~3-4 min on every one of
-  # the four (run 31031336234: 3m09s, 3m22s, 2m57s, 3m17s) — so extra shards
-  # buy proportionally less here than on Linux while costing the same scarce
-  # slot. This is also a deliberate SUBSET rather than a gate, so it is the
-  # cheaper place to give up parallelism: the completeness guarantee lives on
-  # Linux.
+  # Two shards, and this one does NOT track the Linux gate's count. Windows
+  # pays the worst fixed cost per shard of any job here — `pip install
+  # .[test,dev]` alone was ~3-4 min on every one of the four it used to run
+  # (run 31031336234: 3m09s, 3m22s, 2m57s, 3m17s) — so an extra runner here
+  # spends most of its life installing rather than testing. That arithmetic is
+  # about setup cost, not about the concurrency budget, so raising the cap did
+  # not change it. This is also a deliberate SUBSET rather than a gate, so it
+  # is the cheaper place to give up parallelism: the completeness guarantee
+  # lives on Linux.
   # ---------------------------------------------------------------------------
   backend_windows:
     name: backend-windows shard ${{ matrix.shard }}
