@@ -1,0 +1,385 @@
+"""The model shelf's read API: adapters, checkpoints, and what they are attached to.
+
+Two route blocks, one table. ``/adapters`` and ``/checkpoints`` converge on the
+same ``model`` query filtered by ``file_kind``; the blocks stay separate only
+because their **addressing** differs. An adapter always carries a sha256 (the
+hub's ``CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)`` makes that an
+invariant, not a hope), so it is addressable as ``/adapters/{sha256}``. A
+checkpoint may be 24 GB and registers instantly with ``sha256`` NULL, so until
+``MissingCheckpointHashFinder`` has read it there is no hash to address it by —
+hence a list route and no by-hash detail route on that side. Every row carries
+its hub ``model.id`` for that reason: it is AUTOINCREMENT, never recycled, and it
+is the only identifier an unhashed checkpoint has.
+
+**``unknown`` is never rendered as a checkpoint.** ``file_kind='unknown'`` is a
+first-class stored value (a marker-free file too small to be a base model is most
+likely an adapter format we have not met yet), and it appears in neither list by
+default. It surfaces on the *adapters* block under an explicit
+``?file_kind=unknown``, because an unknown is hashed on sight by the scanner and
+is therefore hash-addressable exactly as an adapter is. ``/checkpoints`` never
+returns one.
+
+**A null ``base_model`` is a bulk state, not an edge case.** Measured against 91
+real adapters, 37 % carry no title, no base model and no trigger word at all. So
+``base_model`` is serialised as ``null`` rather than coerced to a string, is never
+a reason to drop a row from the list, and is selectable through the filter as the
+explicit sentinel ``base_model=UNASSIGNED``.
+
+The queries themselves live in
+:mod:`pixlstash.services.model_shelf_service`, including the hub/vault seam the
+``character_id`` / ``set_id`` filter has to cross. Sorting by ``added_at`` /
+``file_mtime`` and by the stack aggregates is B7's half of the shelf; the list is
+ordered by ``model.id`` here, and locations and attachments each arrive in a
+single whole-page query, so adding those aggregates is a change to one SELECT
+rather than the unpicking of an N+1.
+
+Authorization is declared, never inline: every route here is ``OWNER_ONLY`` in
+``pixlstash/authz/registry.py`` and takes the **default** library pin
+(``library_independent`` is left at ``False``, so the pin runs before the policy
+branch). See ``docs/backend_architecture.md`` §16.1.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
+
+from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
+from pixlstash.pixl_logging import get_logger
+from pixlstash.services.model_shelf_service import (
+    attached_hashes,
+    fetch_attachments,
+    fetch_locations,
+    fetch_model_by_hash,
+    fetch_models,
+)
+from pixlstash.utils.adapter_header import FILE_ADAPTER, FILE_CHECKPOINT, FILE_UNKNOWN
+
+logger = get_logger(__name__)
+
+# What ``GET /adapters`` will serve. ``checkpoint`` is deliberately absent: it has
+# its own block because it is not addressable by hash, and folding it in here
+# would be the "unknown renders as checkpoint" defect in the other direction.
+ADAPTER_BLOCK_FILE_KINDS = (FILE_ADAPTER, FILE_UNKNOWN)
+
+
+class ModelLocation(BaseModel):
+    """Where one copy of a model sits, and whether it was there at the last scan."""
+
+    model_config = ConfigDict(extra="allow")
+
+    folder_id: int = Field(description="``model_folder.id`` this copy lives under.")
+    folder_path: str = Field(description="The registered folder, as registered.")
+    relpath: str = Field(description="Path of this copy relative to the folder.")
+    state: str = Field(
+        description=(
+            "``present``, ``missing`` or ``unreachable``. ``missing`` is a fact "
+            "(the folder was readable and the file was not in it); "
+            "``unreachable`` is the absence of one (we could not look), and only "
+            "``missing`` is something a forget/cleanup action may act on."
+        )
+    )
+    file_mtime: Optional[int] = Field(
+        default=None,
+        description="``st_mtime_ns`` of this copy at the last scan; null if never seen.",
+    )
+
+
+class ModelAttachment(BaseModel):
+    """One character or set in **this library** that uses the model."""
+
+    model_config = ConfigDict(extra="allow")
+
+    entity_type: str = Field(description="``character`` or ``set``.")
+    entity_id: int = Field(
+        description="Row id in this library's vault. Meaningless in another library."
+    )
+
+
+class ModelResponse(BaseModel):
+    """One row of the shelf: what the file is, where its copies are, who uses it."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: int = Field(
+        description=(
+            "Hub ``model.id``. AUTOINCREMENT, so it is never reissued to a "
+            "different file. This is the only identifier an unhashed checkpoint "
+            "has, which is why it is on every row and not only on the ones a "
+            "sha256 could address."
+        )
+    )
+    sha256: Optional[str] = Field(
+        default=None,
+        description=(
+            "Full-file SHA-256, the interop identity (Civitai lookup, the ComfyUI "
+            "node). Never null for an adapter or an unknown; null for a checkpoint "
+            "MissingCheckpointHashFinder has not read yet."
+        ),
+    )
+    file_kind: str = Field(
+        description="``adapter``, ``checkpoint`` or ``unknown``. Owner-correctable."
+    )
+    kind: Optional[str] = Field(
+        default=None,
+        description="Adapter algorithm (``lora``, ``lokr``, …). Null for a checkpoint.",
+    )
+    display_name: Optional[str] = None
+    filename: Optional[str] = None
+    base_model: Optional[str] = Field(
+        default=None,
+        description=(
+            "What the trainer said this was trained against, verbatim. Null for "
+            "the large minority of real adapters that record nothing — shown as "
+            "'Not set', never dropped, and selectable with base_model=UNASSIGNED."
+        ),
+    )
+    trigger_words: Optional[str] = None
+    provenance: str = Field(
+        description="``external`` for anything found on disk; ``trained`` for a run we ran."
+    )
+    training_run_id: Optional[int] = None
+    training_step: Optional[int] = None
+    param_count: Optional[int] = None
+    file_size: Optional[int] = None
+    hashed_at: Optional[str] = None
+    stack_id: Optional[int] = None
+    stack_position: Optional[int] = None
+    run_key: Optional[str] = None
+    added_at: Optional[str] = Field(
+        default=None, description="``model.created_at`` — when the shelf first saw it."
+    )
+    locations: list[ModelLocation] = Field(
+        default_factory=list,
+        description="Every registered copy. Empty means every copy was forgotten.",
+    )
+    attachments: list[ModelAttachment] = Field(
+        default_factory=list,
+        description=(
+            "Characters and sets in the active library that use this model. "
+            "Returned on the list as well as on the detail so the shelf never "
+            "has to fetch them one row at a time."
+        ),
+    )
+
+
+class AdapterListResponse(BaseModel):
+    """Body of ``GET /adapters``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    adapters: list[ModelResponse]
+
+
+class CheckpointListResponse(BaseModel):
+    """Body of ``GET /checkpoints``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    checkpoints: list[ModelResponse]
+
+
+def _to_response(
+    row: dict,
+    locations: dict[int, list[dict]],
+    attachments: dict[str, list[dict]],
+) -> ModelResponse:
+    return ModelResponse(
+        id=int(row["id"]),
+        sha256=row["sha256"],
+        file_kind=row["file_kind"],
+        kind=row["kind"],
+        display_name=row["display_name"],
+        filename=row["filename"],
+        base_model=row["base_model"],
+        trigger_words=row["trigger_words"],
+        provenance=row["provenance"],
+        training_run_id=row["training_run_id"],
+        training_step=row["training_step"],
+        param_count=row["param_count"],
+        file_size=row["file_size"],
+        hashed_at=row["hashed_at"],
+        stack_id=row["stack_id"],
+        stack_position=row["stack_position"],
+        run_key=row["run_key"],
+        added_at=row["created_at"],
+        locations=[ModelLocation(**loc) for loc in locations.get(int(row["id"]), [])],
+        attachments=[
+            ModelAttachment(**att) for att in attachments.get(row["sha256"] or "", [])
+        ],
+    )
+
+
+def create_router(server) -> APIRouter:
+    """Create the adapter/checkpoint read router.
+
+    Args:
+        server: The Server instance, for ``hub`` (the model tables) and ``vault``
+            (the attachments).
+
+    Returns:
+        The configured router.
+    """
+    router = APIRouter()
+
+    def _build_list(
+        file_kinds: tuple[str, ...],
+        *,
+        base_model: Optional[str],
+        kind: Optional[str],
+        q: Optional[str],
+        character_id: Optional[int],
+        set_id: Optional[int],
+    ) -> list[ModelResponse]:
+        """The shared body of both list routes: three queries, whatever the size."""
+        if character_id is not None and set_id is not None:
+            raise HTTPException(
+                status_code=400, detail="Give character_id or set_id, not both."
+            )
+
+        rows = fetch_models(
+            server.hub, file_kinds, base_model=base_model, kind=kind, q=q
+        )
+
+        if character_id is not None or set_id is not None:
+            entity_type = ENTITY_CHARACTER if character_id is not None else ENTITY_SET
+            entity_id = character_id if character_id is not None else set_id
+            allowed = attached_hashes(server.vault, entity_type, int(entity_id))
+            # Intersected in Python rather than pushed into the hub query as an
+            # IN list: the two tables live in different SQLite files, and a list
+            # of attachment hashes would also meet the bound-parameter limit on
+            # a well-used character.
+            rows = [row for row in rows if row["sha256"] in allowed]
+
+        if not rows:
+            return []
+        # Hoisted deliberately: both are whole-page lookups, so calling them
+        # inside the comprehension would be the N+1 this route exists to avoid.
+        locations = fetch_locations(server.hub)
+        attachments = fetch_attachments(server.vault)
+        return [_to_response(row, locations, attachments) for row in rows]
+
+    @router.get(
+        "/adapters",
+        summary="List adapters on the shelf",
+        description=(
+            "Every adapter registered on this machine, with each copy's location "
+            "and the characters/sets in the active library that use it. "
+            "`file_kind=unknown` returns the unclassified files instead — they "
+            "are hashed and addressable exactly as adapters are, and they are "
+            "never folded into /checkpoints. `base_model=UNASSIGNED` selects the "
+            "rows that record no base model."
+        ),
+        tags=["model_shelf"],
+        response_model=AdapterListResponse,
+    )
+    def list_adapters(
+        request: Request,
+        file_kind: str = Query(
+            FILE_ADAPTER,
+            description="`adapter` (default) or `unknown`. Checkpoints have their own route.",
+        ),
+        base_model: Optional[str] = Query(
+            None,
+            description=(
+                "Exact match on the recorded base model, or `UNASSIGNED` for the "
+                "rows that record none. Omit for all."
+            ),
+        ),
+        kind: Optional[str] = Query(
+            None, description="Adapter algorithm, e.g. `lora` or `lokr`."
+        ),
+        character_id: Optional[int] = Query(
+            None, description="Only adapters attached to this character."
+        ),
+        set_id: Optional[int] = Query(
+            None, description="Only adapters attached to this picture set."
+        ),
+        q: Optional[str] = Query(
+            None,
+            description="Substring of the display name, filename or trigger words.",
+        ),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        if file_kind not in ADAPTER_BLOCK_FILE_KINDS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"file_kind must be one of {list(ADAPTER_BLOCK_FILE_KINDS)}; "
+                    "checkpoints are served by GET /checkpoints."
+                ),
+            )
+        return AdapterListResponse(
+            adapters=_build_list(
+                (file_kind,),
+                base_model=base_model,
+                kind=kind,
+                q=q,
+                character_id=character_id,
+                set_id=set_id,
+            )
+        )
+
+    @router.get(
+        "/adapters/{sha256}",
+        summary="One adapter by hash",
+        description=(
+            "Resolves on the interop identity, so it answers for an unclassified "
+            "file too. A checkpoint is deliberately not reachable here: it may "
+            "have no hash yet, so its block addresses rows by id instead."
+        ),
+        tags=["model_shelf"],
+        response_model=ModelResponse,
+    )
+    def get_adapter(sha256: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        row = fetch_model_by_hash(server.hub, sha256)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such adapter.")
+        if row["file_kind"] == FILE_CHECKPOINT:
+            raise HTTPException(
+                status_code=404,
+                detail="That hash is a checkpoint; see GET /checkpoints.",
+            )
+        return _to_response(
+            row,
+            fetch_locations(server.hub, int(row["id"])),
+            fetch_attachments(server.vault, sha256=sha256),
+        )
+
+    @router.get(
+        "/checkpoints",
+        summary="List checkpoints on the shelf",
+        description=(
+            "The same query as /adapters, filtered to `file_kind='checkpoint'`. "
+            "`sha256` is null until MissingCheckpointHashFinder has read the "
+            "file, so `id` is the identifier to hold on to. Unclassified files "
+            "are never returned here."
+        ),
+        tags=["model_shelf"],
+        response_model=CheckpointListResponse,
+    )
+    def list_checkpoints(
+        request: Request,
+        base_model: Optional[str] = Query(
+            None, description="Exact match, or `UNASSIGNED` for the rows with none."
+        ),
+        q: Optional[str] = Query(
+            None, description="Substring of the display name or filename."
+        ),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        return CheckpointListResponse(
+            checkpoints=_build_list(
+                (FILE_CHECKPOINT,),
+                base_model=base_model,
+                kind=None,
+                q=q,
+                character_id=None,
+                set_id=None,
+            )
+        )
+
+    return router

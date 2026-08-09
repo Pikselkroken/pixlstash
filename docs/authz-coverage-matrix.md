@@ -536,6 +536,14 @@ and the declarations themselves are pinned by
 | GET | `/api/v1/telemetry/install-id` | owner_only |  | Owner-only read of the installation's anonymous install ID. Not any_token: the ID is a stable installation identifier and a resource-scoped share token must not be able to read it |
 | POST | `/api/v1/telemetry/install-id/recreate` | owner_only |  | Owner-only rotation of the install ID; POST is blocked for READ tokens, so only an unscoped owner reaches it. Sibling of GET /telemetry/install-id |
 
+### model_shelf.py (added 2026-08-09 — model shelf B5 read routes)
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/adapters` | owner_only |  | Model-shelf list. `owner_only` on the **default** library pin: `library_independent` is left `False` even though `model` is a hub table, because the response joins hub content to the active vault's `adapter_attachment` rows, so it does return library content and a token stamped for a non-active library must be refused. `character_id=` / `set_id=` filter through that vault table, not through a column, so the filter is a hub query plus a vault query intersected in Python — no join spans the two databases. Accepted residual (shelf plan B5): an owner pinned to library A sees machine-level model filenames, including ones only used in B |
+| GET | `/api/v1/adapters/{sha256}` | owner_only |  | Detail for one adapter (or one `unknown`, which is hashed on sight and therefore hash-addressable). Same pin reasoning as the list. A checkpoint hash 404s here rather than being served, so the two blocks stay separate |
+| GET | `/api/v1/checkpoints` | owner_only |  | The same `model` query filtered to `file_kind='checkpoint'`. No by-hash detail sibling: a checkpoint registers with `sha256` NULL until `MissingCheckpointHashFinder` reads it, so `model.id` is its only identifier. `unknown` is never returned here |
+
 ### other
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
