@@ -229,7 +229,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useSnapshotsStore` | `useSnapshotsStore.js` | `snapshots`, `loading`, `activeJob`, `error`, `dailySnapshotsEnabled`; drives the shared `RestoreConfirmDialog` hoisted in `App.vue` (`restoreDialogOpen`, `restoreDialogSnapshotId`, `restoreDialogResources`). Owns snapshot list load / create / restore and the snapshot WebSocket event handlers (called from `App.vue`). |
 | `useReviewSessionsStore` | `useReviewSessionsStore.js` | Tag-review state: the tag-health board, the rail of open review sessions (each = one tag + frozen scope + one scan's results), and the per-session binary/pair card queues. Per-item decisions write through `/tag_suggestions`; session bookkeeping talks to `/reviews`, the board to `/tag_health`. Also owns the opt-in gamification — variable-ratio sticker awards with monotonic XP / level / streak counters; the sticker vocabulary is imported from `setAppearance.js` so sets and stickers never drift. |
 | `useLockedSetsStore` | `useLockedSetsStore.js` | Which pictures are frozen by a locked picture set. Fed by `GET /picture_sets/locked-members`; refreshed on app start and on the same sidebar-refresh / `pictures_changed` ws triggers the sidebar uses. Single source of the lock-tooltip copy reused by the grid badge, overlay chip, and context-menu gating. |
-| `useModelShelfStore` | `useModelShelfStore.js` | The model shelf's rows and its `Show` selection. `rows` are the raw `/adapters` + `/checkpoints` payload, **every block fetched so far rather than the shown set**: a fetch replaces the blocks it asked for and leaves the rest standing, because both option vocabularies (`adapterKindOptions`, `baseModelOptions`) are derived from `rows`, so an overwriting narrowed fetch deleted the kind checkboxes that unticking Adapters is documented to *grey*, and dropped base models that stayed selected and persisted with no box left to untick them. `visibleRows` layers the resolved name and the reduced location state on top and applies the kind and base-model narrowing **client-side**, so a multi-select base-model filter is not one request per option. `filters` (`adapters`, `adapterKinds`, `checkpoints`, `unclassified`, `baseModels`) persists to `localStorage` under `pixlstash:modelShelfFilters` — not to `/users/me/config`, which is a fixed `User` model and would need a backend column. An empty `adapterKinds` / `baseModels` array means **unconstrained**, the standard multi-select convention and the only reading under which a fresh install shows anything. `activeCount` counts filter SECTIONS that deviate from their default, not ticked boxes, or a mild narrowing would read as `9`. Only the three top-level type toggles refetch, and they narrow client-side too; the rest only narrow what is already loaded. Each fetch takes the next `epoch` and only the newest may write `rows` or clear `loading`, so a slower earlier flight cannot land last and show adapters only while Checkpoints is ticked; `resetForSession` bumps the same counter, so a read on the wire when the credential changed is discarded. `ModelShelf.vue` watches `loaded` and refetches when a session reset clears it, which the store cannot do itself because session-reset handlers run *before* the new credential is installed. **Session reset drops `rows` but keeps `filters`:** the models are hub-side facts about this machine, but every row carries the characters and sets in the ACTIVE LIBRARY that use it, while the selection is the user's own preference and holds no ids. |
+| `useModelShelfStore` | `useModelShelfStore.js` | The model shelf's rows and its `Show` selection. `rows` are the raw `/adapters` + `/checkpoints` payload, **every block fetched so far rather than the shown set**: a fetch replaces the blocks it asked for and leaves the rest standing, because both option vocabularies (`adapterKindOptions`, `baseModelOptions`) are derived from `rows`, so an overwriting narrowed fetch deleted the kind checkboxes that unticking Adapters is documented to *grey*, and dropped base models that stayed selected and persisted with no box left to untick them. `visibleRows` layers the resolved name and the reduced location state on top and applies the kind and base-model narrowing **client-side**, so a multi-select base-model filter is not one request per option. `groups` sorts `visibleRows` client-side on the five ruled `SortKey` values and cuts them into one level of groups (`none` / `base_model` / `folder`), always returning at least one group so the flat and grouped lists are one piece of markup; sorting never refetches, because every field the keys read is already on the payload and three server-sorted blocks would be destroyed by the merge above. A row that cannot answer the key sorts last in BOTH directions, and the unset group sorts last whatever the direction. `view` (`groupBy`, `sortKey`, `sortDirection`) and the per-axis collapsed sets persist under `pixlstash:modelShelfView`, a SECOND key so `resetFilters` cannot take the sort order with it. `filters` (`adapters`, `adapterKinds`, `checkpoints`, `unclassified`, `baseModels`) persists to `localStorage` under `pixlstash:modelShelfFilters` — not to `/users/me/config`, which is a fixed `User` model and would need a backend column. An empty `adapterKinds` / `baseModels` array means **unconstrained**, the standard multi-select convention and the only reading under which a fresh install shows anything. `activeCount` counts filter SECTIONS that deviate from their default, not ticked boxes, or a mild narrowing would read as `9`. Only the three top-level type toggles refetch, and they narrow client-side too; the rest only narrow what is already loaded. Each fetch takes the next `epoch` and only the newest may write `rows` or clear `loading`, so a slower earlier flight cannot land last and show adapters only while Checkpoints is ticked; `resetForSession` bumps the same counter, so a read on the wire when the credential changed is discarded. `ModelShelf.vue` watches `loaded` and refetches when a session reset clears it, which the store cannot do itself because session-reset handlers run *before* the new credential is installed. **Session reset drops `rows` but keeps `filters`:** the models are hub-side facts about this machine, but every row carries the characters and sets in the ACTIVE LIBRARY that use it, while the selection and the view axes are the user's own preferences and hold no ids. |
 | `useModelFoldersStore` | `useModelFoldersStore.js` | The registered model folders and the scans running against them. Fetched when `ModelFoldersDialog` opens, not at startup: the dialog is its only reader. It is a **store rather than dialog state** because a scan outlives the panel that started it, and because `POST .../rescan` answers 202 as soon as the thread starts, so completion has to be waited for: the store polls `GET /model-folders` every 3s and treats `last_checked` advancing as done, then refreshes `useModelShelfStore` and says what landed. It **gives up after 10 minutes**, because the scanner logs an exception without stamping `last_checked` and a crashed scan is otherwise indistinguishable from a slow one. `forget` captures the row's fields BEFORE the request, which is what makes the notice's `Add it back` possible and therefore what lets removal skip a confirmation prompt. **Session reset drops it whole:** absolute host paths are owner-only, and a session that lost its credential has no standing to keep polling. |
 | `useGenStackPrefsStore` | `useGenStackPrefsStore.js` | Remembered client prefs for whether newly generated / filtered images stack with their source: `stackI2IOutputs` (ComfyUI image-to-image) and `stackFilterOutputs` (plugin "Filters" runs), both default ON and persisted to `localStorage`. |
 | `useEntityListsStore` | `useEntityListsStore.js` | The character / picture-set / project **lists** themselves (`characters`, `pictureSets`, `projects`) plus `fetchedAt` and `pending` per kind. One cache for the three surfaces that need them — the `SideBar` tree, the image context menu's Person/Set/Project flyouts, and the tag-review scope pickers. **Stale-while-revalidate:** a caller renders the cached list immediately and calls `refresh(kind)` *without awaiting it*, so opening a flyout never waits on the network; concurrent callers share one in-flight request (`inFlight`, modelled on `useDedupStore.scopeCounts`). `invalidate(kinds)` is **refetch-only** — a `characters_changed` ws event or a local assignment says "ask again", it never writes the store from a payload (`origin_client_id` is echo-matching, not authority; see §9 and integration_architecture.md §8.1). **These are `SCOPED_LIST` routes, so their content is an authorization decision:** the cache is in-memory only (never `localStorage`/`sessionStorage`), `reset()` drops it on every auth-context transition via the single `onSessionReset` chokepoint in `apiClient` (logout / login / share-token entry / vault switch), and an epoch guard discards any response that was in flight across that transition. Revalidate-on-open is mandatory rather than an optimisation: a share/scoped session receives no ws events (the stream is owner-only), so it is that session's only invalidation path. **The sidebar's row counts ride along on these lists (`include_counts=true`, issue #651):** every character row carries `image_count` and `project_image_count` (scoped to the character's OWN `project_id`, or to "in no project" when it has none) and every project row carries `image_count`, which is what replaced `SideBar.fetchSidebarData`'s one-`/{id}/summary`-per-row fan-out. They live on the shared list rather than in a second counts-bearing cache on purpose (two shapes for one entity would mean two caches, two invalidation paths and two epochs), and the flyout / scope-picker consumers simply ignore the extra fields. Because both scopes are on every row and neither depends on the sidebar's current project selection, one cached response serves both sidebar view modes. Distinct from `useEntityNamesStore`, which holds id→name maps only. |
@@ -1347,6 +1347,111 @@ and the wire sentinel never reaches the UI.
 Windowing is `content-visibility: auto` with `contain-intrinsic-size` on the
 row rather than a virtual scroller: the browser skips layout and paint outside
 the viewport, which is what 1,800 rows need, in two declarations.
+
+#### Sorting and grouping (the `Sort` split-button)
+
+**Sorting is client-side, and that is the correct answer rather than a
+shortcut.** `GET /adapters` and `GET /checkpoints` both accept the five ruled
+`SortKey` values, but `fetchRows` issues one request per selected block and
+concatenates the results, so three server-sorted lists would arrive correctly
+ordered and be destroyed by the merge. Every field the five keys read is already
+on the list payload, so sorting in `groups` costs no request and a direction
+flip refetches nothing. `SORT_KEYS` in `useModelShelfStore.js` mirrors
+`SortKey` in `routes/model_shelf.py` and must stay in step with it.
+
+Two rules are inherited from the API and are easy to undo:
+
+- **A row that cannot answer the key sorts last in BOTH directions.** It is not
+  "smallest": a file recording no base model is an unanswered question, and
+  letting 37% of the shelf pile up at whichever end the arrow points is how a
+  sort stops being one.
+- **`size` reads `total_size ?? file_size` and `added_at` reads
+  `newest_member_at || added_at`.** A stack's size is its members' and its date
+  is its newest member's; the cover alone understates a six-step run by about
+  six times, in the column the shelf exists to answer.
+
+**`groups` always returns at least one group**, so the flat list and the grouped
+list are one piece of markup with the header switched off rather than two copies
+of the row template. Grouping offers `None`, `Base model` and `Folder`. Type is
+deliberately absent: three buckets, already a `Show` checkbox, and already on
+every row as an icon and a word.
+
+**One level of headers, though the plan allows two.** The folder band is a
+grouping *value* rather than a permanent outer tier. A band per folder crossed
+with a group per base model fragments "what do I have for SDXL" into one answer
+per disk, and three folders by twelve base models is thirty-six headers; one
+level also means one sticky offset and no stacking arithmetic. The second level
+is reserved for F5, where a stack genuinely nests inside a group.
+
+- **`Base model not set` sorts last, always, and is expanded by default.** It is
+  the absence of a value rather than a value, so it never joins the alphabetical
+  run and never swaps ends with the direction. That matters because it is not a
+  tail: it is one of the largest groups on the shelf. Expanded by default because
+  a collapsed third of the library is a hiding place, and the wall is survivable
+  because it is reached last and its count is stated before you fall into it.
+- **A model appears under every folder holding a copy of it**, and each such row
+  reports *that* copy's state rather than the merged `locState`. A "primary
+  location" would be a fiction the shelf then has to explain, and it makes the
+  storage answer wrong: the file really does occupy both disks. The consequence
+  is that group counts sum higher than the shelf holds, so the toolbar states
+  both numbers when they differ (`1,782 models · 1,806 copies`).
+- **The sort never reorders groups, only rows inside them.** Groups are
+  alphabetical by label with the unset group last. Switching to "Largest first"
+  and having every header move out from under the reader would be a different
+  view, not a sorted one.
+
+The header **is** the button, on the row grid, wrapped in an `<h3>`: column 1
+carries the chevron, column 2 stays reserved and empty so the label starts at
+the row names' left edge, and the count sits in column 4 where the row's status
+glyph does. Rows are still not focus stops, so the headers are the only stops in
+the list, which makes Tab a group-to-group move and is why no jump shortcut was
+invented; the `<h3>` gives heading navigation for free, and
+`useGlobalKeydown.js` already owns Home/End/PageUp/PageDown, so adding keys here
+would collide. Rank is size, case and tracking at **full** `on-background`
+strength, never opacity: a header must not be dimmer than the rows it heads. A
+folder header's label is a literal path, so it takes `--font-mono` at
+`--text-sm` and is never uppercased; a base-model label takes `--text-2xs`
+uppercase with `--tracking-label`. The band is sticky on
+`DuplicateQueue.vue`'s shipped `.mixed-head` recipe (opaque `background`,
+`--z-sticky`, one hairline, no elevation).
+
+The `Sort` split-button reuses `.bar-split-button` / `.bar-split-toggle` /
+`.bar-split-menu` whole. The left half toggles direction and **its accessible
+name is the current state**, worded per axis ("Newest first", "A to Z",
+"Largest first") because "ascending" is useless on a date and backwards on a
+size; the right half opens `ShelfSortPanel.vue` and carries
+`aria-haspopup="dialog"`, not `"menu"`: the `.tbm` panel is a div of grouped
+toggles with no roving arrow keys, and the same reasoning already rejected
+`role="listbox"`/`option` here. Inside the panel the options are `.tbm-toggle`
+buttons in a `role="group"` with `aria-pressed`, matching `DedupTierMenu.vue`;
+menu roles inside a non-menu container would repeat the mistake one level down.
+One `role="status"` announces a resort, because the rows reorder silently;
+collapse gets none, because `aria-expanded` already says it.
+
+`view` (`groupBy`, `sortKey`, `sortDirection`) and the collapsed sets persist to
+`localStorage` under **`pixlstash:modelShelfView`**, a second key rather than
+more fields under `pixlstash:modelShelfFilters`: `Reset filters` clears
+everything under that one, and losing your sort order to it would be a different
+promise than the button makes. The blob is versioned and a mismatch is discarded
+whole (`useSidebarExpansion.js`'s shape). Only the **collapsed** set is stored,
+namespaced per axis, so a base model that appears after the preference was
+written still opens, and collapsing `Not set` under `Base model` does not
+collapse a folder of the same name.
+
+**Capacity meters are not built, deliberately.** Nothing exposes per-drive free
+and total bytes: `shutil.disk_usage` exists only inside `model_mover.py`'s
+pre-move check, with no route. A meter computed from the sizes the shelf happens
+to know would measure "what the shelf has catalogued" while looking like "what
+is on the disk", which is worse than no meter. See §9.1a's note below on what an
+endpoint would have to return.
+
+The `.bar-*` control family lives **unscoped in `App.css`**, not in
+`Toolbar.vue`. `<style scoped>` compiles `.bar-btn` to `.bar-btn[data-v-hash]`,
+which matches only that component's own elements, so the shelf's toolbar (which
+reuses the same class names) rendered bare `<button>`s; the `--open` state was
+already global, so half the family lived in each place. `Toolbar.vue` keeps only
+its own overrides (the container-query fold, the icon-trigger accent) and
+`TbGlobalActions.vue`'s byte-identical second copy is gone.
 
 #### Registering the folders the shelf reads
 
