@@ -31,6 +31,7 @@ by the autouse ``env`` fixture in this package's ``conftest.py``, which
 
 import io
 import time
+import zlib
 
 import numpy as np
 import pytest
@@ -1620,12 +1621,17 @@ def _png_bytes(filename: str) -> bytes:
     test that made them (the shared library keeps its picture rows so no finder
     is left claiming an id SQLite would hand to a different row), and two
     byte-identical uploads would be deduplicated rather than imported.
+
+    The seed is therefore a checksum of the whole name, not a sum of its bytes:
+    a byte sum collides on any reordering, so two differently-named uploads
+    could produce identical PNGs, dedupe into one picture, and fail the caller
+    that expected its own. ``zlib.crc32`` is order-sensitive and stable across
+    runs and interpreters, which ``hash()`` is not.
     """
-    seed = sum(filename.encode())
+    seed = zlib.crc32(filename.encode())
+    color = (seed & 0xFF, (seed >> 8) & 0xFF, (seed >> 16) & 0xFF)
     buf = io.BytesIO()
-    Image.new("RGB", (48, 48), color=(seed % 256, (seed * 7) % 256, 200)).save(
-        buf, format="PNG"
-    )
+    Image.new("RGB", (48, 48), color=color).save(buf, format="PNG")
     return buf.getvalue()
 
 
