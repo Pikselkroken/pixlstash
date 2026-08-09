@@ -139,7 +139,7 @@ def test_detect_install_type_invalid_override_ignored(monkeypatch):
 
 
 def test_detect_install_type_always_in_allowed_set(monkeypatch):
-    """Whatever the inputs, the result is always one of the three values."""
+    """Whatever the inputs, the result is always one of the allowed values."""
     for env_value in ("1", "0", "", "true"):
         monkeypatch.setenv("PIXLSTASH_IN_DOCKER", env_value)
         monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)

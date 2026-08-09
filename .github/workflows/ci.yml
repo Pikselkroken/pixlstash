@@ -413,6 +413,7 @@ jobs:
           tests/test_image_embedding_worker.py
           tests/test_import_scrapheap_match.py
           tests/test_impossible_clear_authz.py
+          tests/test_install_type_buckets.py
           tests/test_invalid_image_endless_retry.py
           tests/test_ip_locality_fail_closed.py
           tests/test_keep_cover_only.py

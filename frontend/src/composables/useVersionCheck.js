@@ -40,11 +40,15 @@ function isRemoteNewer(current, remote) {
 const LATEST_VERSION_BASE_URL = "https://pixlstash.dev/latest-version";
 // Install-type buckets allowed in the telemetry path; anything else (or
 // empty) collapses to "other". Detection must never block the check.
+// Every bucket here needs a matching website/latest-version/<bucket>.json: a
+// path with no manifest answers 404 HTML, and see checkForUpdatesNow for why
+// that used to mean an unthrottled check.
 const TELEMETRY_INSTALL_BUCKETS = new Set([
   "docker",
   "pip",
   "electron",
   "other",
+  "dev",
 ]);
 const UPDATE_PAGE_URL = "https://pixlstash.dev/upgrade.html";
 
@@ -99,10 +103,17 @@ export function useVersionCheck(installType, checkForUpdates, enabled = true) {
     const type = toValue(installType);
     const bucket = TELEMETRY_INSTALL_BUCKETS.has(type) ? type : "other";
     const url = `${LATEST_VERSION_BASE_URL}/${encodeURIComponent(appVersion)}/${bucket}.json`;
+    // Stamp the attempt before the request, not after a successful parse. A
+    // failing check is the one that must not repeat: stamping inside `.then()`
+    // meant a non-JSON response (a 404 page for a bucket with no manifest)
+    // left the throttle unset and re-fired the check on every page load, which
+    // is how a single development machine sent 136 checks in a day. The cost of
+    // stamping first is one missed check per outage, which is the right trade
+    // for a value that changes on release day.
+    localStorage.setItem(VERSION_CHECK_STORAGE_KEY, String(Date.now()));
     fetch(url)
       .then((r) => r.json())
       .then((data) => {
-        localStorage.setItem(VERSION_CHECK_STORAGE_KEY, String(Date.now()));
         localStorage.setItem(VERSION_CHECK_SECURITY_KEY, data?.security ?? "");
         const remote = data?.version;
         if (remote && isRemoteNewer(appVersion, remote)) {

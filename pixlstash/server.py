@@ -275,11 +275,20 @@ class Server(
             )
         return False
 
-    # install_type telemetry: exactly these three values may ever be reported.
+    # install_type telemetry: exactly these values may ever be reported.
     # "docker" is the reliable signal, "pip" the default, "other" the explicit
     # opt-out used by installers (e.g. the Windows Inno Setup wheel build) that
     # otherwise look like a plain pip install.
-    INSTALL_TYPES = ("docker", "pip", "electron", "other")
+    #
+    # "dev" is a declaration, not a detection: a machine that sets it is ours,
+    # and the metrics collector subtracts that bucket from the active-install
+    # figure whatever version it happens to be running. Without it a development
+    # checkout was only excluded by *inferring* from its unpublished version,
+    # which silently stopped working the day pre-releases started counting as
+    # real users. Every consumer of this value has to know the bucket, so the
+    # list is mirrored in three other places -- see
+    # tests/test_install_type_buckets.py, which fails if they drift.
+    INSTALL_TYPES = ("docker", "pip", "electron", "other", "dev")
 
     @staticmethod
     def detect_install_type() -> str:
