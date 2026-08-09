@@ -93,6 +93,22 @@ class TestCheckpoints:
         run = read_run(str(run_dir))
         assert run.steps == [500]
 
+    def test_a_final_whose_run_name_ends_in_digits_is_still_final(self, tmp_path):
+        # `Archive_2025/Archive_2025.safetensors` matches the step pattern on
+        # the run name alone. Accepting it gives the final `step=2025`, sorts it
+        # among the intermediates and invents a step with no samples, so the
+        # parsed name has to equal the run's.
+        run_dir = tmp_path / "Archive_2025"
+        run_dir.mkdir()
+        (run_dir / "Archive_2025.safetensors").write_bytes(b"")
+        (run_dir / "Archive_2025_000000500.safetensors").write_bytes(b"")
+        run = read_run(str(run_dir))
+        assert run.steps == [500]
+        assert [(c.filename, c.step) for c in run.checkpoints] == [
+            ("Archive_2025_000000500.safetensors", 500),
+            ("Archive_2025.safetensors", None),
+        ]
+
     def test_non_checkpoint_files_are_ignored(self, tmp_path):
         run_dir = _run_folder(tmp_path)
         (run_dir / "notes.txt").write_bytes(b"")
