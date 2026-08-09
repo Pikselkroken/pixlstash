@@ -264,6 +264,11 @@ _V1_LIBRARY_INDEXES = (
 # says "this library's character uses that adapter" and is keyed by sha256
 # because no foreign key can span the two databases.
 #
+# Two tables carry the shelf: ``model`` is what a file IS (identity, curation,
+# provenance) and ``model_file`` is WHERE a copy of it sits. That split is what
+# makes one file in two folders one row with two locations, and what makes
+# removing a folder a tombstone rather than a deletion.
+#
 # Hand-written DDL against stdlib sqlite3, like everything else here. The hub is
 # deliberately not SQLModel: a SQLModel table would be created inside every
 # vault as well.
@@ -271,7 +276,7 @@ _V1_LIBRARY_INDEXES = (
 
 # AUTOINCREMENT, not a bare INTEGER PRIMARY KEY, for the same reason
 # ``library.id`` uses it: SQLite hands a deleted row's id to the next insert, and
-# a recycled folder id would silently re-point every ``adapter_file`` row at a
+# a recycled folder id would silently re-point every ``model_file`` row at a
 # different folder.
 _V2_MODEL_FOLDER = """
 CREATE TABLE IF NOT EXISTS model_folder (
@@ -287,13 +292,28 @@ CREATE TABLE IF NOT EXISTS model_folder (
 )
 """
 
+# One content table for every ``.safetensors`` on the shelf, adapter or
+# checkpoint (integration plan §3, "File location needs its own row", ruled
+# 2026-08-08: *the same split applies to checkpoint*). Two content tables would
+# mean two location tables, or a location table with a discriminator column, and
+# every consumer branching on which one to read — for rows that differ in three
+# columns.
+#
 # `base_model` is free text on purpose. It comes from whatever the trainer wrote
 # and an enum would reject every model that ships after this release.
-_V2_ADAPTER = """
-CREATE TABLE IF NOT EXISTS adapter (
+_V2_MODEL = """
+CREATE TABLE IF NOT EXISTS model (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-    sha256                TEXT UNIQUE NOT NULL,
-    kind                  TEXT NOT NULL,
+    -- What the file IS, from the header: 'adapter' | 'checkpoint' | 'unknown'
+    -- (pixlstash.utils.adapter_header.FILE_*). Owner-correctable; 'unknown'
+    -- is a first-class value here and is never promoted to checkpoint.
+    file_kind             TEXT NOT NULL,
+    -- Which adapter algorithm. Meaningful only when file_kind = 'adapter'.
+    kind                  TEXT,
+    -- Interop identity (Civitai, {sha256}/file, the ComfyUI node). NULL only
+    -- while a checkpoint waits for MissingCheckpointHashFinder; the CHECK below
+    -- keeps today's NOT NULL guarantee exactly where it was load-bearing.
+    sha256                TEXT UNIQUE,
     display_name          TEXT,
     filename              TEXT,
     base_model            TEXT,
@@ -303,45 +323,38 @@ CREATE TABLE IF NOT EXISTS adapter (
     lineage_id            INTEGER,
     training_step         INTEGER,
     safetensors_metadata  TEXT,
+    param_count           INTEGER,
     file_size             INTEGER,
+    hashed_at             TEXT,
     stack_id              INTEGER REFERENCES adapter_stack(id),
     stack_position        INTEGER,
     run_key               TEXT,
-    created_at            TEXT
+    created_at            TEXT,
+    CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)
 )
 """
 
-# One adapter, many paths. That is what a duplicate after an interrupted move
-# is, and what the same file copied into two registered folders is.
+# One model, many paths. That is what a duplicate after an interrupted move is,
+# and what the same file copied into two registered folders is — for a 24 GB
+# checkpoint exactly as much as for an adapter.
 #
-# This table is also the tombstone. Removing a folder drops its ``adapter_file``
-# rows and KEEPS the ``adapter`` row with its name, triggers and attachments, so
-# re-adding the folder re-links by sha256 with the user's curation intact. That
-# is what lets folder removal skip a confirmation prompt: nothing a user typed
-# is destroyed by it.
-_V2_ADAPTER_FILE = """
-CREATE TABLE IF NOT EXISTS adapter_file (
-    adapter_sha256   TEXT NOT NULL,
+# This table is also the tombstone. Removing a folder drops its ``model_file``
+# rows and KEEPS the ``model`` row with its name, triggers and attachments, so
+# re-adding the folder re-links with the user's curation intact. That is what
+# lets folder removal skip a confirmation prompt: nothing a user typed is
+# destroyed by it.
+_V2_MODEL_FILE = """
+CREATE TABLE IF NOT EXISTS model_file (
+    -- Integer, not sha256: this link does not cross a database. The precedent
+    -- is model_folder_id on the next line, which is already an integer FK, and
+    -- model.id is AUTOINCREMENT so a deleted id is never reissued. A sha256 key
+    -- could not name a checkpoint at all until something had read 24 GB of it.
+    model_id         INTEGER NOT NULL REFERENCES model(id),
     model_folder_id  INTEGER NOT NULL REFERENCES model_folder(id),
     relpath          TEXT NOT NULL,
     state            TEXT NOT NULL,
     seen_at          TEXT,
     PRIMARY KEY (model_folder_id, relpath)
-)
-"""
-
-# ``sha256`` is nullable here and NOT NULL on ``adapter``: a checkpoint may be
-# many gigabytes and is registered in place long before anything hashes it.
-_V2_CHECKPOINT = """
-CREATE TABLE IF NOT EXISTS checkpoint (
-    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-    sha256             TEXT UNIQUE,
-    filename           TEXT NOT NULL,
-    local_path         TEXT,
-    base_model_family  TEXT,
-    file_size          INTEGER,
-    hashed_at          TEXT,
-    created_at         TEXT
 )
 """
 
@@ -358,25 +371,32 @@ CREATE TABLE IF NOT EXISTS adapter_stack (
 """
 
 _V2_MODEL_SHELF_INDEXES = (
-    # The scanner's hot path: "which files does this adapter have, and where".
-    "CREATE INDEX IF NOT EXISTS ix_adapter_file_sha ON adapter_file(adapter_sha256)",
+    # The scanner's hot path: "which files does this model have, and where".
+    "CREATE INDEX IF NOT EXISTS ix_model_file_model ON model_file(model_id)",
     # Folder removal and rescan both work folder-at-a-time.
-    "CREATE INDEX IF NOT EXISTS ix_adapter_file_folder "
-    "ON adapter_file(model_folder_id)",
+    "CREATE INDEX IF NOT EXISTS ix_model_file_folder ON model_file(model_folder_id)",
     # Expanding one stack in the shelf, in cover-first order.
-    "CREATE INDEX IF NOT EXISTS ix_adapter_stack_member "
-    "ON adapter(stack_id, stack_position)",
+    "CREATE INDEX IF NOT EXISTS ix_model_stack_member "
+    "ON model(stack_id, stack_position)",
+    # The hash finder's whole query, as a partial index. Mirrors 0095 in the
+    # vault: the queue is a handful of rows in a table of thousands, so a full
+    # index on sha256 would be almost entirely rows the finder never wants.
+    "CREATE INDEX IF NOT EXISTS ix_model_hash_queue ON model(id) WHERE sha256 IS NULL",
 )
 
 _V2_MODEL_SHELF_TABLES = (
-    # adapter_stack first: `adapter.stack_id` references it.
+    # adapter_stack first: `model.stack_id` references it.
     _V2_ADAPTER_STACK,
     _V2_MODEL_FOLDER,
-    _V2_ADAPTER,
-    _V2_ADAPTER_FILE,
-    _V2_CHECKPOINT,
+    _V2_MODEL,
+    _V2_MODEL_FILE,
     *_V2_MODEL_SHELF_INDEXES,
 )
+
+# The pre-reshape shelf shape. ``CREATE TABLE IF NOT EXISTS`` silently skips a
+# *reshape*, so a developer hub opened on an earlier develop would keep the old
+# three tables and gain the new two, with the scanner writing to neither.
+_V2_SUPERSEDED_SHELF_TABLES = ("adapter_file", "adapter", "checkpoint")
 
 
 # Ordered schema steps. Append only: a released version's statement list is
@@ -444,6 +464,32 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     # before this change has CURRENT_SCHEMA_VERSION = 2, so it would refuse a v3
     # hub with HubSchemaTooNewError and lock that user out of a downgrade.
     # CREATE TABLE IF NOT EXISTS throughout, so re-running is a no-op.
+    #
+    # One-shot drop first, for the same reason: IF NOT EXISTS cannot reshape a
+    # table, so a hub opened on an earlier unreleased develop would keep the
+    # superseded `adapter`/`adapter_file`/`checkpoint` shape alongside the new
+    # `model`/`model_file` one. Dropping rather than migrating is correct only
+    # because nothing has ever written these tables — the scan that fills them
+    # is unmerged, no route or UI reads them, and no released build shipped
+    # them (v1.10.0-dev.1 was tagged 13 hours before they landed). `model_folder`
+    # and `adapter_stack` are NOT dropped: a developer may have registered
+    # folders, and neither table changes shape.
+    existing = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    # `adapter` does not exist after the reshape, so this guard is false on a
+    # fresh hub and false on every subsequent re-run.
+    if "adapter" in existing:
+        logger.info(
+            "Replacing the superseded model-shelf tables %s with model/model_file.",
+            ", ".join(_V2_SUPERSEDED_SHELF_TABLES),
+        )
+        # DROP TABLE takes each table's indexes with it, so the superseded
+        # ix_adapter_* indexes need no separate statement.
+        for table in _V2_SUPERSEDED_SHELF_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+
     for statement in _V2_MODEL_SHELF_TABLES:
         conn.execute(statement)
 
