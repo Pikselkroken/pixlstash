@@ -400,17 +400,7 @@ class TaskRunner:
                     break
                 if isinstance(queued_task, _StopTask):
                     continue
-                try:
-                    queued_task.on_cancel()
-                except Exception as exc:
-                    logger.warning(
-                        "Task %s (%s) cancel hook failed: %s",
-                        queued_task.id,
-                        queued_task.type,
-                        exc,
-                    )
-                queued_task.status = TaskStatus.CANCELLED
-                queued_task.completed_at = datetime.now(UTC)
+                self._cancel_queued_task(queued_task, "drained from the queue")
                 cancelled += 1
         logger.debug(
             "TaskRunner %s: cancelled %d pending task(s).", self._name, cancelled
@@ -465,18 +455,7 @@ class TaskRunner:
                     break
                 if isinstance(queued_task, _StopTask):
                     continue
-                try:
-                    queued_task.on_cancel()
-                except Exception as exc:
-                    logger.warning(
-                        "Task %s (%s) cancel hook failed: %s",
-                        queued_task.id,
-                        queued_task.type,
-                        exc,
-                    )
-                queued_task.status = TaskStatus.CANCELLED
-                queued_task.completed_at = datetime.now(UTC)
-                queued_task._done_event.set()
+                self._cancel_queued_task(queued_task, "runner stopped")
 
         # Cancel tasks that are currently executing so their loops can exit early.
         with self._active_task_lock:
@@ -581,18 +560,7 @@ class TaskRunner:
                 continue
 
             if self._stop.is_set():
-                try:
-                    task.on_cancel()
-                except Exception as exc:
-                    logger.warning(
-                        "Task %s (%s) cancel hook failed after stop: %s",
-                        task.id,
-                        task.type,
-                        exc,
-                    )
-                task.status = TaskStatus.CANCELLED
-                task.completed_at = datetime.now(UTC)
-                task._done_event.set()
+                self._cancel_queued_task(task, "runner stopped before the task ran")
                 continue
 
             logger.debug(
@@ -706,17 +674,55 @@ class TaskRunner:
                     task.status,
                     elapsed_s,
                 )
-                callbacks = list(self._on_task_complete_callbacks)
-                for callback in callbacks:
-                    try:
-                        callback(task, error)
-                    except Exception as callback_exc:
-                        logger.warning(
-                            "Task completion callback failed for %s: %s",
-                            task.id,
-                            callback_exc,
-                        )
+                self._fire_task_complete_callbacks(task, error)
         logger.debug("TaskRunner %s stopped.", self._name)
+
+    def _fire_task_complete_callbacks(
+        self, task: BaseTask, error: Optional[BaseException]
+    ):
+        for callback in list(self._on_task_complete_callbacks):
+            try:
+                callback(task, error)
+            except Exception as callback_exc:
+                logger.warning(
+                    "Task completion callback failed for %s (%s): %s",
+                    task.id,
+                    task.type,
+                    callback_exc,
+                )
+
+    def _cancel_queued_task(self, task: BaseTask, reason: str):
+        """Cancel a task that will never run and release everything it holds.
+
+        The completion callbacks are the only path that gives a task's resources
+        back: ``BaseTaskFinder.on_task_complete`` discards its claimed picture
+        ids and ``WorkPlanner.on_task_complete`` frees its in-flight slot. They
+        used to fire only from the worker's ``finally``, so a task cancelled off
+        the queue kept both for the life of the process — the finder then sat at
+        max in-flight for ever, every finder that ``depends_on()`` it starved,
+        and the claimed pictures could never be selected again.
+
+        Args:
+            task: The task being cancelled; it has been taken off its queue.
+            reason: Why it was cancelled, for the log and the callback error.
+        """
+        try:
+            task.on_cancel()
+        except Exception as exc:
+            logger.warning(
+                "Task %s (%s) cancel hook failed (%s): %s",
+                task.id,
+                task.type,
+                reason,
+                exc,
+            )
+        task.status = TaskStatus.CANCELLED
+        task.completed_at = datetime.now(UTC)
+        task._done_event.set()
+        self._fire_task_complete_callbacks(
+            task,
+            TaskCancelledError(f"Task {task.id} ({task.type}) cancelled: {reason}"),
+        )
 
 
 class _StopTask(BaseTask):
