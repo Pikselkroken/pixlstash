@@ -54,6 +54,7 @@ import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue"
 import TelemetryConsentDialog from "./components/dialogs/TelemetryConsentDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
 import DuplicateQueue from "./components/views/DuplicateQueue.vue";
+import ModelShelf from "./components/views/ModelShelf.vue";
 import ReviewSessionsOverlay from "./components/views/ReviewSessionsOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import ThumbnailUpgradeBanner from "./components/panels/ThumbnailUpgradeBanner.vue";
@@ -135,6 +136,8 @@ const error = ref(null);
 // route back into the stores is useViewStore's job, not this one's.
 const {
   isDuplicatesView,
+  isModelsView,
+  handleSelectModels,
   handleSelectCharacter,
   handleSelectSet,
   handleSelectFolder,
@@ -531,6 +534,7 @@ defineExpose({
             @view-project="handleViewProject"
             @select-character="handleSelectCharacter"
             @select-duplicates="handleSelectDuplicates"
+            @select-models="handleSelectModels"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
@@ -598,6 +602,11 @@ defineExpose({
                 v-if="isDuplicatesView"
                 @open-settings="openSettingsDialog"
               />
+              <!-- The model shelf lists files on this machine rather than
+                   pictures in the library, so like Duplicates it replaces the
+                   grid instead of floating over it, and the grid stays
+                   unmounted while it is open. -->
+              <ModelShelf v-else-if="isModelsView" />
               <ImageGrid
                 v-else
                 ref="gridContainer"

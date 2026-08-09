@@ -126,7 +126,7 @@ frontend/src/
 └── components/
     ├── TitleBar.vue             # Shared library chrome plus Electron title bar: active-library entry point, breadcrumb, window controls, update alert
     ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
-    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, LoginScreen
+    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, LoginScreen
     ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbComfyPanel/TbExportPanel/TbImportPanel/GbFilterPanel/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
     ├── reviews/     # Tag-review surfaces (see below)
     │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
@@ -1280,6 +1280,56 @@ While the lightbox overlay is open, the user's own in-overlay edits (and any oth
 3. **On close, reconcile in place (no pill).** `ImageGrid.closeOverlay()` applies the deferred work directly: it swaps in any `pendingGridImages` and, when `pendingOverlayGridRefresh` / `pendingTagFilterRefresh` is set, runs `debouncedFetchAllGridImages()`. So the now-non-matching picture leaves the grid and any re-sort applies as a direct in-place refresh — never as a pill flashing on exit.
 
 `grid.isOverlayOpen` / `grid.markOverlayDeferredRefresh` are exposed by `ImageGrid` (Tier-3 imperative API) and forwarded to `useGridRealtimeSync` through `App.vue`'s `gridApi`. Tested in `useGridRealtimeSync.test.js` (both directions: deferred while open, pill still raised when closed).
+
+---
+
+### 9.1a The model shelf destination
+
+`/models` mounts `ModelShelf.vue` in place of `ImageGrid` (`App.vue`,
+`isModelsView`), on exactly the `/duplicates` pattern: a route rather than a
+selection, because the shelf lists **files on this machine** — LoRAs, other
+adapters and checkpoints found by the scanner — and no picture selection can
+express that. Like Duplicates it is excluded from `selectionOwnsHighlight` in
+`SideBar.vue`, or the underlying picture selection would light a second active
+destination in the rail.
+
+Four rules come from measurement against real adapter folders and are easy to
+undo by accident:
+
+- **A blank cell is the failure mode, not an edge case.** 37% of real adapters
+  carry no title, no base model and no trigger word at all. So the name falls
+  back through `display_name` → a name derived from the filename → the filename
+  itself (`utils/modelShelf.js`), and the metadata line always renders its
+  kind, its base model *or* the words "Base model not set", and its size.
+- **The derived name is computed at render, never stored.** That is what keeps
+  `display_name IS NULL` an exact "nobody has named this" queue on the backend
+  and stops a guess being mistaken for a choice. `deriveModelName` mirrors
+  `pixlstash/utils/model_utils.py`; `cleanAssetName` beneath it must not drift,
+  because its Python original feeds stored sentence embeddings.
+- **The derived name is marked by type, never by opacity.** `--font-mono` at
+  `--weight-regular` and full strength: §3 gives the mono face to file paths,
+  and a filename-derived name is one. Rank is never opacity
+  (`visual-language.md` §5.1) and a third of the rows faded would be a column
+  of ghosts. A font swap is silent to a screen reader, so the row also carries
+  a `visually-hidden` qualifier.
+- **`unknown` is never rendered as a checkpoint.** `file_kind='unknown'` is a
+  first-class stored value with its own glyph and the word "Unclassified". It
+  is in neither list by default and is fetched only from the *adapters* block
+  under `?file_kind=unknown`.
+
+Rows are built on the shared row system (`SideBar.global.css`, §5.1) through
+the neutral `.ps-row` / `.ps-row-glyph` aliases, so the shelf consumes those
+rules rather than keeping a second copy of them. Column 1 is reserved and empty
+until grouping fills it. Rows are **not** focus stops while they carry no verb:
+1,800 empty tab stops would be a trap, so the shelf root takes `tabindex="-1"`
+and receives focus on entry, and roving focus arrives with the first thing a
+focused row can do. The sidebar's Models entry is a real `<button>` with
+`aria-current`; the three older fixed destinations are still clickable `div`s,
+which is a filed gap rather than a pattern to copy.
+
+Windowing is `content-visibility: auto` with `contain-intrinsic-size` on the
+row rather than a virtual scroller: the browser skips layout and paint outside
+the viewport, which is what 1,800 rows need, in two declarations.
 
 ---
 

@@ -1,0 +1,332 @@
+<template>
+  <div
+    ref="rootEl"
+    class="shelf"
+    tabindex="-1"
+    aria-label="Model shelf"
+    aria-describedby="shelf-help"
+  >
+    <p id="shelf-help" class="visually-hidden">
+      Every adapter and checkpoint PixlStash has found on this machine. A name
+      in a monospaced face was taken from the filename, because nobody has named
+      that file yet.
+    </p>
+
+    <div class="shelf-toolbar">
+      <span class="shelf-title">Models</span>
+      <span class="shelf-sub">{{ countLabel }}</span>
+    </div>
+
+    <div class="shelf-body">
+      <p v-if="loading" class="shelf-state">Reading the shelf…</p>
+      <p v-else-if="error" class="shelf-state" role="alert">{{ error }}</p>
+      <div v-else-if="!rows.length" class="shelf-state">
+        <p>No models found.</p>
+        <p>
+          PixlStash lists what it finds in the model folders registered on this
+          machine. Register one to fill the shelf.
+        </p>
+      </div>
+
+      <!-- Rows are not focus stops: they carry no verb and no selection, so
+           1,800 empty tab stops would be a trap. Roving focus arrives with the
+           first thing a focused row can do. -->
+      <ul v-else class="shelf-list" role="list">
+        <li
+          v-for="row in rows"
+          :key="row.id"
+          class="ps-row shelf-row"
+          :title="rowTitle(row)"
+        >
+          <span class="ps-row-glyph ps-row-glyph--empty"></span>
+          <span class="shelf-row-kind">
+            <v-icon size="16">{{ KIND_ICON[row.file_kind] }}</v-icon>
+          </span>
+          <span class="shelf-row-label">
+            <span
+              class="shelf-row-name"
+              :class="{ 'shelf-row-name--derived': row.name.derived }"
+              >{{ row.name.text
+              }}<span v-if="row.name.derived" class="visually-hidden">
+                (name taken from the filename)</span
+              ></span
+            >
+            <span class="shelf-row-meta">
+              <span>{{ kindLabel(row) }}</span>
+              <span>{{ row.base_model || "Base model not set" }}</span>
+              <span v-if="row.file_size" class="shelf-row-size">{{
+                formatModelSize(row.file_size)
+              }}</span>
+            </span>
+          </span>
+          <span
+            class="shelf-row-loc"
+            :class="`shelf-row-loc--${row.locState}`"
+            :title="LOC_TITLE[row.locState]"
+          >
+            <v-icon size="16">{{ LOC_ICON[row.locState] }}</v-icon>
+          </span>
+        </li>
+      </ul>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { computed, nextTick, onMounted, ref } from "vue";
+import { listAdapters, listCheckpoints } from "../../api/modelShelf";
+import { errorDetail } from "../../utils/apiError";
+import { formatModelSize, locationState, modelName } from "../../utils/modelShelf";
+
+const rootEl = ref(null);
+const models = ref([]);
+const loading = ref(false);
+const error = ref("");
+
+// A closed vocabulary gets a glyph, an open one a word. `unknown` gets a plain
+// file rather than a question mark (an unclassified file is a fact about our
+// parser, not the user's mistake) and never the checkpoint cube.
+const KIND_ICON = {
+  adapter: "mdi-layers-outline",
+  checkpoint: "mdi-cube-outline",
+  unknown: "mdi-file-outline",
+};
+
+// `missing` is a fact (the folder was readable, the file was not in it);
+// `unreachable` is the absence of one (we could not look). Only the fact wears
+// a status colour — claiming a hue for "we do not know" would assert knowledge
+// we do not have. `present` reserves its slot and shows nothing.
+const LOC_ICON = {
+  present: "mdi-check",
+  missing: "mdi-file-remove-outline",
+  unreachable: "mdi-help-circle-outline",
+  forgotten: "mdi-folder-off-outline",
+};
+
+const LOC_TITLE = {
+  present: "",
+  missing: "The file is not where it was",
+  unreachable: "Could not check this location",
+  forgotten: "Every registered copy has been forgotten",
+};
+
+// Trainers spell these however they like; the shelf spells them one way.
+const ALGO_LABEL = {
+  lora: "LoRA",
+  lokr: "LoKr",
+  loha: "LoHa",
+  dora: "DoRA",
+  oft: "OFT",
+};
+
+/** The rows as the list renders them: name resolved, locations reduced. */
+const rows = computed(() =>
+  models.value.map((row) => ({
+    ...row,
+    name: modelName(row),
+    locState: locationState(row.locations),
+  })),
+);
+
+const countLabel = computed(() => {
+  const n = rows.value.length;
+  return `${n.toLocaleString()} ${n === 1 ? "model" : "models"}`;
+});
+
+/** The always-present anchor of the metadata line, whatever else is null. */
+function kindLabel(row) {
+  if (row.file_kind === "checkpoint") return "Checkpoint";
+  if (row.file_kind === "unknown") return "Unclassified";
+  const kind = String(row.kind || "").toLowerCase();
+  return ALGO_LABEL[kind] || kind || "Adapter";
+}
+
+/** Filename and folder live in the tooltip; the row shows the name. */
+function rowTitle(row) {
+  const where = (row.locations || [])
+    .map((loc) => `${loc.folder_path}/${loc.relpath}`)
+    .join("\n");
+  return [row.filename, where].filter(Boolean).join("\n");
+}
+
+/**
+ * Load the shelf: two requests, never one per row, because the list already
+ * carries each copy's location and who uses the model. Unclassified files are
+ * in neither — `unknown` is first-class, gets its own filter with the `Show`
+ * panel, and is never folded into either bucket.
+ */
+async function fetchRows() {
+  loading.value = true;
+  error.value = "";
+  try {
+    const [adapters, checkpoints] = await Promise.all([
+      listAdapters(),
+      listCheckpoints(),
+    ]);
+    models.value = [...adapters, ...checkpoints];
+  } catch (err) {
+    error.value = errorDetail(err) || err?.message || String(err);
+    models.value = [];
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(async () => {
+  await fetchRows();
+  // Tab out of the sidebar lands in the shelf, the same contract the duplicate
+  // queue has.
+  await nextTick();
+  rootEl.value?.focus();
+});
+</script>
+
+<style scoped>
+.shelf {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: rgb(var(--v-theme-background));
+  color: rgb(var(--v-theme-on-background));
+  outline: none;
+}
+
+.shelf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: var(--bar-height);
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  flex-shrink: 0;
+}
+
+.shelf-title {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+}
+
+.shelf-sub {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-background), 0.7);
+  font-variant-numeric: tabular-nums;
+}
+
+.shelf-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.shelf-state {
+  padding: var(--space-7) var(--space-5);
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-on-background), 0.7);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+  max-width: 60ch;
+}
+
+.shelf-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* The box, the rail and the indent come from the shared row system
+   (SideBar.global.css, visual-language.md §5.1) via `.ps-row`; only the
+   columns and the vertical rhythm are the shelf's own. Column 1 stays
+   reserved and empty: grouping fills it, and a column that appears later
+   would move every label sideways. */
+.shelf-row {
+  display: grid;
+  grid-template-columns:
+    var(--gutter-glyph)
+    var(--entity-thumb)
+    minmax(0, 1fr)
+    auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+  transition: background var(--dur-1) var(--ease-standard);
+  /* Native windowing: the browser skips layout and paint for rows outside the
+     viewport, which is what 1,800 rows need and is two lines rather than a
+     virtual scroller. The size hint is only the first guess — `auto` makes the
+     browser remember each row's real height after it has painted once. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto calc(var(--entity-thumb) + var(--space-5));
+}
+
+.shelf-row:hover {
+  background: var(--hover-wash);
+}
+
+.shelf-row-kind {
+  display: inline-flex;
+  justify-content: center;
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+.shelf-row-label {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.shelf-row-name {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The unnamed third. Mono at regular weight, at FULL strength: §3 gives the
+   mono face to file paths, and a filename-derived name is one — so this says
+   what the string is rather than demoting it. Rank is never opacity (§5.1),
+   and 37% of rows faded would be a column of ghosts. */
+.shelf-row-name--derived {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-regular);
+}
+
+.shelf-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  /* 0.7, not 0.6: at 12px the lower alpha measures 4.07:1 on the light canvas
+     and misses the 4.5:1 floor. */
+  color: rgba(var(--v-theme-on-background), 0.7);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-row-size {
+  font-variant-numeric: tabular-nums;
+}
+
+.shelf-row-loc {
+  display: inline-flex;
+  width: var(--gutter-glyph);
+  margin-left: var(--space-3);
+}
+
+.shelf-row-loc--present {
+  visibility: hidden;
+}
+
+.shelf-row-loc--missing,
+.shelf-row-loc--forgotten {
+  color: rgb(var(--v-theme-error));
+}
+
+.shelf-row-loc--unreachable {
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+</style>

@@ -346,6 +346,15 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   // the selection store: it shows no pictures, so it has no selection to express.
   const isDuplicatesView = computed(() => route.name === "duplicates");
 
+  // Same reasoning for the model shelf: it lists files on this machine, not
+  // pictures in the library, so it is a route rather than a selection.
+  const isModelsView = computed(() => route.name === "models");
+
+  /** Open the model shelf. */
+  function handleSelectModels() {
+    pushAppRoute({ name: "models" });
+  }
+
   /**
    * Open the duplicate triage queue, optionally scoped to one collection object.
    *
@@ -373,6 +382,8 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
 
   return {
     isDuplicatesView,
+    isModelsView,
+    handleSelectModels,
     handleSelectCharacter,
     handleSelectSet,
     handleSelectFolder,

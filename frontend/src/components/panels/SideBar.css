@@ -2426,3 +2426,19 @@ button.sidebar-ctx-item:disabled:hover {
 .relocate-actions {
   padding: 10px 16px 14px;
 }
+
+/* A fixed destination rendered as a real button rather than a clickable div,
+   so it is reachable by Tab. It carries the row classes and needs only the
+   defaults a <button> does not inherit: full width, left-aligned text, and the
+   UI font. The three older destinations are still divs; making them buttons is
+   the same four-line change and is filed, not forgotten. */
+.sidebar-destination-btn {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.sidebar-collapsed-item.sidebar-destination-btn {
+  text-align: center;
+}
