@@ -157,20 +157,30 @@ jobs:
   # 31023904354. Cutting to four shards bought those slots back, at the cost of
   # wall clock on every uncontended run.
   #
-  # At 60 slots that trade is gone, so the lever goes back to seconds-per-test.
-  # Twelve jobs per run leaves room for ~5 concurrent PR runs, which is what
-  # this repo routinely has in flight, so eight shards can now actually spend
-  # the parallelism they ask for. Each still pays its own ~3.2 min of
-  # setup-backend (free-disk-space + setup-python + pip install + HuggingFace
-  # cache restore), so ~26 min of runner time per run goes before a test
-  # executes, but that is now bought out of idle capacity instead of out of the
-  # next PR's slots.
+  # Under a hard slot cap, jobs-per-run is the lever, not seconds-per-test.
+  # Eight shards cannot spend the parallelism they ask for, and each one pays
+  # its own setup-backend (setup-python + pip install + HuggingFace cache
+  # restore). That was ~4 min per shard when the install still pulled the CUDA
+  # torch stack (issue #796 cut it to under a minute by installing CPU-only
+  # torch); at eight shards it was ~32 min of runner
+  # time per run before a single test executed, all of it competing for the
+  # same scarce slots as real work. Halving the matrix halves that fixed cost
+  # and returns four slots per run. Together with the two Windows shards this
+  # takes ci.yml from 16 jobs to 10, so two concurrent runs now fit inside the
+  # budget where one used to fill it.
   #
-  # Measured basis for the resize: at four shards, 193 s setup + 2652 s pytest
-  # = 45.5 min per shard, ~177 min of backend test compute per run. At eight
-  # that is ~22.1 min of tests + 3.2 min setup = ~25 min per shard. LPT over
-  # the committed map splits the recorded load dead level at N=8 (679 s per
-  # shard, max/min 1.000), and the balance guardrail
+  # The trade-off is real and was taken deliberately, and the number is not
+  # small. LPT over the committed map puts 1360 s of recorded load on each of
+  # four shards (vs 680 s on each of eight); CI measures ~1.77x the recorded
+  # local time (shard 7 of run 31031336234: 1202 s in CI against a ~680 s
+  # recorded share), so expect roughly 40 min of tests per shard plus ~1 min
+  # setup, against ~20 min before. An UNCONTENDED run therefore gets slower —
+  # ~45 min instead of ~25. It wins only because runs overlap, which is the
+  # normal state here, and because a failed shard now costs one slot for 45
+  # min instead of eight slots for 20.
+  #
+  # If that is too long, 6 is the middle setting (~27 min per shard, 12 jobs
+  # per run) and the balance guardrail
   # (test_ci_shards.py::test_recorded_durations_actually_balance_the_gate)
   # reads N from this matrix, so a future resize has to re-prove that rather
   # than inherit the claim. If the concurrency budget ever tightens again this
