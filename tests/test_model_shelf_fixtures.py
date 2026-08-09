@@ -1,0 +1,212 @@
+"""The model-shelf fixture generator produces files the shelf's readers accept.
+
+This is the acceptance test for ``scripts/generate_model_shelf_fixtures.py``.
+The fixtures exist so B4's scanner and the F1+ shelf UI are built against
+realistic data instead of invented data, and that is only true while the two
+readers that will consume them —
+:mod:`pixlstash.utils.adapter_header` and :mod:`pixlstash.utils.aitoolkit_run` —
+read the generated tree exactly as they read the real thing. So every assertion
+below goes through those readers rather than re-parsing the fixtures here.
+
+The adapter count is small on purpose: 1,800 files prove nothing 60 do not, and
+the name generator is exercised at full scale separately without touching disk.
+"""
+
+import importlib.util
+import os
+import sys
+
+import pytest
+
+from pixlstash.utils.adapter_header import (
+    FILE_ADAPTER,
+    FILE_CHECKPOINT,
+    FILE_UNKNOWN,
+    describe_adapter,
+)
+from pixlstash.utils.aitoolkit_run import read_output_root, read_run
+
+_SCRIPT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "scripts",
+    "generate_model_shelf_fixtures.py",
+)
+
+
+def _load_generator():
+    """Load the fixture generator, which lives under scripts/, not in a package."""
+    spec = importlib.util.spec_from_file_location(
+        "generate_model_shelf_fixtures", _SCRIPT
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["generate_model_shelf_fixtures"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+generator = _load_generator()
+
+SMALL_ADAPTER_COUNT = 60
+
+
+@pytest.fixture(scope="module")
+def tree(tmp_path_factory):
+    """One generated tree, shared: generating it is the expensive part."""
+    root = tmp_path_factory.mktemp("model-shelf")
+    return generator.generate(root, adapters=SMALL_ADAPTER_COUNT)
+
+
+# ── the big adapter folder ───────────────────────────────────────────────────
+
+
+class TestAdapterFolder:
+    def test_every_adapter_is_readable_by_the_header_parser(self, tree):
+        """The acceptance condition: nothing here is a file the shelf cannot read."""
+        files = sorted(tree.adapter_folder.glob("*.safetensors"))
+        assert len(files) == SMALL_ADAPTER_COUNT
+        for path in files:
+            info = describe_adapter(str(path))
+            assert info is not None, f"header parser could not read {path.name}"
+            assert info.tensor_count > 0, path.name
+            assert info.param_count > 0, path.name
+
+    def test_marker_free_files_read_as_unknown_never_checkpoint(self, tree):
+        """`unknown` must never be stored or shown as checkpoint (plan §6.5).
+
+        The generator writes a few marker-free adapters deliberately. They are
+        small, so the parameter-count rule must leave them unknown rather than
+        promoting them to checkpoint.
+        """
+        kinds = {
+            path.name: describe_adapter(str(path)).file_kind
+            for path in tree.adapter_folder.glob("*.safetensors")
+        }
+        assert FILE_ADAPTER in kinds.values()
+        assert FILE_UNKNOWN in kinds.values()
+        assert FILE_CHECKPOINT not in kinds.values()
+
+    def test_the_folder_carries_more_than_one_algorithm(self, tree):
+        """A shelf whose kind column is all `lora` is not a useful fixture."""
+        kinds = {
+            describe_adapter(str(path)).kind
+            for path in tree.adapter_folder.glob("*.safetensors")
+        }
+        assert len(kinds) > 1, kinds
+
+    def test_both_the_metadata_rich_and_the_bare_case_are_present(self, tree):
+        """The common download carries nothing; ai-toolkit output carries plenty."""
+        described = [
+            describe_adapter(str(path))
+            for path in tree.adapter_folder.glob("*.safetensors")
+        ]
+        assert any(info.has_metadata for info in described)
+        assert any(not info.has_metadata for info in described)
+        assert any(info.trigger_words for info in described)
+
+    def test_sizes_are_reported_in_full_but_not_paid_for(self, tree):
+        """Real sizes, sparse payloads: that is what makes 1,800 adapters fit.
+
+        Without this the folder is either 300 GB or a folder of 4 KB files that
+        makes a size-sorted shelf meaningless.
+        """
+        sizes = [
+            os.path.getsize(path) for path in tree.adapter_folder.glob("*.safetensors")
+        ]
+        # The spread is the point: a LoKr really is a few MB and a rank-64 SDXL
+        # LoRA really is hundreds, so a size-sorted shelf has something to sort.
+        assert min(sizes) > 500_000
+        assert max(sizes) > 100 * 1024 * 1024
+        assert tree.reported_bytes == sum(sizes)
+        assert tree.disk_bytes < tree.reported_bytes / 50
+
+    def test_names_are_unique_at_full_scale(self):
+        """1,800 files in one folder; two of them cannot share a name."""
+        names = generator._adapter_names(1800)
+        assert len(names) == 1800
+        assert len(set(names)) == 1800
+
+
+# ── the ai-toolkit runs ──────────────────────────────────────────────────────
+
+
+class TestFullRun:
+    def test_the_reader_sees_five_steps_and_the_bare_final(self, tree):
+        run = read_run(str(tree.full_run))
+        assert run.steps == [250, 500, 750, 1000, 1250]
+        assert run.checkpoints[-1].is_final
+        assert sum(1 for c in run.checkpoints if c.is_final) == 1
+
+    def test_it_carries_the_full_sample_grid(self, tree):
+        run = read_run(str(tree.full_run))
+        assert len(run.samples) == 130
+        assert len(run.samples_for_step(750)) == 26
+        assert [s.index for s in run.samples_for_step(750)] == list(range(26))
+
+    def test_the_samples_are_real_images(self, tree):
+        """The shelf renders these, so a zero-byte placeholder will not do."""
+        from PIL import Image
+
+        run = read_run(str(tree.full_run))
+        with Image.open(run.samples[0].path) as image:
+            assert image.size == (64, 96)
+
+    def test_the_config_yields_base_model_trigger_and_rank(self, tree):
+        run = read_run(str(tree.full_run))
+        assert run.config_error is None
+        assert run.base_model == "black-forest-labs/FLUX.1-dev"
+        assert run.trigger_words == ["aur0ra"]
+        assert run.rank == 16
+
+    def test_its_checkpoints_read_as_adapters(self, tree):
+        run = read_run(str(tree.full_run))
+        for checkpoint in run.checkpoints:
+            info = describe_adapter(checkpoint.path)
+            assert info is not None, checkpoint.filename
+            assert info.file_kind == FILE_ADAPTER
+            assert info.trained_by == "ai-toolkit 0.9.11"
+
+
+class TestRunWithoutABareFinal:
+    def test_no_checkpoint_claims_to_be_the_final(self, tree):
+        """The unconfirmed-cover state: every save is a step, none is settled."""
+        run = read_run(str(tree.no_final_run))
+        assert run.steps == [500, 1000, 1500]
+        assert not any(c.is_final for c in run.checkpoints)
+
+    def test_it_still_has_samples_and_a_config(self, tree):
+        run = read_run(str(tree.no_final_run))
+        assert len(run.samples) == 24
+        assert run.rank == 32
+        assert run.base_model == "Qwen/Qwen-Image"
+
+
+def test_the_output_root_lists_both_runs(tree):
+    runs = read_output_root(str(tree.aitoolkit_output))
+    assert [run.name for run in runs] == ["Aurora", "Nightfall"]
+
+
+# ── the states that are not a training run ───────────────────────────────────
+
+
+def test_the_manual_stack_has_two_adapters_and_no_samples(tree):
+    """Two hand-imports of one subject: a stack the shelf must cover without art."""
+    files = sorted(tree.manual_stack.glob("*.safetensors"))
+    assert [path.name for path in files] == [
+        "Cyanwood_v1.safetensors",
+        "Cyanwood_v2.safetensors",
+    ]
+    assert not (tree.manual_stack / "samples").exists()
+    for path in files:
+        assert describe_adapter(str(path)).file_kind == FILE_ADAPTER
+
+
+def test_the_offline_mount_does_not_resolve(tree):
+    """An unmounted share: the parent is there, the mount point is not.
+
+    A scanner has to mark this `unreachable`, which is a different row state
+    from `missing`, so the fixture must not be merely an empty directory.
+    """
+    assert tree.offline_mount.parent.is_dir()
+    assert not tree.offline_mount.exists()
+    with pytest.raises(NotADirectoryError):
+        read_run(str(tree.offline_mount))
