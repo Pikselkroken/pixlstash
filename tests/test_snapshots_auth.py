@@ -39,11 +39,19 @@ def _setup_server_with_owner_session():
         json.dump({"disable_background_workers": True}, fh)
     server = Server(config_path)
     server.__enter__()
-    client = TestClient(server.api, raise_server_exceptions=True)
-    r = client.post(
-        f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
-    )
-    assert r.status_code == 200, r.text
+    # The caller's try/finally cannot start until this returns, so anything
+    # that raises past __enter__ would strand a fully started Server — and its
+    # daemon database worker — for the rest of the session.
+    try:
+        client = TestClient(server.api, raise_server_exceptions=True)
+        r = client.post(
+            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        )
+        assert r.status_code == 200, r.text
+    except BaseException:
+        server.__exit__(None, None, None)
+        tmp.cleanup()
+        raise
     return tmp, server, client
 
 
