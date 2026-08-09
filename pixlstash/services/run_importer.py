@@ -315,6 +315,20 @@ class RunImporter:
                     f"Copy of {checkpoint.path} did not verify; the copy was "
                     "discarded and the original is untouched."
                 )
+            # Re-checked here and not only in :meth:`_resolve_targets`, for the
+            # same reason the mover re-checks in ``_move_one``: the plan ran in
+            # the POST and this runs minutes later on the worker thread, and
+            # ``os.replace`` overwrites in silence. ``SHELF_IO_LOCK`` keeps the
+            # other shelf operation out of that gap; the owner, ComfyUI or a
+            # trainer is under no lock of ours. ``lexists`` rather than
+            # ``exists`` so a symlink that appeared at the name is refused too:
+            # it is still a thing the caller did not name.
+            if os.path.lexists(target):
+                raise OSError(
+                    f"{os.path.basename(target)} appeared in the destination "
+                    "folder after the import was planned; the copy was discarded "
+                    "rather than written over it."
+                )
             os.replace(partial, target)
         except OSError as exc:
             discard_partial(partial)

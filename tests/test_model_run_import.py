@@ -329,6 +329,46 @@ def test_a_name_already_in_the_destination_is_refused_before_anything_copies(she
     assert models(shelf["hub"]) == {}
 
 
+def test_a_file_that_lands_on_the_destination_name_mid_copy_is_not_overwritten(
+    shelf, monkeypatch
+):
+    """The TOCTOU between ``_resolve_targets`` and ``os.replace``.
+
+    The batch is planned in the POST and the copy runs minutes later, so the
+    destination being free at plan time proves nothing about it being free at
+    write time — ``SHELF_IO_LOCK`` holds off the other shelf operation, not the
+    owner or a trainer. ``os.replace`` overwrites in silence, so without the
+    re-check this destroys a file nobody named and there is no undo.
+    """
+    target = shelf["destination_dir"] / "Clementine.safetensors"
+    real_digest = importer_module.file_digest
+
+    def gatecrash_then_digest(path):
+        if not target.exists():
+            target.write_bytes(b"somebody else's file")
+        return real_digest(path)
+
+    monkeypatch.setattr(importer_module, "file_digest", gatecrash_then_digest)
+
+    report = RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], steps=[None], delete_source=True
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_FAILED]
+    assert target.read_bytes() == b"somebody else's file", (
+        "the import wrote over a file that appeared after the batch was planned"
+    )
+    assert os.path.exists(shelf["run_dir"] / "Clementine.safetensors"), (
+        "the run's own file was unlinked despite the import failing"
+    )
+    assert models(shelf["hub"]) == {}
+    assert [
+        name
+        for name in os.listdir(shelf["destination_dir"])
+        if name.endswith(mover_module.PARTIAL_SUFFIX)
+    ] == [], "the discarded copy was left behind"
+
+
 def test_a_symlink_at_a_destination_name_is_refused_not_written_through(shelf):
     """The importer's destination containment is **reachable** too.
 
