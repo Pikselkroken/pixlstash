@@ -701,3 +701,40 @@ class TestUnreadableFiles:
         assert result.unreadable == 1
         assert models(hub) == {}
         assert located(hub) == {}
+
+
+class TestProgressReporting:
+    def test_the_denominator_arrives_before_the_first_file_is_read(
+        self, hub, scanner, tmp_path
+    ):
+        """A caller cannot draw a progress bar without a total, and hashing is
+        what makes the scan minutes long — so the walk is materialised and the
+        count is handed over *before* the first file is described, not
+        discovered as the generator drains. Only model files are counted: the
+        denominator has to match what the loop will actually work through.
+        """
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        for name in ("a", "b", "c"):
+            write_adapter(folder / f"{name}.safetensors")
+        (folder / "notes.txt").write_text("not a model")
+        folder_id = register_folder(hub, folder)
+
+        seen: list[tuple[int, int]] = []
+        scanner.scan_folder(
+            folder_id,
+            str(folder),
+            "user",
+            progress=lambda done, total: seen.append((done, total)),
+        )
+
+        assert seen == [(0, 3), (1, 3), (2, 3), (3, 3)]
+
+    def test_a_scan_with_no_callback_still_works(self, hub, scanner, tmp_path):
+        """The callback is optional; every other caller passes nothing."""
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "a.safetensors")
+        folder_id = register_folder(hub, folder)
+
+        assert scanner.scan_folder(folder_id, str(folder), "user").adapters == 1

@@ -33,6 +33,7 @@ class TaskType(str, Enum):
     STACK_COHESION = "StackCohesionTask"
     SNAPSHOT_IDENTITY_SCRUB = "SnapshotIdentityScrubTask"
     CHECKPOINT_HASH = "CheckpointHashTask"
+    MODEL_FOLDER_SCAN = "ModelFolderScanTask"
 
     @staticmethod
     def all():

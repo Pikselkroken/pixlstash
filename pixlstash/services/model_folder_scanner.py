@@ -49,7 +49,7 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import NamedTuple, Optional
+from typing import Callable, NamedTuple, Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
@@ -191,7 +191,13 @@ class ModelFolderScanner:
         rows = self._hub.fetchall("SELECT id, path, kind FROM model_folder ORDER BY id")
         return [self.scan_folder(row["id"], row["path"], row["kind"]) for row in rows]
 
-    def scan_folder(self, folder_id: int, path: str, kind: str) -> FolderScanResult:
+    def scan_folder(
+        self,
+        folder_id: int,
+        path: str,
+        kind: str,
+        progress: Optional[Callable[[int, int], None]] = None,
+    ) -> FolderScanResult:
         """Scan one registered folder and reconcile its rows with what is on disk.
 
         A scan of a folder of 1,800 adapters is minutes long, and
@@ -209,6 +215,10 @@ class ModelFolderScanner:
             path: The folder as registered. Owner-chosen and therefore trusted;
                 this is a read path only, so nothing here writes into it.
             kind: ``model_folder.kind``. ``source`` folders are skipped.
+            progress: Optional ``(processed, total)`` callback, invoked once the
+                walk knows how many files there are and again after each one.
+                Hashing dominates the runtime, so per-file is fine-grained
+                enough and cheap enough to call unconditionally.
 
         Returns:
             A :class:`FolderScanResult` describing what was found, or one with
@@ -219,7 +229,7 @@ class ModelFolderScanner:
                 the folder having been forgotten.
         """
         try:
-            return self._scan_folder(folder_id, path, kind)
+            return self._scan_folder(folder_id, path, kind, progress)
         except sqlite3.IntegrityError as exc:
             if self._folder_exists(folder_id):
                 raise
@@ -241,7 +251,13 @@ class ModelFolderScanner:
             is not None
         )
 
-    def _scan_folder(self, folder_id: int, path: str, kind: str) -> FolderScanResult:
+    def _scan_folder(
+        self,
+        folder_id: int,
+        path: str,
+        kind: str,
+        progress: Optional[Callable[[int, int], None]] = None,
+    ) -> FolderScanResult:
         if kind == SOURCE_FOLDER_KIND:
             return FolderScanResult(
                 folder_id=folder_id, path=path, state=STATE_PRESENT, skipped=True
@@ -255,14 +271,27 @@ class ModelFolderScanner:
         result = FolderScanResult(folder_id=folder_id, path=path, state=STATE_PRESENT)
         blocked: set[str] = set()
 
+        # Materialised so the caller can be told how many files there are before
+        # the first (potentially multi-GB) hash starts. Listing costs a stat per
+        # entry; hashing costs the whole folder, so the walk is the cheap half
+        # and a caller with no denominator has nothing to show for the expensive
+        # one. Only ``.safetensors`` files are yielded, so the list is small even
+        # for a folder of 1,800 adapters.
+        files = list(self._walk(path, blocked))
+        total = len(files)
+        if progress is not None:
+            progress(0, total)
+
         batch: list[_FileRecord] = []
-        for abs_path, relpath in self._walk(path, blocked):
+        for processed, (abs_path, relpath) in enumerate(files, start=1):
             record = self._describe(abs_path, relpath, known, result)
             if record is not None:
                 batch.append(record)
             if len(batch) >= _WRITE_BATCH:
                 self._write_batch(folder_id, batch, scanned_at)
                 batch = []
+            if progress is not None:
+                progress(processed, total)
         if batch:
             self._write_batch(folder_id, batch, scanned_at)
 
