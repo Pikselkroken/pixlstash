@@ -560,6 +560,29 @@ def _enforce_no_leaked_threads(session) -> None:
     session.exitstatus = 1
 
 
+def _stop_tqdm_monitors() -> None:
+    """Shut down tqdm's background monitor threads.
+
+    tqdm starts a ``TMonitor`` daemon per tqdm class the moment any progress
+    bar exists, and never stops it — a full Windows-shard run ends with two of
+    them still ticking on a 10-second interval. They are third-party, so the
+    leak gate above does not fail on them, but a daemon thread that wakes
+    periodically is precisely what ``Py_FinalizeEx`` kills mid-instruction.
+    Reached through ``threading.enumerate()`` rather than ``tqdm.tqdm.monitor``
+    because each tqdm class (std, auto, the copies vendored by transformers and
+    huggingface_hub) keeps its own.
+    """
+    for thread in threading.enumerate():
+        if type(thread).__name__ != "TMonitor":
+            continue
+        try:
+            thread.exit()
+        except Exception as exc:
+            print(
+                f"Could not stop tqdm monitor {thread.name}: {exc!r}", file=sys.stderr
+            )
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
     """Release native model/session resources before interpreter teardown.
@@ -591,6 +614,8 @@ def pytest_sessionfinish(session, exitstatus):
     except Exception:
         # Best-effort teardown: ignore cleanup failures during session shutdown.
         pass
+
+    _stop_tqdm_monitors()
 
     gc.collect()
 
