@@ -45,6 +45,7 @@ from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models.adapter_attachment import AdapterAttachment
+from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.server import Server
 from pixlstash.services.model_mover import SHELF_IO_LOCK
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
@@ -905,6 +906,43 @@ def test_put_refuses_an_entity_that_does_not_exist_and_writes_nothing(shelf_env)
     assert r.json()["attachments"] == [
         {"entity_type": "character", "entity_id": shelf_env.character_id}
     ], "a refused attachment write still wiped the existing set"
+
+
+def test_put_refuses_a_list_longer_than_the_ceiling(shelf_env):
+    """Every element is a ``session.get`` inside one ``DBPriority.IMMEDIATE``
+    vault transaction, which is the queue every other write waits behind, so an
+    unbounded body is a stall any authenticated caller can trigger. Refused by
+    validation, before the handler opens that transaction."""
+    over = [
+        {"entity_type": "character", "entity_id": shelf_env.character_id}
+        for _ in range(MAX_ATTACHMENTS_PER_MODEL + 1)
+    ]
+    r = shelf_env.owner.put(_attachments_url(ADAPTER_WITH_BASE), json=over)
+    assert r.status_code == 422, r.text
+
+    # The positive control: a list at the ceiling still writes. Over-blocking a
+    # legitimate assignment would be its own regression.
+    at_limit = over[:MAX_ATTACHMENTS_PER_MODEL]
+    r = shelf_env.owner.put(_attachments_url(ADAPTER_WITH_BASE), json=at_limit)
+    assert r.status_code == 200, r.text
+
+
+def test_put_refuses_an_attachment_carrying_an_unrecognised_key(shelf_env):
+    """The response model allows extra keys so an old client keeps reading a
+    newer server. A request is the other direction: an unrecognised key is a
+    typo, and accepting it silently turns a misspelled ``entity_id`` into a
+    no-op the user reads as success."""
+    r = shelf_env.owner.put(
+        _attachments_url(ADAPTER_WITH_BASE),
+        json=[
+            {
+                "entity_type": "character",
+                "entity_id": shelf_env.character_id,
+                "entitiy_id": 999999,
+            }
+        ],
+    )
+    assert r.status_code == 422, r.text
 
 
 def test_put_refuses_an_unknown_entity_type(shelf_env):

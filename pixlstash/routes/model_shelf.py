@@ -110,6 +110,28 @@ class ModelAttachment(BaseModel):
     )
 
 
+class ModelAttachmentRequest(ModelAttachment):
+    """One attachment as a *client* may send it.
+
+    The response model above allows extra keys, so a future field does not
+    break an old client reading it. A request is the other direction: an
+    unrecognised key there is a typo or a client the server does not
+    understand, and accepting it silently is how a misspelled ``entity_id``
+    becomes a no-op the user reads as success.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+# Ceiling on one PUT's attachment list. Every element costs a ``session.get``
+# inside a single ``DBPriority.IMMEDIATE`` vault transaction, which is the
+# queue every other write is waiting behind, so an unbounded list is a stall
+# any authenticated caller can trigger. 200 is far above the real shape of the
+# data (one adapter used by a handful of characters or sets) and far below a
+# list long enough to hold the write path.
+MAX_ATTACHMENTS_PER_MODEL = 200
+
+
 class ModelResponse(BaseModel):
     """One row of the shelf: what the file is, where its copies are, who uses it."""
 
@@ -484,11 +506,15 @@ def create_router(server) -> APIRouter:
     def put_adapter_attachments(
         sha256: str,
         request: Request,
-        attachments: list[ModelAttachment] = Body(
+        attachments: list[ModelAttachmentRequest] = Body(
             ...,
+            max_length=MAX_ATTACHMENTS_PER_MODEL,
             description=(
                 "The complete set of characters and sets that use this adapter. "
-                "An empty list detaches it from everything."
+                "An empty list detaches it from everything. At most "
+                f"{MAX_ATTACHMENTS_PER_MODEL} entries: each one is a lookup "
+                "inside the immediate write transaction, so a longer list "
+                "would stall every other write behind it."
             ),
         ),
     ):
