@@ -7,25 +7,79 @@
     aria-describedby="shelf-help"
   >
     <p id="shelf-help" class="visually-hidden">
-      Every adapter and checkpoint PixlStash has found on this machine. A name
-      in a monospaced face was taken from the filename, because nobody has named
+      Every adapter and checkpoint PixlStash has found on this machine. Show
+      chooses which kinds are listed and which base models. A name in a
+      monospaced face was taken from the filename, because nobody has named
       that file yet.
     </p>
 
     <div class="shelf-toolbar">
       <span class="shelf-title">Models</span>
       <span class="shelf-sub">{{ countLabel }}</span>
+      <span class="shelf-spacer"></span>
+      <v-menu
+        v-model="showMenuOpen"
+        :close-on-content-click="false"
+        location="bottom end"
+        origin="top end"
+        :offset="8"
+        transition="scale-transition"
+      >
+        <!-- The boxed bar button, its badge and the panel shell are the
+             toolbar's shipped filter pattern; v-menu is also what returns
+             focus to this button on Escape and on an outside click, so none
+             of that is hand-rolled. -->
+        <template #activator="{ props: menuProps }">
+          <button
+            v-bind="menuProps"
+            class="bar-btn bar-btn--boxed"
+            :class="{
+              'bar-btn--active': store.activeCount > 0 && !showMenuOpen,
+              'bar-btn--open': showMenuOpen,
+            }"
+            type="button"
+            title="Show"
+          >
+            <span class="bar-icon-badge-wrap">
+              <v-icon size="19">mdi-eye-outline</v-icon>
+              <span v-if="store.activeCount > 0" class="bar-filter-badge">{{
+                store.activeCount
+              }}</span>
+            </span>
+            <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
+          </button>
+        </template>
+        <ShelfShowPanel />
+      </v-menu>
     </div>
 
     <div class="shelf-body">
-      <p v-if="loading" class="shelf-state">Reading the shelf…</p>
-      <p v-else-if="error" class="shelf-state" role="alert">{{ error }}</p>
-      <div v-else-if="!rows.length" class="shelf-state">
+      <p v-if="store.loading" class="shelf-state">Reading the shelf…</p>
+      <p v-else-if="store.error" class="shelf-state" role="alert">
+        {{ store.error }}
+      </p>
+      <!-- Three empty states, deliberately distinct. Conflating "you filtered
+           everything out" with "there is nothing here" is the failure: the
+           first is one click from fixed and the second is not, so only the
+           first two offer Reset. -->
+      <div v-else-if="store.nothingSelected" class="shelf-state">
+        <p>Nothing is selected in Show.</p>
+        <button class="tbm-action" type="button" @click="store.resetFilters()">
+          Reset filters
+        </button>
+      </div>
+      <div v-else-if="!store.rows.length" class="shelf-state">
         <p>No models found.</p>
         <p>
           PixlStash lists what it finds in the model folders registered on this
           machine. Register one to fill the shelf.
         </p>
+      </div>
+      <div v-else-if="!store.visibleRows.length" class="shelf-state">
+        <p>No models match these filters.</p>
+        <button class="tbm-action" type="button" @click="store.resetFilters()">
+          Reset filters
+        </button>
       </div>
 
       <!-- Rows are not focus stops: they carry no verb and no selection, so
@@ -33,7 +87,7 @@
            first thing a focused row can do. -->
       <ul v-else class="shelf-list" role="list">
         <li
-          v-for="row in rows"
+          v-for="row in store.visibleRows"
           :key="row.id"
           class="ps-row shelf-row"
           :title="rowTitle(row)"
@@ -74,14 +128,13 @@
 
 <script setup>
 import { computed, nextTick, onMounted, ref } from "vue";
-import { listAdapters, listCheckpoints } from "../../api/modelShelf";
-import { errorDetail } from "../../utils/apiError";
-import { formatModelSize, locationState, modelName } from "../../utils/modelShelf";
+import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
+import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { formatModelSize } from "../../utils/modelShelf";
 
+const store = useModelShelfStore();
 const rootEl = ref(null);
-const models = ref([]);
-const loading = ref(false);
-const error = ref("");
+const showMenuOpen = ref(false);
 
 // A closed vocabulary gets a glyph, an open one a word. `unknown` gets a plain
 // file rather than a question mark (an unclassified file is a fact about our
@@ -119,17 +172,8 @@ const ALGO_LABEL = {
   oft: "OFT",
 };
 
-/** The rows as the list renders them: name resolved, locations reduced. */
-const rows = computed(() =>
-  models.value.map((row) => ({
-    ...row,
-    name: modelName(row),
-    locState: locationState(row.locations),
-  })),
-);
-
 const countLabel = computed(() => {
-  const n = rows.value.length;
+  const n = store.visibleRows.length;
   return `${n.toLocaleString()} ${n === 1 ? "model" : "models"}`;
 });
 
@@ -149,31 +193,8 @@ function rowTitle(row) {
   return [row.filename, where].filter(Boolean).join("\n");
 }
 
-/**
- * Load the shelf: two requests, never one per row, because the list already
- * carries each copy's location and who uses the model. Unclassified files are
- * in neither — `unknown` is first-class, gets its own filter with the `Show`
- * panel, and is never folded into either bucket.
- */
-async function fetchRows() {
-  loading.value = true;
-  error.value = "";
-  try {
-    const [adapters, checkpoints] = await Promise.all([
-      listAdapters(),
-      listCheckpoints(),
-    ]);
-    models.value = [...adapters, ...checkpoints];
-  } catch (err) {
-    error.value = errorDetail(err) || err?.message || String(err);
-    models.value = [];
-  } finally {
-    loading.value = false;
-  }
-}
-
 onMounted(async () => {
-  await fetchRows();
+  await store.fetchRows();
   // Tab out of the sidebar lands in the shelf, the same contract the duplicate
   // queue has.
   await nextTick();
@@ -211,6 +232,10 @@ onMounted(async () => {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-background), 0.7);
   font-variant-numeric: tabular-nums;
+}
+
+.shelf-spacer {
+  flex: 1 1 auto;
 }
 
 .shelf-body {
