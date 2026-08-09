@@ -230,6 +230,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useReviewSessionsStore` | `useReviewSessionsStore.js` | Tag-review state: the tag-health board, the rail of open review sessions (each = one tag + frozen scope + one scan's results), and the per-session binary/pair card queues. Per-item decisions write through `/tag_suggestions`; session bookkeeping talks to `/reviews`, the board to `/tag_health`. Also owns the opt-in gamification — variable-ratio sticker awards with monotonic XP / level / streak counters; the sticker vocabulary is imported from `setAppearance.js` so sets and stickers never drift. |
 | `useLockedSetsStore` | `useLockedSetsStore.js` | Which pictures are frozen by a locked picture set. Fed by `GET /picture_sets/locked-members`; refreshed on app start and on the same sidebar-refresh / `pictures_changed` ws triggers the sidebar uses. Single source of the lock-tooltip copy reused by the grid badge, overlay chip, and context-menu gating. |
 | `useModelShelfStore` | `useModelShelfStore.js` | The model shelf's rows and its `Show` selection. `rows` are the raw `/adapters` + `/checkpoints` payload; `visibleRows` layers the resolved name and the reduced location state on top and applies the kind and base-model narrowing **client-side**, so a multi-select base-model filter is not one request per option. `filters` (`adapters`, `adapterKinds`, `checkpoints`, `unclassified`, `baseModels`) persists to `localStorage` under `pixlstash:modelShelfFilters` — not to `/users/me/config`, which is a fixed `User` model and would need a backend column. An empty `adapterKinds` / `baseModels` array means **unconstrained**, the standard multi-select convention and the only reading under which a fresh install shows anything. `activeCount` counts filter SECTIONS that deviate from their default, not ticked boxes, or a mild narrowing would read as `9`. Only the three top-level type toggles refetch; the rest narrow what is already loaded. **Session reset drops `rows` but keeps `filters`:** the models are hub-side facts about this machine, but every row carries the characters and sets in the ACTIVE LIBRARY that use it, while the selection is the user's own preference and holds no ids. |
+| `useModelFoldersStore` | `useModelFoldersStore.js` | The registered model folders and the scans running against them. Fetched when `ModelFoldersDialog` opens, not at startup: the dialog is its only reader. It is a **store rather than dialog state** because a scan outlives the panel that started it, and because `POST .../rescan` answers 202 as soon as the thread starts, so completion has to be waited for: the store polls `GET /model-folders` every 3s and treats `last_checked` advancing as done, then refreshes `useModelShelfStore` and says what landed. It **gives up after 10 minutes**, because the scanner logs an exception without stamping `last_checked` and a crashed scan is otherwise indistinguishable from a slow one. `forget` captures the row's fields BEFORE the request, which is what makes the notice's `Add it back` possible and therefore what lets removal skip a confirmation prompt. **Session reset drops it whole:** absolute host paths are owner-only, and a session that lost its credential has no standing to keep polling. |
 | `useGenStackPrefsStore` | `useGenStackPrefsStore.js` | Remembered client prefs for whether newly generated / filtered images stack with their source: `stackI2IOutputs` (ComfyUI image-to-image) and `stackFilterOutputs` (plugin "Filters" runs), both default ON and persisted to `localStorage`. |
 | `useEntityListsStore` | `useEntityListsStore.js` | The character / picture-set / project **lists** themselves (`characters`, `pictureSets`, `projects`) plus `fetchedAt` and `pending` per kind. One cache for the three surfaces that need them — the `SideBar` tree, the image context menu's Person/Set/Project flyouts, and the tag-review scope pickers. **Stale-while-revalidate:** a caller renders the cached list immediately and calls `refresh(kind)` *without awaiting it*, so opening a flyout never waits on the network; concurrent callers share one in-flight request (`inFlight`, modelled on `useDedupStore.scopeCounts`). `invalidate(kinds)` is **refetch-only** — a `characters_changed` ws event or a local assignment says "ask again", it never writes the store from a payload (`origin_client_id` is echo-matching, not authority; see §9 and integration_architecture.md §8.1). **These are `SCOPED_LIST` routes, so their content is an authorization decision:** the cache is in-memory only (never `localStorage`/`sessionStorage`), `reset()` drops it on every auth-context transition via the single `onSessionReset` chokepoint in `apiClient` (logout / login / share-token entry / vault switch), and an epoch guard discards any response that was in flight across that transition. Revalidate-on-open is mandatory rather than an optimisation: a share/scoped session receives no ws events (the stream is owner-only), so it is that session's only invalidation path. **The sidebar's row counts ride along on these lists (`include_counts=true`, issue #651):** every character row carries `image_count` and `project_image_count` (scoped to the character's OWN `project_id`, or to "in no project" when it has none) and every project row carries `image_count`, which is what replaced `SideBar.fetchSidebarData`'s one-`/{id}/summary`-per-row fan-out. They live on the shared list rather than in a second counts-bearing cache on purpose (two shapes for one entity would mean two caches, two invalidation paths and two epochs), and the flyout / scope-picker consumers simply ignore the extra fields. Because both scopes are on every row and neither depends on the sidebar's current project selection, one cached response serves both sidebar view modes. Distinct from `useEntityNamesStore`, which holds id→name maps only. |
 | `useEntityNamesStore` | `useEntityNamesStore.js` | `characterNames`, `setNames`, `projectNames`, `refFolderLabels`, `importFolderLabels` (id→name maps). One-directional id→name only (names aren't unique). `SideBar` publishes via `merge*` setters after each fetch; `ImageGrid`'s breadcrumb consumes them to label the route's IDs. |
@@ -1346,6 +1347,64 @@ and the wire sentinel never reaches the UI.
 Windowing is `content-visibility: auto` with `contain-intrinsic-size` on the
 row rather than a virtual scroller: the browser skips layout and paint outside
 the viewport, which is what 1,800 rows need, in two declarations.
+
+#### Registering the folders the shelf reads
+
+`ModelFoldersDialog.vue` (`components/panels/`) is the registry surface,
+opened from a `bar-btn--boxed` beside `Show` and from the empty state's own
+button. The empty state is the moment the folder list matters, so the fix must
+not be two navigations away in Settings. `FolderBrowser.vue` is reused whole as
+the host-path picker, and `registeredPaths` is what stops the API's duplicate
+409 rather than reporting it.
+
+Four states are designed rather than left to fail on click:
+
+- **A remote owner reads the list and may change nothing.** `GET
+  /model-folders` is `OWNER_ONLY`, every mutator is `LOCAL_OWNER_ONLY` (§16.3).
+  The signal is `useLibrariesStore().canManage`, already refreshed at startup
+  for every non-read-only session, so there is no second source of truth to
+  drift. Blocked controls take **`aria-disabled`, never the `disabled`
+  attribute**, the shipped `MixedQueueRow` / `ReviewDecisionBar` pattern, so
+  they keep their tab stop and the `aria-describedby` reason they point at
+  stays reachable by keyboard. Docker blocks *adding* for a different reason
+  (`POST` needs a host path this UI cannot ask for from inside a container) and
+  says so in its own sentence.
+- **The managed store has no remove affordance at all.** `DELETE` on it is a
+  **409, not a 403**: the caller is authorized and the target's state refuses,
+  because exactly one such row always exists and it is PixlStash's own storage.
+  A button that could only ever 409 is a worse answer than no button, so the
+  row carries Relocate in that slot instead, and the reason its Forget is
+  missing is **rendered in the row**, not in a tooltip. Relocation itself is
+  not built yet: the control ships blocked and described, so its absence is not
+  mistaken for a design gap.
+- **Every action slot is reserved.** Three slots per row plus a trailing help
+  mark, and an action a row does not have is hidden with `visibility`, never
+  `v-if`: §5.1's glyph-gutter rule applied to the right edge, or the managed
+  row's missing Forget would slide every other row's Scan sideways. The help
+  mark (`widgets/HelpTip.vue`, an `AppButton` in a `v-tooltip`) is the
+  pointer-and-focus route to a blocked control's reason; it opens on focus as
+  well as hover and its box is reserved on rows with nothing to explain.
+- **`POST .../rescan` answers 202 the instant the thread starts.** There is no
+  progress channel, because the scanner is a raw daemon thread, so there is no
+  progress bar to draw and a fake one would lie. `useModelFoldersStore` polls
+  the list every 3s and treats `last_checked` advancing as completion, then
+  refreshes the shelf and says what landed. The poll lives in the **store, not
+  the dialog**, because a 57 GB scan outlives the panel that started it; it
+  gives up after 10 minutes, because the scanner logs its exception without
+  stamping `last_checked` and a crash is otherwise indistinguishable from a
+  slow read.
+
+Forgetting a folder takes **no confirmation and an undo instead**. The API
+tombstones only the `model_file` rows, so the models keep the names, triggers
+and attachments the owner gave them and re-adding re-links by content. That is
+only cheap to reverse because the notice's `Add it back` exists, which is why
+the row's fields are captured *before* the request that destroys them.
+
+Rows are a plain `<ul role="list">` of real `<button>`s, deliberately **not**
+`role="listbox"` / `role="option"`: nothing here is selected, and interactive
+controls inside an `option` are unreachable to a screen reader. Both openers
+restore focus to the control that was pressed, falling back to the toolbar
+button when the empty-state button has unmounted underneath the dialog.
 
 ---
 

@@ -30,6 +30,9 @@ const globalOpts = {
         template: "<div><slot name='activator' :props='{}' /><slot /></div>",
       },
       ShelfShowPanel: true,
+      // Its own suite mounts it. Here it would only drag Vuetify's dialog and
+      // tooltip providers into a suite that installs neither.
+      ModelFoldersDialog: true,
     },
   },
 };
