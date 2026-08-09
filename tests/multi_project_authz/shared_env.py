@@ -309,9 +309,16 @@ def _reset_domain_state(server, baseline):
     # The token cache mirrors the rows just deleted, and a bare `.clear()` skips
     # the revocation epoch bump (see AuthService._flush_token_cache).
     server.auth._flush_token_cache()
-    assert server.auth._db.run_immediate_read_task(
-        lambda session: session.exec(select(func.count()).select_from(UserToken)).one()
-    ) in (0, (0,)), "token rows survived the reset; a stale credential stays live"
+    # `Session.scalar` unwraps the single column itself, so this compares an int
+    # to an int. Accepting `(0,)` as well would mean the assertion also passes
+    # for a `Row` holding *any* count, which is the one thing it must not do:
+    # what it guards is that no credential survived the reset.
+    remaining = server.auth._db.run_immediate_read_task(
+        lambda session: session.scalar(select(func.count()).select_from(UserToken))
+    )
+    assert remaining == 0, (
+        f"{remaining} token row(s) survived the reset; a stale credential stays live"
+    )
 
 
 def _build_fixture_entities(client, pic_a):
