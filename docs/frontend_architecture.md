@@ -586,7 +586,7 @@ Configure import/reference folders (add, edit, remove, Docker command generation
 Server-side directory browser dialog. Props: `open`, `initialPath`. Emits: `select`, `close`. Fetches `GET /folders/browse`.
 
 #### `FolderTreeNode.vue` (230 lines)
-Recursive tree node for nested folder display. Props: `node`, `expanded`, `depth`. Emits: `select`, `toggle`.
+Recursive tree node for nested folder display. Props: `entry`, `rfId`, `depth`, `selectedFolderKey`, `folderBrowseCache`, `expandedFolderIds`, `dropTargetKey`, `dropRejected`. Emits: `select`, `toggle`, `drag-over`, `drag-leave`, `drop`, `context`. `dropRejected` must be declared and forwarded down the recursion, or a refused payload paints the full `droppable` accept highlight on a row whose dragover never called `preventDefault()`; the row styling lives unscoped in `SideBar.global.css` (`.sidebar-folder-row.not-droppable`).
 
 ---
 
