@@ -165,8 +165,7 @@ def _check_sparse_support(root: Path) -> None:
         # stop rather than quietly writing 100 GB.
         raise RuntimeError(
             f"Cannot verify sparse-file support under {root} ({exc}). These "
-            "fixtures rely on it: without holes the adapter folder is ~100 GB. "
-            "Pass --adapters with a small count to generate anyway."
+            "fixtures rely on it: without holes the adapter folder is ~100 GB."
         ) from exc
     finally:
         if probe.exists():
@@ -176,8 +175,7 @@ def _check_sparse_support(root: Path) -> None:
         raise RuntimeError(
             f"{root} is on a filesystem without sparse files (a 1 MiB hole "
             f"allocated {allocated} bytes). The adapter folder would really "
-            "weigh ~100 GB here. Point --root at ext4/btrfs/xfs/APFS, or pass "
-            "--adapters with a small count."
+            "weigh ~100 GB here. Point --root at ext4/btrfs/xfs/APFS."
         )
 
 
@@ -315,6 +313,8 @@ def generate_adapter_folder(root: Path, count: int = 1800) -> tuple[int, int]:
         ``(reported_bytes, disk_bytes)``.
     """
     root.mkdir(parents=True, exist_ok=True)
+    for old in root.glob("*.safetensors"):
+        old.unlink()
     rng = random.Random(20261010)
     reported = 0
     disk = 0
