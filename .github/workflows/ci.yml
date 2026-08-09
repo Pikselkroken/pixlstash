@@ -456,6 +456,7 @@ jobs:
           tests/test_scope_table.py
           tests/test_score_agreement_stats.py
           tests/test_scrapheap_retention.py
+          tests/test_security_supported_versions.py
           tests/test_server.py
           tests/test_share_link_library_pin.py
           tests/test_sidebar_counts_query_cost.py
