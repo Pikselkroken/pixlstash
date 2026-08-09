@@ -19,6 +19,8 @@ Two rules under test throughout:
 
 import re
 import sqlite3
+import threading
+import time
 
 import pytest
 
@@ -204,6 +206,63 @@ class TestReRunIsSafe:
 
         apply_migrations(hub)
         assert set(SHELF_TABLES) <= table_names(hub)
+
+    def test_the_re_run_takes_the_write_lock_before_it_reads_the_schema(self, tmp_path):
+        """The tail is the same read-then-ALTER logic the versioned path guards.
+
+        A server and a ``pixlstash libraries`` CLI can open the same
+        pre-model-shelf v2 hub at once. Under sqlite3's default DEFERRED
+        transaction both read "column absent", both ALTER, and the loser raises
+        ``OperationalError`` ("duplicate column name") straight out of
+        ``HubDatabase.__init__``. ``BEGIN IMMEDIATE`` before the read means the
+        loser waits and then sees the column the winner added.
+
+        Deterministic, not timing-hopeful: the competitor holds the write lock
+        across the whole re-run and only commits once the re-run is provably
+        parked on it.
+        """
+        hub_path = tmp_path / "hub.db"
+        conn = sqlite3.connect(hub_path, timeout=30, check_same_thread=False)
+        competitor = sqlite3.connect(hub_path, timeout=30)
+        errors: list[Exception] = []
+        try:
+            apply_migrations(conn)
+            conn.commit()
+            # Put the hub back in the state a pre-telemetry v2 developer hub is
+            # in: still version 2, so the migration loop skips every step and
+            # only the tail runs, and missing a column the tail wants to add.
+            conn.execute("ALTER TABLE user DROP COLUMN telemetry_consent_prompted")
+            conn.commit()
+            assert read_schema_version(conn) == 2
+
+            competitor.execute("BEGIN IMMEDIATE")
+
+            def rerun():
+                try:
+                    apply_migrations(conn)
+                except Exception as exc:  # pragma: no cover - asserted below
+                    errors.append(exc)
+
+            thread = threading.Thread(target=rerun)
+            thread.start()
+            # The competitor is the other process winning the race: it adds the
+            # very column the parked re-run intends to add.
+            time.sleep(0.3)
+            competitor.execute(
+                "ALTER TABLE user ADD COLUMN telemetry_consent_prompted INTEGER"
+            )
+            competitor.commit()
+            thread.join(timeout=30)
+
+            assert not thread.is_alive(), "the re-run never finished"
+            assert not errors, f"the losing re-run raised: {errors}"
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(user)").fetchall()
+            }
+            assert "telemetry_consent_prompted" in columns
+        finally:
+            conn.close()
+            competitor.close()
 
     def test_existing_rows_survive_a_re_run(self, hub):
         apply_migrations(hub)

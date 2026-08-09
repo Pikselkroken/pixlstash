@@ -5,6 +5,7 @@ Pytest configuration and fixtures for test suite.
 import gc
 import json
 import math
+import os
 import socket
 import statistics
 import sys
@@ -420,14 +421,25 @@ def _measured_test_seconds(reporter) -> float:
 
 
 def _enforce_test_time_budget(session) -> None:
-    """Turn the shard red when its own measured test time blows the budget.
+    """Report the shard's measured test time when it blows the budget.
 
     Only active under ``--ci-shard``, so a local partial run cannot trip it.
-    Deliberately a signal rather than a correctness gate: every test can pass
-    and this still exits non-zero, which is why the banner says exactly that.
-    The repo has no required status checks; a red step is simply the loudest
-    thing available, and the drift it watches for (the gate creeping from 15 to
-    47 minutes per shard) has no other alarm.
+    A signal rather than a correctness gate: every test can pass and the shard
+    is still over budget, which is why the banner says exactly that. The drift
+    it watches for (the gate creeping from 15 to 47 minutes per shard) has no
+    other alarm.
+
+    **It does not touch the exit status.** It used to, and that closed the loop
+    the breach is normally fixed by: refreshing ``ci_test_durations.json`` is
+    the standard remedy for a slow gate, and
+    ``.github/workflows/record-test-durations.yml`` refuses to harvest any run
+    whose conclusion is not ``success`` (a red shard may never have reported
+    its durations). A shard failed purely for being slow therefore made the
+    refresh impossible for exactly as long as it was needed. A red check also
+    reads as "broken" to everything downstream that only sees an exit code, and
+    this is not that. The signal is instead a GitHub annotation plus a step
+    summary entry, both of which survive on the run page without lying about
+    what happened.
     """
     spec = session.config.getoption("--ci-shard")
     if not spec:
@@ -452,21 +464,44 @@ def _enforce_test_time_budget(session) -> None:
         return
 
     banner = "TEST-TIME BUDGET EXCEEDED - THIS IS NOT A TEST FAILURE"
-    reporter.write_sep("=", banner, red=True, bold=True)
-    reporter.write_line(
-        f"Every test above may have passed. This shard spent {measured:.6g}s of "
-        f"test time against a ceiling of {ceiling:.6g}s "
-        f"({TEST_TIME_BUDGET_SECONDS:.0f}s for the whole suite / {shards} shards)."
+    measurement = (
+        f"This shard spent {measured:.6g}s of test time against a ceiling of "
+        f"{ceiling:.6g}s ({TEST_TIME_BUDGET_SECONDS:.0f}s for the whole suite "
+        f"/ {shards} shards)."
     )
-    reporter.write_line(
+    remedy = (
         "The suite got slower, it did not break. Reuse an existing "
         "module-scoped environment instead of standing up a Server per test "
-        "(CLAUDE.md, 'Tests: reuse the environment, don't rebuild it'), or "
-        "raise TEST_TIME_BUDGET_SECONDS in tests/conftest.py deliberately and "
-        "put the measurement that justifies it in the commit message."
+        "(CLAUDE.md, 'Tests: reuse the environment, don't rebuild it'), "
+        "refresh tests/ci_test_durations.json, or raise "
+        "TEST_TIME_BUDGET_SECONDS in tests/conftest.py deliberately and put "
+        "the measurement that justifies it in the commit message."
     )
     reporter.write_sep("=", banner, red=True, bold=True)
-    session.exitstatus = 1
+    reporter.write_line(f"Every test above may have passed. {measurement}")
+    reporter.write_line(remedy)
+    reporter.write_sep("=", banner, red=True, bold=True)
+    # Written to stdout, which is where Actions reads workflow commands from.
+    # Outside Actions it is one more harmless line under the banner.
+    reporter.write_line(
+        f"::warning title=Test-time budget exceeded::{measurement} {remedy}"
+    )
+    _append_step_summary(f"### {banner}\n\n{measurement}\n\n{remedy}\n")
+
+
+def _append_step_summary(markdown: str) -> None:
+    """Append to the GitHub Actions step summary, if we are running in one."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(markdown)
+    except OSError as exc:
+        # The annotation above already carries the message, so a summary that
+        # cannot be written costs presentation and no signal. Say why anyway,
+        # or a silently empty summary looks like the check never fired.
+        print(f"Could not append to GITHUB_STEP_SUMMARY at {path}: {exc}")
 
 
 # Both roots are needed. CI installs the package non-editable

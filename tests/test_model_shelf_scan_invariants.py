@@ -189,6 +189,61 @@ class TestWeCouldNotLookIsNotGone:
 
         assert set(states(hub).values()) == {STATE_PRESENT}
 
+    def test_a_folder_forgotten_mid_scan_ends_the_scan_without_a_traceback(
+        self, hub, scanner, tmp_path
+    ):
+        # A scan of 1,800 adapters is minutes long and `DELETE
+        # /model-folders/{id}` can land inside it. `model_file.model_folder_id`
+        # is NOT NULL REFERENCES and the hub runs with foreign keys on, so the
+        # next batch commits against a parent that is gone. Nothing is lost, so
+        # the operator gets a message rather than an IntegrityError traceback
+        # out of the rescan thread.
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        for index in range(3):
+            write_adapter(folder / f"{index}.safetensors", pad=index)
+        folder_id = register_folder(hub, folder)
+
+        original = ModelFolderScanner._write_batch
+
+        def forget_then_write(self, *args, **kwargs):
+            with hub.transaction() as conn:
+                conn.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
+            return original(self, *args, **kwargs)
+
+        ModelFolderScanner._write_batch = forget_then_write
+        try:
+            result = scanner.scan_folder(folder_id, str(folder), "user")
+        finally:
+            ModelFolderScanner._write_batch = original
+
+        assert result.skipped, "the abandoned scan did not report itself skipped"
+        assert result.state == STATE_MISSING
+        assert hub.fetchall("SELECT * FROM model_file") == []
+
+    def test_an_integrity_error_with_the_folder_still_there_is_still_raised(
+        self, hub, scanner, tmp_path
+    ):
+        # The positive control for the clause above: swallowing every
+        # IntegrityError would hide a real constraint defect behind the same
+        # "the folder was forgotten" message.
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "a.safetensors")
+        folder_id = register_folder(hub, folder)
+
+        original = ModelFolderScanner._write_batch
+
+        def die(*_args, **_kwargs):
+            raise sqlite3.IntegrityError("a genuine constraint violation")
+
+        ModelFolderScanner._write_batch = die
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                scanner.scan_folder(folder_id, str(folder), "user")
+        finally:
+            ModelFolderScanner._write_batch = original
+
     def test_emptying_one_folder_leaves_the_other_folder_alone(
         self, hub, scanner, tmp_path
     ):

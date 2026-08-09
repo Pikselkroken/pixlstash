@@ -680,8 +680,23 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
     # Version 2 is still unreleased and existed in earlier feature-lane builds.
     # Re-run its guarded shape reconciliation so those developer hubs receive
     # newly added v2 tables without pretending a released v3 exists.
+    #
+    # BEGIN IMMEDIATE for the same reason the versioned path takes it: this is
+    # the same read-then-ALTER logic, so a server and a `pixlstash libraries`
+    # CLI opening a pre-model-shelf v2 hub at once can both read "column
+    # absent" and both try to add it. Without the lock the loser raises
+    # OperationalError out of HubDatabase.__init__, uncaught.
     if version >= 2:
-        with conn:
-            _apply_v2(conn)
+        try:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                _apply_v2(conn)
+        except sqlite3.Error as exc:
+            logger.error(
+                "Hub v2 shape reconciliation failed, hub stays on version %d: %s",
+                version,
+                exc,
+            )
+            raise
 
     return version

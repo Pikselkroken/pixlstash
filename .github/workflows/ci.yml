@@ -706,12 +706,20 @@ jobs:
         run: |
           cd frontend
           npm ci
-          npx playwright install --with-deps chromium
           # This job used to reclaim runner disk with jlumbroso/free-disk-space
-          # (88 s) before installing anything. That step is gone; this `df` is
-          # what replaces the assumption with a measurement, on the fullest
-          # point of the job — after Python, Node, npm deps and Chromium are
-          # all on disk. If it ever gets tight, put the reclaim step back.
+          # (88 s) before installing anything. That step is gone, so the
+          # headroom is measured instead of assumed - and measured BEFORE
+          # Chromium lands, because that is the download that runs out of it.
+          # A bare `df` after the fact prints on the green runs and is missing
+          # on the one that matters: the job dies inside `playwright install`
+          # with an ENOSPC that reads as a Playwright bug. A warning, not a
+          # failure: 4 GiB is a heuristic, and a heuristic must not be able to
+          # fail a build on its own. If this fires, put the reclaim step back.
+          avail_kb="$(df --output=avail -k / | tail -1)"
+          if [ "$avail_kb" -lt 4194304 ]; then
+            echo "::warning title=Low runner disk::Only $((avail_kb / 1024)) MiB free on / before installing Chromium. If this job failed with ENOSPC, that is why; restore the jlumbroso/free-disk-space step."
+          fi
+          npx playwright install --with-deps chromium
           df -h /
 
       - name: Run Playwright e2e

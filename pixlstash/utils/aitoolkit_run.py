@@ -102,27 +102,32 @@ class TrainingRun:
         )
 
 
-def _split_step(stem: str) -> tuple[str, int | None]:
-    """Split a checkpoint stem into its run name and step.
+def _split_step(stem: str, run_name: str) -> int | None:
+    """Read the step out of a checkpoint stem, or ``None`` for the final save.
 
     A stem with no trailing step is the run's final save, so the step is
     ``None`` rather than 0. Zero is a real step ai-toolkit can emit, and
     conflating "final" with "step 0" would sort the finished adapter to the
     front of the list.
+
+    The parsed name has to equal ``run_name`` or the digits are part of the run
+    name, not a step: a run ``Archive_2025`` saves its final as
+    ``Archive_2025.safetensors``, which the pattern alone reads as run
+    "Archive" at step 2025.
     """
     match = _STEP_RE.match(stem)
-    if not match:
-        return stem, None
-    return match.group("name"), int(match.group("step"))
+    if not match or match.group("name") != run_name:
+        return None
+    return int(match.group("step"))
 
 
-def _read_checkpoints(run_dir: str) -> list[Checkpoint]:
+def _read_checkpoints(run_dir: str, run_name: str) -> list[Checkpoint]:
     found: list[Checkpoint] = []
     for entry in os.scandir(run_dir):
         if not entry.is_file() or not entry.name.endswith(CHECKPOINT_SUFFIX):
             continue
         stem = entry.name[: -len(CHECKPOINT_SUFFIX)]
-        _, step = _split_step(stem)
+        step = _split_step(stem, run_name)
         found.append(Checkpoint(path=entry.path, filename=entry.name, step=step))
     # Ascending by step with the final last: that is the order a user reads a
     # run in, and the final is the one they most often want.
@@ -278,7 +283,7 @@ def read_run(run_dir: str) -> TrainingRun:
 
     run = TrainingRun(name=os.path.basename(os.path.normpath(run_dir)), path=run_dir)
     try:
-        run.checkpoints = _read_checkpoints(run_dir)
+        run.checkpoints = _read_checkpoints(run_dir, run.name)
         run.samples = _read_samples(run_dir)
     except OSError as exc:
         # A run folder that becomes unreadable mid-scan is worth surfacing, but

@@ -1,7 +1,11 @@
 <template>
+  <!-- role="region" because a bare div is role `generic`, which prohibits an
+       accessible name: without it the aria-label is dropped and #shelf-help is
+       never announced, so the whole paragraph below is dead weight. -->
   <div
     ref="rootEl"
     class="shelf"
+    role="region"
     tabindex="-1"
     aria-label="Model shelf"
     aria-describedby="shelf-help"
