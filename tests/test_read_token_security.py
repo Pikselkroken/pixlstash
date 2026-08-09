@@ -23,10 +23,13 @@ the library costs ~1.5-2.3 s and its assertions cost milliseconds, so it shares
 one environment for the whole class (``read_token_write_env``) and re-mints
 *credentials* per test instead (``read_token``). That split is deliberate — a
 shared credential is exactly what would let one test's revocation turn a later
-test's 403 from "wrong scope" into "no credential", so every test gets a fresh
-token that is probed against an in-scope read before the negative assertion
-runs, and ``test_shared_environment_is_still_intact_and_readable`` closes the
-class as a canary.
+test's 403 from "wrong scope" into "no credential". ``read_token`` is therefore
+also the canary for the shared environment: it re-establishes the owner
+session, mints a fresh token, proves that token on an in-scope read and
+re-checks the library's ids and scores, all before each negative assertion
+runs. It is a per-test fixture rather than a trailing "runs last" test because
+``--ci-shard`` (tests/conftest.py) partitions tests individually, so a trailing
+test would land in one shard and watch nothing in the other three.
 """
 
 import io
@@ -269,11 +272,16 @@ def read_token_write_env():
     Booting the Server and running the library through the import pipeline is
     ~1.5-2.3 s; the assertions it serves are single HTTP calls. Every write in
     the class is expected to be *refused*, so the environment is read-only in
-    practice and safe to share — and any write that did land shows up in the
-    closing canary, which re-checks ids and scores.
+    practice and safe to share — and any write that did land is caught by the
+    integrity check in ``read_token``, which re-checks ids and scores before
+    every single test.
 
     Deliberately class-scoped, not module-scoped: the blast radius of the
-    sharing stays inside the one class that opted into it.
+    sharing stays inside the one class that opted into it. Note that
+    ``--ci-shard`` (tests/conftest.py) partitions tests individually, so in CI
+    this class is split across shards and each shard builds its own copy of
+    this fixture — which is why the guard lives in the per-test fixture and not
+    in a trailing "runs last" test that no shard is guaranteed to receive.
     """
     with tempfile.TemporaryDirectory() as tmp:
         server, owner_client, picture_ids, _ = _setup_server_with_pictures(tmp)
@@ -283,7 +291,6 @@ def read_token_write_env():
                 owner_client=owner_client,
                 picture_ids=picture_ids,
                 scores=_fixture_scores(picture_ids),
-                tmp=tmp,
             )
         finally:
             server.__exit__(None, None, None)
@@ -293,21 +300,33 @@ class TestReadTokenBlocksWrites:
     """A READ token must be rejected for every mutating HTTP method.
 
     The Server is shared across the class (``read_token_write_env``) but the
-    credential is not: ``read_token`` re-mints one per test and proves it works
-    on an in-scope read first, so a 403 below can only mean "wrong scope".
+    credential is not: ``read_token`` re-mints one per test, proves it works on
+    an in-scope read, and re-checks the library's ids and scores first, so a
+    403 below can only mean "wrong scope".
     """
 
     @pytest.fixture(autouse=True)
     def read_token(self, read_token_write_env):
-        """Mint a fresh global READ token for each test, and prove it is live.
+        """Mint a fresh global READ token per test, and re-prove the environment.
 
-        Sharing an environment across negative tests is exactly the change that
-        can make a 403 pass for the wrong reason: one test revoking a token or
-        dropping the owner session would leave every later test asserting
-        "unauthenticated" while claiming to assert "read scope cannot write".
-        So each test gets its own credential, and the probe below is the
-        in-scope positive control adjacent to every negative assertion — if the
-        token could not read, the test that follows never runs.
+        This is the canary for the shared environment, and it deliberately runs
+        before *every* test rather than as a trailing "runs last" test: CI
+        partitions this class across shards (``--ci-shard``, tests/conftest.py
+        deals tests individually), so no single test is guaranteed to run after
+        the ones it would be watching.
+
+        Three things are re-established or re-checked here, and each is a way a
+        negative assertion below could otherwise pass for the wrong reason:
+
+        * a fresh owner session and a fresh READ token, so a revoked token or a
+          dead session cannot turn "read scope cannot write" into "no
+          credential";
+        * an in-scope read with that token — the positive control adjacent to
+          every negative assertion. If the token cannot read, the test never
+          runs;
+        * the exact picture *ids* and their scores, not just a count. A missing
+          picture answers a write with 403 exactly like a scope refusal does,
+          so "the object is still there" has to be asserted separately.
         """
         env = read_token_write_env
 
@@ -335,10 +354,13 @@ class TestReadTokenBlocksWrites:
             f"fresh READ token cannot perform an in-scope read ({probe.status_code}: "
             f"{probe.text}) — the 403s below would prove nothing"
         )
-        assert len(probe.json()) == len(env.picture_ids), (
-            "shared library changed size before the test ran: "
-            f"{len(probe.json())} != {len(env.picture_ids)}"
+        assert {str(p["id"]) for p in probe.json()} == {
+            str(pid) for pid in env.picture_ids
+        }, (
+            "shared library no longer holds exactly the fixture pictures: "
+            f"{sorted(p['id'] for p in probe.json())} != {sorted(env.picture_ids)}"
         )
+        _assert_pictures_intact(env.owner_client, env.picture_ids, env.scores)
         return token
 
     def test_cannot_upload_picture(self, read_token_write_env, read_token):
@@ -454,36 +476,6 @@ class TestReadTokenBlocksWrites:
         assert r.status_code == 403, (
             f"READ token should not restore pictures, got {r.status_code}: {r.text}"
         )
-
-    def test_shared_environment_is_still_intact_and_readable(
-        self, read_token_write_env, read_token
-    ):
-        """Canary for the shared environment — keep this test last in the class.
-
-        Every other test above asserts a 403. If one of them had revoked the
-        token, killed the owner session or emptied the library, those 403s
-        would mean "no credential" instead of "read scope cannot write" and the
-        class would go green while proving nothing. This asserts the opposite
-        direction on the same environment: the owner still sees every picture
-        with its original score, and a READ token still succeeds on an in-scope
-        read after the whole write barrage.
-        """
-        _assert_pictures_intact(
-            read_token_write_env.owner_client,
-            read_token_write_env.picture_ids,
-            read_token_write_env.scores,
-        )
-
-        r = TestClient(read_token_write_env.server.api).get(
-            f"{API}/pictures", headers={"Authorization": f"Bearer {read_token}"}
-        )
-        assert r.status_code == 200, (
-            f"READ token lost its in-scope read after the write attempts, "
-            f"got {r.status_code}: {r.text}"
-        )
-        assert {str(p["id"]) for p in r.json()} == {
-            str(pid) for pid in read_token_write_env.picture_ids
-        }
 
 
 # ---------------------------------------------------------------------------
