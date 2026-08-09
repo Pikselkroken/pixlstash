@@ -270,6 +270,20 @@ class Vault:
         self._planner_work_finders[TaskType.PENDING_SCORE_INVALIDATION] = (
             PendingScoreInvalidationFinder(vault=self)
         )
+        # The one finder here that works on the HUB rather than on this vault:
+        # a model folder is a fact about the machine, so the checkpoints it
+        # registers are shared by every library. Registered only when the vault
+        # was opened through a hub registration (a Vault built without one — the
+        # CLI tools, most tests — has no hub to reach), and harmless in the
+        # multi-library case because only one vault is live at a time.
+        if registered_hub is not None:
+            from pixlstash.tasks.missing_checkpoint_hash_finder import (
+                MissingCheckpointHashFinder,
+            )
+
+            self._planner_work_finders[TaskType.CHECKPOINT_HASH] = (
+                MissingCheckpointHashFinder(hub=registered_hub)
+            )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
             task_finders=self._planner_work_finders,
