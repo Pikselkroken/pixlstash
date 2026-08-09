@@ -363,6 +363,26 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 walks a registered host path and reads every model file under it — the same authority as reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # ── model_moves.py (shelf plan B7; §16.3 host-capability) ───────────────
+    # The strongest filesystem authority the shelf has: this block writes new
+    # files into a registered host folder and unlinks files out of another one.
+    # The read (GET) is on the same tier rather than OWNER_ONLY because it is
+    # not a shelf read at all — it reports host paths and per-file progress for
+    # an operation only a local owner could have started, and putting it a tier
+    # lower would leak that operation's filenames to a caller who is barred from
+    # every route that could produce them.
+    ("POST", "/api/v1/model-moves"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 writes model files into a registered host folder and unlinks them from another — strictly more filesystem authority than reference-folders/move-pictures, which is already on this tier; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/model-moves"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 reports the host paths and per-file outcomes of an in-flight move; same tier as the POST that alone can create one, so progress for a local-only operation is not readable from a tier that cannot start it",
+    ),
+    ("DELETE", "/api/v1/model-moves"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 cancels an in-flight host-filesystem move; halting the owner's own file operation is the same authority as starting it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
         _LOCAL,
