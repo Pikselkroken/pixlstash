@@ -1177,7 +1177,34 @@ strands a file and is recoverable; over-blocking a read breaks the library.
 
 Both directions are asserted in `tests/test_path_containment.py`: escape is
 refused at each sink, and in-root plus reference-folder files are still deleted
-(over-blocking is its own regression).
+(over-blocking is its own regression). **That file covers the picture sinks
+only.** The model shelf's write/unlink sites (`services/model_mover.py`,
+`services/run_importer.py`) are the same class and are contained the same way,
+but they use the hub rather than the vault and are asserted in
+`tests/test_model_move.py` and `tests/test_model_run_import.py` — do not read
+the sentence above as covering them.
+
+- **The shelf's containment is reachable at every one of its four sites**, and
+  none of it is a dead sanitizer. Two are obvious: a `model_file.relpath` is a
+  database value, so the mover resolves each **source** against its own
+  `model_folder.path` before unlinking it, and a run *name* comes from the HTTP
+  body, so the importer resolves it against the registered output root before
+  reading it. The two **destination** checks were previously commented as
+  unreachable, on the grounds that `os.path.basename` had already flattened the
+  name — that is wrong. `resolve_path_within` calls `realpath`, so a **symlink
+  standing at the destination filename** resolves outside the folder and is
+  refused, which `basename` does nothing about. A *dangling* symlink is the
+  sharp case: `os.path.exists` is False for it, so the collision check that
+  follows waves it through, and the containment is the only thing between the
+  request and an `os.replace` writing outside a registered folder. Both are
+  pinned by a negative that goes red when the guard is swapped for
+  `os.path.join`.
+- **The relocation target is the one caller-supplied host path in the shelf**
+  (`POST /model-folders/{folder_id}/relocate`). Owner-chosen paths are trusted
+  here, as reference folders are, so the guard is deliberately narrow —
+  `validate_reference_folder_path`: absolute, and not a system directory — and
+  it is pinned in both directions by `tests/test_model_shelf_api.py` (`/etc/…`
+  and a relative path are 400; an ordinary absolute path still relocates).
 
 ### The managed model store (shelf plan B7)
 

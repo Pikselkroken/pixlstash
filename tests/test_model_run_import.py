@@ -328,6 +328,35 @@ def test_a_name_already_in_the_destination_is_refused_before_anything_copies(she
     assert models(shelf["hub"]) == {}
 
 
+def test_a_symlink_at_a_destination_name_is_refused_not_written_through(shelf):
+    """The importer's destination containment is **reachable** too.
+
+    Same shape as the mover's (``tests/test_model_move.py``), and it was never
+    flagged: ``basename`` flattens the filename but ``resolve_path_within``
+    calls ``realpath``, so a symlink standing at a checkpoint's destination name
+    resolves outside. A *dangling* one is the sharp case — ``os.path.exists`` is
+    False for it, so the collision check below the containment would wave it
+    through into an ``os.replace`` that writes outside the registered folder.
+    """
+    outside = shelf["destination_dir"].parent / "outside"
+    outside.mkdir()
+    os.symlink(
+        str(outside / "Clementine.safetensors"),
+        str(shelf["destination_dir"] / "Clementine.safetensors"),
+    )
+
+    with pytest.raises(MoveRefused, match="outside the destination folder"):
+        RunImporter(shelf["hub"]).import_run(
+            str(shelf["run_dir"]), shelf["destination_id"]
+        )
+
+    assert not (outside / "Clementine.safetensors").exists(), (
+        "the import wrote through the link, outside the registered folder"
+    )
+    assert models(shelf["hub"]) == {}
+    assert os.path.exists(shelf["run_dir"] / "Clementine.safetensors")
+
+
 def test_space_is_checked_before_the_first_byte(shelf, monkeypatch):
     import shutil
 

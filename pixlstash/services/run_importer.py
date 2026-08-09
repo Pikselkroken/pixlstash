@@ -247,13 +247,15 @@ class RunImporter:
         for checkpoint in checkpoints:
             relpath = os.path.basename(checkpoint.filename)
             try:
-                # Containment (#776) on the write path. ``basename`` above has
-                # already flattened the name, and ``aitoolkit_run`` only ever
-                # produces ``scandir`` entry names, so today nothing can reach
-                # this check — it is a sanitizer, not the live guard. It stays
-                # because it becomes load-bearing the moment a second producer
-                # supplies a relpath, and because ``os.path.join`` silently
-                # discards the base for an absolute component.
+                # Containment (#776) on the write path, and **reachable**:
+                # ``basename`` flattens the name and ``aitoolkit_run`` only ever
+                # yields ``scandir`` entry names, but ``resolve_path_within``
+                # calls ``realpath``, so a *symlink standing at the destination
+                # filename* is refused here. A dangling one is refused **only**
+                # here — ``os.path.exists`` below is False for it, so the
+                # collision check would wave it through into an ``os.replace``
+                # that writes outside the registered folder. Asserted in
+                # ``tests/test_model_run_import.py``.
                 target = resolve_path_within(destination, relpath)
             except ValueError as exc:
                 raise MoveRefused(

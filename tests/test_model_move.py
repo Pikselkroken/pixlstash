@@ -565,6 +565,37 @@ def test_an_existing_destination_file_is_never_overwritten(two_folders, cross_de
     assert os.path.exists(two_folders["source_path"])
 
 
+def test_a_symlink_at_the_destination_name_is_refused_not_written_through(
+    two_folders, cross_device
+):
+    """The destination containment is **reachable**, and this is the case that
+    proves it.
+
+    ``basename`` neutralises ``..``; it does nothing about a symlink standing at
+    the destination filename, and ``resolve_path_within`` calls ``realpath``. A
+    *dangling* link is the sharp case: ``os.path.exists`` is False for it, so the
+    collision check waves it through, and without the containment the copy would
+    ``os.replace`` straight through the link and write outside the registered
+    folder.
+    """
+    outside = two_folders["destination_dir"].parent / "outside"
+    outside.mkdir()
+    os.symlink(
+        str(outside / "alice.safetensors"),
+        os.path.join(two_folders["destination_dir"], "alice.safetensors"),
+    )
+
+    mover = ModelMover(two_folders["hub"])
+    with pytest.raises(MoveRefused, match="outside the destination folder"):
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+
+    assert not (outside / "alice.safetensors").exists(), "written outside the folder"
+    assert os.path.exists(two_folders["source_path"])
+
+
 def test_two_files_that_would_collide_are_refused_before_either_moves(hub, tmp_path):
     """Filenames are flattened to the basename, so two copies in different
     subdirectories can land on one name. Refused as a batch: moving the first and
