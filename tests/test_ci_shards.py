@@ -576,17 +576,15 @@ def test_release_critical_suites_cannot_remain_informational(workflow):
     )
 
 
-def test_stable_aggregate_requires_playwright_and_fixture_fails_closed(workflow):
-    """The stable check cannot pass when Playwright did not prove the RC UI."""
-    aggregate = workflow["jobs"]["build"]
-    needs = aggregate.get("needs", [])
-    assert "e2e" in needs, "The stable `build` aggregate must require e2e"
-    aggregate_steps = "\n".join(
-        step.get("run", "") for step in aggregate.get("steps", [])
-    )
-    assert "E2E_RESULT" in aggregate_steps
-    assert "e2e)" in aggregate_steps
+def test_e2e_fixture_check_fails_closed(workflow):
+    """The e2e job cannot go green by skipping Playwright.
 
+    The `build` aggregate that used to carry the other half of this test (that
+    the stable check required e2e at all) was removed in #796: there is no
+    branch protection consuming it, so there is no stable check to require.
+    What still matters is that this job reports red rather than green when the
+    committed fixture is missing.
+    """
     e2e = workflow["jobs"]["e2e"]
     fixture_steps = [
         step for step in e2e.get("steps", []) if step.get("id") == "fixture"
