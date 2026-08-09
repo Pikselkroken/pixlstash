@@ -612,18 +612,32 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/pip
-          # Own namespace, on purpose, and NOT the composite's `pip-cpu-` key.
-          # This job installs `pip install .` while every setup-backend job
+          # Deliberately the SAME key as the setup-backend composite, so this
+          # job and the backend shards share one pip download cache instead of
+          # keeping two near-identical copies per ref.
+          #
+          # The trade-off is real and was decided on a measurement, not a
+          # guess. This job installs `pip install .` while the composite
           # installs `.[test,dev]`, and actions/cache only writes on a key
-          # miss — so one shared key would let whichever job raced first fix
-          # the contents, and an e2e win would make the backend shards
-          # re-download the test/dev wheels on every run without ever getting
-          # to re-save them. A separate namespace costs ~0.5 GB of the 10 GB
-          # repo ceiling and buys zero interaction between the two lanes.
-          # `-cpu-` because the old `pip-` prefix would restore the 2.79 GB
-          # CUDA-fat cache and re-save those nvidia wheels forever.
-          key: pip-e2e-cpu-${{ runner.os }}-py3.12-${{ hashFiles('setup.py', 'requirements.txt') }}
-          restore-keys: pip-e2e-cpu-${{ runner.os }}-py3.12-
+          # miss — so whichever job races to the miss first fixes the contents
+          # for both, and the loser re-downloads its delta on every run
+          # without ever getting a miss to re-save. That delta was the whole
+          # question, so it was measured: a separate `pip-e2e-cpu-` namespace
+          # saved 494 MB against the composite's 507 MB. The test/dev extras
+          # are ~13 MB of small pure-Python wheels; that is the entire cost of
+          # losing the race. Against it, a second namespace costs ~494 MB on
+          # every active ref, in a repo already evicting entries against
+          # GitHub's 10 GB limit — which is what makes runs miss cache and
+          # install cold in the first place. 13 MB per run beats 494 MB per
+          # ref. Contents cannot diverge dangerously either way: pip's HTTP
+          # cache is keyed by URL, so a subset or superset just means pip
+          # downloads whatever is not there.
+          #
+          # `-cpu-` is not optional in either design: restore-keys is a prefix
+          # match, so the old `pip-` prefix would restore the 2.79 GB CUDA-fat
+          # cache and re-save those nvidia wheels forever.
+          key: pip-cpu-${{ runner.os }}-py3.12-${{ hashFiles('setup.py', 'requirements.txt') }}
+          restore-keys: pip-cpu-${{ runner.os }}-py3.12-
 
       - name: Install backend
         if: steps.fixture.outputs.present == 'true'
