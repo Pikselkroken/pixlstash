@@ -14,17 +14,32 @@ Coverage
 8. All picture data uploaded before token issuance survives every attack attempt
    intact (scores, filenames).
 
-The server is created fresh per test function with a real temporary database and
-a small library of generated pictures, so each scenario gets an isolated,
-realistically-populated vault (see ``_good_picture_files``).
+Most classes here still create the server fresh per test function with a real
+temporary database and a small library of generated pictures, so each scenario
+gets an isolated, realistically-populated vault (see ``_good_picture_files``).
+
+``TestReadTokenBlocksWrites`` is the exception: booting a Server and importing
+the library costs ~1.5-2.3 s and its assertions cost milliseconds, so it shares
+one environment for the whole class (``read_token_write_env``) and re-mints
+*credentials* per test instead (``read_token``). That split is deliberate — a
+shared credential is exactly what would let one test's revocation turn a later
+test's 403 from "wrong scope" into "no credential". ``read_token`` is therefore
+also the canary for the shared environment: it re-establishes the owner
+session, mints a fresh token, proves that token on an in-scope read and
+re-checks the library's ids and scores, all before each negative assertion
+runs. It is a per-test fixture rather than a trailing "runs last" test because
+``--ci-shard`` (tests/conftest.py) partitions tests individually, so a trailing
+test would land in one shard and watch nothing in the other three.
 """
 
 import io
 import json
 import tempfile
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -94,6 +109,15 @@ def _good_picture_files() -> list[tuple[str, bytes, str]]:
     return results
 
 
+def _fixture_scores(picture_ids: list) -> dict[str, int]:
+    """Manual scores (1-5) assigned to the fixture library, keyed by id string.
+
+    Shared so a test can assert the library survived an attack without
+    re-deriving the mapping ``_setup_server_with_pictures`` applied.
+    """
+    return {str(pid): (i % 5) + 1 for i, pid in enumerate(picture_ids)}
+
+
 def _setup_server_with_pictures(temp_dir: str):
     """Create a Server, log in, upload all good pictures, set random scores.
 
@@ -129,7 +153,7 @@ def _setup_server_with_pictures(temp_dir: str):
     assert picture_ids, "No pictures after import"
 
     # Assign manual scores (1–5) so we can verify they survive attacks.
-    scores = {str(pid): (i % 5) + 1 for i, pid in enumerate(picture_ids)}
+    scores = _fixture_scores(picture_ids)
     r = client.post(
         f"{API}/pictures/apply-scores",
         json={"scores": scores, "only_unscored": False},
@@ -241,192 +265,217 @@ class TestAllScopeResourceTokenRejected:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="class")
+def read_token_write_env():
+    """One Server + imported picture library shared by ``TestReadTokenBlocksWrites``.
+
+    Booting the Server and running the library through the import pipeline is
+    ~1.5-2.3 s; the assertions it serves are single HTTP calls. Every write in
+    the class is expected to be *refused*, so the environment is read-only in
+    practice and safe to share — and any write that did land is caught by the
+    integrity check in ``read_token``, which re-checks ids and scores before
+    every single test.
+
+    Deliberately class-scoped, not module-scoped: the blast radius of the
+    sharing stays inside the one class that opted into it. Note that
+    ``--ci-shard`` (tests/conftest.py) partitions tests individually, so in CI
+    this class is split across shards and each shard builds its own copy of
+    this fixture — which is why the guard lives in the per-test fixture and not
+    in a trailing "runs last" test that no shard is guaranteed to receive.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        server, owner_client, picture_ids, _ = _setup_server_with_pictures(tmp)
+        try:
+            yield SimpleNamespace(
+                server=server,
+                owner_client=owner_client,
+                picture_ids=picture_ids,
+                scores=_fixture_scores(picture_ids),
+            )
+        finally:
+            server.__exit__(None, None, None)
+
+
 class TestReadTokenBlocksWrites:
-    """A READ token must be rejected for every mutating HTTP method."""
+    """A READ token must be rejected for every mutating HTTP method.
 
-    def test_cannot_upload_picture(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            server, owner_client, picture_ids, read_token = _setup_server_with_pictures(
-                tmp
-            )
-            try:
-                png = _make_png_bytes()
-                r = TestClient(server.api).post(
-                    f"{API}/pictures/import",
-                    files=[("file", ("new.png", png, "image/png"))],
-                    headers={"Authorization": f"Bearer {read_token}"},
-                )
-                assert r.status_code == 403, (
-                    f"READ token should not be able to upload pictures, got {r.status_code}: {r.text}"
-                )
-            finally:
-                server.__exit__(None, None, None)
+    The Server is shared across the class (``read_token_write_env``) but the
+    credential is not: ``read_token`` re-mints one per test, proves it works on
+    an in-scope read, and re-checks the library's ids and scores first, so a
+    403 below can only mean "wrong scope".
+    """
 
-    def test_cannot_delete_picture(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            server, owner_client, picture_ids, read_token = _setup_server_with_pictures(
-                tmp
-            )
-            try:
-                target_id = picture_ids[0]
-                r = TestClient(server.api).delete(
-                    f"{API}/pictures/{target_id}",
-                    headers={"Authorization": f"Bearer {read_token}"},
-                )
-                assert r.status_code == 403, (
-                    f"READ token should not delete pictures, got {r.status_code}: {r.text}"
-                )
-            finally:
-                server.__exit__(None, None, None)
+    @pytest.fixture(autouse=True)
+    def read_token(self, read_token_write_env):
+        """Mint a fresh global READ token per test, and re-prove the environment.
 
-    def test_cannot_patch_picture_score(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            server, owner_client, picture_ids, read_token = _setup_server_with_pictures(
-                tmp
-            )
-            try:
-                target_id = picture_ids[0]
-                r = TestClient(server.api).patch(
-                    f"{API}/pictures/{target_id}",
-                    json={"score": 1},
-                    headers={"Authorization": f"Bearer {read_token}"},
-                )
-                assert r.status_code == 403, (
-                    f"READ token should not PATCH pictures, got {r.status_code}: {r.text}"
-                )
-            finally:
-                server.__exit__(None, None, None)
+        This is the canary for the shared environment, and it deliberately runs
+        before *every* test rather than as a trailing "runs last" test: CI
+        partitions this class across shards (``--ci-shard``, tests/conftest.py
+        deals tests individually), so no single test is guaranteed to run after
+        the ones it would be watching.
 
-    def test_cannot_batch_apply_scores(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            server, owner_client, picture_ids, read_token = _setup_server_with_pictures(
-                tmp
-            )
-            try:
-                payload = {"scores": {str(pid): 1 for pid in picture_ids}}
-                r = TestClient(server.api).post(
-                    f"{API}/pictures/apply-scores",
-                    json=payload,
-                    headers={"Authorization": f"Bearer {read_token}"},
-                )
-                assert r.status_code == 403, (
-                    f"READ token should not batch-set scores, got {r.status_code}: {r.text}"
-                )
-            finally:
-                server.__exit__(None, None, None)
+        Three things are re-established or re-checked here, and each is a way a
+        negative assertion below could otherwise pass for the wrong reason:
 
-    def test_cannot_change_password(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            server, owner_client, picture_ids, read_token = _setup_server_with_pictures(
-                tmp
-            )
-            try:
-                r = TestClient(server.api).post(
-                    f"{API}/users/me/auth",
-                    json={
-                        "current_password": "ownerpass1",
-                        "new_password": "hacked12345",
-                    },
-                    headers={"Authorization": f"Bearer {read_token}"},
-                )
-                assert r.status_code == 403, (
-                    f"READ token should not change password, got {r.status_code}: {r.text}"
-                )
-            finally:
-                server.__exit__(None, None, None)
+        * a fresh owner session and a fresh READ token, so a revoked token or a
+          dead session cannot turn "read scope cannot write" into "no
+          credential";
+        * an in-scope read with that token — the positive control adjacent to
+          every negative assertion. If the token cannot read, the test never
+          runs;
+        * the exact picture *ids* and their scores, not just a count. A missing
+          picture answers a write with 403 exactly like a scope refusal does,
+          so "the object is still there" has to be asserted separately.
+        """
+        env = read_token_write_env
 
-    def test_cannot_create_new_token(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            server, owner_client, picture_ids, read_token = _setup_server_with_pictures(
-                tmp
-            )
-            try:
-                r = TestClient(server.api).post(
-                    f"{API}/users/me/token",
-                    json={"description": "escalated", "scope": "ALL"},
-                    headers={"Authorization": f"Bearer {read_token}"},
-                )
-                assert r.status_code == 403, (
-                    f"READ token should not create tokens, got {r.status_code}: {r.text}"
-                )
-            finally:
-                server.__exit__(None, None, None)
+        # Re-establish the owner session too; a failure here means a previous
+        # test changed the password or killed the session, and the class should
+        # say so rather than silently 403 everywhere.
+        r = env.owner_client.post(
+            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        )
+        assert r.status_code == 200, (
+            f"owner re-login failed — shared environment is dirty: {r.text}"
+        )
 
-    def test_cannot_delete_token(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            server, owner_client, picture_ids, read_token = _setup_server_with_pictures(
-                tmp
-            )
-            try:
-                # The owner creates a second token to give us an ID to target.
-                r2 = owner_client.post(
-                    f"{API}/users/me/token",
-                    json={"description": "victim token", "scope": "READ"},
-                )
-                assert r2.status_code == 200, r2.text
-                victim_id = r2.json()["token_id"]
+        r = env.owner_client.post(
+            f"{API}/users/me/token",
+            json={"description": "per-test read", "scope": "READ"},
+        )
+        assert r.status_code == 200, r.text
+        token = r.json()["token"]
 
-                r = TestClient(server.api).delete(
-                    f"{API}/users/me/token/{victim_id}",
-                    headers={"Authorization": f"Bearer {read_token}"},
-                )
-                assert r.status_code == 403, (
-                    f"READ token should not delete tokens, got {r.status_code}: {r.text}"
-                )
-            finally:
-                server.__exit__(None, None, None)
+        probe = TestClient(env.server.api).get(
+            f"{API}/pictures", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert probe.status_code == 200, (
+            f"fresh READ token cannot perform an in-scope read ({probe.status_code}: "
+            f"{probe.text}) — the 403s below would prove nothing"
+        )
+        assert {str(p["id"]) for p in probe.json()} == {
+            str(pid) for pid in env.picture_ids
+        }, (
+            "shared library no longer holds exactly the fixture pictures: "
+            f"{sorted(p['id'] for p in probe.json())} != {sorted(env.picture_ids)}"
+        )
+        _assert_pictures_intact(env.owner_client, env.picture_ids, env.scores)
+        return token
 
-    def test_cannot_upload_watermark(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            server, owner_client, picture_ids, read_token = _setup_server_with_pictures(
-                tmp
-            )
-            try:
-                png = _make_png_bytes()
-                r = TestClient(server.api).post(
-                    f"{API}/users/me/watermark",
-                    files=[("file", ("wm.png", png, "image/png"))],
-                    headers={"Authorization": f"Bearer {read_token}"},
-                )
-                assert r.status_code == 403, (
-                    f"READ token should not upload watermark, got {r.status_code}: {r.text}"
-                )
-            finally:
-                server.__exit__(None, None, None)
+    def test_cannot_upload_picture(self, read_token_write_env, read_token):
+        png = _make_png_bytes()
+        r = TestClient(read_token_write_env.server.api).post(
+            f"{API}/pictures/import",
+            files=[("file", ("new.png", png, "image/png"))],
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert r.status_code == 403, (
+            f"READ token should not be able to upload pictures, got {r.status_code}: {r.text}"
+        )
 
-    def test_cannot_patch_user_config(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            server, owner_client, picture_ids, read_token = _setup_server_with_pictures(
-                tmp
-            )
-            try:
-                r = TestClient(server.api).patch(
-                    f"{API}/users/me/config",
-                    json={"max_vram_gb": 0},
-                    headers={"Authorization": f"Bearer {read_token}"},
-                )
-                assert r.status_code == 403, (
-                    f"READ token should not PATCH user config, got {r.status_code}: {r.text}"
-                )
-            finally:
-                server.__exit__(None, None, None)
+    def test_cannot_delete_picture(self, read_token_write_env, read_token):
+        target_id = read_token_write_env.picture_ids[0]
+        r = TestClient(read_token_write_env.server.api).delete(
+            f"{API}/pictures/{target_id}",
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert r.status_code == 403, (
+            f"READ token should not delete pictures, got {r.status_code}: {r.text}"
+        )
 
-    def test_cannot_restore_deleted_pictures(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            server, owner_client, picture_ids, read_token = _setup_server_with_pictures(
-                tmp
-            )
-            try:
-                r = TestClient(server.api).post(
-                    f"{API}/pictures/scrapheap/restore",
-                    json={"picture_ids": picture_ids[:2]},
-                    headers={"Authorization": f"Bearer {read_token}"},
-                )
-                assert r.status_code == 403, (
-                    f"READ token should not restore pictures, got {r.status_code}: {r.text}"
-                )
-            finally:
-                server.__exit__(None, None, None)
+    def test_cannot_patch_picture_score(self, read_token_write_env, read_token):
+        target_id = read_token_write_env.picture_ids[0]
+        r = TestClient(read_token_write_env.server.api).patch(
+            f"{API}/pictures/{target_id}",
+            json={"score": 1},
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert r.status_code == 403, (
+            f"READ token should not PATCH pictures, got {r.status_code}: {r.text}"
+        )
+
+    def test_cannot_batch_apply_scores(self, read_token_write_env, read_token):
+        payload = {"scores": {str(pid): 1 for pid in read_token_write_env.picture_ids}}
+        r = TestClient(read_token_write_env.server.api).post(
+            f"{API}/pictures/apply-scores",
+            json=payload,
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert r.status_code == 403, (
+            f"READ token should not batch-set scores, got {r.status_code}: {r.text}"
+        )
+
+    def test_cannot_change_password(self, read_token_write_env, read_token):
+        r = TestClient(read_token_write_env.server.api).post(
+            f"{API}/users/me/auth",
+            json={
+                "current_password": "ownerpass1",
+                "new_password": "hacked12345",
+            },
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert r.status_code == 403, (
+            f"READ token should not change password, got {r.status_code}: {r.text}"
+        )
+
+    def test_cannot_create_new_token(self, read_token_write_env, read_token):
+        r = TestClient(read_token_write_env.server.api).post(
+            f"{API}/users/me/token",
+            json={"description": "escalated", "scope": "ALL"},
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert r.status_code == 403, (
+            f"READ token should not create tokens, got {r.status_code}: {r.text}"
+        )
+
+    def test_cannot_delete_token(self, read_token_write_env, read_token):
+        # The owner creates a second token to give us an ID to target.
+        r2 = read_token_write_env.owner_client.post(
+            f"{API}/users/me/token",
+            json={"description": "victim token", "scope": "READ"},
+        )
+        assert r2.status_code == 200, r2.text
+        victim_id = r2.json()["token_id"]
+
+        r = TestClient(read_token_write_env.server.api).delete(
+            f"{API}/users/me/token/{victim_id}",
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert r.status_code == 403, (
+            f"READ token should not delete tokens, got {r.status_code}: {r.text}"
+        )
+
+    def test_cannot_upload_watermark(self, read_token_write_env, read_token):
+        png = _make_png_bytes()
+        r = TestClient(read_token_write_env.server.api).post(
+            f"{API}/users/me/watermark",
+            files=[("file", ("wm.png", png, "image/png"))],
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert r.status_code == 403, (
+            f"READ token should not upload watermark, got {r.status_code}: {r.text}"
+        )
+
+    def test_cannot_patch_user_config(self, read_token_write_env, read_token):
+        r = TestClient(read_token_write_env.server.api).patch(
+            f"{API}/users/me/config",
+            json={"max_vram_gb": 0},
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert r.status_code == 403, (
+            f"READ token should not PATCH user config, got {r.status_code}: {r.text}"
+        )
+
+    def test_cannot_restore_deleted_pictures(self, read_token_write_env, read_token):
+        r = TestClient(read_token_write_env.server.api).post(
+            f"{API}/pictures/scrapheap/restore",
+            json={"picture_ids": read_token_write_env.picture_ids[:2]},
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert r.status_code == 403, (
+            f"READ token should not restore pictures, got {r.status_code}: {r.text}"
+        )
 
 
 # ---------------------------------------------------------------------------
