@@ -331,6 +331,25 @@ describe("sorting", () => {
     ]);
   });
 
+  it("holds equal rows in one order when a refetch reorders the blocks", async () => {
+    // `Array.prototype.sort` is stable, but stability preserves the INPUT
+    // order, and the input changes: `fetchRows` re-concatenates the blocks
+    // every time. Without the id tiebreak two adapters of the same size swap
+    // places on a refresh, which reads as a rendering fault.
+    const store = useModelShelfStore();
+    const a = adapter({ id: 1, display_name: "a", file_size: 100 });
+    const b = adapter({ id: 2, display_name: "b", file_size: 100 });
+    store.setView({ sortKey: "size" });
+
+    listAdapters.mockResolvedValue([a, b]);
+    await store.fetchRows();
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([1, 2]);
+
+    listAdapters.mockResolvedValue([b, a]);
+    await store.fetchRows();
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([1, 2]);
+  });
+
   it("uses the stack's own size and date, not its cover's", async () => {
     // A six-step run understates by about six times when read off the cover, in
     // the column the shelf exists to answer.
@@ -514,6 +533,17 @@ describe("collapsing a group", () => {
 });
 
 describe("the view is remembered", () => {
+  it("persists a sort change on its own, with nothing else to save it", () => {
+    // Changing the sort and leaving is the common case; a collapse is not. An
+    // earlier version of this suite only ever asserted the pair together, and
+    // `setView` writing to the wrong key survived it.
+    const store = useModelShelfStore();
+    store.setView({ sortKey: "size", sortDirection: "asc" });
+    expect(
+      JSON.parse(window.localStorage.getItem("pixlstash:modelShelfView")),
+    ).toMatchObject({ sortKey: "size", sortDirection: "asc" });
+  });
+
   it("restores the grouping, the sort and what was collapsed", () => {
     const store = useModelShelfStore();
     store.setView({ groupBy: "base_model", sortKey: "size" });
