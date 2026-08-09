@@ -334,6 +334,7 @@ jobs:
           tests/test_generic_field_reader_allowlist.py
           tests/test_hub_bootstrap.py
           tests/test_hub_engine.py
+          tests/test_hub_model_shelf_schema.py
           tests/test_hub_registry.py
           tests/test_identity_storage_guardrail.py
           tests/test_image_embedding_worker.py
