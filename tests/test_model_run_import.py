@@ -156,8 +156,9 @@ def test_crash_after_the_copy_and_before_the_register_leaves_no_row(shelf, monke
     """Window 1. The bytes are at the destination and nothing claims them.
 
     The run still has its own copy, because the unlink is last and the register
-    never happened. Residue: an unregistered file the destination folder's next
-    scan picks up as a normal adapter. Not a dangling row — there is no row.
+    never happened. Residue: an unregistered file that a **manual** rescan of the
+    destination folder picks up as a normal adapter — nothing scans a model
+    folder on start or on a schedule. Not a dangling row: there is no row.
     """
     monkeypatch.setattr(
         RunImporter,

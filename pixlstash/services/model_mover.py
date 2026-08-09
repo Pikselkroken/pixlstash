@@ -20,19 +20,41 @@ after commit, before the unlink  both paths                 the **destination**
 
 Both residues are a *duplicate*, which the shelf already models — one ``model``
 row with two ``model_file`` rows is what a file copied into two registered
-folders is, and the next scan of either folder reconciles it. Neither residue is
-a dangling row. That is the acceptance bar (shelf plan §6 item 3), and
-``tests/test_model_move.py`` interrupts both windows to prove it.
+folders is, and a **manual** rescan of either folder reconciles it. Neither
+residue is a dangling row. That is the acceptance bar (shelf plan §6 item 3),
+and ``tests/test_model_move.py`` interrupts both windows to prove it.
+
+**"A rescan fixes it" means the owner presses the button.** ``ModelFolderScanner``
+has exactly one caller, ``POST /model-folders/{id}/rescan``; nothing scans a
+model folder on start or on a schedule. So every reconciliation claim below is a
+claim about a *repair the owner can make*, not about one that happens by itself.
+The residues are chosen so that waiting costs nothing — a duplicate is
+serviceable, a dangling row is not — but nobody should read them as self-healing.
 
 **Same-drive is a rename and skips all of it**, per the ruling. Nothing is
 copied, nothing is verified and no space is needed, because no second copy is
 made. Its residue is narrower but not identical: ``os.rename`` is atomic, so a
 crash between the rename and the commit leaves the file only at the destination
 with the row still naming the source — a ``missing`` row and an unregistered
-file, which the next scan of either folder repairs by content, because ``model``
-is keyed by sha256 and the row keeps its curation. The window is the microseconds
-between two syscalls rather than the minutes a 24 GB copy takes, which is the
-trade the ruling makes.
+file, which a manual rescan of either folder repairs by content, because
+``model`` is keyed by sha256 and the row keeps its curation. The window is the
+microseconds between two syscalls rather than the minutes a 24 GB copy takes,
+which is the trade the ruling makes.
+
+**Durability: the hub runs ``PRAGMA synchronous=NORMAL``** (``hub/db.py``), so
+"the row is committed" means committed to the WAL without an fsync, and a power
+loss — not a process kill, which WAL survives — can lose the last commit. The
+consequence here is *milder* than the ordering it sits inside, not worse: the
+unlink that follows a lost commit has already removed the source, so what
+survives is the bytes at the **destination** with no row naming them. That is an
+unregistered file a rescan re-links by content with its curation intact — the
+same residue the same-drive rename window already accepts, and never a row
+naming a file that is gone. Raising the pragma to ``FULL`` would fsync every
+tiny hub write in the product to narrow that one window, which is not the trade.
+
+**One move or import at a time, machine-wide** (:data:`SHELF_IO_LOCK`), and the
+destination is re-checked at execution time rather than trusted from the plan.
+Both are below, with the reasoning.
 
 **Space is checked before the first byte**, and for the whole batch at once:
 :meth:`ModelMover.plan` refuses a job that would not fit rather than filling the

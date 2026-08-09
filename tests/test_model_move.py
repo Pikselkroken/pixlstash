@@ -170,8 +170,11 @@ def test_crash_after_the_copy_and_before_the_commit_leaves_a_duplicate(
 
     Nothing has been unlinked, because the unlink is last. The residue is a
     duplicate — one content row, one location row, and a second file on disk
-    that the next scan of the destination folder will register as a second
+    that a **manual** rescan of the destination folder will register as a second
     location of the same model, which is exactly what a duplicate is here.
+    ``ModelFolderScanner`` has one caller, ``POST .../rescan``; nothing scans a
+    model folder on start or on a schedule, so the residue has to be serviceable
+    on its own and not merely repairable.
     """
     monkeypatch.setattr(
         ModelMover,
