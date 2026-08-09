@@ -471,8 +471,8 @@ jobs:
   #    build's critical path.
   #
   # N=6. Two reasons, and the second is the binding one. (1) Concurrency: the
-  # rest of this workflow queues 14 jobs (checks 1 + backend 8 + e2e 1 +
-  # backend_windows 2 + the two aggregators) against the Team plan's
+  # rest of this workflow queues 12 jobs (checks 1 + backend 8 + e2e 1 +
+  # backend_windows 2) against the Team plan's
   # 60-concurrent-job budget, so 6 fits without the sweep queueing behind the
   # gate it is supposed to run alongside — and unlike the gate it runs only
   # during release prep, when there is rarely a queue of feature-branch runs
@@ -484,8 +484,8 @@ jobs:
   # TIME — that imbalance is the price of preserving order.
   #
   # The per-shard check name is NOT stable across a resize, by design: this job
-  # is informational and must never be a required check. Branch protection
-  # requires `build` (below), which aggregates it.
+  # is informational and must never be a required check. Nothing is a required
+  # check in this repo — see the removal note above `e2e`.
   #
   # The old "1.7.0 headline API surface" step is gone: its five files
   # (test_tag_health_api, test_reviews_api, test_tag_predictions_api,
@@ -520,72 +520,22 @@ jobs:
           tests/
 
   # ---------------------------------------------------------------------------
-  # Aggregate status for the Linux side. Exists so branch protection can require
-  # one stable check name instead of a per-shard list that would have to be
-  # re-configured every time the matrix is resized.
+  # REMOVED 2026-08-09 (#796): the `build` and `build-windows` aggregator jobs.
+  # They existed only to give branch protection one stable check name per OS,
+  # and there is no branch protection to serve: `develop` has none, `main` is
+  # protected with no required_status_checks at all, and merges are a human
+  # judgement call by design. `build` also cost real tail latency — it needed
+  # every Linux job, so it queued for its own runner after the gate finished
+  # (up to ~16 min for a 3-second job).
+  #
+  # They carried one property beyond aggregation (CSO condition F2): `skipped`
+  # counted as a FAILURE for `checks`/`backend`, so a `paths:`/`if:` filter
+  # could not leave a green required check that ran zero tests (`skipped` was a
+  # pass only for `backend_release_sweep`, which is skipped outside release
+  # prep by design). That is moot while nothing is required. Anything that
+  # reintroduces a required status check, or adds a `paths:`/`if:` filter to
+  # the gate, MUST restore the skipped-is-failure guard with it.
   # ---------------------------------------------------------------------------
-  build:
-    name: build
-    if: always()
-    needs: [checks, backend, backend_release_sweep, e2e]
-    runs-on: ubuntu-latest
-    steps:
-      # Each dependency is checked against what IT is allowed to report, not
-      # against a shared allowlist. `skipped` is a pass only for
-      # backend_release_sweep, which is skipped outside release prep by design.
-      # For checks/backend, `skipped` must fail: if someone later adds a
-      # `paths:` or `if:` filter to the gate, this check would otherwise go
-      # green having run zero tests — a required check that passes by not
-      # running is worse than no required check at all. (CSO condition F2.)
-      #
-      # `backend` and `backend_release_sweep` are both matrices, and
-      # `needs.<job>.result` collapses a matrix into ONE value: `skipped` only
-      # if every leg was skipped, `failure` if ANY leg failed, `cancelled` if
-      # any was cancelled and none failed, `success` otherwise. So the checks
-      # below already cover partial failure, and they keep working when a
-      # matrix is resized — which is the whole point of aggregating here
-      # instead of listing per-shard check names in branch protection.
-      #
-      # A `failure` from the sweep is still fatal here even though the sweep is
-      # "informational": its pytest step carries `continue-on-error`, so a
-      # failing TEST cannot produce one. A failing JOB therefore means
-      # checkout/setup died and the ordering control did not run at all, which
-      # during release prep is exactly what must not pass silently.
-      - name: Require the blocking backend jobs to have succeeded
-        env:
-          CHECKS_RESULT: ${{ needs.checks.result }}
-          BACKEND_RESULT: ${{ needs.backend.result }}
-          SWEEP_RESULT: ${{ needs.backend_release_sweep.result }}
-          E2E_RESULT: ${{ needs.e2e.result }}
-        run: |
-          set -euo pipefail
-          echo "checks=$CHECKS_RESULT backend=$BACKEND_RESULT sweep=$SWEEP_RESULT e2e=$E2E_RESULT"
-
-          failed=0
-          for job in checks backend e2e; do
-            case "$job" in
-              checks) result="$CHECKS_RESULT" ;;
-              backend) result="$BACKEND_RESULT" ;;
-              e2e) result="$E2E_RESULT" ;;
-            esac
-            if [ "$result" != "success" ]; then
-              echo "::error::Blocking job '$job' reported '$result' (must be 'success')."
-              failed=1
-            fi
-          done
-
-          case "$SWEEP_RESULT" in
-            success|skipped) ;;
-            *)
-              echo "::error::backend_release_sweep reported '$SWEEP_RESULT'."
-              failed=1
-              ;;
-          esac
-
-          if [ "$failed" -ne 0 ]; then
-            exit 1
-          fi
-          echo "All required backend jobs passed."
 
   e2e:
     # Playwright UI tests drive the real SPA against a backend booted on a
@@ -773,26 +723,5 @@ jobs:
           tests/test_watch_folder_worker.py
           tests/test_work_planner.py
 
-  # Aggregate status for Windows, for the same branch-protection reason as
-  # `build`.
-  build-windows:
-    name: build-windows
-    if: always()
-    needs: [backend_windows]
-    runs-on: ubuntu-latest
-    steps:
-      # `success` only — `skipped` must fail here for the same reason as in
-      # `build`: this is a blocking gate, so a filter that stopped the shards
-      # from running must not leave a green required check behind. (CSO
-      # condition F2.)
-      - name: Require every Windows shard to have succeeded
-        env:
-          RESULT: ${{ needs.backend_windows.result }}
-        run: |
-          set -euo pipefail
-          echo "backend-windows result: $RESULT"
-          if [ "$RESULT" != "success" ]; then
-            echo "::error::backend-windows reported '$RESULT' (must be 'success')."
-            exit 1
-          fi
-          echo "Windows shards passed."
+  # The `build-windows` aggregator over this job was removed with `build` in
+  # #796 — see the note where `build` used to be, above `e2e`.
