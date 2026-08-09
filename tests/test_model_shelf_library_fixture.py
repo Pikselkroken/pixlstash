@@ -67,7 +67,7 @@ def test_the_database_was_created_and_migrated_by_the_product(library, session):
     stamped = session.exec(
         select(Picture).limit(1)  # forces the mapper against the real schema
     ).all()
-    assert stamped is not None
+    assert len(stamped) > 0
     version = (
         session.connection()
         .exec_driver_sql("SELECT version_num FROM alembic_version")
@@ -148,3 +148,11 @@ class TestTheCharacterWithNoThumbnail:
             x1, y1, x2, y2 = face.bbox
             assert 0 <= x1 < x2 <= picture.width
             assert 0 <= y1 < y2 <= picture.height
+
+
+def test_pictures_must_exceed_the_largest_set_span(tmp_path):
+    """Sets span 6 on the cards branch; _make_sets divides by (len(pictures) - span)."""
+    with pytest.raises(ValueError, match="pictures must exceed the largest set span"):
+        generator.generate_library(tmp_path, pictures=6)
+    with pytest.raises(ValueError, match="pictures must exceed the largest set span"):
+        generator.generate_library(tmp_path, pictures=5)
