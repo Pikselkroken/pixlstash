@@ -692,8 +692,20 @@ def test_share_tokens_never_reach_a_folder_mutator(shelf_env):
     ``_enforce_unscoped_owner`` from the gate's ``LOCAL_OWNER_ONLY`` branch does
     **not** turn this file red, and that is a property of the system rather than
     a hole in this test. It is flagged to the adversarial review rather than
-    papered over, and it is not specific to the shelf: it holds for all 18
-    routes on the tier.
+    papered over, and it is not specific to the shelf.
+
+    **What is NOT true — corrected by the 2026-08-09 security review:** the tier
+    is not all non-GET. ``GET /filesystem/browse`` and
+    ``GET /reference-folders/detect-sidecars`` are both ``LOCAL_OWNER_ONLY``, and
+    for those two the middleware's non-GET rule says nothing. What refuses a
+    share token there is ``READ_BLOCKED_GET_PATHS``, a hand-maintained frozenset
+    with no guardrail tying it to ``ROUTE_POLICIES``: the review dropped one path
+    from it and a resource-scoped READ token got a full host filesystem listing
+    (200, not 403). So the reasoning above holds for **these four routes**
+    because they are non-GET, not for the tier. A GET added to the tier without
+    a matching ``READ_BLOCKED_GET_PATHS`` entry is a real hole and nothing goes
+    red. Tracked as a follow-up; do not read this docstring as saying the tier
+    is safe by construction.
 
     What this test does own: the block is real, the credential is live, and the
     routes exist. ``assert_real_route`` is load-bearing — middleware answers 403
