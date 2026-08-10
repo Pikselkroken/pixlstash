@@ -1394,6 +1394,24 @@ models is thirty-six headers. Under `Folder` the second level is spent on the
   arithmetic — the inner offset is the outer's measured height, which no token
   knows — and the band is a label with a meter rather than something worth
   pinning while the reader scans one folder. So there is still one sticky offset.
+- **A registered folder holding no models still gets a group.** Groups are built
+  from `model_file` rows, so a folder with nothing in it produces none — and the
+  managed store is exactly that on every fresh install, despite being the ruled
+  default destination for a drop or an import. A destination you cannot see is
+  not a destination. `withEmptyFolders` merges the registry into the folder
+  groups, which is why `ModelShelf.vue` now fetches the folder list on mount
+  rather than leaving `ModelFoldersDialog` as its only reader.
+  - It says **which** empty it is: "Not scanned yet" against "No models in this
+    folder", discriminated on `last_checked IS NULL` rather than on a zero count,
+    because a folder nothing has walked has no count to be zero. Only one of the
+    two states is the owner's to act on.
+  - The note is a plain `<li>`, never a `role="option"`: there is no model there
+    for a verb to write.
+  - It applies under `Group by: Folder` only. A folder appearing while grouped by
+    base model would be a category error.
+  - A shelf holding **no** models at all still shows its own empty state instead
+    of a list of empty folders, because "add the folder where you keep them" is
+    the better answer on a fresh install than an inventory of nothing.
 - **The band is named by the volume, not by the mount point.** A Linux mount
   point runs to `/media/glindkvist/102AB4B6757AF9A3` and crowds the header out,
   so the band shows `label` behind a disk glyph and keeps `mount_point` as its

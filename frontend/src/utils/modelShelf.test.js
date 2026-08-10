@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import {
   bandGroups,
   bandUsage,
+  withEmptyFolders,
   cleanAssetName,
   deriveModelName,
   formatModelSize,
@@ -228,5 +229,67 @@ describe("bandUsage", () => {
       shelfBytes: 5000,
     });
     expect(usage.shelfPct).toBe(usage.usedPct);
+  });
+});
+
+describe("withEmptyFolders", () => {
+  const group = (path) => ({
+    key: path,
+    label: path,
+    labelKind: "path",
+    folderId: 1,
+    rows: [{ id: 1 }],
+  });
+
+  it("adds the registered folder that produced no group", () => {
+    // The managed store is exactly this on a fresh install: registered, ruled
+    // to be the default drop destination, and holding nothing — so it has no
+    // rows, no group, and no way to be seen.
+    const arranged = withEmptyFolders(
+      [group("/models/loras")],
+      [
+        { id: 1, path: "/models/loras", last_checked: "2026-08-10T00:00:00Z" },
+        { id: 2, path: "/models/store", last_checked: "2026-08-10T00:00:00Z" },
+      ],
+    );
+    expect(arranged.map((g) => g.label)).toEqual([
+      "/models/loras",
+      "/models/store",
+    ]);
+    expect(arranged[1].rows).toEqual([]);
+    expect(arranged[1].folderId).toBe(2);
+  });
+
+  it("keeps 'never scanned' apart from 'scanned and empty'", () => {
+    // Only one of the two is the owner's to act on, and `last_checked` is the
+    // discriminator: a folder that has never been walked has no count to be
+    // zero.
+    const [never, walked] = withEmptyFolders(
+      [],
+      [
+        { id: 1, path: "/a", last_checked: null },
+        { id: 2, path: "/b", last_checked: "2026-08-10T00:00:00Z" },
+      ],
+    );
+    expect(never.emptyReason).toBe("unscanned");
+    expect(walked.emptyReason).toBe("empty");
+  });
+
+  it("never duplicates a folder that already has rows", () => {
+    const arranged = withEmptyFolders(
+      [group("/models/loras")],
+      [{ id: 1, path: "/models/loras", last_checked: null }],
+    );
+    expect(arranged).toHaveLength(1);
+    expect(arranged[0].rows).toHaveLength(1);
+  });
+
+  it("returns the groups untouched when every folder has some", () => {
+    // Identity, not a copy: the caller bands this result, and a needless new
+    // array would invalidate every downstream computed on each keystroke.
+    const groups = [group("/models/loras")];
+    expect(withEmptyFolders(groups, [{ id: 1, path: "/models/loras" }])).toBe(
+      groups,
+    );
   });
 });

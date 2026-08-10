@@ -24,9 +24,11 @@ vi.mock("../../api/modelShelf", () => ({
 // reset — which empties the shelf store MID-TEST and made an unrelated sort
 // assertion read the default view back.
 const listModelFolderDevices = vi.fn();
+const listModelFolders = vi.fn();
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
   listModelFolderDevices: (...args) => listModelFolderDevices(...args),
+  listModelFolders: (...args) => listModelFolders(...args),
 }));
 
 import ModelShelf from "./ModelShelf.vue";
@@ -89,6 +91,8 @@ beforeEach(() => {
   listCheckpoints.mockReset();
   listModelFolderDevices.mockReset();
   listModelFolderDevices.mockResolvedValue([]);
+  listModelFolders.mockReset();
+  listModelFolders.mockResolvedValue([]);
 });
 
 describe("a row with nothing in its header", () => {
@@ -816,5 +820,107 @@ describe("a click that ends a text drag", () => {
 
     window.getSelection.mockRestore();
     outside.remove();
+  });
+});
+
+describe("a registered folder holding no models", () => {
+  it("gets a group of its own, so the managed store is visible", async () => {
+    // It is ruled to always exist and to be the default destination for a drop
+    // or an import. A destination you cannot see is not a destination.
+    listModelFolders.mockResolvedValue([
+      { id: 1, path: "/models/loras", last_checked: "2026-08-10T00:00:00Z" },
+      { id: 2, path: "/models/store", last_checked: "2026-08-10T00:00:00Z" },
+    ]);
+    const wrapper = await mountShelf([
+      adapter({
+        locations: [
+          {
+            state: "present",
+            folder_id: 1,
+            folder_path: "/models/loras",
+            relpath: "a",
+          },
+        ],
+      }),
+    ]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
+    await wrapper.vm.$nextTick();
+
+    const labels = wrapper.findAll(".shelf-group-label").map((l) => l.text());
+    expect(labels).toContain("/models/store");
+    expect(textOf(wrapper.find(".shelf-empty-folder"))).toBe(
+      "No models in this folder.",
+    );
+  });
+
+  it("says it has not been looked in yet when it has not", async () => {
+    // "We have not looked" is the owner's to act on; "we looked and it is
+    // empty" is not, and a bare "0 models" says neither.
+    //
+    // A shelf with NO models at all renders its own empty state instead of the
+    // group list, which is the better answer there ("add a folder"), so the
+    // case asserted is the one the owner actually hits: models elsewhere, and
+    // one folder nothing has looked in.
+    listModelFolders.mockResolvedValue([
+      { id: 1, path: "/models/loras", last_checked: "2026-08-10T00:00:00Z" },
+      { id: 2, path: "/models/store", last_checked: null },
+    ]);
+    const wrapper = await mountShelf([
+      adapter({
+        locations: [
+          {
+            state: "present",
+            folder_id: 1,
+            folder_path: "/models/loras",
+            relpath: "a",
+          },
+        ],
+      }),
+    ]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
+    await wrapper.vm.$nextTick();
+
+    expect(textOf(wrapper.find(".shelf-empty-folder"))).toBe(
+      "Not scanned yet.",
+    );
+  });
+
+  it("stays out of the way on every other axis", async () => {
+    // The folder registry is a fact about folders. Grouping by base model and
+    // seeing a folder appear would be a category error.
+    listModelFolders.mockResolvedValue([
+      { id: 2, path: "/models/store", last_checked: null },
+    ]);
+    const wrapper = await mountShelf([adapter({ base_model: "sdxl" })]);
+    useModelShelfStore().setView({ groupBy: "base_model" });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".shelf-empty-folder").exists()).toBe(false);
+  });
+
+  it("is not selectable, having no model to act on", async () => {
+    // A verb armed against a folder would be a verb with nothing to write.
+    listModelFolders.mockResolvedValue([
+      { id: 1, path: "/models/loras", last_checked: "2026-08-10T00:00:00Z" },
+      { id: 2, path: "/models/store", last_checked: null },
+    ]);
+    const wrapper = await mountShelf([
+      adapter({
+        locations: [
+          {
+            state: "present",
+            folder_id: 1,
+            folder_path: "/models/loras",
+            relpath: "a",
+          },
+        ],
+      }),
+    ]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
+    await wrapper.vm.$nextTick();
+
+    const note = wrapper.find(".shelf-empty-folder");
+    expect(note.attributes("role")).toBeUndefined();
+    expect(note.attributes("tabindex")).toBeUndefined();
   });
 });
