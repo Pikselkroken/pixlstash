@@ -594,7 +594,12 @@ watch(
   align-items: center;
   gap: var(--space-3);
   margin: var(--space-2) 0 var(--space-3);
-  padding: var(--space-3) 0;
+  /* Tight vertically, roomy horizontally: a one-line band reads as loose at
+     --space-3 top and bottom, and the next value down the scale is --space-2
+     (the scale has nothing between them, and an off-grid 6px is a design
+     decision rather than a nudge). The --space-4 inset is the point of the
+     change: the meter and its figures were running to the panel edge. */
+  padding: var(--space-2) var(--space-4);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
