@@ -4,6 +4,7 @@ import { defineStore } from "pinia";
 import {
   createModelFolder,
   forgetModelFolder,
+  listModelFolderDevices,
   listModelFolders,
   MANAGED_KIND,
   rescanModelFolder,
@@ -38,6 +39,8 @@ const SCAN_WAIT_CEILING_MS = 10 * 60 * 1000;
  */
 export const useModelFoldersStore = defineStore("modelFolders", () => {
   const folders = ref([]);
+  /** One entry per DRIVE the folders sit on, for the shelf's bands. */
+  const devices = ref([]);
   const loading = ref(false);
   const error = ref("");
   /** True once a read has completed, so "none registered" and "not asked" differ. */
@@ -52,6 +55,24 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   let epoch = 0;
 
   const scanningIds = computed(() => new Set(scanning.value.keys()));
+
+  /**
+   * folder id → the drive it sits on.
+   *
+   * The shelf bands by this rather than by path prefix: a bind mount and a
+   * symlinked folder look like different drives by path and are one, and two
+   * folders under one root can be different drives when a mount sits between
+   * them. The server measured it; the client must not re-derive it.
+   */
+  const deviceByFolderId = computed(() => {
+    const byId = new Map();
+    for (const device of devices.value) {
+      for (const folderId of device.folder_ids || []) {
+        byId.set(Number(folderId), device);
+      }
+    }
+    return byId;
+  });
 
   /** The one folder that is PixlStash's own storage. Always exactly one. */
   const managedFolder = computed(() =>
@@ -70,6 +91,30 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
    * @param {boolean} [options.quiet=false] - true for a poll, which must not
    *   flash the list's loading state on every tick.
    */
+  /**
+   * Re-read the drive capacities.
+   *
+   * Its own call, and its own failure. The route stats the filesystem, so an
+   * offline mount can make it slow or make it fail, and neither may take the
+   * folder list down with it: without capacities the shelf still draws its
+   * bands, it just cannot draw a meter in them.
+   */
+  async function refreshDevices() {
+    const startedAt = epoch;
+    try {
+      const next = await listModelFolderDevices();
+      if (startedAt !== epoch) return;
+      devices.value = next;
+    } catch (err) {
+      if (startedAt !== epoch) return;
+      // Not surfaced as `error`: that field drives the folder dialog's alert,
+      // and a drive we could not measure is not a reason to tell the owner
+      // their folders could not be read.
+      devices.value = [];
+      console.warn("Could not read the model drives' capacity", err);
+    }
+  }
+
   async function refresh({ quiet = false } = {}) {
     const startedAt = epoch;
     if (!quiet) loading.value = true;
@@ -265,6 +310,7 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     epoch += 1;
     stopPolling();
     folders.value = [];
+    devices.value = [];
     scanning.value = new Map();
     loading.value = false;
     loaded.value = false;
@@ -279,6 +325,8 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
 
   return {
     folders,
+    devices,
+    deviceByFolderId,
     loading,
     loaded,
     error,
@@ -286,6 +334,7 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     managedFolder,
     registeredPaths,
     refresh,
+    refreshDevices,
     add,
     forget,
     scan,

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -2409,3 +2410,193 @@ def test_a_relocation_with_a_failed_file_does_not_promote_the_new_folder(
         "the store was promoted despite files that never arrived"
     )
     assert (relocatable_store.store / "one.safetensors").exists()
+
+
+# ===========================================================================
+# GET /model-folders/devices — the drive bands' capacity meter (F2)
+# ===========================================================================
+
+
+def _devices(shelf_env) -> list[dict]:
+    r = shelf_env.owner.get(f"{API}/model-folders/devices")
+    assert r.status_code == 200, r.text
+    return r.json()["devices"]
+
+
+def test_two_folders_on_one_drive_share_one_band(shelf_env, tmp_path):
+    """The band is a drive, not a path. Both folders here are under `tmp_path`
+    and therefore one filesystem, so a path-keyed implementation would draw two
+    meters for one drive and let the same free space be read twice."""
+    first, first_path = _register_folder_with_adapters(shelf_env, tmp_path, "driveA", 2)
+    second, second_path = _register_folder_with_adapters(
+        shelf_env, tmp_path, "driveB", 1
+    )
+    assert os.stat(first_path).st_dev == os.stat(second_path).st_dev, (
+        "the two folders are not on one filesystem here, so this machine "
+        "cannot prove the grouping"
+    )
+
+    bands = [d for d in _devices(shelf_env) if first in d["folder_ids"]]
+    assert len(bands) == 1, f"the drive was reported {len(bands)} times: {bands}"
+    band = bands[0]
+    assert second in band["folder_ids"], (
+        "two folders on one filesystem were split across bands"
+    )
+    assert band["folder_ids"] == sorted(band["folder_ids"]), "folder ids are unordered"
+    assert band["total_bytes"] > 0 and band["free_bytes"] > 0
+    assert band["free_bytes"] <= band["total_bytes"]
+    assert band["mount_point"], "the band has no label to draw"
+
+
+def test_the_meter_counts_present_bytes_and_ignores_missing_ones(shelf_env, tmp_path):
+    """`shelf_bytes` answers "how much of this drive is the shelf". A `missing`
+    row names bytes that are not on the drive any more, so counting it would
+    report space the drive itself does not agree is in use."""
+    folder_id, folder_path = _register_folder_with_adapters(
+        shelf_env, tmp_path, "metered", 3
+    )
+    assert (
+        shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan").status_code
+        == 202
+    )
+    assert _await_scan(shelf_env, folder_id)["scan_status"] == "completed"
+
+    band = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
+    on_disk = sum(
+        os.path.getsize(os.path.join(folder_path, name))
+        for name in os.listdir(folder_path)
+    )
+    assert band["shelf_bytes"] >= on_disk, (
+        f"the meter reported {band['shelf_bytes']} bytes for {on_disk} on disk"
+    )
+
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_folder_id = ?",
+            (folder_id,),
+        )
+    after = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
+    assert after["shelf_bytes"] == 0, (
+        f"vanished files still counted toward the meter: {after['shelf_bytes']}"
+    )
+
+
+def test_an_unmeasurable_folder_still_gets_a_band(shelf_env, tmp_path):
+    """An offline drive is the normal case this has to survive: the folder must
+    keep somewhere to sit, and its capacity must read as unknown rather than as
+    zero, which would draw a full meter."""
+    folder_id, folder_path = _register_folder_with_adapters(
+        shelf_env, tmp_path, "goingaway", 1
+    )
+    for name in os.listdir(folder_path):
+        os.unlink(os.path.join(folder_path, name))
+    os.rmdir(folder_path)
+
+    band = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
+    assert band["device_id"] is None
+    assert band["total_bytes"] is None and band["free_bytes"] is None, (
+        "an unmeasurable drive reported a capacity"
+    )
+    assert band["folder_ids"] == [folder_id], (
+        "two folders we cannot stat were merged into one band, which claims a "
+        "sameness nothing measured"
+    )
+    assert band["mount_point"] == folder_path
+
+
+def test_devices_is_owner_only_in_both_directions(shelf_env):
+    path = f"{API}/model-folders/devices"
+    assert shelf_env.owner.get(path).status_code == 200
+
+    token = _mint(shelf_env.owner, "device list probe")
+    client = _bearer(shelf_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the READ token is dead; the refusal below would prove nothing"
+    )
+    assert_real_route(shelf_env.server.api, "GET", path)
+    assert client.get(path).status_code == 403
+
+
+def test_devices_is_not_restricted_to_a_local_caller(shelf_env):
+    """The meter is `owner_only`, not the §16.3 locality tier: a remote owner
+    already reads every registered path from `GET /model-folders`, so blocking
+    this one would cost the drive bands and withhold nothing."""
+    r = shelf_env.owner.get(f"{API}/model-folders/devices", headers=_xff("8.8.8.8"))
+    assert r.status_code == 200, r.text
+
+
+_LINUX_ONLY = pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason=(
+        "the label lookup is per-platform: /dev/disk/by-label and /proc/mounts "
+        "are Linux's answer, and the Windows and macOS branches read a volume "
+        "API and a mount name that no fixture here can stand in for"
+    ),
+)
+
+
+@_LINUX_ONLY
+def test_a_band_is_named_by_its_volume_label_when_it_has_one(
+    shelf_env, tmp_path, monkeypatch
+):
+    """A Linux mount point runs to `/media/glindkvist/102AB4B6757AF9A3`, which
+    crowds a band header out. The volume's own name is what the owner recognises;
+    the mount point stays on the response for the tooltip."""
+    from pixlstash.utils import system_utils
+
+    folder_id, folder_path = _register_folder_with_adapters(
+        shelf_env, tmp_path, "labelled", 1
+    )
+    mount_point = system_utils.mount_point_of(folder_path)
+
+    by_label = tmp_path / "by-label"
+    by_label.mkdir()
+    device = tmp_path / "fake-device"
+    device.write_text("")
+    # udev escapes a space as \x20, so a label with one proves the decoding too.
+    os.symlink(device, by_label / "Model\\x20Drive")
+    mounts = tmp_path / "mounts"
+    mounts.write_text(
+        f"{device} {mount_point.replace(' ', chr(92) + '040')} ext4 rw 0 0\n"
+    )
+
+    monkeypatch.setattr(system_utils, "_BY_LABEL_DIR", str(by_label))
+    monkeypatch.setattr(system_utils, "_MOUNTS_FILE", str(mounts))
+
+    band = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
+    assert band["label"] == "Model Drive"
+    assert band["mount_point"] == mount_point, (
+        "the precise string must survive for the tooltip"
+    )
+
+
+def test_a_mount_point_holding_a_backslash_still_matches_its_device():
+    """`/proc/mounts` escapes a literal backslash as `\\134`, which a pattern
+    written for `\\040` and `\\011` does not cover. Left undecoded the mount
+    point never matches its device and the drive silently loses its label.
+    Reported by the review of #868."""
+    from pixlstash.utils.system_utils import _unescape_mount_field
+
+    assert _unescape_mount_field(r"/mnt/My\040Disk") == "/mnt/My Disk"
+    assert _unescape_mount_field(r"/mnt/back\134slash") == "/mnt/back\\slash"
+    assert _unescape_mount_field(r"/mnt/tab\011here") == "/mnt/tab\there"
+    # A path with nothing to decode comes back untouched.
+    assert _unescape_mount_field("/mnt/models") == "/mnt/models"
+
+
+@_LINUX_ONLY
+def test_a_drive_with_no_label_reports_null_rather_than_a_guess(
+    shelf_env, tmp_path, monkeypatch
+):
+    """The band then falls back to the mount point, which is never wrong, only
+    long. Inventing a name from the path would be neither."""
+    from pixlstash.utils import system_utils
+
+    folder_id, _ = _register_folder_with_adapters(shelf_env, tmp_path, "unlabelled", 1)
+    empty = tmp_path / "no-labels"
+    empty.mkdir()
+    monkeypatch.setattr(system_utils, "_BY_LABEL_DIR", str(empty))
+
+    band = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
+    assert band["label"] is None
+    assert band["mount_point"]
