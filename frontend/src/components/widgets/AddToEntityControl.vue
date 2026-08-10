@@ -221,6 +221,14 @@ const props = defineProps({
   // missing REQUIRED prop; it says nothing about an unknown attribute. Face
   // mode has no subject list and passes `[]`.
   subjectIds: { type: Array, required: true },
+  // Membership supplied by the host: `item.key -> Set<string>` of subject ids.
+  //
+  // Supplying it is the single switch into host-driven mode. The internal
+  // readers below answer "which of these PICTURES are in each entity", which
+  // only the picture hosts can ask; the model shelf already has every adapter's
+  // attachments on the rows it drew, so it hands them straight in and no read
+  // happens at all. Null keeps the picture path exactly as it was.
+  membership: { type: Object, default: null },
   disabled: { type: Boolean, default: false },
   readonly: { type: Boolean, default: false },
   label: { type: String, default: null },
@@ -345,7 +353,16 @@ const searchInputRef = ref(null);
 const menuOpen = ref(false);
 const searchQuery = ref("");
 const statusMessage = ref("");
-const membersById = ref({}); // key: item.key → Set<string> of picture IDs
+const membersById = ref({}); // key: item.key → Set<string> of subject IDs
+
+/**
+ * The membership in play: the host's when it supplied one, else what was read.
+ *
+ * Resolved once so no reader has to remember which mode it is in, and so the
+ * host's map cannot be half-applied — every consumer of membership goes through
+ * this.
+ */
+const effectiveMembers = computed(() => props.membership ?? membersById.value);
 // The trigger's aria-controls target. Several of these controls sit in one menu,
 // so the id has to be per-instance.
 const listboxId = useId();
@@ -558,12 +575,17 @@ function getAriaSelected(item) {
 function getItemState(item) {
   const ids = normalisedPictureIds.value;
   if (!ids.length) return "unchecked";
-  const members = membersById.value?.[item.key];
+  const members = effectiveMembers.value?.[item.key];
   if (!members || members.size === 0) return "unchecked";
 
-  const relevantIds = isCharacter.value
-    ? ids.filter((id) => picturesWithFaces.value.has(String(id)))
-    : ids;
+  // The face narrowing is a PICTURE rule — a picture with no face cannot be a
+  // character member — so it must not survive into host-driven mode. Left in,
+  // it would filter the shelf's adapter ids against a set that never contains
+  // them, and every row would read `unchecked` however many were attached.
+  const relevantIds =
+    isCharacter.value && !props.membership
+      ? ids.filter((id) => picturesWithFaces.value.has(String(id)))
+      : ids;
   if (!relevantIds.length) return "unchecked";
 
   const matched = relevantIds.filter((id) => members.has(String(id))).length;
@@ -782,6 +804,12 @@ function handleOutsideClick(event) {
 async function fetchMembers() {
   const ids = normalisedPictureIds.value;
   const requestKey = normalisedIdsKey.value;
+  // Host-driven: the membership arrived as a prop, so there is nothing to read
+  // and the picture readers would not understand these ids anyway.
+  if (props.membership) {
+    membershipLoaded.value = true;
+    return;
+  }
   if (!props.backendUrl || !ids.length) {
     membersById.value = {};
     picturesWithFaces.value = new Set();
