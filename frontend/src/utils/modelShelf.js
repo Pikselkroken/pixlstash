@@ -189,7 +189,11 @@ export function bandGroups(groups, deviceByFolderId) {
     if (!band) {
       band = {
         key,
-        label: device?.mount_point || group.label,
+        // The volume's name if it has one, else where it is mounted. A Linux
+        // mount point runs to `/media/glindkvist/102AB4B6757AF9A3` and crowds
+        // the header out; the precise string stays available as the tooltip.
+        label: device?.label || device?.mount_point || group.label,
+        mountPoint: device?.mount_point || group.label,
         measured: Boolean(device?.device_id),
         totalBytes: device?.total_bytes ?? null,
         freeBytes: device?.free_bytes ?? null,

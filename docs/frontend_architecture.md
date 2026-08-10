@@ -1394,6 +1394,14 @@ models is thirty-six headers. Under `Folder` the second level is spent on the
   arithmetic — the inner offset is the outer's measured height, which no token
   knows — and the band is a label with a meter rather than something worth
   pinning while the reader scans one folder. So there is still one sticky offset.
+- **The band is named by the volume, not by the mount point.** A Linux mount
+  point runs to `/media/glindkvist/102AB4B6757AF9A3` and crowds the header out,
+  so the band shows `label` behind a disk glyph and keeps `mount_point` as its
+  `title`. The server reads the label from `/dev/disk/by-label` on Linux,
+  `GetVolumeInformationW` on Windows and the `/Volumes` mount name on macOS, and
+  returns null when there is none, which a root partition usually has not. The
+  fallback chain is label → mount point → the folder's own path, so the header
+  is never empty and never invented.
 - **The band is a drive, never a path prefix.** `bandGroups` keys on the
   `device_id` the server measured (`GET /model-folders/devices`), because a bind
   mount and a symlinked folder look like different drives by path and are one,

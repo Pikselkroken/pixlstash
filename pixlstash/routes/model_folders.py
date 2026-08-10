@@ -218,10 +218,21 @@ class ModelFolderDeviceResponse(BaseModel):
     )
     mount_point: str = Field(
         description=(
-            "Where the filesystem is mounted (`/`, `/mnt/models`, `D:\\`). The "
-            "label for the drive band. Falls back to the folder's own path "
-            "when the drive could not be measured."
+            "Where the filesystem is mounted (`/`, `/mnt/models`, `D:\\`). "
+            "Precise, and on Linux long enough to crowd a band header, so it "
+            "is the drive band's tooltip rather than its label. Falls back to "
+            "the folder's own path when the drive could not be measured."
         )
+    )
+    label: Optional[str] = Field(
+        default=None,
+        description=(
+            "What the owner called the volume (`Models`, `WinStorage`), read "
+            "from `/dev/disk/by-label` on Linux, `GetVolumeInformationW` on "
+            "Windows and the `/Volumes` mount name on macOS. Null when the "
+            "filesystem carries no label, which a root partition usually does "
+            "not; the band then shows `mount_point` instead."
+        ),
     )
     total_bytes: Optional[int] = Field(
         default=None, description="Size of the filesystem. Null if unmeasurable."
@@ -475,6 +486,7 @@ def create_router(server) -> APIRouter:
                 existing = ModelFolderDeviceResponse(
                     device_id=device.device_id,
                     mount_point=device.mount_point,
+                    label=device.label,
                     total_bytes=device.total_bytes,
                     free_bytes=device.free_bytes,
                     shelf_bytes=0,

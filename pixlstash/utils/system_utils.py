@@ -2,12 +2,20 @@
 
 import logging
 import os
+import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Where udev keeps its label → device symlinks on Linux, and the kernel's own
+# mount table. Constants so a test can point both at fixtures and exercise the
+# matching without a real disk, a real label or root.
+_BY_LABEL_DIR = "/dev/disk/by-label"
+_MOUNTS_FILE = "/proc/mounts"
 
 # Hard upper bound for the VRAM budget setting. Applies both to the UI slider
 # maximum and to backend validation. Keep in sync with the frontend constant.
@@ -24,7 +32,10 @@ class StorageDevice:
             grouping key, never something to persist. Two folders sharing it
             share one drive and therefore one capacity meter.
         mount_point: Where that filesystem is mounted (``/``, ``/mnt/models``,
-            ``D:\\``). This is the label a drive band shows.
+            ``D:\\``). Precise, and on Linux often long enough to crowd a band
+            header, so it belongs in a tooltip rather than in the label.
+        label: What the owner called the volume (``Models``, ``WinStorage``), or
+            ``None`` when it has none. This is what a drive band shows.
         total_bytes: Size of the filesystem.
         free_bytes: What is left on it. Free, not "used": a shelf that reports
             how much room is left answers the question the owner is asking
@@ -33,6 +44,7 @@ class StorageDevice:
 
     device_id: str
     mount_point: str
+    label: Optional[str]
     total_bytes: int
     free_bytes: int
 
@@ -59,6 +71,102 @@ def mount_point_of(path: str) -> str:
             return current
         current = parent
     return current
+
+
+def _unescape_mount_field(field: str) -> str:
+    """Decode the octal escapes ``/proc/mounts`` writes for spaces and tabs."""
+    return re.sub(r"\\0([0-7]{2})", lambda m: chr(int(m.group(1), 8)), field)
+
+
+def _linux_volume_label(mount_point: str) -> Optional[str]:
+    """The volume label of the Linux filesystem mounted at *mount_point*.
+
+    Two stdlib reads and no dependency: ``/proc/mounts`` gives device →
+    mount point, and the ``/dev/disk/by-label`` symlinks udev maintains give
+    label → device. Matching them is the whole trick. `lsblk` and `blkid` would
+    each answer in one call and each is a subprocess that may not be installed.
+
+    Returns:
+        The label, or ``None`` if the filesystem has none (a root partition
+        usually does not) or the tables cannot be read.
+    """
+    try:
+        with open(_MOUNTS_FILE, encoding="utf-8") as handle:
+            mounted = {
+                _unescape_mount_field(parts[1]): os.path.realpath(parts[0])
+                for line in handle
+                if len(parts := line.split()) >= 2
+            }
+    except OSError as exc:
+        logger.debug(
+            "Cannot read %s (%s); drive bands lose their labels.", _MOUNTS_FILE, exc
+        )
+        return None
+
+    device = mounted.get(mount_point)
+    if device is None:
+        return None
+    try:
+        entries = os.listdir(_BY_LABEL_DIR)
+    except OSError:
+        # No by-label directory at all is normal (a container, a system whose
+        # filesystems carry no labels), not a fault worth a warning.
+        return None
+    for entry in entries:
+        link = os.path.join(_BY_LABEL_DIR, entry)
+        if os.path.realpath(link) == device:
+            # udev escapes anything awkward as \xNN, spaces included.
+            return re.sub(
+                r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), entry
+            )
+    return None
+
+
+def _windows_volume_label(mount_point: str) -> Optional[str]:
+    """The volume label Windows reports for *mount_point*, or ``None``.
+
+    ``GetVolumeInformationW`` through ctypes: the label is what Explorer shows
+    beside the drive letter, and a drive letter alone is exactly the "precise
+    and unhelpful" string this whole function exists to replace.
+    """
+    try:
+        import ctypes
+
+        buffer = ctypes.create_unicode_buffer(261)
+        root = mount_point if mount_point.endswith("\\") else mount_point + "\\"
+        ok = ctypes.windll.kernel32.GetVolumeInformationW(
+            ctypes.c_wchar_p(root),
+            buffer,
+            ctypes.sizeof(buffer),
+            None,
+            None,
+            None,
+            None,
+            0,
+        )
+    except (AttributeError, OSError, ValueError) as exc:
+        logger.debug("GetVolumeInformationW failed for %r (%s).", mount_point, exc)
+        return None
+    return buffer.value or None if ok else None
+
+
+def volume_label(mount_point: str) -> Optional[str]:
+    """What the owner called this volume, or ``None`` if it has no name.
+
+    Platform-specific by necessity and best-effort by design: a band that cannot
+    name its drive falls back to the mount point, which is never wrong, only
+    long.
+    """
+    if sys.platform.startswith("linux"):
+        return _linux_volume_label(mount_point)
+    if sys.platform == "win32":
+        return _windows_volume_label(mount_point)
+    if sys.platform == "darwin":
+        # macOS mounts everything but the boot volume under /Volumes/<name>,
+        # so the last segment IS the label the user chose.
+        parent, name = os.path.split(mount_point.rstrip("/"))
+        return name if parent == "/Volumes" else None
+    return None
 
 
 def describe_storage_device(path: str) -> Optional[StorageDevice]:
@@ -88,9 +196,11 @@ def describe_storage_device(path: str) -> Optional[StorageDevice]:
             exc,
         )
         return None
+    mount_point = mount_point_of(path)
     return StorageDevice(
         device_id=str(device_id),
-        mount_point=mount_point_of(path),
+        mount_point=mount_point,
+        label=volume_label(mount_point),
         total_bytes=int(usage.total),
         free_bytes=int(usage.free),
     )

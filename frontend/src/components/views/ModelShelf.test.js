@@ -399,6 +399,7 @@ describe("drive bands", () => {
       {
         device_id: "9",
         mount_point: "/mnt/fast",
+        label: "FastModels",
         total_bytes: 1024 ** 4,
         free_bytes: 512 * 1024 ** 3,
         shelf_bytes: 256 * 1024 ** 3,
@@ -414,7 +415,13 @@ describe("drive bands", () => {
 
     const bands = wrapper.findAll(".shelf-band-heading");
     expect(bands).toHaveLength(1);
-    expect(textOf(bands[0])).toContain("/mnt/fast");
+    // The volume's name, not its mount point: a Linux mount point runs to
+    // `/media/glindkvist/102AB4B6757AF9A3` and crowds the header out.
+    expect(textOf(bands[0])).toContain("FastModels");
+    expect(textOf(bands[0])).not.toContain("/mnt/fast");
+    expect(bands[0].find(".shelf-band-label").attributes("title")).toBe(
+      "/mnt/fast",
+    );
     // Free leads: it is the number that decides whether the next checkpoint
     // fits, and the meter is read at a glance rather than computed from.
     expect(textOf(bands[0])).toContain("512.0 GB free of 1.0 TB");

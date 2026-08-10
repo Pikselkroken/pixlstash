@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -2522,3 +2523,66 @@ def test_devices_is_not_restricted_to_a_local_caller(shelf_env):
     this one would cost the drive bands and withhold nothing."""
     r = shelf_env.owner.get(f"{API}/model-folders/devices", headers=_xff("8.8.8.8"))
     assert r.status_code == 200, r.text
+
+
+_LINUX_ONLY = pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason=(
+        "the label lookup is per-platform: /dev/disk/by-label and /proc/mounts "
+        "are Linux's answer, and the Windows and macOS branches read a volume "
+        "API and a mount name that no fixture here can stand in for"
+    ),
+)
+
+
+@_LINUX_ONLY
+def test_a_band_is_named_by_its_volume_label_when_it_has_one(
+    shelf_env, tmp_path, monkeypatch
+):
+    """A Linux mount point runs to `/media/glindkvist/102AB4B6757AF9A3`, which
+    crowds a band header out. The volume's own name is what the owner recognises;
+    the mount point stays on the response for the tooltip."""
+    from pixlstash.utils import system_utils
+
+    folder_id, folder_path = _register_folder_with_adapters(
+        shelf_env, tmp_path, "labelled", 1
+    )
+    mount_point = system_utils.mount_point_of(folder_path)
+
+    by_label = tmp_path / "by-label"
+    by_label.mkdir()
+    device = tmp_path / "fake-device"
+    device.write_text("")
+    # udev escapes a space as \x20, so a label with one proves the decoding too.
+    os.symlink(device, by_label / "Model\\x20Drive")
+    mounts = tmp_path / "mounts"
+    mounts.write_text(
+        f"{device} {mount_point.replace(' ', chr(92) + '040')} ext4 rw 0 0\n"
+    )
+
+    monkeypatch.setattr(system_utils, "_BY_LABEL_DIR", str(by_label))
+    monkeypatch.setattr(system_utils, "_MOUNTS_FILE", str(mounts))
+
+    band = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
+    assert band["label"] == "Model Drive"
+    assert band["mount_point"] == mount_point, (
+        "the precise string must survive for the tooltip"
+    )
+
+
+@_LINUX_ONLY
+def test_a_drive_with_no_label_reports_null_rather_than_a_guess(
+    shelf_env, tmp_path, monkeypatch
+):
+    """The band then falls back to the mount point, which is never wrong, only
+    long. Inventing a name from the path would be neither."""
+    from pixlstash.utils import system_utils
+
+    folder_id, _ = _register_folder_with_adapters(shelf_env, tmp_path, "unlabelled", 1)
+    empty = tmp_path / "no-labels"
+    empty.mkdir()
+    monkeypatch.setattr(system_utils, "_BY_LABEL_DIR", str(empty))
+
+    band = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
+    assert band["label"] is None
+    assert band["mount_point"]

@@ -185,7 +185,10 @@
             class="shelf-band-heading"
             :class="{ 'shelf-band-heading--unknown': !group.band.measured }"
           >
-            <span class="shelf-band-label">{{ group.band.label }}</span>
+            <span class="shelf-band-label" :title="group.band.mountPoint">
+              <v-icon size="16" class="shelf-band-icon">mdi-harddisk</v-icon>
+              <span>{{ group.band.label }}</span>
+            </span>
             <!-- Two fills in one track, not two bars: the shelf's share is a
                  part of what is used, so drawing it separately would let the
                  two add up past the drive. -->
@@ -596,9 +599,19 @@ watch(
 }
 
 .shelf-band-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The glyph says "this is a disk", which is what lets the label be a bare
+   volume name rather than a path the reader has to parse to know what it is. */
+.shelf-band-icon {
+  flex: none;
 }
 
 /* One track, two fills, the wider drawn first: the shelf's share is PART of
