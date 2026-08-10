@@ -4,12 +4,19 @@
 an enum would reject every model that ships after this release). This module
 never constrains what can be stored. It does two jobs:
 
-* **folds** an arriving string to a canonical label, so the shelf's *Base model*
-  sort, its filter facets and the ComfyUI picker's search group
-  ``sdxl_base_v1-0``, ``SDXL``, ``sdxl base`` and ``stable diffusion xl`` into
-  one row rather than four;
+* **folds** an arriving string to a canonical label, so a caller that wants
+  ``sdxl_base_v1-0``, ``SDXL``, ``sdxl base`` and ``stable diffusion xl`` to
+  group as one rather than four can ask for that;
 * **seeds tab-completion** with models we already know about, so the field is
   useful on a fresh install with an empty library.
+
+**Nothing folds what is stored, and nothing calls this yet.** The shelf's *Base
+model* sort is still ``m.base_model COLLATE NOCASE`` and its filter is an exact
+match on the raw column, so the grouping above is what :func:`fold` makes
+possible, not what the shelf does today. Wiring it in is open work and a
+decision rather than a rename: folding inside the sort needs either a SQLite
+function registered per hub connection or a canonical column the scanner
+maintains. Do not read this docstring as a description of the shelf.
 
 An unrecognised string is not an error. It is stored verbatim, displayed
 verbatim, and — the moment it lands on a ``model`` row — becomes a completion
