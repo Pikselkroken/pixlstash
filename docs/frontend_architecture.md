@@ -1483,6 +1483,79 @@ namespaced per axis, so a base model that appears after the preference was
 written still opens, and collapsing `Not set` under `Base model` does not
 collapse a folder of the same name.
 
+#### The verbs (the selection bar, F3)
+
+**Selection is by MODEL, not by rendered row.** Under folder grouping one model
+is drawn once per folder holding a copy of it, and the verbs write the model, so
+a per-row selection would let the same file be half selected and ask the reader
+to hold a distinction the data has not got. `selectedIds` is a `Set` of hub
+`model.id`, replaced rather than mutated on every change because Vue does not
+track `Set.add` and the bar's count would otherwise go stale.
+
+**`selectedRows` reads `visibleRows`, never `rows`,** which is load-bearing: a
+verb may only act on something the reader can see. Narrowing `Show` therefore
+drops rows out of the selection (an unclassified file has to have its box ticked
+before it can be corrected at all), while `selectedIds` keeps the id, so
+re-ticking the box brings it back rather than making the reader select it again.
+`pruneSelection` runs after every fetch and drops ids the shelf no longer holds,
+or a forgotten model would be counted by the bar for the life of the tab.
+
+**The checkbox goes in column 1, where the reserved glyph slot already was**, so
+ticking a row moves nothing. It is labelled with the row's own name: 1,800
+controls announcing "checkbox" is the same as none of them announcing anything.
+This is also the one rule F3 changed — the row itself is still not a focus stop,
+but its checkbox is, which is exactly what the old "rows carry no verb" comment
+anticipated.
+
+**`ShelfSelectionBar.vue` emits; `ModelShelf.vue` acts.** Every button is an
+emit, so both confirmations live in one place instead of half in the bar and
+half in the view, and the bar mounts in a test with nothing but a store.
+
+**Three verbs, one dialog.** `ShelfEditDialog.vue` carries Rename, Set base
+model and Set kind because all three write one curated column and differ only in
+which one, mirroring `PATCH /models` rather than inventing a shape of its own.
+It sends **only** the field its verb owns, which is why the route distinguishes
+an absent field from a null one. Fields are seeded from the selection on open
+(shared value, or empty when the selection disagrees) so the box shows what is
+there rather than something the reader has to interpret.
+
+**The two confirmations are deliberately different shapes.**
+
+- *Bulk base-model overwrite* is inline in the dialog, and counts the values it
+  will **destroy** rather than the rows selected: "12 selected" is something the
+  reader can already see. It appears only from two rows up. A second dialog
+  stacked on a form is how people learn to click through prompts.
+- *Forget* is a `useConfirm` prompt, because unlike the overwrite it is a single
+  press with nothing between it and the deletion.
+
+**Forget is gated by row state in the bar as well as on the server.** It is
+enabled only when the selection holds rows whose every copy is `missing` (or
+`forgotten`); `present` and `unreachable` both mean the bytes may still be out
+there, and `unreachable` is the one that matters — an unplugged drive must never
+be one press from losing its curation. The bar disables with the reason in the
+tooltip rather than hiding the verb, and a mixed selection stays enabled with
+the count it will actually take, because the server forgets what it can and
+reports the rest.
+
+**Receipts are notices, not `useActionReceipt`.** That composable is built on
+`useOperationStore`, which is the vault-only operation log with undo keycaps —
+the exact machinery the shelf ruled out. Shelf outcomes go through
+`useNoticeStore`, the same idiom folder registration already uses, and
+`editReceipt` / `forgetReceipt` are pure functions so the wording is testable
+without a component. The forget receipt names the refusals: "3 forgotten, 2
+still have copies" is the normal outcome of a selection made a minute ago, and a
+receipt reporting only the 3 would read as a silent partial failure. The **two
+refusal reasons stay apart**: `still_has_a_copy` is the gate doing its job and
+the file is fine, while `no_such_model` means the row had already been forgotten
+before the call reached it. Reporting the second as "still has a copy" would
+tell the reader their file is safe when the row is not there at all. Any reason
+the server adds later counts as kept, the conservative reading.
+
+**Assign is not here yet.** It is the fifth verb and its route already exists,
+but its control is the `AddToEntityControl` rewrite that decision 6 of the nine
+puts after #759 — a combobox/listbox shell rather than a button — so it arrives
+with that rewrite instead of as a fourth dialog.
+
 **Capacity meters are built, and they read the disk rather than the catalogue.**
 This paragraph previously recorded the opposite, on the grounds that nothing
 exposed per-drive free and total bytes and that a meter computed from the sizes

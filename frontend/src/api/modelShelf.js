@@ -58,3 +58,37 @@ export async function listCheckpoints({ baseModel, q } = {}) {
   const body = await unwrap(apiClient.get("/checkpoints", { params }));
   return Array.isArray(body?.checkpoints) ? body.checkpoints : [];
 }
+
+/**
+ * Write curated columns onto one or more models.
+ *
+ * Three of the shelf's verbs land here — Rename, Set base model, Set kind —
+ * because all three write one column and differ in nothing else. **Only the
+ * keys present in `changes` are sent**, so setting a base model across a
+ * selection cannot blank the names in it, and an explicit `null` is a *clear*
+ * rather than "leave it alone".
+ *
+ * @param {Array<number>} ids - hub `model.id` values. Ids rather than hashes:
+ *   an unhashed 24 GB checkpoint has no hash to be addressed by.
+ * @param {Object} changes - any of `display_name` (one id only), `base_model`,
+ *   `kind`, `file_kind`.
+ * @returns {Promise<{updated: Array<number>, fields: Array<string>}>}
+ */
+export async function editModels(ids, changes) {
+  return unwrap(apiClient.patch("/models", { ids, ...changes }));
+}
+
+/**
+ * Forget models whose files are gone.
+ *
+ * The one shelf call that destroys curation, so its caller confirms first. The
+ * server gates on each row's state rather than on the caller: anything with a
+ * `present` or `unreachable` copy comes back under `refused` with a reason
+ * instead of failing the call, which is what the receipt reports.
+ *
+ * @param {Array<number>} ids - hub `model.id` values.
+ * @returns {Promise<{forgotten: Array<number>, refused: Array<Object>}>}
+ */
+export async function forgetModels(ids) {
+  return unwrap(apiClient.post("/models/forget", { ids }));
+}

@@ -136,6 +136,13 @@
       </div>
     </div>
 
+    <ShelfSelectionBar
+      @rename="editVerb = 'rename'"
+      @set-base-model="editVerb = 'base-model'"
+      @set-kind="editVerb = 'kind'"
+      @forget="confirmForget"
+    />
+
     <div class="shelf-body">
       <p v-if="store.loading" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
@@ -180,11 +187,12 @@
         </button>
       </div>
 
-      <!-- Rows are not focus stops: they carry no verb and no selection, so
-           1,800 empty tab stops would be a trap. Roving focus arrives with the
-           first thing a focused row can do. The group headers are therefore the
-           only stops in the list, which makes Tab a group-to-group move and is
-           why no jump shortcut was invented for one. -->
+      <!-- The row itself is still not a focus stop; its checkbox is. That is
+           the change F3 made and the reason the old rule existed: a row with no
+           verb and no selection would have been 1,800 empty tab stops, and a
+           row with a selection has exactly one thing to do. Group headers stay
+           stops too, so Tab still moves group to group when nothing inside is
+           reached. -->
       <template v-else>
         <div v-for="group in shownGroups" :key="group.key" class="shelf-group">
           <!-- The drive band: the OUTER of the two levels the plan allows, and
@@ -272,9 +280,22 @@
               v-for="row in group.rows"
               :key="row.rowKey"
               class="ps-row shelf-row"
+              :class="{ 'shelf-row--selected': store.isSelected(row.id) }"
               :title="rowTitle(row)"
             >
-              <span class="ps-row-glyph ps-row-glyph--empty"></span>
+              <!-- Column 1 was a reserved empty slot while a row carried no
+                   verb. It carries one now, so the checkbox goes where the
+                   space already was and no column moves. Labelled by the row's
+                   own name, because "checkbox" repeated 1,800 times tells a
+                   screen reader nothing about which file it is on. -->
+              <span class="ps-row-glyph shelf-row-pick">
+                <input
+                  type="checkbox"
+                  :checked="store.isSelected(row.id)"
+                  :aria-label="`Select ${row.name.text}`"
+                  @change="store.toggleSelected(row.id)"
+                />
+              </span>
               <span class="shelf-row-kind">
                 <v-icon size="16">{{ KIND_ICON[row.file_kind] }}</v-icon>
               </span>
@@ -308,6 +329,7 @@
       </template>
     </div>
 
+    <ShelfEditDialog :verb="editVerb" @close="editVerb = ''" />
     <ModelFoldersDialog :open="foldersOpen" @close="closeFolders" />
   </div>
 </template>
@@ -316,7 +338,10 @@
 import { computed, nextTick, onMounted, ref, shallowRef, watch } from "vue";
 import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
+import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
+import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
+import { useConfirm } from "../../composables/useConfirm";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import {
@@ -335,6 +360,36 @@ const showMenuOpen = ref(false);
 const sortMenuOpen = ref(false);
 const foldersOpen = ref(false);
 const foldersBtnRef = ref(null);
+/** Which edit verb owns the dialog: `rename` | `base-model` | `kind` | "". */
+const editVerb = ref("");
+const { confirm } = useConfirm();
+
+/**
+ * The second of the shelf's two confirmations.
+ *
+ * A prompt rather than an inline warning, because unlike the bulk base-model
+ * overwrite this one is not a property of a form the reader is filling in: it
+ * is a single press with nothing between it and the deletion. There is no undo
+ * and no operation log behind the shelf, so this sentence is the whole safety
+ * net, and it names what is destroyed rather than what is clicked.
+ */
+async function confirmForget() {
+  const forgettable = store.selectedRows.filter(
+    (row) => row.locState === "missing" || row.locState === "forgotten",
+  );
+  if (!forgettable.length) return;
+  const many = forgettable.length !== 1;
+  const ok = await confirm({
+    title: many ? `Forget ${forgettable.length} models?` : "Forget this model?",
+    message: many
+      ? "Their files are already gone. This also deletes the names, base models and trigger words recorded for them."
+      : "Its file is already gone. This also deletes the name, base model and trigger words recorded for it.",
+    warning: "There is no undo for this.",
+    confirmLabel: many ? "Forget them" : "Forget it",
+    danger: true,
+  });
+  if (ok) await store.forgetSelected();
+}
 
 // Two controls open the same dialog, so which one gets focus back is a fact
 // about the press rather than about the dialog. Held raw: it is a DOM node, and
@@ -591,6 +646,27 @@ watch(
   list-style: none;
   padding: 0;
   margin: 0;
+}
+
+/* The selection tick lives in the reserved glyph column, so ticking a row
+   moves nothing. Sized to the 24px target the rest of the app uses. */
+.shelf-row-pick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shelf-row-pick input {
+  width: 16px;
+  height: 16px;
+  accent-color: rgb(var(--v-theme-primary));
+  cursor: pointer;
+}
+
+/* A wash, not a border: a 1px outline on a selected row shifts every glyph in
+   it by a pixel, and 200 selected rows would shimmer as the list scrolls. */
+.shelf-row--selected {
+  background: rgba(var(--v-theme-primary), 0.12);
 }
 
 /* ── Drive bands ───────────────────────────────────────────────────────────
