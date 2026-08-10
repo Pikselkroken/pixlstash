@@ -4,6 +4,11 @@ description: >-
   The single source of truth for the cache's paths and key: every job restores,
   and exactly one job — `warm_models` in ci.yml — saves.
 
+  Covers Linux and Windows. Windows had its own inline copy of this cache in
+  ci.yml, with different paths and a key that hashed three of these six files;
+  the two definitions could not share an entry and the Windows one was never
+  warmed on a branch. See the `warm_models` matrix in ci.yml.
+
   RESTORE-ONLY for readers, deliberately. `actions/cache` writes only on a key
   MISS, so a model missing from an entry that keeps hitting its primary key can
   never be added to it. CLIP was missing from the 1.77 GB entry for exactly that
@@ -38,6 +43,12 @@ runs:
     #    user_data_dir, where the WD14 and PixlStash taggers land because they
     #    call hf_hub_download(local_dir=...), which bypasses the hub cache
     #    entirely.
+    #  * ~/AppData/Local/pixlstash/pixlstash/downloaded_models — the same
+    #    user_data_dir on Windows (the doubled "pixlstash" is platformdirs'
+    #    appauthor=appname default). Listed unconditionally rather than behind
+    #    a `runner.os` branch so there stays exactly ONE path list and ONE key
+    #    expression; `actions/cache` skips a path that does not exist, so each
+    #    OS simply ignores the other's.
     # A warm cache makes needs_download() (a pure file-existence check) return
     # False, so download() is never issued; and for the models that have no such
     # check, a cache hit lets huggingface_hub fall back to the cached file when
@@ -55,6 +66,7 @@ runs:
         path: |
           ~/.cache/huggingface
           ~/.local/share/pixlstash/downloaded_models
+          ~/AppData/Local/pixlstash/pixlstash/downloaded_models
         key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/tagger_plugins/clip_service.py', 'pixlstash/tagger_plugins/sbert.py', 'pixlstash/tagger_plugins/wd14.py', 'pixlstash/tagger_plugins/pixlstash_tagger.py', 'pixlstash/tagger_plugins/florence2.py', 'scripts/prefetch_ci_models.py') }}
         restore-keys: hf-models-${{ runner.os }}-
 
