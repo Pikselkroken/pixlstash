@@ -488,34 +488,42 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
         return [], []
 
     placeholders = ", ".join("?" for _ in ids)
-    known = {
-        int(row["id"])
-        for row in hub.fetchall(
-            f"SELECT id FROM model WHERE id IN ({placeholders})", tuple(ids)
-        )
-    }
-    alive = {
-        int(row["model_id"])
-        for row in hub.fetchall(
-            f"SELECT DISTINCT model_id FROM model_file WHERE model_id IN "
-            f"({placeholders}) AND state IN "
-            f"({', '.join('?' for _ in _KEEPS_A_MODEL_ALIVE)})",
-            tuple(ids) + _KEEPS_A_MODEL_ALIVE,
-        )
-    }
+    forgettable: list[int] = []
+    refused: list[dict] = []
 
-    forgettable, refused = [], []
-    for model_id in ids:
-        if model_id not in known:
-            refused.append({"id": model_id, "reason": "no_such_model"})
-        elif model_id in alive:
-            refused.append({"id": model_id, "reason": "still_has_a_copy"})
-        else:
-            forgettable.append(model_id)
+    # ONE critical section, gate and delete together. `hub.fetchall` takes and
+    # releases the hub lock per call, so reading the states outside this block
+    # left a window in which a background `ModelFolderScanner` could flip a row
+    # from `missing` back to `present` between the check and the DELETE — and
+    # the model would be forgotten anyway. Small window, unrecoverable
+    # consequence, on the one shelf operation with no undo behind it.
+    with hub.transaction() as conn:
+        known = {
+            int(row[0])
+            for row in conn.execute(
+                f"SELECT id FROM model WHERE id IN ({placeholders})", tuple(ids)
+            ).fetchall()
+        }
+        alive = {
+            int(row[0])
+            for row in conn.execute(
+                f"SELECT DISTINCT model_id FROM model_file WHERE model_id IN "
+                f"({placeholders}) AND state IN "
+                f"({', '.join('?' for _ in _KEEPS_A_MODEL_ALIVE)})",
+                tuple(ids) + _KEEPS_A_MODEL_ALIVE,
+            ).fetchall()
+        }
 
-    if forgettable:
-        marks = ", ".join("?" for _ in forgettable)
-        with hub.transaction() as conn:
+        for model_id in ids:
+            if model_id not in known:
+                refused.append({"id": model_id, "reason": "no_such_model"})
+            elif model_id in alive:
+                refused.append({"id": model_id, "reason": "still_has_a_copy"})
+            else:
+                forgettable.append(model_id)
+
+        if forgettable:
+            marks = ", ".join("?" for _ in forgettable)
             # Child first: `model_file` references `model(id)`, and the delete
             # order is what keeps this working without turning foreign keys off.
             conn.execute(

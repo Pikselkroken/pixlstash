@@ -767,38 +767,53 @@ def create_router(server) -> APIRouter:
         """Refuse a correction the hub's own CHECK constraints would reject.
 
         ``model`` carries ``CHECK (file_kind <> 'adapter' OR sha256 IS NOT
-        NULL)`` and the same for ``kind``. Promoting an unhashed 24 GB
-        checkpoint to ``adapter`` therefore violates a constraint, and left to
-        SQLite it surfaces as a 500 naming ``CHECK constraint failed``, which
-        tells the owner nothing about the file they picked. Checked here so the
-        answer names the file instead.
+        NULL)`` and the same for ``kind``. Left to SQLite a violation surfaces
+        as a 500 naming ``CHECK constraint failed``, which tells the owner
+        nothing about the file they picked.
+
+        Decided on the **post-write** state rather than on the body, because
+        three different bodies reach the same violation and only one of them
+        mentions ``file_kind`` at all:
+
+        * ``{"file_kind": "adapter"}`` on an unhashed or algorithm-less row;
+        * ``{"kind": null}`` on a row that is *already* an adapter, which names
+          no ``file_kind`` and so never looked like this guard's business;
+        * ``{"kind": null, "file_kind": "adapter"}``, which passed a guard that
+          read the *stored* kind instead of the one about to be written.
+
+        Taking the effective value of each column collapses all three into one
+        condition.
         """
-        if changes.get("file_kind") != FILE_ADAPTER:
+        if "file_kind" not in changes and "kind" not in changes:
+            # Nothing else a caller may write can reach either constraint.
             return
         placeholders = ", ".join("?" for _ in ids)
-        blocked = [
-            dict(row)
-            for row in server.hub.fetchall(
-                f"SELECT id, filename, sha256, kind FROM model "
-                f"WHERE id IN ({placeholders})",
-                tuple(ids),
-            )
-            if row["sha256"] is None
-            or (row["kind"] is None and changes.get("kind") is None)
-        ]
+        blocked = []
+        for row in server.hub.fetchall(
+            f"SELECT id, filename, sha256, kind, file_kind FROM model "
+            f"WHERE id IN ({placeholders})",
+            tuple(ids),
+        ):
+            file_kind = changes.get("file_kind", row["file_kind"])
+            if file_kind != FILE_ADAPTER:
+                continue
+            if row["sha256"] is None:
+                blocked.append((row["filename"], "has not been hashed yet"))
+            elif changes.get("kind", row["kind"]) is None:
+                blocked.append(
+                    (
+                        row["filename"],
+                        "would be left with no algorithm recorded; name one "
+                        "with `kind`",
+                    )
+                )
         if not blocked:
             return
-        first = blocked[0]
-        reason = (
-            "has not been hashed yet"
-            if first["sha256"] is None
-            else "has no algorithm recorded, so name one with `kind`"
-        )
+        filename, reason = blocked[0]
         raise HTTPException(
             status_code=400,
             detail=(
-                f"{len(blocked)} file(s) cannot be marked as an adapter: "
-                f"{first['filename']!r} {reason}."
+                f"{len(blocked)} file(s) cannot be an adapter: {filename!r} {reason}."
             ),
         )
 

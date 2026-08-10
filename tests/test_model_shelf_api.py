@@ -2501,6 +2501,77 @@ def test_an_unhashed_checkpoint_cannot_be_called_an_adapter(shelf_env):
     assert _model_row(shelf_env, unhashed)["file_kind"] == "checkpoint"
 
 
+def test_clearing_the_algorithm_of_an_adapter_is_refused(shelf_env):
+    """Named no `file_kind` at all, so it never looked like the CHECK guard's
+    business — and the row is already an adapter, so `kind = NULL` violates
+    `CHECK (file_kind <> 'adapter' OR kind IS NOT NULL)`. Reported by the CSO
+    review of #869; it was a 500 before the guard read the post-write state."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    r = shelf_env.owner.patch(f"{API}/models", json={"ids": [alice], "kind": None})
+    assert r.status_code == 400, r.text
+    assert "alice.safetensors" in r.text
+    assert "algorithm" in r.text
+    assert _model_row(shelf_env, alice)["kind"] == "lora"
+
+
+def test_clearing_the_algorithm_while_naming_adapter_is_refused(shelf_env):
+    """The sibling of the case above: this one DID reach the guard and passed,
+    because the guard read the STORED kind rather than the one about to be
+    written."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    r = shelf_env.owner.patch(
+        f"{API}/models",
+        json={"ids": [alice], "kind": None, "file_kind": "adapter"},
+    )
+    assert r.status_code == 400, r.text
+    assert "algorithm" in r.text
+    row = _model_row(shelf_env, alice)
+    assert (row["file_kind"], row["kind"]) == ("adapter", "lora")
+
+
+def test_clearing_the_algorithm_of_a_checkpoint_is_allowed(shelf_env):
+    """The positive control for the two refusals above: the constraint only
+    binds adapters, so over-blocking here would be its own regression."""
+    base = shelf_env.model_ids["base_xl.safetensors"]
+    r = shelf_env.owner.patch(f"{API}/models", json={"ids": [base], "kind": None})
+    assert r.status_code == 200, r.text
+    assert _model_row(shelf_env, base)["kind"] is None
+
+
+def test_forget_reads_its_gate_inside_the_write_transaction(shelf_env):
+    """The gate and the DELETE must be one critical section.
+
+    `hub.fetchall` takes and releases the hub lock per call, so a gate read
+    through it leaves a window in which a background scan can flip a row from
+    `missing` back to `present` before the DELETE lands — and the model is
+    forgotten anyway. Counting the reads that go OUTSIDE the transaction is the
+    assertion, because the race itself cannot be scheduled reliably. Reported by
+    the CSO review of #869."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    _set_states(shelf_env, alice, "missing")
+
+    hub = shelf_env.server.hub
+    original = hub.fetchall
+    outside: list[str] = []
+
+    def counting(sql, params=()):
+        if "model" in sql:
+            outside.append(sql)
+        return original(sql, params)
+
+    hub.fetchall = counting
+    try:
+        r = shelf_env.owner.post(f"{API}/models/forget", json={"ids": [alice]})
+    finally:
+        hub.fetchall = original
+
+    assert r.status_code == 200, r.text
+    assert r.json()["forgotten"] == [alice]
+    assert outside == [], (
+        f"the forget read its gate outside the write transaction: {outside}"
+    )
+
+
 def test_an_unknown_is_corrected_to_an_adapter_when_it_can_be(shelf_env):
     """The positive direction, and the reason `unknown` is a stored value rather
     than a guess: it is one UPDATE away from correct, and the correction is
