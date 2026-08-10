@@ -1376,12 +1376,57 @@ of the row template. Grouping offers `None`, `Base model` and `Folder`. Type is
 deliberately absent: three buckets, already a `Show` checkbox, and already on
 every row as an icon and a word.
 
-**One level of headers, though the plan allows two.** The folder band is a
-grouping *value* rather than a permanent outer tier. A band per folder crossed
-with a group per base model fragments "what do I have for SDXL" into one answer
-per disk, and three folders by twelve base models is thirty-six headers; one
-level also means one sticky offset and no stacking arithmetic. The second level
-is reserved for F5, where a stack genuinely nests inside a group.
+**Two levels, and only under `Folder`.** The folder is a grouping *value* on
+every axis, so `None` and `Base model` draw one level of headers and nothing
+else; a band per folder crossed with a group per base model would fragment "what
+do I have for SDXL" into one answer per disk, and three folders by twelve base
+models is thirty-six headers. Under `Folder` the second level is spent on the
+**drive band** (F2), which is what the plan's "2 levels max" was for.
+
+- **The layout is a sub-choice of `Folder`, not a fourth axis.** `folderLayout`
+  is `drive` (bands the folders by the disk they sit on) or `alpha` (one flat A
+  to Z run), it renders in `ShelfSortPanel.vue` only while `Folder` is selected,
+  and it is carried in `view` at all times so a trip through another axis and
+  back does not reset it. It was once shipped as `Sort: Drive | Folder`, which
+  reordered nothing and grouped everything; a grouping control living in the
+  sort menu is why the absence of real sorting went unnoticed.
+- **Only the folder header is sticky.** Two sticky levels need stacking
+  arithmetic — the inner offset is the outer's measured height, which no token
+  knows — and the band is a label with a meter rather than something worth
+  pinning while the reader scans one folder. So there is still one sticky offset.
+- **The band is named by the volume, not by the mount point.** A Linux mount
+  point runs to `/media/glindkvist/102AB4B6757AF9A3` and crowds the header out,
+  so the band shows `label` behind a disk glyph and keeps `mount_point` as its
+  `title`. The server reads the label from `/dev/disk/by-label` on Linux,
+  `GetVolumeInformationW` on Windows and the `/Volumes` mount name on macOS, and
+  returns null when there is none, which a root partition usually has not. The
+  fallback chain is label → mount point → the folder's own path, so the header
+  is never empty and never invented.
+- **The band is a drive, never a path prefix.** `bandGroups` keys on the
+  `device_id` the server measured (`GET /model-folders/devices`), because a bind
+  mount and a symlinked folder look like different drives by path and are one,
+  and two folders under one root can be different drives when a mount sits
+  between them. Groups are **re-ordered** so a band's folders are contiguous: a
+  band drawn over a non-contiguous run would claim a grouping the list has not
+  got.
+- **An unmeasurable drive still gets a band, and says so.** It is labelled with
+  the folder's own path, bands alone (two folders we could not stat are not
+  thereby one drive) and sorts after every measured band. Its meter is omitted
+  rather than drawn empty, because an empty bar reads as a drive with nothing on
+  it. `bandUsage` returns `null` for exactly this.
+- **The meter is one track with two fills, and free space leads the label.** The
+  shelf's share is *part* of what is used, so two separate bars could sum past
+  the drive; and free is the number that decides whether the next 24 GB
+  checkpoint fits. `shelf_bytes` counts `present` copies only, so a `missing`
+  row never reports space the drive does not agree is in use.
+- **The bands are decoration and fail alone.** `refreshDevices` is unawaited and
+  swallows its own error into a `console.warn`, never into the folder store's
+  `error`: the route stats the filesystem, so an offline mount can make it slow
+  or make it fail, and neither may hold up the models or raise an alert about
+  folders that were read perfectly well.
+
+F5's stacks nest inside a *row*, not inside a header, so they do not want a
+third level.
 
 - **`Base model not set` sorts last, always, and is expanded by default.** It is
   the absence of a value rather than a value, so it never joins the alphabetical
@@ -1506,12 +1551,15 @@ but its control is the `AddToEntityControl` rewrite that decision 6 of the nine
 puts after #759 — a combobox/listbox shell rather than a button — so it arrives
 with that rewrite instead of as a fourth dialog.
 
-**Capacity meters are not built, deliberately.** Nothing exposes per-drive free
-and total bytes: `shutil.disk_usage` exists only inside `model_mover.py`'s
-pre-move check, with no route. A meter computed from the sizes the shelf happens
-to know would measure "what the shelf has catalogued" while looking like "what
-is on the disk", which is worse than no meter. See §9.1a's note below on what an
-endpoint would have to return.
+**Capacity meters are built, and they read the disk rather than the catalogue.**
+This paragraph previously recorded the opposite, on the grounds that nothing
+exposed per-drive free and total bytes and that a meter computed from the sizes
+the shelf happens to know would measure "what the shelf has catalogued" while
+looking like "what is on the disk". That reasoning still holds and is exactly
+why `GET /model-folders/devices` exists: `total_bytes` and `free_bytes` come
+from `shutil.disk_usage` on the drive, and `shelf_bytes` is reported as a
+*separate* fill inside the same track rather than as the meter itself. The two
+numbers answer different questions and the band shows both.
 
 The `.bar-*` control family lives **unscoped in `App.css`**, not in
 `Toolbar.vue`. `<style scoped>` compiles `.bar-btn` to `.bar-btn[data-v-hash]`,

@@ -29,7 +29,9 @@ const TRAINING_SUFFIX_RE = /^(?:step\d+|epoch\d+|\d+ep|\d{5,})$/i;
  * @returns {string}
  */
 export function cleanAssetName(filename) {
-  const base = String(filename || "").split(/[\\/]/).pop();
+  const base = String(filename || "")
+    .split(/[\\/]/)
+    .pop();
   const stem = base.replace(/\.[^.]+$/, "");
   return stem.replace(/[_-]/g, " ").trim();
 }
@@ -147,6 +149,111 @@ export function formatModelSize(bytes) {
   }
   const digits = unit === 0 ? 0 : 1;
   return `${value.toFixed(digits)} ${SIZE_UNITS[unit]}`;
+}
+
+/** What each folder layout is called, and the glyph that stands for it. */
+export const FOLDER_LAYOUT_LABELS = {
+  drive: { label: "Drive, then folder", icon: "mdi-harddisk" },
+  alpha: { label: "Folder, A to Z", icon: "mdi-sort-alphabetical-variant" },
+};
+
+/**
+ * Arrange folder groups into drive bands.
+ *
+ * Two levels, which is what the plan allows and no more: the band is the drive
+ * and the header under it is the folder. Groups are RE-ORDERED so a band's
+ * folders are contiguous — a band drawn over a non-contiguous run would claim
+ * a grouping the list does not have — and each group is tagged with the band it
+ * opens, so the caller draws a band header exactly when `bandStart` is set
+ * rather than nesting the markup.
+ *
+ * A folder whose drive could not be measured still gets a band of its own,
+ * labelled with its own path: an unplugged drive has to keep somewhere to sit,
+ * and merging two unmeasurable folders would assert a sameness nothing
+ * measured. Those bands sort last, because a drive we cannot read is not the
+ * one the reader is scanning for space on.
+ *
+ * @param {Array<Object>} groups - folder groups, each carrying `folderId`.
+ * @param {Map<number, Object>} deviceByFolderId - from `useModelFoldersStore`.
+ * @returns {Array<Object>} the same groups, reordered, each with `band` and
+ *   `bandStart` (true on the first group of each band).
+ */
+export function bandGroups(groups, deviceByFolderId) {
+  const byBand = new Map();
+  // Not every folder group names a folder. A model whose folders have all been
+  // forgotten falls into "No registered copy", which has no `folderId` and is
+  // not on a drive at all — banding it would put a disk glyph and a capacity
+  // line over the one group that exists precisely because there is no disk.
+  // It stays unbanded and sorts last, the same place `compareGroups` already
+  // puts the absence of a value.
+  const unbanded = groups.filter((group) => !Number.isInteger(group.folderId));
+  for (const group of groups) {
+    if (!Number.isInteger(group.folderId)) continue;
+    const folderId = Number(group.folderId);
+    const device = deviceByFolderId?.get?.(folderId) || null;
+    // Unmeasured folders band alone, keyed by folder rather than by device.
+    const key = device?.device_id ? `d:${device.device_id}` : `f:${folderId}`;
+    let band = byBand.get(key);
+    if (!band) {
+      band = {
+        key,
+        // The volume's name if it has one, else where it is mounted. A Linux
+        // mount point runs to `/media/glindkvist/102AB4B6757AF9A3` and crowds
+        // the header out; the precise string stays available as the tooltip.
+        label: device?.label || device?.mount_point || group.label,
+        mountPoint: device?.mount_point || group.label,
+        measured: Boolean(device?.device_id),
+        totalBytes: device?.total_bytes ?? null,
+        freeBytes: device?.free_bytes ?? null,
+        shelfBytes: device?.shelf_bytes ?? null,
+        groups: [],
+      };
+      byBand.set(key, band);
+    }
+    band.groups.push(group);
+  }
+  const bands = [...byBand.values()].sort((a, b) => {
+    if (a.measured !== b.measured) return a.measured ? -1 : 1;
+    return a.label.localeCompare(b.label, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+  const arranged = [];
+  for (const band of bands) {
+    band.groups.forEach((group, index) => {
+      arranged.push({ ...group, band, bandStart: index === 0 });
+    });
+  }
+  // `band: null` rather than a band of their own: the caller draws a header
+  // only where `bandStart` is set, so these render as bare folder groups.
+  for (const group of unbanded) {
+    arranged.push({ ...group, band: null, bandStart: false });
+  }
+  return arranged;
+}
+
+/**
+ * How full a drive is, as a percentage of its size.
+ *
+ * `used`, not `free`, because a meter fills from empty. Returns `null` when the
+ * drive could not be measured, which the caller must draw as "unknown" rather
+ * than as an empty bar: an empty bar reads as a drive with nothing on it.
+ *
+ * @param {Object} band - a band from {@link bandGroups}.
+ * @returns {{usedPct: number, shelfPct: number}|null}
+ */
+export function bandUsage(band) {
+  const total = Number(band?.totalBytes);
+  const free = Number(band?.freeBytes);
+  if (!Number.isFinite(total) || total <= 0) return null;
+  if (!Number.isFinite(free) || free < 0) return null;
+  const used = Math.max(0, total - free);
+  const shelf = Math.max(0, Math.min(used, Number(band?.shelfBytes) || 0));
+  return {
+    usedPct: Math.min(100, (used / total) * 100),
+    shelfPct: Math.min(100, (shelf / total) * 100),
+  };
 }
 
 /**
