@@ -86,7 +86,7 @@ function mountControl(props = {}) {
     props: {
       type: "set",
       backendUrl: "http://backend.test",
-      pictureIds: ["101"],
+      subjectIds: ["101"],
       ...props,
     },
     global: {
@@ -183,7 +183,7 @@ describe("AddToEntityControl", () => {
 
     const slowMembership = deferred();
     getPictureSetMembership.mockReturnValueOnce(slowMembership.promise);
-    await wrapper.setProps({ pictureIds: ["202"] });
+    await wrapper.setProps({ subjectIds: ["202"] });
     await flushPromises();
 
     // The previous selection's ticks are gone the moment the selection changes.
@@ -208,12 +208,12 @@ describe("AddToEntityControl", () => {
       .mockReturnValueOnce(slowFirst.promise)
       .mockReturnValueOnce(fastSecond.promise);
 
-    const wrapper = mountControl({ type: "character", pictureIds: ["101"] });
+    const wrapper = mountControl({ type: "character", subjectIds: ["101"] });
     await wrapper.find("button.ate-btn").trigger("click");
     await flushPromises();
 
     // The selection moves on while the first membership read is still open.
-    await wrapper.setProps({ pictureIds: ["202"] });
+    await wrapper.setProps({ subjectIds: ["202"] });
     fastSecond.resolve({
       character_assignments: { 12: ["202"] },
       pictures_with_faces: ["202"],
@@ -268,7 +268,7 @@ async function mountOpen(props = {}) {
     props: {
       type: "character",
       backendUrl: "http://x",
-      pictureIds: ["10", "11"],
+      subjectIds: ["10", "11"],
       allowCreate: true,
       ...props,
     },
@@ -350,7 +350,7 @@ describe("pinned New person row", () => {
   });
 
   it("is disabled when there is no picture selection", async () => {
-    const wrapper = await mountOpen({ pictureIds: [] });
+    const wrapper = await mountOpen({ subjectIds: [] });
     expect(pinnedCreateButton(wrapper).attributes("disabled")).toBeDefined();
   });
 });
@@ -393,7 +393,7 @@ describe("no-match empty state", () => {
   });
 
   it("Enter does nothing when disabled by an empty selection", async () => {
-    const wrapper = await mountOpen({ pictureIds: [] });
+    const wrapper = await mountOpen({ subjectIds: [] });
     const input = wrapper.find(".ate-search input");
     await input.setValue("Zed");
     await input.trigger("keydown.enter");
@@ -688,7 +688,7 @@ describe("keyboard operation and ARIA structure", () => {
       props: {
         type: "set",
         backendUrl: "http://x",
-        pictureIds: ["10", "11"],
+        subjectIds: ["10", "11"],
         ...props,
       },
       attachTo: document.body,
@@ -803,7 +803,7 @@ describe("keyboard operation and ARIA structure", () => {
       props: {
         type: "character",
         backendUrl: "http://x",
-        pictureIds: ["10", "11"],
+        subjectIds: ["10", "11"],
         allowCreate: true,
       },
       attachTo: document.body,

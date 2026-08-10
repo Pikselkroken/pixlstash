@@ -210,7 +210,17 @@ const props = defineProps({
   // create rule has to serve both call sites.
   type: { type: String, required: true },
   backendUrl: { type: String, default: () => API_BASE_URL },
-  pictureIds: { type: Array, default: () => [] },
+  // The subjects the tri-state is computed across. Named for what it is rather
+  // than for pictures, because the model shelf attaches ADAPTERS through this
+  // same picker (shelf plan F3) and an adapter is not a picture.
+  //
+  // `required` on purpose, and it is the only protection that works here: every
+  // call site stubs this component in its tests, so a binding that goes missing
+  // would land in `$attrs` with no warning, leave this list empty, and make the
+  // menu open with every row unchecked and every click a no-op. Vue warns for a
+  // missing REQUIRED prop; it says nothing about an unknown attribute. Face
+  // mode has no subject list and passes `[]`.
+  subjectIds: { type: Array, required: true },
   disabled: { type: Boolean, default: false },
   readonly: { type: Boolean, default: false },
   label: { type: String, default: null },
@@ -437,9 +447,9 @@ const baseUrl = computed(() =>
 // means "address the API relatively", which is what a missing prop implies.
 const apiOpts = computed(() => ({ baseUrl: baseUrl.value || "" }));
 
-// --- Normalised picture IDs ---
+// --- Normalised subject IDs ---
 const normalisedPictureIds = computed(() =>
-  (Array.isArray(props.pictureIds) ? props.pictureIds : [])
+  (Array.isArray(props.subjectIds) ? props.subjectIds : [])
     .map((id) => String(id))
     .filter(Boolean),
 );

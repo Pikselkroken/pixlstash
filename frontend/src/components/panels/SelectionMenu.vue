@@ -19,7 +19,7 @@
         ref="ateProjectRef"
         type="project"
         placement="right"
-        :picture-ids="selectedImageIds"
+        :subject-ids="selectedImageIds"
         :disabled="selectedCount === 0 || !!groupingLockReason"
         :title="groupingLockReason || undefined"
         :readonly="isReadOnly"
@@ -29,7 +29,7 @@
         ref="ateCharacterRef"
         type="character"
         placement="right"
-        :picture-ids="selectedImageIds"
+        :subject-ids="selectedImageIds"
         :disabled="selectedCount === 0 || !!groupingLockReason"
         :title="groupingLockReason || undefined"
         :readonly="isReadOnly"
@@ -40,7 +40,7 @@
         ref="ateSetRef"
         type="set"
         placement="right"
-        :picture-ids="selectedImageIds"
+        :subject-ids="selectedImageIds"
         :disabled="selectedCount === 0 || !!groupingLockReason"
         :title="groupingLockReason || undefined"
         :readonly="isReadOnly"
@@ -128,10 +128,7 @@
         @mouseenter="autoTagSubmenuOpen = true"
         @mouseleave="autoTagSubmenuOpen = false"
       >
-        <button
-          class="ctx-item"
-          :disabled="selectedCount === 0 || isReadOnly"
-        >
+        <button class="ctx-item" :disabled="selectedCount === 0 || isReadOnly">
           <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
           Tag automatically
           <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
@@ -162,10 +159,7 @@
         @mouseenter="descriptionSubmenuOpen = true"
         @mouseleave="descriptionSubmenuOpen = false"
       >
-        <button
-          class="ctx-item"
-          :disabled="selectedCount === 0 || isReadOnly"
-        >
+        <button class="ctx-item" :disabled="selectedCount === 0 || isReadOnly">
           <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
           Generate description
           <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
@@ -224,10 +218,7 @@
         @mouseenter="restoreSubmenuOpen = true"
         @mouseleave="restoreSubmenuOpen = false"
       >
-        <button
-          class="ctx-item"
-          :disabled="selectedCount === 0 || isReadOnly"
-        >
+        <button class="ctx-item" :disabled="selectedCount === 0 || isReadOnly">
           <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
           Restore from snapshot
           <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>

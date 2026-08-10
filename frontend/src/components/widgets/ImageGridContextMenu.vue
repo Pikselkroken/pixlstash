@@ -4,7 +4,10 @@
       v-if="visible"
       ref="menuRef"
       class="image-ctx-menu"
-      :class="{ 'ctx-flip-sub': submenusFlip, 'image-ctx-menu--on-dark': onDark }"
+      :class="{
+        'ctx-flip-sub': submenusFlip,
+        'image-ctx-menu--on-dark': onDark,
+      }"
       :style="menuStyle"
       role="menu"
       aria-orientation="vertical"
@@ -36,7 +39,9 @@
         >
           <v-icon class="ctx-icon" size="15">mdi-download</v-icon>
           <span>Save {{ overlayMediaNoun }}</span>
-          <span class="ctx-shortcut" aria-hidden="true">{{ saveShortcutHint }}</span>
+          <span class="ctx-shortcut" aria-hidden="true">{{
+            saveShortcutHint
+          }}</span>
         </button>
         <button
           v-if="contextImage?.id"
@@ -45,7 +50,9 @@
           :title="`Choose where to save this ${overlayMediaNoun}`"
           @click="onAction('save-picture-as')"
         >
-          <v-icon class="ctx-icon" size="15">mdi-content-save-edit-outline</v-icon>
+          <v-icon class="ctx-icon" size="15"
+            >mdi-content-save-edit-outline</v-icon
+          >
           Save {{ overlayMediaNoun }} as…
         </button>
         <button
@@ -56,13 +63,17 @@
           :title="copyPictureTitle"
           :aria-keyshortcuts="copyAriaShortcut"
           :aria-describedby="
-            contextImage?.copyAvailable === true ? undefined : overlayCopyReasonId
+            contextImage?.copyAvailable === true
+              ? undefined
+              : overlayCopyReasonId
           "
           @click="onAction('copy-picture')"
         >
           <v-icon class="ctx-icon" size="15">mdi-content-copy</v-icon>
           <span>{{ copyPictureLabel }}</span>
-          <span class="ctx-shortcut" aria-hidden="true">{{ copyShortcutHint }}</span>
+          <span class="ctx-shortcut" aria-hidden="true">{{
+            copyShortcutHint
+          }}</span>
         </button>
         <span
           v-if="contextImage?.id && contextImage?.copyAvailable !== true"
@@ -194,7 +205,11 @@
                   cp.created_at ? formatSnapshotDate(cp.created_at) : ""
                 }}</span>
               </button>
-              <button class="ctx-item" role="menuitem" @click="handleRestoreMore">
+              <button
+                class="ctx-item"
+                role="menuitem"
+                @click="handleRestoreMore"
+              >
                 <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
                 More…
               </button>
@@ -243,371 +258,380 @@
            GRID MODE — the full context menu for grid cells (unchanged).
            ════════════════════════════════════════════════════════════ -->
       <template v-else>
-      <!-- ── Set / Character / Project ─────────────────────────────── -->
-      <template v-if="!isScrapheapView">
-        <AddToEntityControl
-          v-if="entityLists.canSeeProjects"
-          type="project"
-          placement="right"
-          :picture-ids="selectedImageIds"
-          :disabled="!selectedImageIds.length || !!groupingLockReason"
-          :title="groupingLockReason || undefined"
-          :readonly="isReadOnly"
-          @selected="onAction('set-project', $event)"
-        />
-        <AddToEntityControl
-          type="character"
-          placement="right"
-          allow-create
-          :picture-ids="selectedImageIds"
-          :disabled="!selectedImageIds.length || !!groupingLockReason"
-          :title="groupingLockReason || undefined"
-          :readonly="isReadOnly"
-          @added="onAction('add-to-character', $event)"
-          @removed="onAction('remove-from-character', $event)"
-          @create="delegateWith('create-character', $event)"
-        />
-        <AddToEntityControl
-          type="set"
-          placement="right"
-          :picture-ids="selectedImageIds"
-          :disabled="!selectedImageIds.length || !!groupingLockReason"
-          :title="groupingLockReason || undefined"
-          :readonly="isReadOnly"
-          :locked-set-ids="lockedSetIds"
-          @added="onAction('added-to-set', $event)"
-        />
-        <div class="ctx-sep" />
-      </template>
+        <!-- ── Set / Character / Project ─────────────────────────────── -->
+        <template v-if="!isScrapheapView">
+          <AddToEntityControl
+            v-if="entityLists.canSeeProjects"
+            type="project"
+            placement="right"
+            :subject-ids="selectedImageIds"
+            :disabled="!selectedImageIds.length || !!groupingLockReason"
+            :title="groupingLockReason || undefined"
+            :readonly="isReadOnly"
+            @selected="onAction('set-project', $event)"
+          />
+          <AddToEntityControl
+            type="character"
+            placement="right"
+            allow-create
+            :subject-ids="selectedImageIds"
+            :disabled="!selectedImageIds.length || !!groupingLockReason"
+            :title="groupingLockReason || undefined"
+            :readonly="isReadOnly"
+            @added="onAction('add-to-character', $event)"
+            @removed="onAction('remove-from-character', $event)"
+            @create="delegateWith('create-character', $event)"
+          />
+          <AddToEntityControl
+            type="set"
+            placement="right"
+            :subject-ids="selectedImageIds"
+            :disabled="!selectedImageIds.length || !!groupingLockReason"
+            :title="groupingLockReason || undefined"
+            :readonly="isReadOnly"
+            :locked-set-ids="lockedSetIds"
+            @added="onAction('added-to-set', $event)"
+          />
+          <div class="ctx-sep" />
+        </template>
 
-      <!-- ── Stack / Unstack ───────────────────────────────────────── -->
-      <template v-if="!isScrapheapView">
-        <button
-          v-if="showRemoveStackButton"
-          class="ctx-item"
-          :disabled="isReadOnly"
-          title="Remove selected images from their stack"
-          @click="onAction('remove-from-stack')"
-        >
-          <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
-          Unstack
-        </button>
-        <button
-          v-else-if="selectedImageIds.length > 1"
-          class="ctx-item"
-          :disabled="isReadOnly"
-          title="Create a stack from the selected images"
-          @click="onAction('create-stack')"
-        >
-          <v-icon class="ctx-icon" size="15">mdi-layers</v-icon>
-          Stack
-        </button>
-        <button
-          v-if="showUnstackMultipleButton"
-          class="ctx-item"
-          :disabled="isReadOnly"
-          title="Dissolve all selected stacks"
-          @click="onAction('dissolve-stacks')"
-        >
-          <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
-          Unstack all
-        </button>
-        <button
-          v-if="showGroupStackButton"
-          class="ctx-item"
-          :disabled="isReadOnly"
-          title="Create stacks from selected likeness groups"
-          @click="onAction('create-stacks-from-groups')"
-        >
-          <v-icon class="ctx-icon" size="15">mdi-layers-plus</v-icon>
-          Stack groups
-        </button>
-        <div v-if="showAnyStackAction" class="ctx-sep" />
-      </template>
+        <!-- ── Stack / Unstack ───────────────────────────────────────── -->
+        <template v-if="!isScrapheapView">
+          <button
+            v-if="showRemoveStackButton"
+            class="ctx-item"
+            :disabled="isReadOnly"
+            title="Remove selected images from their stack"
+            @click="onAction('remove-from-stack')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
+            Unstack
+          </button>
+          <button
+            v-else-if="selectedImageIds.length > 1"
+            class="ctx-item"
+            :disabled="isReadOnly"
+            title="Create a stack from the selected images"
+            @click="onAction('create-stack')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-layers</v-icon>
+            Stack
+          </button>
+          <button
+            v-if="showUnstackMultipleButton"
+            class="ctx-item"
+            :disabled="isReadOnly"
+            title="Dissolve all selected stacks"
+            @click="onAction('dissolve-stacks')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-layers-off</v-icon>
+            Unstack all
+          </button>
+          <button
+            v-if="showGroupStackButton"
+            class="ctx-item"
+            :disabled="isReadOnly"
+            title="Create stacks from selected likeness groups"
+            @click="onAction('create-stacks-from-groups')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-layers-plus</v-icon>
+            Stack groups
+          </button>
+          <div v-if="showAnyStackAction" class="ctx-sep" />
+        </template>
 
-      <!-- ── Tag / Filters / ComfyUI (delegate to SelectionBar panels) ── -->
-      <template v-if="!isScrapheapView">
-        <button
-          class="ctx-item"
-          :title="lockReason || 'Tag selected (T)'"
-          :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
-          @click="delegate('open-tag-panel')"
-        >
-          <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
-          Tag
-        </button>
-        <div
-          v-if="taggerPlugins.length"
-          class="ctx-submenu-wrap"
-          @mouseenter="autoTagSubmenuOpen = true"
-          @mouseleave="autoTagSubmenuOpen = false"
-        >
+        <!-- ── Tag / Filters / ComfyUI (delegate to SelectionBar panels) ── -->
+        <template v-if="!isScrapheapView">
           <button
             class="ctx-item"
-            :title="lockReason || undefined"
+            :title="lockReason || 'Tag selected (T)'"
             :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
+            @click="delegate('open-tag-panel')"
           >
-            <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
-            Tag automatically
-            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+            <v-icon class="ctx-icon" size="15">mdi-tag-plus</v-icon>
+            Tag
           </button>
-          <div v-if="autoTagSubmenuOpen" class="ctx-submenu">
+          <div
+            v-if="taggerPlugins.length"
+            class="ctx-submenu-wrap"
+            @mouseenter="autoTagSubmenuOpen = true"
+            @mouseleave="autoTagSubmenuOpen = false"
+          >
             <button
-              v-for="plugin in taggerPlugins"
-              :key="plugin.name"
               class="ctx-item"
               :title="lockReason || undefined"
               :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
-              @click="onAction('auto-tag', { model: plugin.name })"
             >
               <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
-              {{ plugin.display_name || plugin.name }}
-              <span v-if="plugin.default_enabled" class="ctx-default-pill"
-                >default</span
-              >
+              Tag automatically
+              <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
             </button>
+            <div v-if="autoTagSubmenuOpen" class="ctx-submenu">
+              <button
+                v-for="plugin in taggerPlugins"
+                :key="plugin.name"
+                class="ctx-item"
+                :title="lockReason || undefined"
+                :disabled="
+                  !selectedImageIds.length || isReadOnly || !!lockReason
+                "
+                @click="onAction('auto-tag', { model: plugin.name })"
+              >
+                <v-icon class="ctx-icon" size="15">mdi-tag-outline</v-icon>
+                {{ plugin.display_name || plugin.name }}
+                <span v-if="plugin.default_enabled" class="ctx-default-pill"
+                  >default</span
+                >
+              </button>
+            </div>
           </div>
-        </div>
-        <div
-          v-if="captionerPlugins.length"
-          class="ctx-submenu-wrap"
-          @mouseenter="descriptionSubmenuOpen = true"
-          @mouseleave="descriptionSubmenuOpen = false"
-        >
-          <button
-            class="ctx-item"
-            :title="lockReason || undefined"
-            :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
+          <div
+            v-if="captionerPlugins.length"
+            class="ctx-submenu-wrap"
+            @mouseenter="descriptionSubmenuOpen = true"
+            @mouseleave="descriptionSubmenuOpen = false"
           >
-            <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
-            Generate description
-            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
-          </button>
-          <div v-if="descriptionSubmenuOpen" class="ctx-submenu">
             <button
-              v-for="plugin in captionerPlugins"
-              :key="plugin.name"
               class="ctx-item"
               :title="lockReason || undefined"
               :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
-              @click="onAction('generate-description', { model: plugin.name })"
             >
               <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
-              {{ plugin.display_name || plugin.name }}
-              <span v-if="plugin.default_enabled" class="ctx-default-pill"
-                >default</span
-              >
+              Generate description
+              <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
             </button>
+            <div v-if="descriptionSubmenuOpen" class="ctx-submenu">
+              <button
+                v-for="plugin in captionerPlugins"
+                :key="plugin.name"
+                class="ctx-item"
+                :title="lockReason || undefined"
+                :disabled="
+                  !selectedImageIds.length || isReadOnly || !!lockReason
+                "
+                @click="
+                  onAction('generate-description', { model: plugin.name })
+                "
+              >
+                <v-icon class="ctx-icon" size="15">mdi-text-box-outline</v-icon>
+                {{ plugin.display_name || plugin.name }}
+                <span v-if="plugin.default_enabled" class="ctx-default-pill"
+                  >default</span
+                >
+              </button>
+            </div>
           </div>
-        </div>
-        <button
-          v-if="pluginOptions.length"
-          class="ctx-item"
-          :disabled="!selectedImageIds.length || isReadOnly"
-          @click="delegate('open-plugin-panel')"
-        >
-          <v-icon class="ctx-icon" size="15">mdi-tune-variant</v-icon>
-          Filters
-        </button>
-        <button
-          v-if="comfyuiConfigured"
-          class="ctx-item"
-          title="Generate variants from this image"
-          :disabled="!contextImage || isReadOnly"
-          @click="delegateWith('open-remix-dialog', contextImage?.id)"
-        >
-          <v-icon class="ctx-icon" size="15">mdi-auto-fix</v-icon>
-          Generate variants…
-        </button>
-        <button
-          v-if="comfyuiConfigured"
-          class="ctx-item"
-          :disabled="!selectedImageIds.length || isReadOnly"
-          @click="delegate('open-comfyui-panel')"
-        >
-          <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
-          Edit with ComfyUI
-        </button>
-        <button
-          class="ctx-item"
-          title="Detect objects and store bounding boxes"
-          :disabled="!selectedImageIds.length || isReadOnly"
-          @click="onAction('segment')"
-        >
-          <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
-          Segment
-        </button>
-        <div class="ctx-sep" />
-      </template>
-
-      <!-- ── Restore from snapshot ─────────────────────────── -->
-      <template
-        v-if="!isReadOnly && selectedImageIds.length >= 1 && !isScrapheapView"
-      >
-        <div
-          class="ctx-submenu-wrap"
-          @mouseenter="restoreSubmenuOpen = true"
-          @mouseleave="restoreSubmenuOpen = false"
-        >
           <button
+            v-if="pluginOptions.length"
             class="ctx-item"
             :disabled="!selectedImageIds.length || isReadOnly"
+            @click="delegate('open-plugin-panel')"
           >
-            <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
-            Restore from snapshot
-            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+            <v-icon class="ctx-icon" size="15">mdi-tune-variant</v-icon>
+            Filters
           </button>
-          <div v-if="restoreSubmenuOpen" class="ctx-submenu">
-            <button
-              v-for="cp in recentSnapshots"
-              :key="cp.id"
-              class="ctx-item"
-              :disabled="identicalSnapshotIds.has(cp.id)"
-              :title="
-                identicalSnapshotIds.has(cp.id)
-                  ? 'Selection is identical to this snapshot'
-                  : undefined
-              "
-              @click="handleRestoreFromSnapshot(cp.id)"
-            >
-              <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
-              {{ cp.label || cp.kind }}
-              <span class="ctx-default-pill">{{
-                cp.created_at ? formatSnapshotDate(cp.created_at) : ""
-              }}</span>
-            </button>
-            <button class="ctx-item" @click="handleRestoreMore">
-              <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
-              More…
-            </button>
-          </div>
-        </div>
-      </template>
+          <button
+            v-if="comfyuiConfigured"
+            class="ctx-item"
+            title="Generate variants from this image"
+            :disabled="!contextImage || isReadOnly"
+            @click="delegateWith('open-remix-dialog', contextImage?.id)"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-auto-fix</v-icon>
+            Generate variants…
+          </button>
+          <button
+            v-if="comfyuiConfigured"
+            class="ctx-item"
+            :disabled="!selectedImageIds.length || isReadOnly"
+            @click="delegate('open-comfyui-panel')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-robot</v-icon>
+            Edit with ComfyUI
+          </button>
+          <button
+            class="ctx-item"
+            title="Detect objects and store bounding boxes"
+            :disabled="!selectedImageIds.length || isReadOnly"
+            @click="onAction('segment')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
+            Segment
+          </button>
+          <div class="ctx-sep" />
+        </template>
 
-      <!-- ── Find similar faces ─────────────────────────────── -->
-      <template
-        v-if="
-          contextImage?.id &&
-          !isScrapheapView &&
-          selectedImageIds.length === 1 &&
-          contextImageFaces.length
-        "
-      >
-        <!-- Direct action when a specific face was right-clicked, or only one face exists -->
-        <button
-          v-if="contextClickedFace || contextImageFaces.length === 1"
-          class="ctx-item"
-          title="Find pictures with similar faces"
-          @click="
-            onAction(
-              'find-similar-faces',
-              (contextClickedFace ?? contextImageFaces[0]).id,
-            )
+        <!-- ── Restore from snapshot ─────────────────────────── -->
+        <template
+          v-if="!isReadOnly && selectedImageIds.length >= 1 && !isScrapheapView"
+        >
+          <div
+            class="ctx-submenu-wrap"
+            @mouseenter="restoreSubmenuOpen = true"
+            @mouseleave="restoreSubmenuOpen = false"
+          >
+            <button
+              class="ctx-item"
+              :disabled="!selectedImageIds.length || isReadOnly"
+            >
+              <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
+              Restore from snapshot
+              <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+            </button>
+            <div v-if="restoreSubmenuOpen" class="ctx-submenu">
+              <button
+                v-for="cp in recentSnapshots"
+                :key="cp.id"
+                class="ctx-item"
+                :disabled="identicalSnapshotIds.has(cp.id)"
+                :title="
+                  identicalSnapshotIds.has(cp.id)
+                    ? 'Selection is identical to this snapshot'
+                    : undefined
+                "
+                @click="handleRestoreFromSnapshot(cp.id)"
+              >
+                <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
+                {{ cp.label || cp.kind }}
+                <span class="ctx-default-pill">{{
+                  cp.created_at ? formatSnapshotDate(cp.created_at) : ""
+                }}</span>
+              </button>
+              <button class="ctx-item" @click="handleRestoreMore">
+                <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
+                More…
+              </button>
+            </div>
+          </div>
+        </template>
+
+        <!-- ── Find similar faces ─────────────────────────────── -->
+        <template
+          v-if="
+            contextImage?.id &&
+            !isScrapheapView &&
+            selectedImageIds.length === 1 &&
+            contextImageFaces.length
           "
         >
-          <v-icon class="ctx-icon" size="15">mdi-face-recognition</v-icon>
-          Find similar faces
-        </button>
-        <!-- Submenu to pick a face when not right-clicking on one -->
-        <div
-          v-else
-          class="ctx-submenu-wrap"
-          @mouseenter="openFaceSubmenu"
-          @mouseleave="findFacesSubmenuOpen = false"
-        >
-          <button class="ctx-item">
+          <!-- Direct action when a specific face was right-clicked, or only one face exists -->
+          <button
+            v-if="contextClickedFace || contextImageFaces.length === 1"
+            class="ctx-item"
+            title="Find pictures with similar faces"
+            @click="
+              onAction(
+                'find-similar-faces',
+                (contextClickedFace ?? contextImageFaces[0]).id,
+              )
+            "
+          >
             <v-icon class="ctx-icon" size="15">mdi-face-recognition</v-icon>
             Find similar faces
-            <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
           </button>
-          <div v-if="findFacesSubmenuOpen" class="ctx-submenu ctx-face-submenu">
-            <button
-              v-for="(face, idx) in contextImageFaces"
-              :key="face.id ?? idx"
-              class="ctx-item ctx-face-item"
-              @click="onAction('find-similar-faces', face.id)"
-            >
-              <div
-                class="ctx-face-thumb"
-                :style="getFaceThumbStyle(face, idx)"
-              />
-              <span>{{ faceLabel(face, idx) }}</span>
+          <!-- Submenu to pick a face when not right-clicking on one -->
+          <div
+            v-else
+            class="ctx-submenu-wrap"
+            @mouseenter="openFaceSubmenu"
+            @mouseleave="findFacesSubmenuOpen = false"
+          >
+            <button class="ctx-item">
+              <v-icon class="ctx-icon" size="15">mdi-face-recognition</v-icon>
+              Find similar faces
+              <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
             </button>
+            <div
+              v-if="findFacesSubmenuOpen"
+              class="ctx-submenu ctx-face-submenu"
+            >
+              <button
+                v-for="(face, idx) in contextImageFaces"
+                :key="face.id ?? idx"
+                class="ctx-item ctx-face-item"
+                @click="onAction('find-similar-faces', face.id)"
+              >
+                <div
+                  class="ctx-face-thumb"
+                  :style="getFaceThumbStyle(face, idx)"
+                />
+                <span>{{ faceLabel(face, idx) }}</span>
+              </button>
+            </div>
           </div>
-        </div>
-      </template>
+        </template>
 
-      <!-- ── Reverse image search ────────────────────────────── -->
-      <template v-if="contextImage?.id && !isScrapheapView">
-        <button
-          class="ctx-item"
-          :disabled="!selectedImageIds.length"
-          title="Find visually similar images"
-          @click="onAction('reverse-image-search')"
-        >
-          <v-icon class="ctx-icon" size="15">mdi-image-search-outline</v-icon>
-          Reverse image search
-        </button>
-        <div class="ctx-sep" />
-      </template>
+        <!-- ── Reverse image search ────────────────────────────── -->
+        <template v-if="contextImage?.id && !isScrapheapView">
+          <button
+            class="ctx-item"
+            :disabled="!selectedImageIds.length"
+            title="Find visually similar images"
+            @click="onAction('reverse-image-search')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-image-search-outline</v-icon>
+            Reverse image search
+          </button>
+          <div class="ctx-sep" />
+        </template>
 
-      <!-- ── Share image ──────────────────────────────────────────── -->
-      <template v-if="contextImage?.id && selectedImageIds.length === 1">
-        <button
-          class="ctx-item"
-          :disabled="isReadOnly"
-          @click="onAction('share-picture')"
-        >
-          <v-icon class="ctx-icon" size="15">mdi-link-variant</v-icon>
-          Share image
-        </button>
-        <button
-          v-if="isShared"
-          class="ctx-item ctx-item--danger"
-          :disabled="isReadOnly"
-          @click="onAction('remove-picture-shares')"
-        >
-          <v-icon class="ctx-icon" size="15">mdi-link-variant-off</v-icon>
-          Remove all shares
-        </button>
-        <div class="ctx-sep" />
-      </template>
+        <!-- ── Share image ──────────────────────────────────────────── -->
+        <template v-if="contextImage?.id && selectedImageIds.length === 1">
+          <button
+            class="ctx-item"
+            :disabled="isReadOnly"
+            @click="onAction('share-picture')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-link-variant</v-icon>
+            Share image
+          </button>
+          <button
+            v-if="isShared"
+            class="ctx-item ctx-item--danger"
+            :disabled="isReadOnly"
+            @click="onAction('remove-picture-shares')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-link-variant-off</v-icon>
+            Remove all shares
+          </button>
+          <div class="ctx-sep" />
+        </template>
 
-      <!-- ── Remove / Delete ───────────────────────────────────────────
+        <!-- ── Remove / Delete ───────────────────────────────────────────
            The trailing danger group, ordered by escalating severity:
            Keep cover only → Move to the Scrapheap → Delete forever. Keep cover
            only is recoverable and touches only stacks; Delete moves the whole
            selection; the scrapheap view's Delete destroys files. -->
-      <button
-        v-if="showKeepCoverOnly"
-        class="ctx-item ctx-item--danger"
-        :disabled="isReadOnly || !!keepCoverOnlyLockReason"
-        :title="
-          keepCoverOnlyLockReason ||
-          'Keep each selected stack\'s cover and move its other pictures to the Scrapheap'
-        "
-        @click="onAction('keep-cover-only')"
-      >
-        <v-icon class="ctx-icon" size="15">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
-        {{ keepCoverOnlyLabel }}
-      </button>
-      <button
-        v-if="showRemoveButton"
-        class="ctx-item ctx-item--danger"
-        :disabled="!selectedImageIds.length || isReadOnly"
-        @click="onAction('remove-from-group')"
-      >
-        {{ removeButtonLabel }}
-      </button>
-      <button
-        class="ctx-item ctx-item--danger"
-        :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
-        :title="lockReason || 'Delete selected items (DEL)'"
-        @click="onAction('delete-selected')"
-      >
-        <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
-        {{ deleteButtonLabel }}
-      </button>
+        <button
+          v-if="showKeepCoverOnly"
+          class="ctx-item ctx-item--danger"
+          :disabled="isReadOnly || !!keepCoverOnlyLockReason"
+          :title="
+            keepCoverOnlyLockReason ||
+            'Keep each selected stack\'s cover and move its other pictures to the Scrapheap'
+          "
+          @click="onAction('keep-cover-only')"
+        >
+          <v-icon class="ctx-icon" size="15">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
+          {{ keepCoverOnlyLabel }}
+        </button>
+        <button
+          v-if="showRemoveButton"
+          class="ctx-item ctx-item--danger"
+          :disabled="!selectedImageIds.length || isReadOnly"
+          @click="onAction('remove-from-group')"
+        >
+          {{ removeButtonLabel }}
+        </button>
+        <button
+          class="ctx-item ctx-item--danger"
+          :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
+          :title="lockReason || 'Delete selected items (DEL)'"
+          @click="onAction('delete-selected')"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
+          {{ deleteButtonLabel }}
+        </button>
       </template>
     </div>
   </Teleport>
@@ -683,19 +707,17 @@ const props = defineProps({
 // The dark-surface skin is tied to overlay invocation — the menu renders over
 // the dark lightbox there and nowhere else.
 const onDark = computed(() => props.overlayMode);
-const isOverlayVideo = computed(() => props.contextImage?.mediaKind === "video");
+const isOverlayVideo = computed(
+  () => props.contextImage?.mediaKind === "video",
+);
 const overlayMediaNoun = computed(() =>
   isOverlayVideo.value ? "video" : "picture",
 );
 const copyPictureLabel = computed(() =>
   isOverlayVideo.value ? "Copy current frame" : "Copy picture",
 );
-const saveShortcutHint = computed(() =>
-  isApplePlatform() ? "⌘S" : "Ctrl+S",
-);
-const copyShortcutHint = computed(() =>
-  isApplePlatform() ? "⌘C" : "Ctrl+C",
-);
+const saveShortcutHint = computed(() => (isApplePlatform() ? "⌘S" : "Ctrl+S"));
+const copyShortcutHint = computed(() => (isApplePlatform() ? "⌘C" : "Ctrl+C"));
 const saveAriaShortcut = computed(() =>
   isApplePlatform() ? "Meta+S" : "Control+S",
 );
