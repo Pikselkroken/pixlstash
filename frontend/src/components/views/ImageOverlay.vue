@@ -810,11 +810,7 @@ import {
   safeDownloadName,
   setInternalDragPayload,
 } from "../../utils/media.js";
-import {
-  API_BASE_URL,
-  appendShareToken,
-  isReadOnly,
-} from "../../utils/apiClient";
+import { API_BASE_URL, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
   getPictureMetadata,
   listPictureFaces,
@@ -1656,9 +1652,9 @@ function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
     ordered.push(img);
   };
 
-  const orderedIds = sortStackMembers(Array.from(imageById.values())).map(
-    (img) => String(img.id),
-  );
+  const orderedIds = sortStackMembers(
+    Array.from(imageById.values()),
+  ).map((img) => String(img.id));
   for (const id of orderedIds) {
     addImage(imageById.get(String(id)));
   }
@@ -2048,8 +2044,7 @@ function showNextImage() {
  */
 function hasNativeCopyContext(target) {
   if (isTypingTarget(target)) return true;
-  const selection =
-    typeof window === "undefined" ? null : window.getSelection?.();
+  const selection = typeof window === "undefined" ? null : window.getSelection?.();
   return Boolean(selection && !selection.isCollapsed && selection.toString());
 }
 
@@ -4046,7 +4041,8 @@ function mediaActionInfo(target = null) {
 }
 
 function mediaActionError(err, fallback = "Please try again.") {
-  return errorDetail(err) || err?.message || String(err || fallback);
+  return (
+    errorDetail(err) || err?.message || String(err || fallback) );
 }
 
 function triggerMediaDownload(blob, filename) {
@@ -4118,18 +4114,14 @@ async function saveMediaAs(target = null) {
     if (desktop?.beginMediaSaveAs && desktop?.completeMediaSaveAs) {
       const choice = await desktop.beginMediaSaveAs(info.filename);
       if (choice?.canceled) return false;
-      if (!choice?.saveId)
-        throw new Error(
-          "The desktop save dialog did not return a save request.",
-        );
+      if (!choice?.saveId) throw new Error("The desktop save dialog did not return a save request.");
       try {
         const blob = await fetchOriginalMedia(info);
         const result = await desktop.completeMediaSaveAs(
           choice.saveId,
           await blob.arrayBuffer(),
         );
-        if (!result?.saved)
-          throw new Error("The desktop app did not write the file.");
+        if (!result?.saved) throw new Error("The desktop app did not write the file.");
       } catch (err) {
         await desktop.cancelMediaSaveAs?.(choice.saveId);
         throw err;
@@ -4190,7 +4182,8 @@ function copyAvailability() {
   if (!desktopCapable && !browserCapable) {
     return {
       available: false,
-      reason: "This browser cannot copy image pixels. Save the media instead.",
+      reason:
+        "This browser cannot copy image pixels. Save the media instead.",
     };
   }
   const video = isSupportedVideoFile(getOverlayFormat(image.value));
@@ -4245,8 +4238,7 @@ async function renderMediaPng(target = null) {
     );
   }
   const blob = await canvasToBlob(canvas, "image/png");
-  if (!blob)
-    throw new Error("This browser could not encode the pixels as PNG.");
+  if (!blob) throw new Error("This browser could not encode the pixels as PNG.");
   return blob;
 }
 
@@ -4265,8 +4257,7 @@ async function copyMedia(target = null) {
       const result = await window.pixlstashDesktop.copyPngToClipboard(
         await png.arrayBuffer(),
       );
-      if (!result?.copied)
-        throw new Error("The desktop clipboard rejected the image.");
+      if (!result?.copied) throw new Error("The desktop clipboard rejected the image.");
     } else {
       // Pass the pending PNG promise to ClipboardItem and call write immediately;
       // this preserves the transient user activation required by some browsers.
