@@ -308,7 +308,8 @@ def fresh_shelf(shelf_env):
     # The seed deletes model_folder rows behind the API's back, so the rowids it
     # frees can come back attached to a different folder. Drop the remembered
     # scans with them, as DELETE /model-folders does on the real path.
-    model_folders_routes._scans.clear()
+    with model_folders_routes._scans_lock:
+        model_folders_routes._scans.clear()
     # The owner session is what every positive control runs on; prove it is live
     # before any refusal is measured against it.
     r = shelf_env.owner.get(f"{API}/adapters")
