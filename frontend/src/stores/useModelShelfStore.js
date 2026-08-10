@@ -543,7 +543,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         compareOn(a, b, view.sortKey, view.sortDirection) || a.id - b.id,
     );
     if (axis === "none") {
-      return [{ key: "", label: "", labelKind: "name", rows: sorted }];
+      // `rowKey` on this branch too. It was only set where a model can be drawn
+      // more than once, which left every row in the DEFAULT view without one:
+      // the list's `v-for` key was `undefined` for all of them, and so was
+      // anything else keyed per drawn row.
+      return [
+        {
+          key: "",
+          label: "",
+          labelKind: "name",
+          rows: sorted.map((row) => ({ ...row, rowKey: String(row.id) })),
+        },
+      ];
     }
 
     const byKey = new Map();

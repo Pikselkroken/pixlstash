@@ -293,11 +293,11 @@
               :title="rowTitle(row)"
               role="option"
               :aria-selected="store.isSelected(row.id)"
-              :tabindex="row.id === rovingRowId ? 0 : -1"
-              :data-row-id="row.id"
+              :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
+              :data-row-key="row.rowKey"
               @click="pickRow(row, $event)"
               @keydown="onRowKeydown(row, $event)"
-              @focus="focusedRowId = row.id"
+              @focus="focusedRowKey = row.rowKey"
             >
               <!-- Column 1 stays the reserved glyph slot. The selection shows
                    as the row's own wash and a tick here, not as a checkbox: a
@@ -462,44 +462,68 @@ const ALGO_LABEL = {
 };
 
 /**
- * The ids in the order the list DRAWS them, which is what a Shift-range spans.
+ * Every drawn row, in order, as `{key, id}`.
  *
- * Not `store.groups`: banding re-orders the groups, and a range that measured
+ * TWO orders come out of this and they are not the same list, which is the
+ * whole point. Focus moves over RENDERED ROWS: under folder grouping a model
+ * with copies in two folders is drawn twice, and both draws are places the
+ * cursor can be. Selection is over MODELS: the verbs write the model, so the
+ * range de-duplicates.
+ *
+ * Keying focus by `row.id` instead put `tabindex="0"` on every draw of the
+ * same model at once, gave `querySelector` the first duplicate whichever one
+ * was focused, and made `indexOf` return the first draw's index when the
+ * cursor was on the second.
+ *
+ * Not `store.groups`: banding re-orders the groups, and a range measured
  * against an order the reader cannot see would select a run they did not point
- * at. Under folder grouping a model drawn in two folders appears twice, so the
- * sequence is de-duplicated — the range is over models, which is what the
- * verbs act on.
+ * at.
  */
-const orderedRowIds = computed(() => {
-  const seen = new Set();
+const drawnRows = computed(() => {
+  const rows = [];
   for (const group of shownGroups.value) {
     if (grouped.value && store.isCollapsed(group.key)) continue;
-    for (const row of group.rows) seen.add(row.id);
+    for (const row of group.rows) rows.push({ key: row.rowKey, id: row.id });
   }
-  return [...seen];
+  return rows;
 });
 
+/** Model ids in drawn order, de-duplicated: what a Shift-range spans. */
+const orderedRowIds = computed(() => [
+  ...new Set(drawnRows.value.map((row) => row.id)),
+]);
+
 /**
- * Which row owns the list's single tab stop.
+ * Which drawn row owns the list's single tab stop.
  *
  * Roving, and it falls back to the first drawn row: with no row at `tabindex=0`
  * the whole list is unreachable by Tab, which is the failure mode a roving
  * tabindex introduces if nothing seeds it.
  */
-const focusedRowId = ref(null);
-const rovingRowId = computed(
-  () => focusedRowId.value ?? orderedRowIds.value[0] ?? null,
+const focusedRowKey = ref(null);
+const rovingRowKey = computed(
+  () => focusedRowKey.value ?? drawnRows.value[0]?.key ?? null,
 );
 
 /**
  * Click, Ctrl+click, Shift+click — the grid's own three gestures.
  *
- * A text selection inside the row is not a pick: dragging across a name to
- * copy it would otherwise collapse the selection to that one row on mouseup.
+ * A drag across THIS row's text is not a pick: releasing it would otherwise
+ * collapse the selection to that one row. Scoped to the row the click landed
+ * in — asking only whether any text is selected anywhere would make the whole
+ * list unclickable for as long as the reader had a selection somewhere else on
+ * the page, which is a far bigger rule than the one intended.
  */
 function pickRow(row, event) {
-  if (window.getSelection?.()?.toString()) return;
-  focusedRowId.value = row.id;
+  const selection = window.getSelection?.();
+  if (
+    selection &&
+    !selection.isCollapsed &&
+    event.currentTarget?.contains?.(selection.anchorNode)
+  ) {
+    return;
+  }
+  focusedRowKey.value = row.rowKey;
   store.selectFromClick(
     row.id,
     { ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey },
@@ -516,23 +540,37 @@ function pickRow(row, event) {
  * the keyboard's Shift+click. Escape clears, so there is always a way out that
  * does not involve finding the bar.
  */
+/**
+ * Move real focus to a drawn row by its key.
+ *
+ * Matched by reading `dataset` rather than building an attribute selector: a
+ * row key carries a folder path, so it can hold quotes, brackets and
+ * backslashes, and `CSS.escape` is not defined in jsdom — a selector here would
+ * be both fragile and untestable.
+ */
+function focusDrawnRow(key) {
+  for (const el of rootEl.value?.querySelectorAll("[data-row-key]") || []) {
+    if (el.dataset.rowKey === key) {
+      el.focus({ preventScroll: false });
+      return;
+    }
+  }
+}
+
 function onRowKeydown(row, event) {
-  const order = orderedRowIds.value;
-  const index = order.indexOf(row.id);
+  const drawn = drawnRows.value;
+  const index = drawn.findIndex((drawnRow) => drawnRow.key === row.rowKey);
   const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
   if (step !== undefined) {
-    const next = order[index + step];
+    const next = drawn[index + step];
     if (next === undefined) return;
     event.preventDefault();
-    focusedRowId.value = next;
+    // The cursor moves over DRAWN rows; the range it extends is over models.
+    focusedRowKey.value = next.key;
     if (event.shiftKey) {
-      store.selectFromClick(next, { shift: true }, order);
+      store.selectFromClick(next.id, { shift: true }, orderedRowIds.value);
     }
-    nextTick(() => {
-      rootEl.value
-        ?.querySelector(`[data-row-id="${next}"]`)
-        ?.focus({ preventScroll: false });
-    });
+    nextTick(() => focusDrawnRow(next.key));
     return;
   }
   if (event.key === " " || event.key === "Enter") {
@@ -540,7 +578,7 @@ function onRowKeydown(row, event) {
     store.selectFromClick(
       row.id,
       { ctrl: event.key === " " || event.ctrlKey || event.metaKey },
-      order,
+      orderedRowIds.value,
     );
     return;
   }

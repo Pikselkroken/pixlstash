@@ -710,3 +710,111 @@ describe("selection and drive bands together", () => {
     );
   });
 });
+
+describe("focus under folder grouping, where a model is drawn twice", () => {
+  const twiceDrawn = () =>
+    adapter({
+      id: 1,
+      locations: [
+        { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
+        { state: "present", folder_id: 2, folder_path: "/b", relpath: "x" },
+      ],
+    });
+
+  async function mountGrouped(rows) {
+    const wrapper = await mountShelf(rows);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  }
+
+  it("still keeps exactly one tab stop across both draws", async () => {
+    // Keyed by model id, BOTH draws satisfied `row.id === rovingRowId` and both
+    // carried tabindex="0" — two focusable options for one listbox position.
+    const wrapper = await mountGrouped([twiceDrawn()]);
+    const stops = wrapper
+      .findAll(".shelf-row")
+      .map((r) => r.attributes("tabindex"));
+    expect(stops).toHaveLength(2);
+    expect(stops.filter((t) => t === "0")).toHaveLength(1);
+  });
+
+  it("moves the stop to the second draw, not back to the first", async () => {
+    // The bug the id-keying hid: `indexOf(row.id)` returned the FIRST draw's
+    // index whichever draw the cursor was on, so ArrowDown from the second draw
+    // moved to the second draw again.
+    const wrapper = await mountGrouped([twiceDrawn()]);
+    await wrapper.findAll(".shelf-row")[0].trigger("keydown", {
+      key: "ArrowDown",
+    });
+    await wrapper.vm.$nextTick();
+
+    const stops = wrapper
+      .findAll(".shelf-row")
+      .map((r) => r.attributes("tabindex"));
+    expect(stops).toEqual(["-1", "0"]);
+  });
+
+  it("gives every drawn row a key, including in the ungrouped default", async () => {
+    // `rowKey` was set only where a model can be drawn twice, so in the default
+    // view the list's v-for key — and everything else keyed per drawn row — was
+    // undefined for every row.
+    const flat = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    const keys = flat
+      .findAll(".shelf-row")
+      .map((r) => r.attributes("data-row-key"));
+    expect(keys).toEqual(["1", "2"]);
+
+    const grouped = await mountGrouped([twiceDrawn()]);
+    const groupedKeys = grouped
+      .findAll(".shelf-row")
+      .map((r) => r.attributes("data-row-key"));
+    expect(new Set(groupedKeys).size).toBe(2);
+  });
+
+  it("selects the model, so both of its draws light up", async () => {
+    // Focus is per drawn row; selection stays per model. Clicking one draw
+    // selects the model, and the other draw of it must show as selected too.
+    const wrapper = await mountGrouped([twiceDrawn()]);
+    await wrapper.findAll(".shelf-row")[0].trigger("click");
+    await wrapper.vm.$nextTick();
+
+    expect(useModelShelfStore().selectedRows).toHaveLength(1);
+    expect(wrapper.findAll(".shelf-row--selected")).toHaveLength(2);
+  });
+});
+
+describe("a click that ends a text drag", () => {
+  it("is ignored only when the text was dragged inside that row", async () => {
+    // Asking whether ANY text is selected anywhere made the whole list
+    // unclickable for as long as the reader had a selection elsewhere.
+    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    const store = useModelShelfStore();
+    const rows = wrapper.findAll(".shelf-row");
+
+    // A live selection anchored OUTSIDE the row must not block the click.
+    const outside = document.createElement("p");
+    outside.textContent = "selected somewhere else";
+    document.body.appendChild(outside);
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      isCollapsed: false,
+      anchorNode: outside,
+      toString: () => "selected somewhere else",
+    });
+
+    await rows[0].trigger("click");
+    expect([...store.selectedIds]).toEqual([1]);
+
+    // Anchored INSIDE the clicked row, it is a drag and must be ignored.
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      isCollapsed: false,
+      anchorNode: rows[1].element.firstChild,
+      toString: () => "a name",
+    });
+    await rows[1].trigger("click");
+    expect([...store.selectedIds]).toEqual([1]);
+
+    window.getSelection.mockRestore();
+    outside.remove();
+  });
+});
