@@ -1524,7 +1524,17 @@ checkbox removed the only focus stop a row had, so the row takes the role
 instead: `role="listbox"` + `aria-multiselectable` on the `<ul>`,
 `role="option"` + `aria-selected` on each row, and exactly one row at
 `tabindex="0"` — seeded to the first drawn row, or a roving tabindex with
-nothing at 0 makes the whole list unreachable by Tab. That is the same "1,800
+nothing at 0 makes the whole list unreachable by Tab.
+
+**Focus is keyed per DRAWN ROW (`rowKey`), selection per MODEL (`id`), and the
+two lists are not the same.** Under folder grouping a model with copies in two
+folders is drawn twice, and both draws are places the cursor can be — but the
+verbs write the model, so the range de-duplicates. Keying focus by model id
+instead put `tabindex="0"` on every draw of the same model at once, which is two
+focusable options for one listbox position, and made the arrows read the first
+draw's index whichever draw the cursor was on. `rowKey` is assigned on **both**
+branches of `groups`, including the ungrouped default, where it was previously
+absent and left the list's `v-for` key `undefined` for every row. That is the same "1,800
 tab stops is a trap" rule as before, now solved by roving rather than by having
 no stop at all. The listbox role is legitimate here and was refused in
 `ModelFoldersDialog` for the mirror-image reason: these rows hold no interactive
@@ -1533,8 +1543,11 @@ controls, and a control inside `role="option"` is unreachable.
 Arrows move the stop **without** selecting, so a reader can walk the list
 without arming a verb against every row they pass; Space and Enter pick;
 Shift+arrow extends from the anchor, the keyboard's Shift+click; Escape clears.
-A click that lands while text is selected inside the row is ignored, or dragging
-across a name to copy it would collapse the selection on mouseup.
+A click that ends a text drag **inside that row** is ignored, or dragging across
+a name to copy it would collapse the selection on mouseup. Scoped to the clicked
+row: asking only whether any text is selected anywhere would make the entire
+list unclickable for as long as the reader had a selection elsewhere on the
+page.
 
 **`ShelfSelectionBar.vue` emits; `ModelShelf.vue` acts.** Every button is an
 emit, so both confirmations live in one place instead of half in the bar and
