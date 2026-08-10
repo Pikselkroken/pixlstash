@@ -48,6 +48,25 @@ export async function listModelFolders() {
 }
 
 /**
+ * Capacity of the drives the registered folders sit on.
+ *
+ * A separate call from {@link listModelFolders} because it is a separate route,
+ * and it is a separate route because it stats the filesystem: an offline
+ * network mount can make it slow, while the folder list answers from the
+ * database. Call it for the drive bands and let it fail on its own without
+ * taking the list with it.
+ *
+ * @returns {Promise<Array<Object>>} the `devices` array. Each entry carries
+ *   `device_id` (null when the drive could not be measured), `mount_point`,
+ *   `total_bytes` and `free_bytes` (both null when unmeasurable),
+ *   `shelf_bytes` and `folder_ids`.
+ */
+export async function listModelFolderDevices() {
+  const body = await unwrap(apiClient.get(`${MODEL_FOLDERS_URL}/devices`));
+  return Array.isArray(body?.devices) ? body.devices : [];
+}
+
+/**
  * Register a folder for the shelf to catalogue.
  *
  * Registering does not scan; call {@link rescanModelFolder} afterwards. A path

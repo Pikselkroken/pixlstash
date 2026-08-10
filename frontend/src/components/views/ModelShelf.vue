@@ -174,7 +174,39 @@
            only stops in the list, which makes Tab a group-to-group move and is
            why no jump shortcut was invented for one. -->
       <template v-else>
-        <div v-for="group in store.groups" :key="group.key" class="shelf-group">
+        <div v-for="group in shownGroups" :key="group.key" class="shelf-group">
+          <!-- The drive band: the OUTER of the two levels the plan allows, and
+               the second one is spent here rather than on stacks, which nest
+               inside a row and not inside a header. Drawn on the first group of
+               each band, never as a wrapper element, so the sticky folder
+               headers below keep scrolling under it in one flow. -->
+          <h3
+            v-if="group.bandStart"
+            class="shelf-band-heading"
+            :class="{ 'shelf-band-heading--unknown': !group.band.measured }"
+          >
+            <span class="shelf-band-label">{{ group.band.label }}</span>
+            <!-- Two fills in one track, not two bars: the shelf's share is a
+                 part of what is used, so drawing it separately would let the
+                 two add up past the drive. -->
+            <span
+              v-if="usage(group.band)"
+              class="shelf-band-meter"
+              role="img"
+              :aria-label="meterLabel(group.band)"
+            >
+              <span
+                class="shelf-band-fill"
+                :style="{ width: `${usage(group.band).usedPct}%` }"
+              ></span>
+              <span
+                class="shelf-band-fill shelf-band-fill--shelf"
+                :style="{ width: `${usage(group.band).shelfPct}%` }"
+              ></span>
+            </span>
+            <span class="shelf-band-figures">{{ meterLabel(group.band) }}</span>
+          </h3>
+
           <!-- The header IS the button, on the same four-column grid as the
                rows, so its label starts at their left edge. Column 2 stays
                reserved and empty exactly as a row with no thumbnail reserves it
@@ -263,13 +295,17 @@ import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import {
+  bandGroups,
+  bandUsage,
   formatModelSize,
   SORT_LABELS,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
 
 const store = useModelShelfStore();
+const foldersStore = useModelFoldersStore();
 const rootEl = ref(null);
 const showMenuOpen = ref(false);
 const sortMenuOpen = ref(false);
@@ -336,6 +372,41 @@ const ALGO_LABEL = {
 /** "1 model" / "12 models", so no line ever reads "1 models". */
 function modelCount(n) {
   return `${n.toLocaleString()} ${n === 1 ? "model" : "models"}`;
+}
+
+/**
+ * The groups as drawn: banded by drive under `Folder` + `Drive, then folder`,
+ * and the store's own order on every other axis.
+ *
+ * Banded HERE rather than in the store because the drives are the folder
+ * store's data and the folder store already imports the shelf store; reaching
+ * back the other way would close an import cycle. `bandGroups` is pure, so the
+ * arrangement is still testable without a component.
+ */
+const shownGroups = computed(() => {
+  if (store.view.groupBy !== "folder" || store.view.folderLayout !== "drive") {
+    return store.groups;
+  }
+  return bandGroups(store.groups, foldersStore.deviceByFolderId);
+});
+
+function usage(band) {
+  return bandUsage(band);
+}
+
+/**
+ * What a band's meter says in words.
+ *
+ * Free space leads, because it is the number that decides whether the next
+ * checkpoint fits. A drive we could not measure says so rather than reporting
+ * zero, which would draw an empty meter for a drive that may well be full.
+ */
+function meterLabel(band) {
+  if (!bandUsage(band)) return "Capacity unknown";
+  const free = formatModelSize(band.freeBytes);
+  const total = formatModelSize(band.totalBytes);
+  const shelf = formatModelSize(band.shelfBytes);
+  return `${free} free of ${total} · ${shelf} on the shelf`;
 }
 
 /**
@@ -411,6 +482,9 @@ onMounted(() => {
   // after mount would discard wherever the user had moved in the meantime.
   rootEl.value?.focus();
   store.fetchRows();
+  // Unawaited and never blocking the list: the drives decorate the bands, and a
+  // slow or offline mount must not hold up the models.
+  foldersStore.refreshDevices();
 });
 
 // A credential change (logout, login, share token, restore) empties the store,
@@ -495,10 +569,70 @@ watch(
   margin: 0;
 }
 
+/* ── Drive bands ───────────────────────────────────────────────────────────
+   The OUTER of the two levels the plan allows, drawn only under `Folder` +
+   `Drive, then folder`. Deliberately NOT sticky: two sticky levels need
+   stacking arithmetic (the inner offset becomes the outer's measured height,
+   which no token knows), and the band is a label with a meter rather than
+   something the reader needs pinned while they scan a folder. The folder
+   header below stays sticky and scrolls under nothing. */
+.shelf-band-heading {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: rgb(var(--v-theme-on-background));
+}
+
+/* Rank is size and weight, never opacity: a header must not be dimmer than the
+   rows it heads. The unknown case loses the meter, not the contrast. */
+.shelf-band-heading--unknown .shelf-band-figures {
+  font-style: italic;
+}
+
+.shelf-band-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One track, two fills, the wider drawn first: the shelf's share is PART of
+   what is used, so two separate bars could add up past the drive. */
+.shelf-band-meter {
+  position: relative;
+  height: 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-panel), 0.08);
+  overflow: hidden;
+}
+
+.shelf-band-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-panel), 0.28);
+}
+
+.shelf-band-fill--shelf {
+  background: rgb(var(--v-theme-primary));
+}
+
+.shelf-band-figures {
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
 /* ── Group headers ─────────────────────────────────────────────────────────
-   ONE level, though the plan allows two: folder is a grouping value rather
-   than a permanent outer band, so there is one sticky offset and no stacking
-   arithmetic. The second level is reserved for F5's stacks. */
+   The inner level, and the only sticky one. Folder is a grouping value; the
+   band above is the outer tier and is static, so there is still one sticky
+   offset and no stacking arithmetic. */
 
 /* Space BETWEEN groups, no separator rule: a rule as well as the header's own
    hairline would draw two lines at every boundary. */

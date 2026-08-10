@@ -19,6 +19,16 @@ vi.mock("../../api/modelShelf", () => ({
   listCheckpoints: (...args) => listCheckpoints(...args),
 }));
 
+// The shelf reads the drives to band its folder groups. Left unmocked this
+// reaches the network, and the failure that comes back is routed as a session
+// reset — which empties the shelf store MID-TEST and made an unrelated sort
+// assertion read the default view back.
+const listModelFolderDevices = vi.fn();
+vi.mock("../../api/modelFolders", async (importOriginal) => ({
+  ...(await importOriginal()),
+  listModelFolderDevices: (...args) => listModelFolderDevices(...args),
+}));
+
 import ModelShelf from "./ModelShelf.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
@@ -74,6 +84,8 @@ beforeEach(() => {
   window.localStorage.clear();
   listAdapters.mockReset();
   listCheckpoints.mockReset();
+  listModelFolderDevices.mockReset();
+  listModelFolderDevices.mockResolvedValue([]);
 });
 
 describe("a row with nothing in its header", () => {
@@ -364,5 +376,92 @@ describe("the Sort split-button", () => {
     await wrapper.vm.$nextTick();
     const status = wrapper.find('[role="status"]');
     expect(status.text()).toBe("Sorted by name: A to Z");
+  });
+});
+
+describe("drive bands", () => {
+  const inFolder = (id, folderId, path) =>
+    adapter({
+      id,
+      sha256: String(id).repeat(64).slice(0, 64),
+      locations: [
+        {
+          state: "present",
+          folder_id: folderId,
+          folder_path: path,
+          relpath: "a.st",
+        },
+      ],
+    });
+
+  it("draws one band per drive, with a meter that reads free space first", async () => {
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: "9",
+        mount_point: "/mnt/fast",
+        total_bytes: 1024 ** 4,
+        free_bytes: 512 * 1024 ** 3,
+        shelf_bytes: 256 * 1024 ** 3,
+        folder_ids: [1, 2],
+      },
+    ]);
+    const wrapper = await mountShelf([
+      inFolder(1, 1, "/mnt/fast/loras"),
+      inFolder(2, 2, "/mnt/fast/checkpoints"),
+    ]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
+    await wrapper.vm.$nextTick();
+
+    const bands = wrapper.findAll(".shelf-band-heading");
+    expect(bands).toHaveLength(1);
+    expect(textOf(bands[0])).toContain("/mnt/fast");
+    // Free leads: it is the number that decides whether the next checkpoint
+    // fits, and the meter is read at a glance rather than computed from.
+    expect(textOf(bands[0])).toContain("512.0 GB free of 1.0 TB");
+    expect(wrapper.findAll(".shelf-band-fill")).toHaveLength(2);
+  });
+
+  it("says a drive is unknown rather than drawing it empty", async () => {
+    // An empty meter reads as a drive with nothing on it, which is the one
+    // thing "we could not measure it" does not mean.
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: null,
+        mount_point: "/net/models",
+        total_bytes: null,
+        free_bytes: null,
+        shelf_bytes: 0,
+        folder_ids: [7],
+      },
+    ]);
+    const wrapper = await mountShelf([inFolder(1, 7, "/net/models/loras")]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
+    await wrapper.vm.$nextTick();
+
+    expect(textOf(wrapper.find(".shelf-band-heading"))).toContain(
+      "Capacity unknown",
+    );
+    expect(wrapper.find(".shelf-band-meter").exists()).toBe(false);
+  });
+
+  it("draws no band at all under the A to Z layout", async () => {
+    // The band is the drive layout's own tier. Folder-alphabetical is one flat
+    // run of folder headers, which is what it was before F2.
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: "9",
+        mount_point: "/mnt/fast",
+        total_bytes: 1000,
+        free_bytes: 400,
+        shelf_bytes: 100,
+        folder_ids: [1],
+      },
+    ]);
+    const wrapper = await mountShelf([inFolder(1, 1, "/mnt/fast/loras")]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".shelf-band-heading").exists()).toBe(false);
+    expect(wrapper.findAll(".shelf-group-btn").length).toBeGreaterThan(0);
   });
 });
