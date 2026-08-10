@@ -229,6 +229,16 @@ const props = defineProps({
   // attachments on the rows it drew, so it hands them straight in and no read
   // happens at all. Null keeps the picture path exactly as it was.
   membership: { type: Object, default: null },
+  // Emit the intent and write nothing. Not a new behaviour: `face` has always
+  // worked this way and so has `project`, which emits `selected` and updates
+  // optimistically. This names it so a fourth host can ask for it, and so the
+  // two existing cases stop reading as special.
+  //
+  // Supplying `membership` implies it. A host that owns the data owns the
+  // writes; "your membership, my API calls" is a combination with no meaning
+  // and no caller, and leaving it representable is how it eventually gets
+  // written by accident.
+  hostOwnsWrites: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   readonly: { type: Boolean, default: false },
   label: { type: String, default: null },
@@ -275,6 +285,8 @@ const emit = defineEmits([
   "create",
   "assign",
   "unassign",
+  "attach",
+  "detach",
 ]);
 
 // --- Type-derived helpers ---
@@ -363,6 +375,21 @@ const membersById = ref({}); // key: item.key → Set<string> of subject IDs
  * this.
  */
 const effectiveMembers = computed(() => props.membership ?? membersById.value);
+
+/**
+ * Whether this control writes, or only announces.
+ *
+ * `face` and `project` were already announce-only before the flag existed, so
+ * they are listed here rather than converted: the behaviour is unchanged and
+ * the flag simply has three users on its first day instead of one.
+ */
+const writesAreHosted = computed(
+  () =>
+    props.hostOwnsWrites ||
+    Boolean(props.membership) ||
+    isFace.value ||
+    isProject.value,
+);
 // The trigger's aria-controls target. Several of these controls sit in one menu,
 // so the id has to be per-instance.
 const listboxId = useId();
@@ -911,9 +938,56 @@ async function toggleItem(item) {
     selectFacePerson(item);
     return;
   }
+  if (isProject.value) {
+    toggleProject(item);
+    return;
+  }
+  // Announce-only: the host holds the API. The payload carries the resolved
+  // intent rather than the raw click, because only this component knows whether
+  // a partially-applied entity resolves up (it does) and therefore which
+  // subjects still need writing.
+  if (writesAreHosted.value) {
+    announceToggle(item);
+    return;
+  }
   if (isSet.value) await toggleSet(item);
-  else if (isProject.value) toggleProject(item);
   else await toggleCharacter(item);
+}
+
+/**
+ * Emit what a click means, for a host that owns the writes.
+ *
+ * `attach` / `detach` rather than `added` / `removed`: those two are already
+ * spoken for by the picture modes, carry `pictureIds`, and are forwarded
+ * verbatim into grid stores. A new name keeps this addition from reaching any
+ * existing listener.
+ */
+function announceToggle(item) {
+  const ids = normalisedPictureIds.value;
+  if (!ids.length) return;
+  const members = effectiveMembers.value?.[item.key];
+  const state = getItemState(item);
+  if (state === "checked") {
+    emit("detach", {
+      entityType: props.type,
+      entityId: item.id,
+      subjectIds: ids,
+    });
+  } else {
+    // Partial resolves UP, the same rule the writing paths apply: only the
+    // subjects that are not already in get written, and nothing is detached.
+    const missing = members
+      ? ids.filter((id) => !members.has(String(id)))
+      : ids;
+    if (!missing.length) return;
+    emit("attach", {
+      entityType: props.type,
+      entityId: item.id,
+      entityName: item.name,
+      subjectIds: missing,
+    });
+  }
+  closeMenu();
 }
 
 // Face mode performs no writes: the host owns the face-level API calls and its
