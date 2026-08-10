@@ -37,6 +37,7 @@ too.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -128,5 +129,68 @@ def test_declared_bucket_is_honoured_as_an_override(monkeypatch, bucket):
     install. Docker signals are forced on to prove the override still wins.
     """
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
+    monkeypatch.delenv(Server.DEV_MACHINE_ENV_VAR, raising=False)
     monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", bucket)
     assert Server.detect_install_type() == bucket
+
+
+def test_dev_machine_marker_outranks_the_channel(monkeypatch):
+    """A dev desktop launch must report ``dev``, not ``electron``.
+
+    The shell has to keep declaring ``electron`` because the backend reads that
+    exact value as a runtime switch, so the machine is declared separately and
+    has to win. Without this the developer's own desktop app is indistinguishable
+    from a real user's.
+    """
+    monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
+    monkeypatch.setenv(Server.DEV_MACHINE_ENV_VAR, "1")
+    assert Server.detect_install_type() == "dev"
+
+
+def test_the_dev_marker_does_not_disturb_the_electron_runtime_switch(monkeypatch):
+    """Labelling the machine must not change how the process runs.
+
+    ``PIXLSTASH_INSTALL_TYPE == "electron"`` gates ``cookie_secure``, the loopback
+    listener and the external-listener startup check, and those read the
+    environment directly rather than going through ``detect_install_type``. This
+    pins that separation: the marker changes the reported bucket and leaves the
+    switch the desktop transport depends on exactly as the shell set it.
+    """
+    monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
+    monkeypatch.setenv(Server.DEV_MACHINE_ENV_VAR, "1")
+    assert Server.detect_install_type() == "dev"
+    assert os.environ["PIXLSTASH_INSTALL_TYPE"].strip().lower() == "electron"
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "no", "off"])
+def test_an_unset_or_negative_dev_marker_is_not_a_declaration(monkeypatch, value):
+    """Only an affirmative value declares a dev machine.
+
+    An empty or falsy marker leaking into a released build would relabel real
+    users' installs as ours and quietly delete them from the active-install count.
+    """
+    monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
+    monkeypatch.setenv(Server.DEV_MACHINE_ENV_VAR, value)
+    assert Server.detect_install_type() == "electron"
+
+
+def test_the_shell_sets_the_marker_only_for_a_dev_backend():
+    """The declaration must be wired up in the shell, not just readable here.
+
+    A test that only exercised the Python side would pass with the desktop app
+    never setting the marker at all, which is the bug being fixed.
+    """
+    source = (
+        REPO_ROOT / "electron" / "src" / "backend" / "ServerProcess.ts"
+    ).read_text(encoding="utf-8")
+    assert "PIXLSTASH_TELEMETRY_DEV: '1'" in source, (
+        "the desktop shell no longer declares its dev backend as a dev machine"
+    )
+    assert "isDevBackend() ? { PIXLSTASH_TELEMETRY_DEV" in source, (
+        "the dev marker must be conditional on isDevBackend(), or every desktop "
+        "install would report as ours"
+    )
+    assert "PIXLSTASH_INSTALL_TYPE: 'electron'" in source, (
+        "the shell must keep declaring the electron channel — it is a runtime "
+        "switch for cookie_secure and the loopback listener"
+    )

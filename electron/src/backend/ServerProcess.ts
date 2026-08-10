@@ -265,7 +265,18 @@ export class ServerProcess {
       PYTHONPATH: pythonPath,
       PIXLSTASH_HOST: '127.0.0.1',
       PIXLSTASH_PORT: String(port),
+      // Stays 'electron' even on a developer's machine: the backend reads this
+      // exact value as a runtime switch, not just a telemetry label — it gates
+      // cookie_secure, the loopback listener and the external-listener startup
+      // check. Declaring 'dev' here would stop the window being able to reach or
+      // authenticate against its own backend.
       PIXLSTASH_INSTALL_TYPE: 'electron',
+      // So the machine is labelled separately from the channel. A desktop build
+      // running the repo's backend is by construction one of ours, and without
+      // this it reported as a real Electron install: the shell's env wins over
+      // the developer's own PIXLSTASH_INSTALL_TYPE, so a dev launch could never
+      // declare itself. See Server.DEV_MACHINE_ENV_VAR.
+      ...(isDevBackend() ? { PIXLSTASH_TELEMETRY_DEV: '1' } : {}),
       PIXLSTASH_DESKTOP_SESSION: sessionToken,
       // Force the inference device to match this runtime (the bundled env is
       // CPU-only); overrides default_device in the shared on-disk config.
