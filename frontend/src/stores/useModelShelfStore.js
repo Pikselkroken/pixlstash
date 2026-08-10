@@ -37,6 +37,14 @@ const MAX_COLLAPSED_KEYS = 200;
 export const GROUP_BY_KEYS = ["none", "base_model", "folder"];
 
 /**
+ * How folder groups are laid out, which is a sub-choice of `Folder` rather than
+ * a fourth axis: `drive` bands them by the disk they sit on, `alpha` runs them
+ * A to Z. It was once offered as `Sort: Drive | Folder`, which was never a sort
+ * and is why the absence of real sorting went unnoticed for so long.
+ */
+export const FOLDER_LAYOUTS = ["drive", "alpha"];
+
+/**
  * The five ruled sort keys, mirroring `SortKey` in `routes/model_shelf.py`.
  *
  * Applied CLIENT-SIDE, and that is not a shortcut. `fetchRows` issues one
@@ -91,9 +99,22 @@ function compareOn(a, b, key, direction) {
   );
 }
 
-/** The default view: newest added first, ungrouped, exactly what F1 showed. */
+/**
+ * The default view: newest added first, ungrouped, exactly what F1 showed.
+ *
+ * `folderLayout` is carried at all times but only read under `groupBy:
+ * 'folder'`. Remembering it while another axis is chosen is the point: flipping
+ * to Base model and back must not silently reset how the folders were laid out.
+ * It seeds to `drive`, because the question a shelf of 438 GB is asked first is
+ * which disk is filling up.
+ */
 function defaultView() {
-  return { groupBy: "none", sortKey: "added_at", sortDirection: "desc" };
+  return {
+    groupBy: "none",
+    sortKey: "added_at",
+    sortDirection: "desc",
+    folderLayout: "drive",
+  };
 }
 
 /**
@@ -167,6 +188,12 @@ function storedView() {
   // A blob an older build wrote is discarded whole rather than half-applied.
   if (!parsed || parsed.v !== VIEW_SCHEMA_VERSION) return view;
   if (GROUP_BY_KEYS.includes(parsed.groupBy)) view.groupBy = parsed.groupBy;
+  // Read per field rather than gated behind a schema bump: a blob written
+  // before the layout choice existed is still a valid remembered sort, and
+  // bumping the version to add one field would throw that away for everyone.
+  if (FOLDER_LAYOUTS.includes(parsed.folderLayout)) {
+    view.folderLayout = parsed.folderLayout;
+  }
   if (SORT_KEYS.includes(parsed.sortKey)) view.sortKey = parsed.sortKey;
   if (parsed.sortDirection === "asc" || parsed.sortDirection === "desc") {
     view.sortDirection = parsed.sortDirection;
@@ -455,6 +482,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
             key: group.key,
             label: group.label,
             labelKind: group.labelKind,
+            // Which registered folder this group IS, when it is one. The drive
+            // bands need it to look the group's disk up, and the group is the
+            // only place that survives the flattening: `location` belongs to a
+            // copy, and a bucket outlives the copy that opened it.
+            folderId: group.location ? Number(group.location.folder_id) : null,
             rows: [],
           };
           byKey.set(group.key, bucket);
@@ -515,7 +547,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Never refetches: every field the five sort keys read is already on the list
    * payload, so a direction flip is a resort of what is in hand.
    *
-   * @param {Object} patch - any of `groupBy`, `sortKey`, `sortDirection`.
+   * @param {Object} patch - any of `groupBy`, `folderLayout`, `sortKey`,
+   *   `sortDirection`.
    */
   function setView(patch) {
     Object.assign(view, patch);

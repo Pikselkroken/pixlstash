@@ -356,6 +356,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # rescan take — or walk — a caller-supplied host path, which is the
     # reference-folders class exactly, so they carry the §16.3 locality tier.
     ("GET", "/api/v1/model-folders"): RoutePolicy(_OWNER),
+    # OWNER_ONLY, not the §16.3 tier the mutators carry, and the difference is
+    # deliberate. It takes no caller-supplied path, reads no file content and
+    # walks nothing: it stats the folders that are ALREADY registered, whose
+    # paths GET /model-folders returns to this same token. What it adds over
+    # that is the mount point (a prefix of a path the caller can already read)
+    # and the drive's size. Putting it on LOCAL_OWNER_ONLY would strip the
+    # capacity meter from a remote owner for no disclosure that route does not
+    # already make, and over-blocking is its own regression.
+    ("GET", "/api/v1/model-folders/devices"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/model-folders"): RoutePolicy(
         _LOCAL,
         justification="§16.3 model-folder create; takes a caller-supplied host path, same class as reference-folder create; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",

@@ -507,6 +507,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                     |
 | GET    | /api/v1/model-folders                                                         | model_shelf     | List registered model folders                              |
 | POST   | /api/v1/model-folders                                                         | model_shelf     | Register a model folder                                    |
+| GET    | /api/v1/model-folders/devices                                                 | model_shelf     | Capacity of the drives the model folders sit on            |
 | PATCH  | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Update a registered model folder                           |
 | DELETE | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Forget a registered model folder                           |
 | POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move the managed model store to another location           |
