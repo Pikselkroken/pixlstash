@@ -147,7 +147,11 @@
            first two offer Reset. -->
       <div v-else-if="store.nothingSelected" class="shelf-state">
         <p>Nothing is selected in Show.</p>
-        <button class="tbm-action" type="button" @click="store.resetFilters()">
+        <button
+          class="tbm-action tbm-action--secondary"
+          type="button"
+          @click="store.resetFilters()"
+        >
           Reset filters
         </button>
       </div>
@@ -157,13 +161,21 @@
           PixlStash lists what it finds in the model folders registered on this
           machine. Add the folder where you keep them.
         </p>
-        <button class="tbm-action" type="button" @click="openFolders($event)">
+        <button
+          class="tbm-action tbm-action--primary"
+          type="button"
+          @click="openFolders($event)"
+        >
           Add a model folder
         </button>
       </div>
       <div v-else-if="!store.visibleRows.length" class="shelf-state">
         <p>No models match these filters.</p>
-        <button class="tbm-action" type="button" @click="store.resetFilters()">
+        <button
+          class="tbm-action tbm-action--secondary"
+          type="button"
+          @click="store.resetFilters()"
+        >
           Reset filters
         </button>
       </div>
