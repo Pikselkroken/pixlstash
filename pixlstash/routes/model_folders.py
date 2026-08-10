@@ -62,6 +62,7 @@ from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_accessible,
     validate_reference_folder_path,
 )
+from pixlstash.utils.system_utils import describe_storage_device
 
 logger = get_logger(__name__)
 
@@ -199,6 +200,59 @@ class ModelFolderListResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     folders: list[ModelFolderResponse]
+
+
+class ModelFolderDeviceResponse(BaseModel):
+    """One drive the registered folders sit on."""
+
+    model_config = ConfigDict(extra="allow")
+
+    device_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Opaque key for the filesystem, grouping the folders that share a "
+            "drive. Null when the drive could not be measured, and then the "
+            "entry covers exactly one folder, because two folders we cannot "
+            "stat cannot be shown to be the same drive."
+        ),
+    )
+    mount_point: str = Field(
+        description=(
+            "Where the filesystem is mounted (`/`, `/mnt/models`, `D:\\`). The "
+            "label for the drive band. Falls back to the folder's own path "
+            "when the drive could not be measured."
+        )
+    )
+    total_bytes: Optional[int] = Field(
+        default=None, description="Size of the filesystem. Null if unmeasurable."
+    )
+    free_bytes: Optional[int] = Field(
+        default=None,
+        description=(
+            "Room left on the filesystem, which is the number to read before "
+            "moving a 24 GB checkpoint onto it. Null if unmeasurable."
+        ),
+    )
+    shelf_bytes: int = Field(
+        default=0,
+        description=(
+            "Bytes of registered, `present` copies on this drive. A model held "
+            "in two folders on one drive counts twice, because it occupies the "
+            "drive twice."
+        ),
+    )
+    folder_ids: list[int] = Field(
+        default_factory=list,
+        description="Registered folders on this drive, in id order.",
+    )
+
+
+class ModelFolderDeviceListResponse(BaseModel):
+    """Body of ``GET /model-folders/devices``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    devices: list[ModelFolderDeviceResponse]
 
 
 class ModelFolderDeleteResponse(BaseModel):
@@ -358,6 +412,79 @@ def create_router(server) -> APIRouter:
                 _to_response(dict(row), counts.get(int(row["id"]), 0)) for row in rows
             ]
         )
+
+    def _present_bytes_by_folder() -> dict[int, int]:
+        """Registered `present` bytes per folder, in one grouped query.
+
+        ``present`` only. A ``missing`` row names bytes that are no longer
+        there, and an ``unreachable`` one names bytes we could not look at;
+        counting either into a capacity meter would report space that the drive
+        does not agree is in use.
+        """
+        rows = server.hub.fetchall(
+            "SELECT mf.model_folder_id AS folder_id, "
+            "SUM(COALESCE(m.file_size, 0)) AS total "
+            "FROM model_file mf JOIN model m ON m.id = mf.model_id "
+            "WHERE mf.state = 'present' GROUP BY mf.model_folder_id"
+        )
+        return {int(row["folder_id"]): int(row["total"] or 0) for row in rows}
+
+    @router.get(
+        "/model-folders/devices",
+        summary="Capacity of the drives the model folders sit on",
+        description=(
+            "One entry per drive, with the folders on it, how full it is and "
+            "how much of that the shelf accounts for. Folders are grouped by "
+            "the filesystem they sit on rather than by path, so two folders on "
+            "one drive share one meter and a bind mount does not read as a "
+            "second drive.\n\n"
+            "Separate from `GET /model-folders` on purpose: this route stats "
+            "the filesystem, so an offline network mount can make it slow, "
+            "while the folder list answers from the database and stays fast. A "
+            "drive that cannot be measured is still returned, with null "
+            "capacity, so its folders keep a band to sit in."
+        ),
+        tags=["model_shelf"],
+        response_model=ModelFolderDeviceListResponse,
+    )
+    def list_model_folder_devices(request: Request):
+        server.auth.ensure_secure_when_required(request)
+        shelf_bytes = _present_bytes_by_folder()
+        rows = server.hub.fetchall("SELECT id, path FROM model_folder ORDER BY id")
+        # Key on the measured device, never on the path: a bind mount and a
+        # symlinked folder look like different drives by path and are one, and
+        # two subdirectories of one root can be different drives when a mount
+        # sits between them. Same reasoning as `model_mover.same_device`.
+        by_device: dict[str, ModelFolderDeviceResponse] = {}
+        devices: list[ModelFolderDeviceResponse] = []
+        for row in rows:
+            folder_id = int(row["id"])
+            path = str(row["path"])
+            device = describe_storage_device(path)
+            if device is None:
+                devices.append(
+                    ModelFolderDeviceResponse(
+                        mount_point=path,
+                        shelf_bytes=shelf_bytes.get(folder_id, 0),
+                        folder_ids=[folder_id],
+                    )
+                )
+                continue
+            existing = by_device.get(device.device_id)
+            if existing is None:
+                existing = ModelFolderDeviceResponse(
+                    device_id=device.device_id,
+                    mount_point=device.mount_point,
+                    total_bytes=device.total_bytes,
+                    free_bytes=device.free_bytes,
+                    shelf_bytes=0,
+                    folder_ids=[],
+                )
+                by_device[device.device_id] = existing
+                devices.append(existing)
+            existing.folder_ids.append(folder_id)
+            existing.shelf_bytes += shelf_bytes.get(folder_id, 0)
+        return ModelFolderDeviceListResponse(devices=devices)
 
     @router.post(
         "/model-folders",

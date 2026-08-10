@@ -2409,3 +2409,116 @@ def test_a_relocation_with_a_failed_file_does_not_promote_the_new_folder(
         "the store was promoted despite files that never arrived"
     )
     assert (relocatable_store.store / "one.safetensors").exists()
+
+
+# ===========================================================================
+# GET /model-folders/devices — the drive bands' capacity meter (F2)
+# ===========================================================================
+
+
+def _devices(shelf_env) -> list[dict]:
+    r = shelf_env.owner.get(f"{API}/model-folders/devices")
+    assert r.status_code == 200, r.text
+    return r.json()["devices"]
+
+
+def test_two_folders_on_one_drive_share_one_band(shelf_env, tmp_path):
+    """The band is a drive, not a path. Both folders here are under `tmp_path`
+    and therefore one filesystem, so a path-keyed implementation would draw two
+    meters for one drive and let the same free space be read twice."""
+    first, first_path = _register_folder_with_adapters(shelf_env, tmp_path, "driveA", 2)
+    second, second_path = _register_folder_with_adapters(
+        shelf_env, tmp_path, "driveB", 1
+    )
+    assert os.stat(first_path).st_dev == os.stat(second_path).st_dev, (
+        "the two folders are not on one filesystem here, so this machine "
+        "cannot prove the grouping"
+    )
+
+    bands = [d for d in _devices(shelf_env) if first in d["folder_ids"]]
+    assert len(bands) == 1, f"the drive was reported {len(bands)} times: {bands}"
+    band = bands[0]
+    assert second in band["folder_ids"], (
+        "two folders on one filesystem were split across bands"
+    )
+    assert band["folder_ids"] == sorted(band["folder_ids"]), "folder ids are unordered"
+    assert band["total_bytes"] > 0 and band["free_bytes"] > 0
+    assert band["free_bytes"] <= band["total_bytes"]
+    assert band["mount_point"], "the band has no label to draw"
+
+
+def test_the_meter_counts_present_bytes_and_ignores_missing_ones(shelf_env, tmp_path):
+    """`shelf_bytes` answers "how much of this drive is the shelf". A `missing`
+    row names bytes that are not on the drive any more, so counting it would
+    report space the drive itself does not agree is in use."""
+    folder_id, folder_path = _register_folder_with_adapters(
+        shelf_env, tmp_path, "metered", 3
+    )
+    assert (
+        shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan").status_code
+        == 202
+    )
+    assert _await_scan(shelf_env, folder_id)["scan_status"] == "completed"
+
+    band = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
+    on_disk = sum(
+        os.path.getsize(os.path.join(folder_path, name))
+        for name in os.listdir(folder_path)
+    )
+    assert band["shelf_bytes"] >= on_disk, (
+        f"the meter reported {band['shelf_bytes']} bytes for {on_disk} on disk"
+    )
+
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_folder_id = ?",
+            (folder_id,),
+        )
+    after = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
+    assert after["shelf_bytes"] == 0, (
+        f"vanished files still counted toward the meter: {after['shelf_bytes']}"
+    )
+
+
+def test_an_unmeasurable_folder_still_gets_a_band(shelf_env, tmp_path):
+    """An offline drive is the normal case this has to survive: the folder must
+    keep somewhere to sit, and its capacity must read as unknown rather than as
+    zero, which would draw a full meter."""
+    folder_id, folder_path = _register_folder_with_adapters(
+        shelf_env, tmp_path, "goingaway", 1
+    )
+    for name in os.listdir(folder_path):
+        os.unlink(os.path.join(folder_path, name))
+    os.rmdir(folder_path)
+
+    band = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
+    assert band["device_id"] is None
+    assert band["total_bytes"] is None and band["free_bytes"] is None, (
+        "an unmeasurable drive reported a capacity"
+    )
+    assert band["folder_ids"] == [folder_id], (
+        "two folders we cannot stat were merged into one band, which claims a "
+        "sameness nothing measured"
+    )
+    assert band["mount_point"] == folder_path
+
+
+def test_devices_is_owner_only_in_both_directions(shelf_env):
+    path = f"{API}/model-folders/devices"
+    assert shelf_env.owner.get(path).status_code == 200
+
+    token = _mint(shelf_env.owner, "device list probe")
+    client = _bearer(shelf_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the READ token is dead; the refusal below would prove nothing"
+    )
+    assert_real_route(shelf_env.server.api, "GET", path)
+    assert client.get(path).status_code == 403
+
+
+def test_devices_is_not_restricted_to_a_local_caller(shelf_env):
+    """The meter is `owner_only`, not the §16.3 locality tier: a remote owner
+    already reads every registered path from `GET /model-folders`, so blocking
+    this one would cost the drive bands and withhold nothing."""
+    r = shelf_env.owner.get(f"{API}/model-folders/devices", headers=_xff("8.8.8.8"))
+    assert r.status_code == 200, r.text
