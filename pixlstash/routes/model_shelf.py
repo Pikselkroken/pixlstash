@@ -1,4 +1,4 @@
-"""The model shelf's read API: adapters, checkpoints, and what they are attached to.
+"""The model shelf's API: adapters, checkpoints, what uses them, and the five verbs.
 
 Two route blocks, one table. ``/adapters`` and ``/checkpoints`` converge on the
 same ``model`` query filtered by ``file_kind``; the blocks stay separate only
@@ -33,6 +33,20 @@ SELECT: ``member_count`` / ``total_size`` / ``newest_member_at`` for a stack and
 the newest ``file_mtime`` across a model's present copies are joined in, never
 looked up per row.
 
+**The five verbs sit on two routes, not five.** Assign is
+``PUT /adapters/{sha256}/attachments`` and writes the vault. Rename, Set base
+model and Set kind write one curated hub column each and differ in nothing else,
+so they share ``PATCH /models``, which writes only the fields the body actually
+carries. Forget is ``POST /models/forget`` and is the one that destroys
+curation, so it is the one with a confirmation in front of it — and it is gated
+on the row's *state* (no ``present`` and no ``unreachable`` copy), never on how
+many rows were selected. There is **no undo** and no operation-log half for any
+of this: ruled 2026-08-09, reaffirmed 2026-08-10.
+
+All four id-taking verbs address rows by hub ``model.id`` rather than by hash,
+because a 24 GB checkpoint is listable long before it is hashed and would
+otherwise be the one row on the shelf that cannot be corrected.
+
 Authorization is declared, never inline: every route here is ``OWNER_ONLY`` in
 ``pixlstash/authz/registry.py`` and takes the **default** library pin
 (``library_independent`` is left at ``False``, so the pin runs before the policy
@@ -49,16 +63,20 @@ from pydantic import BaseModel, ConfigDict, Field
 from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_shelf_service import (
+    CURATABLE_FIELDS,
     DEFAULT_DIRECTION,
     DEFAULT_SORT,
     ENTITY_TYPES,
+    FILE_KINDS,
     UnknownAttachmentEntityError,
     attached_hashes,
     fetch_attachments,
     fetch_locations,
     fetch_model_by_hash,
     fetch_models,
+    forget_models,
     replace_attachments,
+    update_models,
 )
 from pixlstash.utils.adapter_header import FILE_ADAPTER, FILE_CHECKPOINT, FILE_UNKNOWN
 
@@ -130,6 +148,13 @@ class ModelAttachmentRequest(ModelAttachment):
 # data (one adapter used by a handful of characters or sets) and far below a
 # list long enough to hold the write path.
 MAX_ATTACHMENTS_PER_MODEL = 200
+
+# Ceiling on one verb's selection. A shelf of 1,806 rows can be selected whole,
+# so this is set above the largest real selection rather than below it: the cost
+# is one hub UPDATE or DELETE over an id list, not a lookup per id, and 5,000
+# ids is still a single short transaction. It exists so a malformed client
+# cannot post an unbounded list into the SQL builder, not to ration the verb.
+MAX_MODELS_PER_EDIT = 5000
 
 
 class ModelResponse(BaseModel):
@@ -238,6 +263,121 @@ class AttachmentsResponse(BaseModel):
 
     sha256: str
     attachments: list[ModelAttachment]
+
+
+class ModelEditRequest(BaseModel):
+    """Body of ``PATCH /models``: the verbs that write a curated column.
+
+    Every field is optional and **only the fields actually sent are written**,
+    which is what lets one route carry Rename, Set base model and Set kind
+    without each of them blanking the other two. A field sent explicitly as
+    ``null`` IS written: clearing a wrong base model back to "not set" is a
+    correction the owner is entitled to make.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ids: list[int] = Field(
+        min_length=1,
+        max_length=MAX_MODELS_PER_EDIT,
+        description=(
+            "The models to write, by hub `model.id`. Ids rather than hashes "
+            "because a 24 GB checkpoint is listable before it has been hashed "
+            "and would otherwise be the one row that cannot be corrected. At "
+            f"most {MAX_MODELS_PER_EDIT} per call."
+        ),
+    )
+    display_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "The name to show. **One id only**: a name is a fact about one "
+            "file, and a bulk rename would give every selected row the same "
+            "one. Null clears it, which puts the row back in the `Needs a "
+            "name` queue and lets the shelf show a name derived from the "
+            "filename instead."
+        ),
+    )
+    base_model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Free text, folded for the shelf's sort and filters by "
+            "`known_base_models.fold` rather than constrained here. Null "
+            "clears it. Overwriting this in bulk is one of the shelf's two "
+            "confirmations, because the values it replaces cannot be "
+            "reconstructed."
+        ),
+    )
+    kind: Optional[str] = Field(
+        default=None,
+        description=(
+            "The adapter algorithm (`lora`, `lokr`, `loha`, `dora`, `oft`, …). "
+            "Free text for the same reason `base_model` is: a trainer we have "
+            "not met yet must be recordable rather than rejected."
+        ),
+    )
+    file_kind: Optional[str] = Field(
+        default=None,
+        description=(
+            "What the file IS: `adapter`, `checkpoint` or `unknown`. This is "
+            "the correction `unknown` exists for. Never null, and never "
+            "re-derived away by a later scan."
+        ),
+    )
+
+
+class ModelEditResponse(BaseModel):
+    """Body of ``PATCH /models``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    updated: list[int] = Field(
+        description="The ids that existed and were written, ascending."
+    )
+    fields: list[str] = Field(
+        description="Which curated columns this call wrote, in request order."
+    )
+
+
+class ModelForgetRequest(BaseModel):
+    """Body of ``POST /models/forget``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ids: list[int] = Field(
+        min_length=1,
+        max_length=MAX_MODELS_PER_EDIT,
+        description="The models to forget, by hub `model.id`.",
+    )
+
+
+class ForgetRefusal(BaseModel):
+    """One id the forget declined, and why."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: int
+    reason: str = Field(
+        description=(
+            "`no_such_model` (the id names no row) or `still_has_a_copy` (a "
+            "location is `present` or `unreachable`)."
+        )
+    )
+
+
+class ModelForgetResponse(BaseModel):
+    """Body of ``POST /models/forget``: the receipt the shelf shows."""
+
+    model_config = ConfigDict(extra="allow")
+
+    forgotten: list[int] = Field(description="Ids whose rows are gone, ascending.")
+    refused: list[ForgetRefusal] = Field(
+        description=(
+            "Ids that were left alone, each with a reason. Reported rather "
+            "than raised: a selection is made against a list that may be "
+            "seconds old, and failing the whole call because one file came "
+            "back would be the wrong answer to good news."
+        )
+    )
 
 
 class AdapterListResponse(BaseModel):
@@ -558,6 +698,142 @@ def create_router(server) -> APIRouter:
         return AttachmentsResponse(
             sha256=sha256,
             attachments=[ModelAttachment(**att) for att in stored],
+        )
+
+    @router.patch(
+        "/models",
+        summary="Correct what the shelf records about one or more models",
+        description=(
+            "Three of the shelf's five verbs on one route, because all three "
+            "write a curated column and differ only in which one: **Rename** "
+            "(`display_name`, one id), **Set base model** (`base_model`) and "
+            "**Set kind** (`kind`, `file_kind`). Only the fields present in "
+            "the body are written, so setting a base model across a selection "
+            "cannot blank the names in it.\n\n"
+            "Every column here is upserted with `COALESCE` by the folder "
+            "scanner, so a correction made through this route survives every "
+            "later scan rather than being re-derived away."
+        ),
+        tags=["model_shelf"],
+        response_model=ModelEditResponse,
+    )
+    def edit_models(
+        request: Request,
+        payload: ModelEditRequest = Body(...),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        sent = [
+            field for field in CURATABLE_FIELDS if field in payload.model_fields_set
+        ]
+        if not sent:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Name at least one of {list(CURATABLE_FIELDS)} to write.",
+            )
+        changes = {field: getattr(payload, field) for field in sent}
+
+        if "display_name" in changes and len(payload.ids) > 1:
+            # A name is a fact about one file. Applying one across a selection
+            # would give every row the same name, which is not a rename anyone
+            # asked for and cannot be undone.
+            raise HTTPException(
+                status_code=400,
+                detail="display_name can only be set on one model at a time.",
+            )
+        if (
+            changes.get("file_kind") is not None
+            and changes["file_kind"] not in FILE_KINDS
+        ):
+            raise HTTPException(
+                status_code=400, detail=f"file_kind must be one of {list(FILE_KINDS)}."
+            )
+        if "file_kind" in changes and changes["file_kind"] is None:
+            # Every file is *something*, and `unknown` is how the shelf says so.
+            # A null here would leave a row that no list block matches.
+            raise HTTPException(
+                status_code=400,
+                detail="file_kind cannot be cleared; use 'unknown'.",
+            )
+
+        _refuse_impossible_adapters(payload.ids, changes)
+
+        updated = update_models(server.hub, payload.ids, changes)
+        logger.info(
+            "Shelf edit wrote %s on %d model(s).", ", ".join(sent), len(updated)
+        )
+        return ModelEditResponse(updated=updated, fields=sent)
+
+    def _refuse_impossible_adapters(ids: list[int], changes: dict) -> None:
+        """Refuse a correction the hub's own CHECK constraints would reject.
+
+        ``model`` carries ``CHECK (file_kind <> 'adapter' OR sha256 IS NOT
+        NULL)`` and the same for ``kind``. Promoting an unhashed 24 GB
+        checkpoint to ``adapter`` therefore violates a constraint, and left to
+        SQLite it surfaces as a 500 naming ``CHECK constraint failed``, which
+        tells the owner nothing about the file they picked. Checked here so the
+        answer names the file instead.
+        """
+        if changes.get("file_kind") != FILE_ADAPTER:
+            return
+        placeholders = ", ".join("?" for _ in ids)
+        blocked = [
+            dict(row)
+            for row in server.hub.fetchall(
+                f"SELECT id, filename, sha256, kind FROM model "
+                f"WHERE id IN ({placeholders})",
+                tuple(ids),
+            )
+            if row["sha256"] is None
+            or (row["kind"] is None and changes.get("kind") is None)
+        ]
+        if not blocked:
+            return
+        first = blocked[0]
+        reason = (
+            "has not been hashed yet"
+            if first["sha256"] is None
+            else "has no algorithm recorded, so name one with `kind`"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{len(blocked)} file(s) cannot be marked as an adapter: "
+                f"{first['filename']!r} {reason}."
+            ),
+        )
+
+    @router.post(
+        "/models/forget",
+        summary="Forget models whose files are gone",
+        description=(
+            "The fifth verb, and the only shelf operation that destroys "
+            "curation: the row goes and takes its name, base model, kind and "
+            "trigger words with it. Forgetting a folder only tombstones, which "
+            "is why that needs no prompt and this one does.\n\n"
+            "**Gated on the row's state, never on how many were selected.** A "
+            "model is forgettable only when no copy of it is `present` or "
+            "`unreachable` — the second is the "
+            "we-could-not-look state, and acting on it would let one call wipe "
+            "the curation for a drive that is merely unplugged. Ids that fail "
+            "the gate come back under `refused` with a reason rather than "
+            "failing the call, because a selection is made against a list that "
+            "may be seconds old."
+        ),
+        tags=["model_shelf"],
+        response_model=ModelForgetResponse,
+    )
+    def forget_shelf_models(
+        request: Request,
+        payload: ModelForgetRequest = Body(...),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        forgotten, refused = forget_models(server.hub, payload.ids)
+        logger.info(
+            "Shelf forgot %d model(s); %d refused.", len(forgotten), len(refused)
+        )
+        return ModelForgetResponse(
+            forgotten=forgotten,
+            refused=[ForgetRefusal(**item) for item in refused],
         )
 
     return router

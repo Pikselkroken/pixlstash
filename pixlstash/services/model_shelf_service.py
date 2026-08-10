@@ -40,6 +40,11 @@ from pixlstash.db_models.adapter_attachment import (
 from pixlstash.db_models.character import Character
 from pixlstash.db_models.picture_set import PictureSet
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.adapter_header import (
+    FILE_ADAPTER,
+    FILE_CHECKPOINT,
+    FILE_UNKNOWN,
+)
 
 logger = get_logger(__name__)
 
@@ -396,3 +401,126 @@ def replace_attachments(
         ]
 
     return vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+# The columns a person may edit, and the only ones the verb layer writes. Every
+# one of them is upserted with COALESCE by the scanner, so a correction made
+# here is never re-derived away on the next pass.
+CURATABLE_FIELDS = ("display_name", "base_model", "kind", "file_kind")
+
+# What a file may be corrected to. Closed, and checked before the UPDATE rather
+# than left to the CHECK constraint: a violation would surface as a 500 naming
+# a constraint, which tells the owner nothing about the file they picked.
+FILE_KINDS = (FILE_ADAPTER, FILE_CHECKPOINT, FILE_UNKNOWN)
+
+# A location state that means the bytes are still out there somewhere, so the
+# row is NOT a candidate for Forget. `unreachable` is in here deliberately: it
+# is "we could not look", and forgetting on it would let one click wipe the
+# curation for a drive that is merely unplugged.
+_KEEPS_A_MODEL_ALIVE = ("present", "unreachable")
+
+
+def update_models(hub, ids: list[int], changes: dict) -> list[int]:
+    """Write curated columns onto the given models, in one transaction.
+
+    Only the fields the caller actually sent are written, so setting a base
+    model cannot blank a name that was never mentioned. A field set to ``None``
+    IS written: clearing a wrong base model back to "not set" is a correction
+    the owner is entitled to make, and it puts the row back in the `Needs a
+    name` / unset queues where it belongs.
+
+    Args:
+        hub: The open hub database.
+        ids: ``model.id`` values to write. Ids that name no row are ignored.
+        changes: A subset of :data:`CURATABLE_FIELDS` mapped to their new values.
+
+    Returns:
+        The ids that existed and were written, ascending.
+    """
+    if not ids or not changes:
+        return []
+    unknown = set(changes) - set(CURATABLE_FIELDS)
+    if unknown:
+        raise ValueError(f"not a curatable field: {sorted(unknown)}")
+
+    columns = ", ".join(f"{field} = ?" for field in changes)
+    placeholders = ", ".join("?" for _ in ids)
+    params = tuple(changes.values()) + tuple(ids)
+    with hub.transaction() as conn:
+        existing = [
+            int(row[0])
+            for row in conn.execute(
+                f"SELECT id FROM model WHERE id IN ({placeholders})", tuple(ids)
+            ).fetchall()
+        ]
+        if existing:
+            conn.execute(
+                f"UPDATE model SET {columns} WHERE id IN ({placeholders})", params
+            )
+    return sorted(existing)
+
+
+def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
+    """Drop models whose files are gone, with their location rows.
+
+    This is the one shelf operation that destroys curation: the ``model`` row
+    goes and takes the name, base model, kind and trigger words with it. Folder
+    removal only tombstones, which is why that needs no prompt and this one
+    does.
+
+    **Vault attachments are deliberately left alone.** ``adapter_attachment``
+    lives in each library's vault keyed by the content hash, so there is no way
+    to reach the ones held by libraries that are not open, and deleting only the
+    active library's half would be an arbitrary subset. Left in place they are
+    invisible (every read joins hub to vault) and they re-link by content if the
+    file ever comes back, which is the same property that makes folder removal
+    safe.
+
+    Args:
+        hub: The open hub database.
+        ids: ``model.id`` values the caller wants forgotten.
+
+    Returns:
+        ``(forgotten, refused)``. ``refused`` carries ``{"id", "reason"}`` for
+        each id that names no row, or that still has a copy somewhere.
+    """
+    if not ids:
+        return [], []
+
+    placeholders = ", ".join("?" for _ in ids)
+    known = {
+        int(row["id"])
+        for row in hub.fetchall(
+            f"SELECT id FROM model WHERE id IN ({placeholders})", tuple(ids)
+        )
+    }
+    alive = {
+        int(row["model_id"])
+        for row in hub.fetchall(
+            f"SELECT DISTINCT model_id FROM model_file WHERE model_id IN "
+            f"({placeholders}) AND state IN "
+            f"({', '.join('?' for _ in _KEEPS_A_MODEL_ALIVE)})",
+            tuple(ids) + _KEEPS_A_MODEL_ALIVE,
+        )
+    }
+
+    forgettable, refused = [], []
+    for model_id in ids:
+        if model_id not in known:
+            refused.append({"id": model_id, "reason": "no_such_model"})
+        elif model_id in alive:
+            refused.append({"id": model_id, "reason": "still_has_a_copy"})
+        else:
+            forgettable.append(model_id)
+
+    if forgettable:
+        marks = ", ".join("?" for _ in forgettable)
+        with hub.transaction() as conn:
+            # Child first: `model_file` references `model(id)`, and the delete
+            # order is what keeps this working without turning foreign keys off.
+            conn.execute(
+                f"DELETE FROM model_file WHERE model_id IN ({marks})",
+                tuple(forgettable),
+            )
+            conn.execute(f"DELETE FROM model WHERE id IN ({marks})", tuple(forgettable))
+    return sorted(forgettable), refused

@@ -2409,3 +2409,246 @@ def test_a_relocation_with_a_failed_file_does_not_promote_the_new_folder(
         "the store was promoted despite files that never arrived"
     )
     assert (relocatable_store.store / "one.safetensors").exists()
+
+
+# ===========================================================================
+# The verb layer (F3): PATCH /models and POST /models/forget
+# ===========================================================================
+
+
+def _model_row(shelf_env, model_id: int) -> dict:
+    row = shelf_env.server.hub.fetchone("SELECT * FROM model WHERE id = ?", (model_id,))
+    assert row is not None, f"model {model_id} is gone"
+    return dict(row)
+
+
+def _set_states(shelf_env, model_id: int, state: str) -> None:
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = ? WHERE model_id = ?", (state, model_id)
+        )
+
+
+def test_an_edit_writes_only_the_fields_it_names(shelf_env):
+    """Three verbs share one route, so the field that is NOT sent is the whole
+    contract: setting a base model across a selection must not blank the names
+    in it."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    bob = shelf_env.model_ids["bob.safetensors"]
+    before = {mid: _model_row(shelf_env, mid) for mid in (alice, bob)}
+
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice, bob], "base_model": "FLUX.2"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"updated": sorted([alice, bob]), "fields": ["base_model"]}
+
+    for mid in (alice, bob):
+        after = _model_row(shelf_env, mid)
+        assert after["base_model"] == "FLUX.2"
+        assert after["display_name"] == before[mid]["display_name"], (
+            "an unmentioned column was written"
+        )
+        assert after["kind"] == before[mid]["kind"]
+
+
+def test_an_explicit_null_clears_the_column(shelf_env):
+    """Distinct from "not sent". Clearing a wrong base model back to unset is a
+    correction the owner is entitled to make, and it is what puts the row back
+    in the filter's `not set` bucket."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice], "base_model": None}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["fields"] == ["base_model"]
+    assert _model_row(shelf_env, alice)["base_model"] is None
+
+
+def test_a_rename_is_refused_across_a_selection(shelf_env):
+    """A name is a fact about one file. In bulk it would give every selected row
+    the same name, and there is no undo to walk that back."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    bob = shelf_env.model_ids["bob.safetensors"]
+
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice, bob], "display_name": "Both"}
+    )
+    assert r.status_code == 400
+    assert "one model at a time" in r.text
+    assert _model_row(shelf_env, alice)["display_name"] == "Alice", (
+        "the refusal still wrote"
+    )
+
+    # Positive control: one id is the rename, and it works.
+    ok = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice], "display_name": "Alice Prime"}
+    )
+    assert ok.status_code == 200, ok.text
+    assert _model_row(shelf_env, alice)["display_name"] == "Alice Prime"
+
+
+def test_an_unhashed_checkpoint_cannot_be_called_an_adapter(shelf_env):
+    """The hub's own CHECK would reject it. Left to SQLite that is a 500 naming
+    a constraint, which says nothing about the file the owner picked."""
+    unhashed = shelf_env.model_ids["huge_unhashed.safetensors"]
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [unhashed], "file_kind": "adapter"}
+    )
+    assert r.status_code == 400, r.text
+    assert "huge_unhashed.safetensors" in r.text
+    assert "hashed" in r.text
+    assert _model_row(shelf_env, unhashed)["file_kind"] == "checkpoint"
+
+
+def test_an_unknown_is_corrected_to_an_adapter_when_it_can_be(shelf_env):
+    """The positive direction, and the reason `unknown` is a stored value rather
+    than a guess: it is one UPDATE away from correct, and the correction is
+    never re-derived away by a later scan."""
+    unknown = shelf_env.model_ids["mystery.safetensors"]
+    r = shelf_env.owner.patch(
+        f"{API}/models",
+        json={"ids": [unknown], "file_kind": "adapter", "kind": "lora"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["fields"] == ["kind", "file_kind"]
+    row = _model_row(shelf_env, unknown)
+    assert (row["file_kind"], row["kind"]) == ("adapter", "lora")
+
+    # ...and it now appears in the adapters list, which is the point of it.
+    listed = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    assert unknown in {row["id"] for row in listed}
+
+
+def test_an_edit_naming_no_field_is_refused(shelf_env):
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [shelf_env.model_ids["alice.safetensors"]]}
+    )
+    assert r.status_code == 400
+    assert "at least one" in r.text
+
+
+def test_file_kind_cannot_be_cleared_only_corrected(shelf_env):
+    """Every file is something, and `unknown` is how the shelf says so. A null
+    would leave a row that neither list block matches."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    r = shelf_env.owner.patch(f"{API}/models", json={"ids": [alice], "file_kind": None})
+    assert r.status_code == 400
+    assert "unknown" in r.text
+    assert _model_row(shelf_env, alice)["file_kind"] == "adapter"
+
+
+def test_forget_takes_a_model_whose_every_copy_is_missing(shelf_env):
+    """The verb's whole purpose. It destroys curation, which is why it is one of
+    the two confirmations."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    _set_states(shelf_env, alice, "missing")
+
+    r = shelf_env.owner.post(f"{API}/models/forget", json={"ids": [alice]})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"forgotten": [alice], "refused": []}
+
+    assert (
+        shelf_env.server.hub.fetchone("SELECT id FROM model WHERE id = ?", (alice,))
+        is None
+    )
+    assert (
+        shelf_env.server.hub.fetchone(
+            "SELECT model_id FROM model_file WHERE model_id = ?", (alice,)
+        )
+        is None
+    ), "the location rows outlived the model they point at"
+
+
+def test_forget_refuses_a_model_that_is_still_there(shelf_env):
+    """`present` means the file is on the disk. Forgetting it would destroy the
+    curation and the next scan would rebuild the row blank from the file."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    r = shelf_env.owner.post(f"{API}/models/forget", json={"ids": [alice]})
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "forgotten": [],
+        "refused": [{"id": alice, "reason": "still_has_a_copy"}],
+    }
+    assert _model_row(shelf_env, alice)["display_name"] == "Alice"
+
+
+def test_forget_refuses_a_model_we_could_not_look_for(shelf_env):
+    """The one that matters. `unreachable` is "we could not look" — an unplugged
+    NAS — and treating it as a deletion would wipe the curation for a whole
+    drive on one call."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    _set_states(shelf_env, alice, "unreachable")
+
+    r = shelf_env.owner.post(f"{API}/models/forget", json={"ids": [alice]})
+    assert r.status_code == 200, r.text
+    assert r.json()["forgotten"] == []
+    assert r.json()["refused"] == [{"id": alice, "reason": "still_has_a_copy"}]
+    assert _model_row(shelf_env, alice)["display_name"] == "Alice"
+
+
+def test_a_mixed_selection_forgets_what_it_can_and_reports_the_rest(shelf_env):
+    """Reported, not raised: the selection was made against a list that may be
+    seconds old, and failing the whole call because one file came back is the
+    wrong answer to good news."""
+    gone = shelf_env.model_ids["alice.safetensors"]
+    here = shelf_env.model_ids["bob.safetensors"]
+    _set_states(shelf_env, gone, "missing")
+
+    r = shelf_env.owner.post(
+        f"{API}/models/forget", json={"ids": [gone, here, 999_999]}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["forgotten"] == [gone]
+    assert body["refused"] == [
+        {"id": here, "reason": "still_has_a_copy"},
+        {"id": 999_999, "reason": "no_such_model"},
+    ]
+    assert _model_row(shelf_env, here)["display_name"] == "Bob"
+
+
+def test_forget_leaves_a_models_copies_in_other_folders_alone(shelf_env):
+    """A model with a copy in two folders, one of them gone, is not forgettable:
+    the file is still on the disk under the other folder."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (id, path, kind, movable, created_at) "
+            "VALUES (2, '/models/spare', 'user', 'per_item', '2026-08-09T00:00:00Z')"
+        )
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_id = ?", (alice,)
+        )
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+            "seen_at, file_mtime) VALUES (?, 2, 'alice.safetensors', 'present', "
+            "'2026-08-09T00:00:00Z', 11)",
+            (alice,),
+        )
+
+    r = shelf_env.owner.post(f"{API}/models/forget", json={"ids": [alice]})
+    assert r.status_code == 200, r.text
+    assert r.json()["refused"] == [{"id": alice, "reason": "still_has_a_copy"}]
+
+
+def test_the_verb_routes_are_owner_only_in_both_directions(shelf_env):
+    alice = shelf_env.model_ids["alice.safetensors"]
+    calls = (
+        ("PATCH", f"{API}/models", {"json": {"ids": [alice], "base_model": "SDXL"}}),
+        ("POST", f"{API}/models/forget", {"json": {"ids": [alice]}}),
+    )
+
+    token = _mint(shelf_env.owner, "verb probe")
+    client = _bearer(shelf_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the READ token is dead; the refusals below would prove nothing"
+    )
+
+    for method, path, kwargs in calls:
+        assert_real_route(shelf_env.server.api, method, path)
+        assert client.request(method, path, **kwargs).status_code == 403, (
+            f"{method} {path} served a scoped READ token"
+        )
+        # Positive control: the owner is not blocked on the same call.
+        assert shelf_env.owner.request(method, path, **kwargs).status_code == 200
