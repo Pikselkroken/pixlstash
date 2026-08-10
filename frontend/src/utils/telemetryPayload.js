@@ -90,8 +90,10 @@ export function buildPayloadForChoice(variant, context) {
  * Plain-language meaning of every varying value in a payload.
  *
  * Rendered under the preview. `pip` covers the Windows server installer too,
- * because only the Electron shell sets PIXLSTASH_INSTALL_TYPE and everything
- * else falls through to the pip default.
+ * because nothing in an ordinary install declares PIXLSTASH_INSTALL_TYPE and
+ * everything undeclared falls through to the pip default. The legend names only
+ * the buckets a user can actually be in: `dev` is a declaration our own machines
+ * make, and listing it here would explain a value no user will ever see.
  *
  * @param {string} variant
  * @param {{version: string, installType: string}} context

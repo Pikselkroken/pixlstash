@@ -973,10 +973,13 @@ def test_read_version(server):
     assert data["message"] == "PixlStash REST API"
     assert data["version"] == expected_version
     assert "install_type" in data
-    # The install_type contract is exactly this set of values; the frontend
+    # The install_type contract is exactly Server.INSTALL_TYPES; the frontend
     # guards anything else to "other", but the backend must never emit a value
-    # outside the set in the first place.
-    assert data["install_type"] in {"docker", "pip", "electron", "other"}
+    # outside the set in the first place. Asserted against the constant rather
+    # than a copy of it: a literal here passed on CI (which sets no install-type
+    # env var) and failed only on a developer's machine, which is the one that
+    # exports PIXLSTASH_INSTALL_TYPE=dev.
+    assert data["install_type"] in set(Server.INSTALL_TYPES)
 
 
 def test_read_version_install_type_docker(server, monkeypatch):

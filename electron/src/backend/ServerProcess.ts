@@ -29,6 +29,16 @@ export function devInterpreter(): string {
   return process.platform === 'win32' ? win : unix;
 }
 
+/** True if *port* can be bound on loopback right now. */
+function portIsFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const srv = createServer();
+    srv.unref();
+    srv.on('error', () => resolve(false));
+    srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)));
+  });
+}
+
 async function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = createServer();
@@ -40,6 +50,41 @@ async function findFreePort(): Promise<number> {
       srv.close(() => resolve(port));
     });
   });
+}
+
+/**
+ * Loopback port for this install, stable across launches.
+ *
+ * A fresh ephemeral port every launch changed the window's origin every launch,
+ * and localStorage is keyed by origin: every `localStorage` value the SPA owns —
+ * the 24h version-check throttle, dismissed-update state, one-time notices — was
+ * silently discarded on restart. The version check therefore fired on every
+ * single app start, which inflated the desktop cohort against Docker installs
+ * that genuinely report once a day.
+ *
+ * Derived from the server-config path (which lives under userData) rather than
+ * remembered in a file: no state to write, read back, corrupt or clean up, and
+ * two installs on one machine get different ports because their userData
+ * differs. Falls back to an ephemeral port when the derived one is taken (a
+ * second instance, or an unrelated process), so stability is best-effort and
+ * never blocks startup. Same derivation as the e2e port in
+ * frontend/playwright.config.js, for the same reason: two copies must not collide.
+ *
+ * 61000-64999 sits above the well-known and registered ports and clear of the
+ * 32768-60999 ephemeral range Linux allocates from, so a transient outbound
+ * socket is unlikely to be holding it. Windows' dynamic range does overlap; the
+ * fallback covers that.
+ *
+ * This makes the port predictable, which is not a property anything relied on:
+ * the backend's boundary is the one-time desktop session token, and a local
+ * process could always have swept all 65535 loopback ports in under a second.
+ */
+async function stableLoopbackPort(): Promise<number> {
+  const seed = serverConfigPath();
+  const hash = [...seed].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 4000, 7);
+  const derived = 61000 + hash;
+  if (await portIsFree(derived)) return derived;
+  return findFreePort();
 }
 
 function pollHealth(url: string, timeoutMs: number): Promise<void> {
@@ -169,7 +214,7 @@ function waitForExit(child: ChildProcess, timeoutMs: number): Promise<void> {
 }
 
 /**
- * Owns the lifecycle of one PixlStash backend process: spawn it on a free
+ * Owns the lifecycle of one PixlStash backend process: spawn it on a stable
  * loopback port with a one-time desktop session token, wait until /version is
  * healthy, stream its logs to a file, and tear the whole process tree down on
  * stop/quit.
@@ -203,7 +248,7 @@ export class ServerProcess {
       throw new Error(`Backend interpreter not found: ${python}`);
     }
 
-    const port = await findFreePort();
+    const port = await stableLoopbackPort();
     const sessionToken = randomBytes(32).toString('hex');
     const url = `http://127.0.0.1:${port}`;
 
@@ -220,7 +265,18 @@ export class ServerProcess {
       PYTHONPATH: pythonPath,
       PIXLSTASH_HOST: '127.0.0.1',
       PIXLSTASH_PORT: String(port),
+      // Stays 'electron' even on a developer's machine: the backend reads this
+      // exact value as a runtime switch, not just a telemetry label — it gates
+      // cookie_secure, the loopback listener and the external-listener startup
+      // check. Declaring 'dev' here would stop the window being able to reach or
+      // authenticate against its own backend.
       PIXLSTASH_INSTALL_TYPE: 'electron',
+      // So the machine is labelled separately from the channel. A desktop build
+      // running the repo's backend is by construction one of ours, and without
+      // this it reported as a real Electron install: the shell's env wins over
+      // the developer's own PIXLSTASH_INSTALL_TYPE, so a dev launch could never
+      // declare itself. See Server.DEV_MACHINE_ENV_VAR.
+      ...(isDevBackend() ? { PIXLSTASH_TELEMETRY_DEV: '1' } : {}),
       PIXLSTASH_DESKTOP_SESSION: sessionToken,
       // Force the inference device to match this runtime (the bundled env is
       // CPU-only); overrides default_device in the shared on-disk config.

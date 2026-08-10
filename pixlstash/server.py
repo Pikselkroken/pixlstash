@@ -275,11 +275,33 @@ class Server(
             )
         return False
 
-    # install_type telemetry: exactly these three values may ever be reported.
+    # install_type telemetry: exactly these values may ever be reported.
     # "docker" is the reliable signal, "pip" the default, "other" the explicit
     # opt-out used by installers (e.g. the Windows Inno Setup wheel build) that
     # otherwise look like a plain pip install.
-    INSTALL_TYPES = ("docker", "pip", "electron", "other")
+    #
+    # "dev" is a declaration, not a detection: a machine that sets it is ours,
+    # and the metrics collector subtracts that bucket from the active-install
+    # figure whatever version it happens to be running. Without it a development
+    # checkout was only excluded by *inferring* from its unpublished version,
+    # which silently stopped working the day pre-releases started counting as
+    # real users. Every consumer of this value has to know the bucket, so the
+    # list is mirrored in three other places -- see
+    # tests/test_install_type_buckets.py, which fails if they drift.
+    INSTALL_TYPES = ("docker", "pip", "electron", "other", "dev")
+
+    #: Marks the host as a development machine, whatever channel it runs.
+    #:
+    #: Needed because ``PIXLSTASH_INSTALL_TYPE`` is not only a telemetry label:
+    #: the exact value ``electron`` is a runtime switch, gating ``cookie_secure``,
+    #: the loopback listener in :meth:`run` and the external-listener startup
+    #: check. The desktop shell therefore has to keep declaring ``electron`` even
+    #: when a developer's environment says ``dev``, and it sets this instead so
+    #: the machine can still be labelled ours without changing how it runs.
+    #:
+    #: Set to 1 by the shell for a dev backend (``PIXLSTASH_DESKTOP_DEV``); a
+    #: developer running a *bundled* desktop build can export it by hand.
+    DEV_MACHINE_ENV_VAR = "PIXLSTASH_TELEMETRY_DEV"
 
     @staticmethod
     def detect_install_type() -> str:
@@ -287,6 +309,9 @@ class Server(
 
         Resolution order:
 
+        0. :data:`DEV_MACHINE_ENV_VAR` — declares the *machine* rather than the
+           channel, so it outranks everything below it. Reported as ``dev``,
+           which the metrics collector subtracts from active installs.
         1. ``PIXLSTASH_INSTALL_TYPE`` override — if set to one of the allowed
            values it wins outright, letting an installer declare its channel
            (e.g. ``other`` for the Windows build) without a code change. An
@@ -297,6 +322,15 @@ class Server(
 
         The return value is guaranteed to be a member of ``INSTALL_TYPES``.
         """
+        dev_marker = os.environ.get(Server.DEV_MACHINE_ENV_VAR, "").strip().lower()
+        if dev_marker in {"1", "true", "yes", "on"}:
+            logger.info(
+                "%s=%r declares a development machine; reporting install_type='dev'.",
+                Server.DEV_MACHINE_ENV_VAR,
+                dev_marker,
+            )
+            return "dev"
+
         override = os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower()
         if override:
             if override in Server.INSTALL_TYPES:

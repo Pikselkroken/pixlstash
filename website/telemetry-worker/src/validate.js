@@ -11,8 +11,15 @@
 /** Maximum accepted request body, in bytes. A valid ping is under 150. */
 export const MAX_BODY_BYTES = 512;
 
-/** The only install types we record. Four coarse buckets, no free text. */
-export const INSTALL_TYPES = Object.freeze(["docker", "pip", "electron", "other"]);
+/**
+ * The only install types we record. Coarse buckets, no free text.
+ *
+ * `dev` is a machine declaring itself as one of ours (PIXLSTASH_INSTALL_TYPE=dev);
+ * it is accepted so the ping is not rejected, and excluded downstream rather
+ * than here. Keep in step with `Server.INSTALL_TYPES` — tests/test_install_type_buckets.py
+ * fails if they drift.
+ */
+export const INSTALL_TYPES = Object.freeze(["docker", "pip", "electron", "other", "dev"]);
 
 /** The exact key set. Not a minimum: extra keys are a rejection, not noise. */
 const REQUIRED_KEYS = Object.freeze(["install_id", "is_new_install", "install_type"]);
