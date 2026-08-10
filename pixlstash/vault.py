@@ -1414,6 +1414,31 @@ class Vault:
                     total = 0
                     missing = 0
                     worker_active_override = False
+            elif worker_type == TaskType.MODEL_FOLDER_SCAN:
+                # User-triggered (no finder): live counters straight off the
+                # running task(s), the PICTURE_IMPORT / DETECTION shape. Counted
+                # in model files, not pictures — the shelf lives in the hub and
+                # the generic library total would be meaningless here.
+                label = "model_folder_scan"
+                active_scan_tasks = (
+                    self._task_runner.get_active_tasks_of_type("ModelFolderScanTask")
+                    if self._task_runner is not None
+                    else []
+                )
+                if active_scan_tasks:
+                    total = sum(
+                        int(getattr(t, "_total_count", 0)) for t in active_scan_tasks
+                    )
+                    processed = sum(
+                        int(getattr(t, "_processed_count", 0))
+                        for t in active_scan_tasks
+                    )
+                    missing = max(0, total - processed)
+                    worker_active_override = True
+                else:
+                    total = 0
+                    missing = 0
+                    worker_active_override = False
             elif worker_type == TaskType.COMFYUI_EXTRACTION:
                 missing = int(
                     self.db.run_immediate_read_task(

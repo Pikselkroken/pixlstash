@@ -27,6 +27,14 @@ describe locations PixlStash registers for itself (tagger artifacts, the
 InsightFace root, the HuggingFace cache), and a hand-made row of either kind would
 collide with that registration.
 
+**A rescan is a task, not a thread.** ``POST .../rescan`` submits a
+:class:`~pixlstash.tasks.model_folder_scan_task.ModelFolderScanTask` to the
+shared ``TaskRunner`` and answers 202 with its ``task_id``. That is what gives
+the walk per-file progress (``GET /workers/progress`` →
+``workers.ModelFolderScanTask``) and a real terminal state (the folder's
+``scan_status``), neither of which the daemon thread it replaced could offer —
+and it is why the scan no longer outlives the process that started it (#856).
+
 Authorization: the read is ``OWNER_ONLY``; every mutator and the rescan are
 ``LOCAL_OWNER_ONLY`` with a §16.3 justification, because they take — or walk — a
 caller-supplied host path. That is the same tier and the same reason as the
@@ -46,7 +54,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.managed_model_store import MANAGED_KIND
-from pixlstash.services.model_folder_scanner import ModelFolderScanner
+from pixlstash.tasks.base_task import TaskStatus
+from pixlstash.tasks.model_folder_scan_task import ModelFolderScanTask
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
 from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.reference_folder_validator import (
@@ -69,11 +78,35 @@ _DERIVED_BY_KIND = {
     "source": ("external", "ai-toolkit"),
 }
 
-# Folder ids with a scan in flight. The scanner is correct under concurrent runs
-# (its missing sweep is ``seen_at <`` the run's own stamp, not ``!=``), so this
-# is not a correctness lock — it stops a double-click from reading 438 GB twice.
-_scanning: set[int] = set()
-_scanning_lock = threading.Lock()
+# The most recent scan submitted for each folder, whatever state it ended in.
+# One entry per registered folder, dropped when the folder is forgotten, so it
+# cannot grow.
+#
+# It serves two purposes. It is the "already running" gate: the scanner is
+# correct under concurrent runs (its missing sweep is ``seen_at <`` the run's own
+# stamp, not ``!=``), so this is not a correctness lock — it stops a double-click
+# from reading 438 GB twice. And it is where a *finished* scan's outcome lives,
+# because ``TaskRunner`` forgets a task the moment it completes; a caller that
+# had only ``last_checked`` to look at could not tell a crash from a slow read.
+#
+# In memory on purpose: after a restart nothing is scanning and nothing is
+# pending, so there is no state worth persisting.
+_scans: dict[int, ModelFolderScanTask] = {}
+_scans_lock = threading.Lock()
+
+# The two states that mean "this folder is spoken for". PENDING covers the
+# window between submission and a worker picking the task up, which the old bare
+# thread had no equivalent of — it started running the moment it was created.
+_SCAN_IN_FLIGHT = (TaskStatus.PENDING, TaskStatus.RUNNING)
+
+
+def _scan_state(folder_id: int) -> tuple[Optional[str], Optional[str]]:
+    """Return ``(scan_status, scan_error)`` for a folder's most recent scan."""
+    with _scans_lock:
+        task = _scans.get(folder_id)
+    if task is None:
+        return None, None
+    return task.status.value, task.error
 
 
 class ModelFolderCreateRequest(BaseModel):
@@ -142,6 +175,22 @@ class ModelFolderResponse(BaseModel):
             "grouped query for the whole list, never one per folder."
         ),
     )
+    scan_status: Optional[str] = Field(
+        default=None,
+        description=(
+            "State of the most recent scan submitted for this folder since the "
+            "server started: `pending`, `running`, `completed`, `failed` or "
+            "`cancelled`. Null when this server has not been asked to scan the "
+            "folder yet — which is not the same as never having scanned it, so "
+            "read `last_checked` for that. Poll this rather than watching "
+            "`last_checked` advance: a scan that threw never stamps "
+            "`last_checked`, so a timestamp cannot tell a crash from a slow read."
+        ),
+    )
+    scan_error: Optional[str] = Field(
+        default=None,
+        description="Why the most recent scan failed. Null unless `scan_status` is `failed`.",
+    )
 
 
 class ModelFolderListResponse(BaseModel):
@@ -177,6 +226,16 @@ class ModelFolderRescanResponse(BaseModel):
         description="`started`, `already_running`, or `skipped` for a source folder."
     )
     id: int
+    task_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The task now queued on the task runner, or the one already running "
+            "when `status` is `already_running`. Null for a skipped `source` "
+            "folder. Its live progress is in `GET /workers/progress` under "
+            "`workers.ModelFolderScanTask`; its outcome is the folder's "
+            "`scan_status`."
+        ),
+    )
 
 
 def _normalize_optional_host_path(value: Optional[str]) -> Optional[str]:
@@ -259,6 +318,7 @@ def create_router(server) -> APIRouter:
 
     def _to_response(row: dict, file_count: int = 0) -> ModelFolderResponse:
         delete_after_import = row["delete_after_import"]
+        scan_status, scan_error = _scan_state(int(row["id"]))
         return ModelFolderResponse(
             id=int(row["id"]),
             path=row["path"],
@@ -272,6 +332,8 @@ def create_router(server) -> APIRouter:
             last_checked=row["last_checked"],
             created_at=row["created_at"],
             file_count=file_count,
+            scan_status=scan_status,
+            scan_error=scan_error,
         )
 
     @router.get(
@@ -303,7 +365,7 @@ def create_router(server) -> APIRouter:
         description=(
             "Adds a folder for the shelf to catalogue (`kind=user`) or to take "
             "ai-toolkit runs from (`kind=source`). Registering does not scan; "
-            "call the rescan route, which reports progress to the server log."
+            "call the rescan route, which queues the walk as a background task."
         ),
         tags=["model_shelf"],
         response_model=ModelFolderResponse,
@@ -450,6 +512,10 @@ def create_router(server) -> APIRouter:
             )
             tombstoned = int(cursor.rowcount or 0)
             conn.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
+        # Drop the remembered scan with the folder. SQLite reuses rowids, so a
+        # folder registered later could otherwise inherit this one's outcome.
+        with _scans_lock:
+            _scans.pop(folder_id, None)
         logger.info(
             "Model folder %s (id=%s) forgotten; %d location row(s) tombstoned, "
             "model rows and their curation kept.",
@@ -466,8 +532,11 @@ def create_router(server) -> APIRouter:
         summary="Rescan a registered model folder",
         description=(
             "Walks the folder and reconciles the shelf with what is on disk. "
-            "Returns immediately; progress goes to the server log, because a "
-            "folder of 1,800 adapters is minutes of reading. A `source` folder "
+            "Returns immediately with the id of the task now queued on the task "
+            "runner, because a folder of 1,800 adapters is minutes of reading. "
+            "Watch it two ways: live file progress in `GET /workers/progress` "
+            "under `workers.ModelFolderScanTask`, and the outcome in this "
+            "folder's `scan_status` from `GET /model-folders`. A `source` folder "
             "is skipped: it is taken from, never catalogued in place."
         ),
         status_code=202,
@@ -480,32 +549,47 @@ def create_router(server) -> APIRouter:
         if folder["kind"] == "source":
             return ModelFolderRescanResponse(status="skipped", id=folder_id)
 
-        with _scanning_lock:
-            if folder_id in _scanning:
-                return ModelFolderRescanResponse(status="already_running", id=folder_id)
-            _scanning.add(folder_id)
-
-        def _run():
-            try:
-                ModelFolderScanner(server.hub).scan_folder(
-                    folder_id, folder["path"], folder["kind"]
+        with _scans_lock:
+            running = _scans.get(folder_id)
+            if running is not None and running.status in _SCAN_IN_FLIGHT:
+                return ModelFolderRescanResponse(
+                    status="already_running", id=folder_id, task_id=running.id
                 )
-            except Exception as exc:
-                logger.error(
-                    "Rescan of model folder %s (id=%s, kind=%s) failed: %s",
-                    folder["path"],
-                    folder_id,
-                    folder["kind"],
-                    exc,
-                    exc_info=True,
-                )
-            finally:
-                with _scanning_lock:
-                    _scanning.discard(folder_id)
+            task = ModelFolderScanTask(
+                server.hub, folder_id, folder["path"], folder["kind"]
+            )
+            # Claimed before submission, so the gate covers the queued window
+            # too. A submission that fails releases it below.
+            _scans[folder_id] = task
 
-        threading.Thread(
-            target=_run, daemon=True, name=f"model-folder-rescan-{folder_id}"
-        ).start()
-        return ModelFolderRescanResponse(status="started", id=folder_id)
+        try:
+            task_id = server.vault.submit_task(task)
+        except RuntimeError as exc:
+            logger.error(
+                "Could not queue a rescan of model folder %s (id=%s): the task "
+                "runner refused the submission: %s",
+                folder["path"],
+                folder_id,
+                exc,
+            )
+            task_id = None
+        if task_id is None:
+            with _scans_lock:
+                if _scans.get(folder_id) is task:
+                    del _scans[folder_id]
+            raise HTTPException(
+                status_code=503,
+                detail="The task runner is not available, so the scan cannot be queued.",
+            )
+        logger.info(
+            "Rescan of model folder %s (id=%s, kind=%s) queued as task %s.",
+            folder["path"],
+            folder_id,
+            folder["kind"],
+            task_id,
+        )
+        return ModelFolderRescanResponse(
+            status="started", id=folder_id, task_id=task_id
+        )
 
     return router

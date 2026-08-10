@@ -35,6 +35,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -45,10 +46,13 @@ from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models.adapter_attachment import AdapterAttachment
+from pixlstash.routes import model_folders as model_folders_routes
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.server import Server
+from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.services.model_mover import SHELF_IO_LOCK
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
+from tests.test_model_folder_scanner import write_adapter
 
 API = "/api/v1"
 
@@ -301,6 +305,11 @@ def fresh_shelf(shelf_env):
     server = shelf_env.server
     shelf_env.model_ids = _seed_hub(server)
     _clear_attachments(server)
+    # The seed deletes model_folder rows behind the API's back, so the rowids it
+    # frees can come back attached to a different folder. Drop the remembered
+    # scans with them, as DELETE /model-folders does on the real path.
+    with model_folders_routes._scans_lock:
+        model_folders_routes._scans.clear()
     # The owner session is what every positive control runs on; prove it is live
     # before any refusal is measured against it.
     r = shelf_env.owner.get(f"{API}/adapters")
@@ -812,10 +821,18 @@ def test_forgetting_a_folder_tombstones_and_keeps_every_model(shelf_env):
 def test_rescan_of_a_missing_folder_reports_started_and_does_not_raise(shelf_env):
     """The seeded folder does not exist on disk, so the scan marks it
     unreachable. The route still answers 202 immediately: it must never block on
-    reading a folder of 1,800 adapters."""
+    reading a folder of 1,800 adapters. It answers with the id of the task now
+    queued, which is what a client watches instead of guessing from
+    ``last_checked``."""
     r = shelf_env.owner.post(f"{API}/model-folders/1/rescan")
     assert r.status_code == 202, r.text
-    assert r.json() == {"status": "started", "id": 1}
+    body = r.json()
+    assert (body["status"], body["id"]) == ("started", 1)
+    assert body["task_id"], body
+    assert _await_scan(shelf_env, 1)["scan_status"] == "completed", (
+        "an unreadable folder is a scan that succeeded and recorded "
+        "'unreachable', not a scan that failed"
+    )
 
 
 def test_rescan_skips_a_source_folder(shelf_env, tmp_path):
@@ -956,6 +973,150 @@ def test_share_tokens_never_reach_a_folder_mutator(shelf_env):
         assert_real_route(shelf_env.server.api, method, path)
         r = client.request(method, path, **kwargs)
         assert r.status_code == 403, f"{method} {path}: {r.status_code} {r.text}"
+
+
+# ===========================================================================
+# A rescan is a task, not a thread
+# ===========================================================================
+
+_TERMINAL_SCAN_STATES = ("completed", "failed", "cancelled")
+
+
+def _register_folder_with_adapters(shelf_env, tmp_path, name, count) -> tuple[int, str]:
+    """Register a folder holding *count* real adapters. Returns ``(id, path)``."""
+    folder = tmp_path / name
+    folder.mkdir()
+    for index in range(count):
+        write_adapter(folder / f"a{index}.safetensors")
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": str(folder)})
+    assert r.status_code == 200, r.text
+    return r.json()["id"], str(folder)
+
+
+def _await_scan(shelf_env, folder_id, timeout=30.0) -> dict:
+    """Poll the folder list until this folder's scan reaches a terminal state."""
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        for row in shelf_env.owner.get(f"{API}/model-folders").json()["folders"]:
+            if row["id"] != folder_id:
+                continue
+            last = row
+            if row["scan_status"] in _TERMINAL_SCAN_STATES:
+                return row
+        time.sleep(0.02)
+    raise AssertionError(f"the scan never settled; last seen: {last}")
+
+
+def test_a_rescan_is_a_task_with_progress_a_denominator_and_one_scan_per_folder(
+    shelf_env, tmp_path, monkeypatch
+):
+    """The three things the bare daemon thread could not give.
+
+    It ran unobserved: a 57 GB folder is minutes of hashing with nothing to
+    show, a crash looked exactly like a slow read, and the thread was alive at
+    interpreter shutdown — the shape #856's teardown gate exists to catch. As a
+    ``TaskRunner`` task the scan reports file progress on the same
+    ``/workers/progress`` lane every other task uses, and the runner owns its
+    lifecycle.
+
+    The scan is held inside ``_describe`` so the in-flight assertions are made
+    against a genuinely running task rather than a race.
+    """
+    folder_id, _ = _register_folder_with_adapters(shelf_env, tmp_path, "held", 3)
+
+    started = threading.Event()
+    release = threading.Event()
+    ran_on = []
+    original = ModelFolderScanner._describe
+
+    def blocking(self, abs_path, relpath, known, result):
+        ran_on.append(threading.current_thread().name)
+        started.set()
+        assert release.wait(30), "the held scan was never released"
+        return original(self, abs_path, relpath, known, result)
+
+    monkeypatch.setattr(ModelFolderScanner, "_describe", blocking)
+
+    r = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
+    assert r.status_code == 202, r.text
+    task_id = r.json()["task_id"]
+    assert task_id, r.text
+    assert started.wait(30), "the submitted task never reached the scanner"
+
+    # The task runner owns it. Not a thread this route spawned and forgot.
+    assert ran_on[0].startswith("vault-task-runner"), ran_on
+
+    lane = shelf_env.owner.get(f"{API}/workers/progress").json()["workers"][
+        "ModelFolderScanTask"
+    ]
+    assert lane["running"] is True, lane
+    # The denominator is known before the first (potentially multi-GB) hash,
+    # which is the whole point of materialising the walk.
+    assert (lane["total"], lane["current"]) == (3, 0), lane
+
+    # One scan per folder: the second press is refused and told which task is
+    # already doing the work, rather than reading the same bytes again.
+    again = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
+    assert again.status_code == 202, again.text
+    assert again.json() == {
+        "status": "already_running",
+        "id": folder_id,
+        "task_id": task_id,
+    }
+
+    release.set()
+    row = _await_scan(shelf_env, folder_id)
+    assert row["scan_status"] == "completed", row
+    assert row["scan_error"] is None, row
+    assert row["file_count"] == 3, row
+    assert row["last_checked"] is not None, row
+
+    # Terminal, so the lane goes quiet again — over-reporting a finished scan as
+    # running is its own regression.
+    lane = shelf_env.owner.get(f"{API}/workers/progress").json()["workers"][
+        "ModelFolderScanTask"
+    ]
+    assert lane["running"] is False, lane
+
+
+def test_a_crashed_rescan_reports_failed_rather_than_looking_slow(
+    shelf_env, tmp_path, monkeypatch
+):
+    """The scanner logs its exception and returns without stamping
+    ``last_checked``, so a timestamp cannot tell a crash from a slow read — which
+    is why the UI had to guess with a ten-minute ceiling. The task's status can.
+    """
+    folder_id, _ = _register_folder_with_adapters(shelf_env, tmp_path, "doomed", 2)
+
+    def die(self, *args, **kwargs):
+        raise RuntimeError("the drive went away mid-scan")
+
+    monkeypatch.setattr(ModelFolderScanner, "scan_folder", die)
+
+    r = shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan")
+    assert r.status_code == 202, r.text
+
+    row = _await_scan(shelf_env, folder_id)
+    assert row["scan_status"] == "failed", row
+    assert "the drive went away mid-scan" in (row["scan_error"] or ""), row
+    # The evidence that the timestamp alone was never enough.
+    assert row["last_checked"] is None, row
+
+
+def test_forgetting_a_folder_forgets_the_scan_recorded_against_it(shelf_env, tmp_path):
+    """SQLite reuses rowids, so a remembered scan outliving its folder would let
+    a folder registered later inherit a previous one's outcome."""
+    folder_id, _ = _register_folder_with_adapters(shelf_env, tmp_path, "shortlived", 1)
+    assert (
+        shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan").status_code
+        == 202
+    )
+    assert _await_scan(shelf_env, folder_id)["scan_status"] == "completed"
+
+    r = shelf_env.owner.delete(f"{API}/model-folders/{folder_id}")
+    assert r.status_code == 200, r.text
+    assert folder_id not in model_folders_routes._scans
 
 
 # ===========================================================================
@@ -1424,8 +1585,6 @@ def move_folders(shelf_env, tmp_path):
 
 def _await_move(shelf_env, timeout=10.0):
     """Poll the status route until the job stops running."""
-    import time
-
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         body = shelf_env.owner.get(f"{API}/model-moves").json()
