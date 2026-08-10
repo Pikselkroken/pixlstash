@@ -1483,12 +1483,15 @@ namespaced per axis, so a base model that appears after the preference was
 written still opens, and collapsing `Not set` under `Base model` does not
 collapse a folder of the same name.
 
-**Capacity meters are not built, deliberately.** Nothing exposes per-drive free
-and total bytes: `shutil.disk_usage` exists only inside `model_mover.py`'s
-pre-move check, with no route. A meter computed from the sizes the shelf happens
-to know would measure "what the shelf has catalogued" while looking like "what
-is on the disk", which is worse than no meter. See §9.1a's note below on what an
-endpoint would have to return.
+**Capacity meters are built, and they read the disk rather than the catalogue.**
+This paragraph previously recorded the opposite, on the grounds that nothing
+exposed per-drive free and total bytes and that a meter computed from the sizes
+the shelf happens to know would measure "what the shelf has catalogued" while
+looking like "what is on the disk". That reasoning still holds and is exactly
+why `GET /model-folders/devices` exists: `total_bytes` and `free_bytes` come
+from `shutil.disk_usage` on the drive, and `shelf_bytes` is reported as a
+*separate* fill inside the same track rather than as the meter itself. The two
+numbers answer different questions and the band shows both.
 
 The `.bar-*` control family lives **unscoped in `App.css`**, not in
 `Toolbar.vue`. `<style scoped>` compiles `.bar-btn` to `.bar-btn[data-v-hash]`,
