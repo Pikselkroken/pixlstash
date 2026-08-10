@@ -168,8 +168,14 @@ jobs:
     # requirement. Absent on fork PRs by design; the prefetch then runs
     # anonymously, which one sequential job is far more likely to survive than
     # eight parallel ones were.
+    # Only a `push` can save this cache (see the save step), so only a `push`
+    # runs the prefetch — and a run that never fetches has no use for the
+    # token. Scoping it this way keeps the secret out of the environment on
+    # pull-request runs, which are the ones that execute the PR's own tree via
+    # `pip install .`. The shards below still carry it unconditionally: they
+    # reach HuggingFace during the tests themselves.
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_TOKEN: ${{ github.event_name == 'push' && secrets.HF_TOKEN || '' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -178,15 +184,30 @@ jobs:
 
       # Only needed to run the prefetch, so it is skipped whenever the cache is
       # already complete — which is every run that does not change the model set.
-      - if: steps.models.outputs.hit != 'true'
+      - if: steps.models.outputs.hit != 'true' && github.event_name == 'push'
         uses: ./.github/actions/setup-backend
 
       - name: Download every model the gate loads
-        if: steps.models.outputs.hit != 'true'
+        if: steps.models.outputs.hit != 'true' && github.event_name == 'push'
         run: python scripts/prefetch_ci_models.py
 
+      # Saved only from a BRANCH run, never from a pull request.
+      #
+      # A cache written by a `pull_request` run lands in refs/pull/N/merge and
+      # is deleted with the PR, so it can never warm anything but itself — while
+      # still counting against the repo's 10 GB budget for as long as the PR is
+      # open. Four open PRs were holding three 1.7 GB Windows entries and a
+      # duplicate 1.7 GB Linux one, with the repo at ~9 GB of 10, which is how a
+      # branch-scoped entry gets LRU-evicted and the whole scheme quietly stops
+      # working.
+      #
+      # A PR that changes the model set is therefore not fully cold: the
+      # `restore-keys` prefix restores the previous set and only the delta is
+      # fetched, which is what that fallback is for.
       - name: Save the model cache
-        if: success() && steps.models.outputs.hit != 'true'
+        if: >-
+          success() && steps.models.outputs.hit != 'true'
+          && github.event_name == 'push'
         uses: ./.github/actions/model-cache
         with:
           mode: save
@@ -321,6 +342,68 @@ jobs:
   # flake to debug. Sharding across jobs buys the same wall clock with one
   # single-threaded pytest per runner and no new native-teardown concurrency.
   # Revisit `-n 2` only with a green measured run behind it.
+  # ---------------------------------------------------------------------------
+  # The Windows half of the same scheme, as a SEPARATE job rather than a matrix
+  # leg of `warm_models`: `backend` does `needs: warm_models`, and `needs:` on a
+  # matrix job waits for every leg, so a matrix would put a Windows runner on
+  # the Linux gate's critical path for nothing.
+  #
+  # Nothing was writing a Windows entry to a branch scope before this. The four
+  # `backend_windows` shards each carried an inline read/write `actions/cache`,
+  # which on a `pull_request` run writes into refs/pull/N/merge — a scope that
+  # dies with the PR. Every PR therefore paid four cold ~1.7 GB downloads that
+  # hit HuggingFace in parallel and 429'd, which is exactly the stampede
+  # `warm_models` above exists to prevent, one platform later. Measured on run
+  # 31418525447: `likeness pipeline did not settle in time` behind five retries
+  # of `HTTP Error 429` per file.
+  # ---------------------------------------------------------------------------
+  warm_models_windows:
+    name: warm model cache (Windows)
+    runs-on: windows-latest
+    # Only a `push` can save this cache (see the save step), so only a `push`
+    # runs the prefetch — and a run that never fetches has no use for the
+    # token. Scoping it this way keeps the secret out of the environment on
+    # pull-request runs, which are the ones that execute the PR's own tree via
+    # `pip install .`. The shards below still carry it unconditionally: they
+    # reach HuggingFace during the tests themselves.
+    env:
+      HF_TOKEN: ${{ github.event_name == 'push' && secrets.HF_TOKEN || '' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: models
+        uses: ./.github/actions/model-cache
+
+      # `setup-backend` caches pip at ~/.cache/pip, which is not where pip
+      # caches on Windows, so it is Linux-only and this is its counterpart.
+      # Deliberately no pip cache: this job installs only to run the prefetch,
+      # and a second 0.4 GB Windows entry is not worth it against the 10 GB
+      # repo budget this change is trying to get back under.
+      - name: Set up Python
+        if: steps.models.outputs.hit != 'true' && github.event_name == 'push'
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        if: steps.models.outputs.hit != 'true' && github.event_name == 'push'
+        run: |
+          python -m pip install --upgrade pip
+          pip install .[test,dev]
+
+      - name: Download every model the Windows shards load
+        if: steps.models.outputs.hit != 'true' && github.event_name == 'push'
+        run: python scripts/prefetch_ci_models.py
+
+      - name: Save the model cache
+        if: >-
+          success() && steps.models.outputs.hit != 'true'
+          && github.event_name == 'push'
+        uses: ./.github/actions/model-cache
+        with:
+          mode: save
+          key: ${{ steps.models.outputs.key }}
+
   # ---------------------------------------------------------------------------
   backend:
     name: backend shard ${{ matrix.shard }}
@@ -781,6 +864,11 @@ jobs:
   # ---------------------------------------------------------------------------
   backend_windows:
     name: backend-windows shard ${{ matrix.shard }}
+    # Same reason `backend` waits for `warm_models`: without the gate all four
+    # shards start cold together and re-run the very stampede the warm job
+    # exists to absorb. On the warm path this costs the shards a checkout and a
+    # cache restore they were doing anyway.
+    needs: warm_models_windows
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -829,24 +917,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install .[test,dev]
 
-      - name: Cache HuggingFace models
-        uses: actions/cache@v5
-        with:
-          # Read/write, unlike Linux: these four shards run a small OS-sensitive
-          # subset that loads no CLIP or SBert, so there is no eight-way
-          # stampede to serialise and this cache self-heals on its own key bust.
-          # See the Linux setup-backend action for the rationale. The taggers
-          # download via hf_hub_download(local_dir=...) into platformdirs'
-          # Windows user_data_dir —
-          # %LOCALAPPDATA%\pixlstash\pixlstash\downloaded_models (the doubled
-          # "pixlstash" is platformdirs' appauthor=appname default) — NOT
-          # ~\.cache\huggingface. Caching both is what makes a warm runner skip
-          # the HEAD revalidation that returns the 429.
-          path: |
-            ~\.cache\huggingface
-            ~\AppData\Local\pixlstash\pixlstash\downloaded_models
-          key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/tagger_plugins/wd14.py', 'pixlstash/tagger_plugins/pixlstash_tagger.py', 'pixlstash/tagger_plugins/florence2.py') }}
-          restore-keys: hf-models-${{ runner.os }}-
+      # Restore-only, through the same action every Linux job uses. This was an
+      # inline read/write `actions/cache` with its own paths and a key hashing
+      # three of the six files the shared one hashes — two definitions that
+      # could never share an entry, and the writing half is what filled the
+      # repo's cache budget with per-PR copies. `warm_models (windows-latest)`
+      # is now the single writer, exactly as on Linux.
+      - name: Restore the HuggingFace model cache
+        uses: ./.github/actions/model-cache
 
       - name: OS-sensitive backend tests (shard ${{ matrix.shard }} of 4)
         shell: bash
