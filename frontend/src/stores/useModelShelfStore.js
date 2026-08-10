@@ -140,16 +140,35 @@ export function editReceipt(count, changes) {
  * The refusals are named rather than swallowed: "3 forgotten, 2 still on disk"
  * is the normal outcome of a selection made a minute ago, and a receipt that
  * reported only the 3 would read as a silent partial failure.
+ *
+ * The two refusal reasons stay apart. "Still has a copy" is the gate doing its
+ * job and the file is fine; "already gone" means the row had been forgotten
+ * before this call reached it, which is not the same news and must not be
+ * reported as though the file were still on the disk.
+ *
+ * @param {number} gone - rows the call destroyed.
+ * @param {number} kept - rows refused because a copy is still present or
+ *   unreachable.
+ * @param {number} [vanished=0] - rows that no longer existed to forget.
  */
-export function forgetReceipt(gone, kept) {
-  if (!gone && !kept) return "Nothing to forget.";
-  if (!gone) {
-    return `${modelCount(kept)} still ${kept === 1 ? "has a copy" : "have copies"} on this machine, so nothing was forgotten.`;
+export function forgetReceipt(gone, kept, vanished = 0) {
+  const notes = [];
+  if (kept) {
+    notes.push(
+      `${modelCount(kept)} still ${kept === 1 ? "has a copy" : "have copies"} and ${kept === 1 ? "was" : "were"} kept.`,
+    );
   }
-  const forgotten = `Forgot ${modelCount(gone)}.`;
-  return kept
-    ? `${forgotten} ${modelCount(kept)} still ${kept === 1 ? "has a copy" : "have copies"} and ${kept === 1 ? "was" : "were"} kept.`
-    : forgotten;
+  if (vanished) {
+    notes.push(
+      `${modelCount(vanished)} ${vanished === 1 ? "was" : "were"} already gone.`,
+    );
+  }
+  if (!gone) {
+    return notes.length
+      ? `Nothing was forgotten. ${notes.join(" ")}`
+      : "Nothing to forget.";
+  }
+  return [`Forgot ${modelCount(gone)}.`, ...notes].join(" ");
 }
 
 /**
@@ -760,11 +779,20 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       const body = await forgetModels(ids);
       clearSelection();
       await fetchRows();
+      const refused = body?.refused ?? [];
       const gone = body?.forgotten?.length ?? 0;
-      const kept = body?.refused?.length ?? 0;
+      // The two refusal reasons are different news and must not be conflated:
+      // `still_has_a_copy` means the file turned up, `no_such_model` means the
+      // row was already gone (another tab forgot it, or this list is stale).
+      // Anything the server may add later counts as "kept", which is the
+      // conservative reading — not forgotten, and possibly still there.
+      const vanished = refused.filter(
+        (r) => r.reason === "no_such_model",
+      ).length;
+      const kept = refused.length - vanished;
       notices.push({
         level: gone ? "success" : "info",
-        text: forgetReceipt(gone, kept),
+        text: forgetReceipt(gone, kept, vanished),
       });
       return true;
     } catch (err) {

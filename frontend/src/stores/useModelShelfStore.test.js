@@ -686,7 +686,50 @@ describe("the receipts", () => {
       "Forgot 3 models. 2 models still have copies and were kept.",
     );
     expect(forgetReceipt(1, 0)).toBe("Forgot 1 model.");
-    expect(forgetReceipt(0, 1)).toContain("nothing was forgotten");
+    expect(forgetReceipt(0, 1)).toBe(
+      "Nothing was forgotten. 1 model still has a copy and was kept.",
+    );
+    expect(forgetReceipt(0, 0)).toBe("Nothing to forget.");
+  });
+
+  it("keeps 'already gone' apart from 'still has a copy'", () => {
+    // Two different pieces of news. A row that no longer exists was forgotten
+    // by something else; saying it "still has a copy" tells the reader their
+    // file is safe when the row is not there at all.
+    expect(forgetReceipt(2, 0, 1)).toBe(
+      "Forgot 2 models. 1 model was already gone.",
+    );
+    expect(forgetReceipt(1, 2, 3)).toBe(
+      "Forgot 1 model. 2 models still have copies and were kept. " +
+        "3 models were already gone.",
+    );
+    expect(forgetReceipt(0, 0, 2)).toBe(
+      "Nothing was forgotten. 2 models were already gone.",
+    );
+  });
+
+  it("counts a vanished row as vanished, not as one that was kept", async () => {
+    // The seam: the store reads `refused` and has to split it by reason. An
+    // unrecognised reason counts as "kept", the conservative reading.
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({ id: 1 }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ];
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+    forgetModels.mockResolvedValue({
+      forgotten: [],
+      refused: [
+        { id: 1, reason: "no_such_model" },
+        { id: 2, reason: "still_has_a_copy" },
+      ],
+    });
+
+    await store.forgetSelected();
+    const text = useNoticeStore().notices.at(-1).text;
+    expect(text).toContain("1 model still has a copy");
+    expect(text).toContain("1 model was already gone");
   });
 });
 

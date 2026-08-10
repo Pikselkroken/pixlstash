@@ -1544,7 +1544,12 @@ the exact machinery the shelf ruled out. Shelf outcomes go through
 `editReceipt` / `forgetReceipt` are pure functions so the wording is testable
 without a component. The forget receipt names the refusals: "3 forgotten, 2
 still have copies" is the normal outcome of a selection made a minute ago, and a
-receipt reporting only the 3 would read as a silent partial failure.
+receipt reporting only the 3 would read as a silent partial failure. The **two
+refusal reasons stay apart**: `still_has_a_copy` is the gate doing its job and
+the file is fine, while `no_such_model` means the row had already been forgotten
+before the call reached it. Reporting the second as "still has a copy" would
+tell the reader their file is safe when the row is not there at all. Any reason
+the server adds later counts as kept, the conservative reading.
 
 **Assign is not here yet.** It is the fifth verb and its route already exists,
 but its control is the `AddToEntityControl` rewrite that decision 6 of the nine
