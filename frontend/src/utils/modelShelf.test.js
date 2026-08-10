@@ -160,6 +160,29 @@ describe("bandGroups", () => {
     expect(arranged.map((g) => g.bandStart)).toEqual([true, true, false]);
   });
 
+  it("leaves a group that names no folder unbanded", () => {
+    // "No registered copy" is the group for a model whose folders have all been
+    // forgotten. It is not on a drive, so a disk glyph and a capacity line over
+    // it would describe the one group that exists because there is no disk.
+    const orphan = {
+      key: "\u0000unset",
+      label: "No registered copy",
+      labelKind: "name",
+      folderId: null,
+      rows: [],
+    };
+    const arranged = bandGroups(
+      [orphan, group(1, "/mnt/fast/a")],
+      new Map([[1, drive("A", "/mnt/fast", [1])]]),
+    );
+    expect(arranged.map((g) => g.label)).toEqual([
+      "/mnt/fast/a",
+      "No registered copy",
+    ]);
+    expect(arranged.at(-1).band).toBe(null);
+    expect(arranged.at(-1).bandStart).toBe(false);
+  });
+
   it("bands an unmeasured folder alone and puts it last", () => {
     // Two drives we cannot stat are not thereby the same drive, and an offline
     // one is not what the reader is scanning for space on.

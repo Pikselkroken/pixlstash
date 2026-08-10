@@ -2570,6 +2570,20 @@ def test_a_band_is_named_by_its_volume_label_when_it_has_one(
     )
 
 
+def test_a_mount_point_holding_a_backslash_still_matches_its_device():
+    """`/proc/mounts` escapes a literal backslash as `\\134`, which a pattern
+    written for `\\040` and `\\011` does not cover. Left undecoded the mount
+    point never matches its device and the drive silently loses its label.
+    Reported by the review of #868."""
+    from pixlstash.utils.system_utils import _unescape_mount_field
+
+    assert _unescape_mount_field(r"/mnt/My\040Disk") == "/mnt/My Disk"
+    assert _unescape_mount_field(r"/mnt/back\134slash") == "/mnt/back\\slash"
+    assert _unescape_mount_field(r"/mnt/tab\011here") == "/mnt/tab\there"
+    # A path with nothing to decode comes back untouched.
+    assert _unescape_mount_field("/mnt/models") == "/mnt/models"
+
+
 @_LINUX_ONLY
 def test_a_drive_with_no_label_reports_null_rather_than_a_guess(
     shelf_env, tmp_path, monkeypatch

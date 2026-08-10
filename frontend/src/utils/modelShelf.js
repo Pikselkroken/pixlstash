@@ -180,7 +180,15 @@ export const FOLDER_LAYOUT_LABELS = {
  */
 export function bandGroups(groups, deviceByFolderId) {
   const byBand = new Map();
+  // Not every folder group names a folder. A model whose folders have all been
+  // forgotten falls into "No registered copy", which has no `folderId` and is
+  // not on a drive at all — banding it would put a disk glyph and a capacity
+  // line over the one group that exists precisely because there is no disk.
+  // It stays unbanded and sorts last, the same place `compareGroups` already
+  // puts the absence of a value.
+  const unbanded = groups.filter((group) => !Number.isInteger(group.folderId));
   for (const group of groups) {
+    if (!Number.isInteger(group.folderId)) continue;
     const folderId = Number(group.folderId);
     const device = deviceByFolderId?.get?.(folderId) || null;
     // Unmeasured folders band alone, keyed by folder rather than by device.
@@ -216,6 +224,11 @@ export function bandGroups(groups, deviceByFolderId) {
     band.groups.forEach((group, index) => {
       arranged.push({ ...group, band, bandStart: index === 0 });
     });
+  }
+  // `band: null` rather than a band of their own: the caller draws a header
+  // only where `bandStart` is set, so these render as bare folder groups.
+  for (const group of unbanded) {
+    arranged.push({ ...group, band: null, bandStart: false });
   }
   return arranged;
 }

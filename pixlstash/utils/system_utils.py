@@ -74,8 +74,15 @@ def mount_point_of(path: str) -> str:
 
 
 def _unescape_mount_field(field: str) -> str:
-    """Decode the octal escapes ``/proc/mounts`` writes for spaces and tabs."""
-    return re.sub(r"\\0([0-7]{2})", lambda m: chr(int(m.group(1), 8)), field)
+    """Decode the octal escapes ``/proc/mounts`` writes in a path.
+
+    Three octal digits after a backslash, not two after a leading zero: the
+    kernel escapes space as ``\\040`` and tab as ``\\011``, which a
+    zero-prefixed pattern happens to cover, but it escapes a literal backslash
+    as ``\\134``, which one does not. A mount point holding one would then
+    fail to match its device and the drive would silently lose its label.
+    """
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
 
 
 def _linux_volume_label(mount_point: str) -> Optional[str]:
@@ -147,7 +154,11 @@ def _windows_volume_label(mount_point: str) -> Optional[str]:
     except (AttributeError, OSError, ValueError) as exc:
         logger.debug("GetVolumeInformationW failed for %r (%s).", mount_point, exc)
         return None
-    return buffer.value or None if ok else None
+    # Parenthesised: `or` binds tighter than the conditional, so the bare
+    # expression already returned None on failure — but it reads as though it
+    # might not, and a reviewer should not have to check the grammar to see
+    # that a failed call cannot leak a stale buffer.
+    return (buffer.value or None) if ok else None
 
 
 def volume_label(mount_point: str) -> Optional[str]:
