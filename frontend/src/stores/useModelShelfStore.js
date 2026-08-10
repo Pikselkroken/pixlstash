@@ -687,15 +687,24 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     visibleRows.value.filter((row) => selectedIds.value.has(row.id)),
   );
 
+  /**
+   * The model a Shift-range measures from: the last one picked deliberately.
+   *
+   * Held apart from the selection itself, exactly as `lastSelectedImageId` is
+   * in `useMultiSelect`: a range replaces the selection, so the anchor cannot
+   * be recovered from what is selected afterwards.
+   */
+  const anchorId = ref(null);
+
   function isSelected(id) {
     return selectedIds.value.has(id);
   }
 
   /**
-   * Add or remove one model.
+   * Add or remove one model, and make it the anchor.
    *
    * A new Set rather than a mutation: Vue does not track `Set.add`, so the
-   * bar's count and every row's tick would go stale until something else
+   * bar's count and every row's mark would go stale until something else
    * happened to re-render.
    */
   function toggleSelected(id) {
@@ -703,15 +712,55 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (next.has(id)) next.delete(id);
     else next.add(id);
     selectedIds.value = next;
+    anchorId.value = id;
+  }
+
+  /**
+   * Select from a click, the way a file manager does.
+   *
+   * The same three gestures `ImageGrid.handleImageCardClick` already teaches,
+   * and deliberately the same rules rather than a shelf dialect: a plain click
+   * REPLACES the selection with the row clicked, Ctrl/Cmd+click toggles one
+   * without disturbing the rest, and Shift+click takes the contiguous run from
+   * the anchor to the row clicked and replaces the selection with it (it does
+   * not merge, which is what makes a mis-aimed range one click to correct).
+   *
+   * @param {number} id - the model clicked.
+   * @param {Object} [modifiers] - `ctrl` and `shift` off the event.
+   * @param {Array<number>} [order] - model ids in the order the list DRAWS
+   *   them, which is the caller's business: banding re-orders groups, so the
+   *   store's own `groups` order is not what the reader sees. Omitted, a range
+   *   falls back to selecting the one row, which is what a range with nothing
+   *   to measure against means.
+   */
+  function selectFromClick(id, { ctrl = false, shift = false } = {}, order) {
+    if (ctrl) {
+      toggleSelected(id);
+      return;
+    }
+    const sequence = Array.isArray(order) ? order : [];
+    const from = sequence.indexOf(anchorId.value);
+    const to = sequence.indexOf(id);
+    if (shift && from >= 0 && to >= 0) {
+      const [start, end] = from <= to ? [from, to] : [to, from];
+      // The anchor stays where it was: dragging a range out and back with
+      // repeated Shift+clicks has to measure from the same end each time.
+      selectedIds.value = new Set(sequence.slice(start, end + 1));
+      return;
+    }
+    selectedIds.value = new Set([id]);
+    anchorId.value = id;
   }
 
   /** Select every model the current filters show, ungrouped duplicates and all. */
   function selectVisible() {
     selectedIds.value = new Set(visibleRows.value.map((row) => row.id));
+    anchorId.value = visibleRows.value[0]?.id ?? null;
   }
 
   function clearSelection() {
     if (selectedIds.value.size) selectedIds.value = new Set();
+    anchorId.value = null;
   }
 
   /**
@@ -808,6 +857,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     epoch += 1;
     rows.value = [];
     selectedIds.value = new Set();
+    anchorId.value = null;
     loaded.value = false;
     error.value = "";
     loading.value = false;
@@ -842,8 +892,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     collapsed,
     selectedIds,
     selectedRows,
+    anchorId,
     isSelected,
     toggleSelected,
+    selectFromClick,
     selectVisible,
     clearSelection,
     editSelected,

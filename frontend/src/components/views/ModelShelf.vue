@@ -271,10 +271,19 @@
             </button>
           </h3>
 
+          <!-- `role="listbox"` with `aria-multiselectable`, which is what the
+               rows became when the checkbox left: a list you select from with
+               click, Ctrl+click and Shift+click IS a multi-select listbox, and
+               the role is what tells a screen reader that. It is legitimate
+               here and was not in `ModelFoldersDialog` for the same reason in
+               reverse — these rows hold no interactive controls, and a control
+               inside `role="option"` is unreachable. -->
           <ul
             v-if="!grouped || !store.isCollapsed(group.key)"
             class="shelf-list"
-            role="list"
+            role="listbox"
+            aria-multiselectable="true"
+            :aria-label="grouped ? group.label : 'Models'"
           >
             <li
               v-for="row in group.rows"
@@ -282,19 +291,23 @@
               class="ps-row shelf-row"
               :class="{ 'shelf-row--selected': store.isSelected(row.id) }"
               :title="rowTitle(row)"
+              role="option"
+              :aria-selected="store.isSelected(row.id)"
+              :tabindex="row.id === rovingRowId ? 0 : -1"
+              :data-row-id="row.id"
+              @click="pickRow(row, $event)"
+              @keydown="onRowKeydown(row, $event)"
+              @focus="focusedRowId = row.id"
             >
-              <!-- Column 1 was a reserved empty slot while a row carried no
-                   verb. It carries one now, so the checkbox goes where the
-                   space already was and no column moves. Labelled by the row's
-                   own name, because "checkbox" repeated 1,800 times tells a
-                   screen reader nothing about which file it is on. -->
+              <!-- Column 1 stays the reserved glyph slot. The selection shows
+                   as the row's own wash and a tick here, not as a checkbox: a
+                   checkbox is a second, contradictory way to select in a list
+                   whose click already selects, and it was the shelf teaching a
+                   dialect the rest of the app does not speak. -->
               <span class="ps-row-glyph shelf-row-pick">
-                <input
-                  type="checkbox"
-                  :checked="store.isSelected(row.id)"
-                  :aria-label="`Select ${row.name.text}`"
-                  @change="store.toggleSelected(row.id)"
-                />
+                <v-icon v-if="store.isSelected(row.id)" size="16"
+                  >mdi-check</v-icon
+                >
               </span>
               <span class="shelf-row-kind">
                 <v-icon size="16">{{ KIND_ICON[row.file_kind] }}</v-icon>
@@ -447,6 +460,95 @@ const ALGO_LABEL = {
   dora: "DoRA",
   oft: "OFT",
 };
+
+/**
+ * The ids in the order the list DRAWS them, which is what a Shift-range spans.
+ *
+ * Not `store.groups`: banding re-orders the groups, and a range that measured
+ * against an order the reader cannot see would select a run they did not point
+ * at. Under folder grouping a model drawn in two folders appears twice, so the
+ * sequence is de-duplicated — the range is over models, which is what the
+ * verbs act on.
+ */
+const orderedRowIds = computed(() => {
+  const seen = new Set();
+  for (const group of shownGroups.value) {
+    if (grouped.value && store.isCollapsed(group.key)) continue;
+    for (const row of group.rows) seen.add(row.id);
+  }
+  return [...seen];
+});
+
+/**
+ * Which row owns the list's single tab stop.
+ *
+ * Roving, and it falls back to the first drawn row: with no row at `tabindex=0`
+ * the whole list is unreachable by Tab, which is the failure mode a roving
+ * tabindex introduces if nothing seeds it.
+ */
+const focusedRowId = ref(null);
+const rovingRowId = computed(
+  () => focusedRowId.value ?? orderedRowIds.value[0] ?? null,
+);
+
+/**
+ * Click, Ctrl+click, Shift+click — the grid's own three gestures.
+ *
+ * A text selection inside the row is not a pick: dragging across a name to
+ * copy it would otherwise collapse the selection to that one row on mouseup.
+ */
+function pickRow(row, event) {
+  if (window.getSelection?.()?.toString()) return;
+  focusedRowId.value = row.id;
+  store.selectFromClick(
+    row.id,
+    { ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey },
+    orderedRowIds.value,
+  );
+}
+
+/**
+ * The keyboard half of the same three gestures.
+ *
+ * Arrow keys move the tab stop without selecting, which is the roving-focus
+ * contract: a reader can walk 1,800 rows without arming a verb against every
+ * one they pass. Space and Enter pick; Shift+arrow extends from the anchor,
+ * the keyboard's Shift+click. Escape clears, so there is always a way out that
+ * does not involve finding the bar.
+ */
+function onRowKeydown(row, event) {
+  const order = orderedRowIds.value;
+  const index = order.indexOf(row.id);
+  const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
+  if (step !== undefined) {
+    const next = order[index + step];
+    if (next === undefined) return;
+    event.preventDefault();
+    focusedRowId.value = next;
+    if (event.shiftKey) {
+      store.selectFromClick(next, { shift: true }, order);
+    }
+    nextTick(() => {
+      rootEl.value
+        ?.querySelector(`[data-row-id="${next}"]`)
+        ?.focus({ preventScroll: false });
+    });
+    return;
+  }
+  if (event.key === " " || event.key === "Enter") {
+    event.preventDefault();
+    store.selectFromClick(
+      row.id,
+      { ctrl: event.key === " " || event.ctrlKey || event.metaKey },
+      order,
+    );
+    return;
+  }
+  if (event.key === "Escape" && store.selectedRows.length) {
+    event.preventDefault();
+    store.clearSelection();
+  }
+}
 
 /** "1 model" / "12 models", so no line ever reads "1 models". */
 function modelCount(n) {
@@ -656,11 +758,16 @@ watch(
   justify-content: center;
 }
 
-.shelf-row-pick input {
-  width: 16px;
-  height: 16px;
-  accent-color: rgb(var(--v-theme-primary));
+/* The row is the control, so it takes the pointer and the focus ring. The ring
+   is inset rather than an outline: the rows sit flush against each other and an
+   outer ring would be clipped by the neighbour above. */
+.shelf-row {
   cursor: pointer;
+}
+
+.shelf-row:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: -2px;
 }
 
 /* A wash, not a border: a 1px outline on a selected row shifts every glyph in

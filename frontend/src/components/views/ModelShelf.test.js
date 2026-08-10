@@ -235,11 +235,21 @@ describe("keyboard", () => {
     wrapper.unmount();
   });
 
-  it("leaves rows out of the tab order while they have no verb", async () => {
-    // 1,800 empty tab stops is a trap. Roving focus arrives with the first
-    // thing a focused row can do (F2/F4).
-    const wrapper = await mountShelf([adapter()]);
-    expect(wrapper.find(".shelf-row").attributes("tabindex")).toBeUndefined();
+  it("gives the rows ONE tab stop between them, not 1,800", async () => {
+    // The rule that used to read "rows are not focus stops" — 1,800 empty stops
+    // is a trap. F3 gave a row something to do, so it is now a roving tabindex
+    // rather than no tabindex: exactly one row is reachable by Tab and the
+    // arrows move which one.
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 2 }),
+      adapter({ id: 3 }),
+    ]);
+    const stops = wrapper
+      .findAll(".shelf-row")
+      .map((r) => r.attributes("tabindex"));
+    expect(stops.filter((t) => t === "0")).toHaveLength(1);
+    expect(stops.filter((t) => t === "-1")).toHaveLength(2);
     expect(wrapper.find(".shelf").attributes("tabindex")).toBe("-1");
   });
 });
@@ -295,15 +305,15 @@ describe("group headers", () => {
     expect(textOf(wrapper.find(".shelf-group-btn"))).toContain("2 models");
   });
 
-  it("is a real button and leaves the rows out of the tab order", async () => {
-    // Rows carry no verb, so the headers are the only stops in the list, which
-    // is what makes Tab a group-to-group move without inventing a shortcut.
+  it("is a real button, so Tab still moves group to group", async () => {
+    // The header stays a stop of its own. It shared that job with nothing while
+    // rows carried no verb; now it shares it with the list's single roving
+    // stop, which is one Tab press away rather than 1,800.
     const wrapper = await mountShelf([adapter({ base_model: "sdxl" })]);
     useModelShelfStore().setView({ groupBy: "base_model" });
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".shelf-group-btn").element.tagName).toBe("BUTTON");
     expect(wrapper.find(".shelf-group-heading").element.tagName).toBe("H3");
-    expect(wrapper.find(".shelf-row").attributes("tabindex")).toBeUndefined();
   });
 
   it("sets a folder path in the path variant, never uppercased", async () => {
@@ -383,7 +393,9 @@ describe("the Sort split-button", () => {
 });
 
 describe("selecting rows", () => {
-  it("ticks by model, so one file selected in two folders is one selection", async () => {
+  const rowAt = (wrapper, i) => wrapper.findAll(".shelf-row")[i];
+
+  it("selects by model, so one file drawn in two folders is one selection", async () => {
     // Under folder grouping a model with copies in two folders is DRAWN twice.
     // The verbs write the model, so a per-row selection would let the same file
     // be half selected and ask the reader to hold a distinction the data has
@@ -399,31 +411,133 @@ describe("selecting rows", () => {
     useModelShelfStore().setView({ groupBy: "folder" });
     await wrapper.vm.$nextTick();
 
-    const boxes = wrapper.findAll(".shelf-row-pick input");
-    expect(boxes).toHaveLength(2);
-    await boxes[0].trigger("change");
+    expect(wrapper.findAll(".shelf-row")).toHaveLength(2);
+    await rowAt(wrapper, 0).trigger("click");
     await wrapper.vm.$nextTick();
 
     expect(useModelShelfStore().selectedRows).toHaveLength(1);
     expect(wrapper.findAll(".shelf-row--selected")).toHaveLength(2);
   });
 
+  it("replaces the selection on a plain click", async () => {
+    // The file-manager rule, and the one a checkbox got wrong: a bare click is
+    // not a toggle, it starts again.
+    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    const store = useModelShelfStore();
+    await rowAt(wrapper, 0).trigger("click");
+    await rowAt(wrapper, 1).trigger("click");
+    expect([...store.selectedIds]).toEqual([2]);
+  });
+
+  it("toggles one row on Ctrl+click and leaves the rest alone", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 2 }),
+      adapter({ id: 3 }),
+    ]);
+    const store = useModelShelfStore();
+    await rowAt(wrapper, 0).trigger("click");
+    await rowAt(wrapper, 2).trigger("click", { ctrlKey: true });
+    expect([...store.selectedIds].sort()).toEqual([1, 3]);
+
+    await rowAt(wrapper, 2).trigger("click", { ctrlKey: true });
+    expect([...store.selectedIds]).toEqual([1]);
+  });
+
+  it("takes the range from the anchor on Shift+click, and replaces", async () => {
+    // Replace rather than merge, exactly as the grid does: it is what makes a
+    // mis-aimed range one click to correct instead of two.
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 2 }),
+      adapter({ id: 3 }),
+      adapter({ id: 4 }),
+    ]);
+    const store = useModelShelfStore();
+    await rowAt(wrapper, 1).trigger("click");
+    await rowAt(wrapper, 3).trigger("click", { shiftKey: true });
+    expect([...store.selectedIds].sort()).toEqual([2, 3, 4]);
+
+    // The anchor stays put, so shrinking the range back measures from the same
+    // end rather than from wherever the last click landed.
+    await rowAt(wrapper, 2).trigger("click", { shiftKey: true });
+    expect([...store.selectedIds].sort()).toEqual([2, 3]);
+  });
+
+  it("ranges upward as readily as downward", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 2 }),
+      adapter({ id: 3 }),
+    ]);
+    const store = useModelShelfStore();
+    await rowAt(wrapper, 2).trigger("click");
+    await rowAt(wrapper, 0).trigger("click", { shiftKey: true });
+    expect([...store.selectedIds].sort()).toEqual([1, 2, 3]);
+  });
+
+  it("is a multi-select listbox, and says which rows are selected", async () => {
+    // The role is what tells a screen reader this list is selectable at all;
+    // it replaced the per-row checkbox that used to carry that meaning.
+    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    const list = wrapper.find("ul.shelf-list");
+    expect(list.attributes("role")).toBe("listbox");
+    expect(list.attributes("aria-multiselectable")).toBe("true");
+
+    await rowAt(wrapper, 0).trigger("click");
+    await wrapper.vm.$nextTick();
+    expect(rowAt(wrapper, 0).attributes("aria-selected")).toBe("true");
+    expect(rowAt(wrapper, 1).attributes("aria-selected")).toBe("false");
+  });
+
+  it("keeps exactly one tab stop, seeded so the list is reachable", async () => {
+    // A roving tabindex with nothing at 0 makes the whole list unreachable by
+    // Tab, which is the failure this seeding exists to prevent.
+    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    const stops = wrapper
+      .findAll(".shelf-row")
+      .map((r) => r.attributes("tabindex"));
+    expect(stops).toEqual(["0", "-1"]);
+  });
+
+  it("moves the tab stop on an arrow without selecting anything", async () => {
+    // Walking 1,800 rows must not arm a verb against every one passed.
+    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    const store = useModelShelfStore();
+    await rowAt(wrapper, 0).trigger("keydown", { key: "ArrowDown" });
+    await wrapper.vm.$nextTick();
+
+    expect(store.selectedRows).toHaveLength(0);
+    expect(
+      wrapper.findAll(".shelf-row").map((r) => r.attributes("tabindex")),
+    ).toEqual(["-1", "0"]);
+  });
+
+  it("extends with Shift+arrow and clears with Escape", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 2 }),
+      adapter({ id: 3 }),
+    ]);
+    const store = useModelShelfStore();
+    await rowAt(wrapper, 0).trigger("keydown", { key: " " });
+    await rowAt(wrapper, 0).trigger("keydown", {
+      key: "ArrowDown",
+      shiftKey: true,
+    });
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+
+    await rowAt(wrapper, 0).trigger("keydown", { key: "Escape" });
+    expect(store.selectedRows).toHaveLength(0);
+  });
+
   it("shows no selection bar until something is selected", async () => {
     const wrapper = await mountShelf([adapter()]);
     expect(wrapper.find(".shelf-selbar").exists()).toBe(false);
 
-    await wrapper.find(".shelf-row-pick input").trigger("change");
+    await rowAt(wrapper, 0).trigger("click");
     await wrapper.vm.$nextTick();
     expect(textOf(wrapper.find(".shelf-selbar"))).toContain("1 model selected");
-  });
-
-  it("names the row in the checkbox, not just 'checkbox'", async () => {
-    // 1,800 controls all announcing "checkbox" is the same as none of them
-    // announcing anything.
-    const wrapper = await mountShelf([adapter({ display_name: "Clementine" })]);
-    expect(wrapper.find(".shelf-row-pick input").attributes("aria-label")).toBe(
-      "Select Clementine",
-    );
   });
 
   it("drops a selected model that the shelf no longer holds", async () => {
@@ -431,9 +545,8 @@ describe("selecting rows", () => {
     // verb posts an id the server has to refuse.
     const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
     const store = useModelShelfStore();
-    for (const box of wrapper.findAll(".shelf-row-pick input")) {
-      await box.trigger("change");
-    }
+    await rowAt(wrapper, 0).trigger("click");
+    await rowAt(wrapper, 1).trigger("click", { ctrlKey: true });
     expect(store.selectedRows).toHaveLength(2);
 
     listAdapters.mockResolvedValue([adapter({ id: 1 })]);
@@ -553,7 +666,7 @@ describe("the group header's reserved column", () => {
 });
 
 describe("selection and drive bands together", () => {
-  it("ticks a row that sits under a band, and bands do not become rows", async () => {
+  it("selects a row that sits under a band, and bands do not become rows", async () => {
     // The seam this merge created: F2 renders `shownGroups` (banded) where F1
     // rendered `store.groups`, and F3 puts a checkbox inside the row loop. If
     // `bandGroups` ever dropped `rows` on its way through, the list would draw
@@ -585,13 +698,15 @@ describe("selection and drive bands together", () => {
     await wrapper.vm.$nextTick();
 
     expect(wrapper.find(".shelf-band-heading").exists()).toBe(true);
-    const boxes = wrapper.findAll(".shelf-row-pick input");
-    expect(boxes).toHaveLength(1);
+    const rows = wrapper.findAll(".shelf-row");
+    expect(rows).toHaveLength(1);
 
-    await boxes[0].trigger("change");
+    await rows[0].trigger("click");
     await wrapper.vm.$nextTick();
     expect(textOf(wrapper.find(".shelf-selbar"))).toContain("1 model selected");
-    // The band is a header, not a row: it must not have acquired a checkbox.
-    expect(wrapper.find(".shelf-band-heading input").exists()).toBe(false);
+    // The band is a header, not a row: it must not have become selectable.
+    expect(wrapper.find(".shelf-band-heading").attributes("role")).not.toBe(
+      "option",
+    );
   });
 });
