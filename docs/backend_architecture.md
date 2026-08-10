@@ -517,6 +517,8 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/model-moves                                                           | model_shelf     | How the current or last model move is going                |
 | POST   | /api/v1/model-moves                                                           | model_shelf     | Move model files into another registered folder            |
 | DELETE | /api/v1/model-moves                                                           | model_shelf     | Cancel the running model move                              |
+| PATCH  | /api/v1/models                                                                | model_shelf     | Correct what the shelf records about one or more models    |
+| POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                         |
 | GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                    |
 | POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                 |
 | POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                |
@@ -1213,6 +1215,30 @@ the sentence above as covering them.
   `validate_reference_folder_path`: absolute, and not a system directory — and
   it is pinned in both directions by `tests/test_model_shelf_api.py` (`/etc/…`
   and a relative path are 400; an ordinary absolute path still relocates).
+
+### The shelf's five verbs (shelf plan F3)
+
+**Five verbs, two new routes.** Assign was already `PUT /adapters/{sha256}/attachments`. Rename, Set base model and Set kind write one curated hub column each and differ in nothing else, so they share `PATCH /models`; Forget is `POST /models/forget`. Adding three routes that ran the same UPDATE with a different column name would have been three sets of guards to keep in step.
+
+**Addressed by `model.id`, never by hash.** A 24 GB checkpoint is listable the moment it is registered and stays `sha256 NULL` until `MissingCheckpointHashFinder` reads it, so a hash-addressed verb layer would leave the largest files on the shelf as the only ones that cannot be corrected. `model.id` is AUTOINCREMENT and never reissued.
+
+**`PATCH /models` writes only the fields the body carries**, using `model_fields_set` rather than a null check, so an explicit `null` is a *clear* (a wrong base model back to unset, which returns the row to the filter's "not set" bucket) while an absent field is untouched. That distinction is what lets one route carry three verbs without Set base model blanking the names in the selection.
+
+Three guards on it, none of them authz:
+
+- **`display_name` is refused for more than one id.** A name is a fact about one file; in bulk it would give every selected row the same one, and there is no undo.
+- **`file_kind` cannot be cleared, only corrected.** Every file is something and `unknown` is how the shelf says so; a null would leave a row neither list block matches.
+- **A correction the hub's own CHECK would reject is refused by name.** `model` carries `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` and the same for `kind`. Left to SQLite a violation surfaces as a 500 naming `CHECK constraint failed`, which tells the owner nothing about the file they picked. The guard decides on the **post-write** state (`changes.get(col, row[col])`), not on the body, because three different bodies reach the same violation and only one mentions `file_kind`: promoting an unhashed checkpoint; `{"kind": null}` on a row that is already an adapter, which names no `file_kind` at all; and `{"kind": null, "file_kind": "adapter"}`, which a guard reading the *stored* kind waves through. Both of the latter were 500s until the CSO review of #869 found them.
+
+**Forget is gated on the row's state, never on the size of the selection** (ruled 2026-08-10). A model is forgettable only when no copy of it is `present` **or `unreachable`**. The second is the one that matters: `unreachable` is the we-could-not-look state an unplugged NAS produces, and acting on it would let one call wipe the curation for a whole drive. A selection of one is therefore just a legal selection and needs no special case, and the confirmation stays at every size, because what makes it confirm is that curation cannot be reconstructed — as true of one row as of four hundred.
+
+**The gate and the DELETE are one critical section.** `HubDatabase.fetchall` takes and releases the hub lock per call, so reading the states through it left a window in which a background `ModelFolderScanner` could flip a row from `missing` back to `present` between the check and the delete, and the model would be forgotten anyway. Both `SELECT`s therefore run on the transaction's own connection inside `with hub.transaction()`. Small window, unrecoverable consequence, on the one shelf operation with no undo behind it — the wrong side of that trade, and found by the CSO review of #869. `tests/test_model_shelf_api.py::test_forget_reads_its_gate_inside_the_write_transaction` counts the reads that escape the transaction rather than trying to schedule the race.
+
+**Ids that fail the gate come back under `refused` with a reason rather than failing the call.** A selection is made against a list that may be seconds old, and failing the whole request because one file came back is the wrong answer to good news. That response *is* the receipt the shelf shows.
+
+**Vault attachments survive a forget, deliberately.** `adapter_attachment` lives in each library's vault keyed by the content hash, so the rows held by libraries that are not open are unreachable from here and deleting only the active library's half would be an arbitrary subset. Left in place they are invisible (every read joins hub to vault) and they re-link by content if the file ever returns — the same property that makes folder removal a tombstone. What Forget destroys is the hub-side curation: name, base model, kind, trigger words. That is the whole reason it is one of the two confirmations while folder removal is neither.
+
+**No undo, and no operation-log half.** The v1.9 operation log is vault-only and the shelf's rows are hub-side; the decision to span it was overturned on 2026-08-09 and reaffirmed 2026-08-10. Confirmation only where the prior state cannot be reconstructed: a bulk base-model overwrite and Forget.
 
 ### The managed model store (shelf plan B7)
 

@@ -342,6 +342,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # reach it. Not LOCAL_OWNER_ONLY — it names a hash and two row ids, never a
     # host path, so it is not the §16.3 filesystem-authority class.
     ("PUT", "/api/v1/adapters/{sha256}/attachments"): RoutePolicy(_OWNER),
+    # The verb layer (F3). OWNER_ONLY on the same default library pin as the
+    # reads above, and NOT the §16.3 locality tier the folder mutators carry:
+    # both take a list of hub `model.id`s and write or delete hub rows, they
+    # take no host path, and neither touches the filesystem — Forget drops
+    # database rows and never unlinks a file. `PATCH /models` is the shelf's
+    # only inline non-authz guard (it refuses a correction the hub's CHECK
+    # constraints would reject) and that is a data check, not a scope one.
+    ("PATCH", "/api/v1/models"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/models/forget"): RoutePolicy(_OWNER),
     # ── model_folders.py (shelf plan B5; §16.3 host-capability for the writes)
     # The read is OWNER_ONLY like the rest of the shelf. Every mutator and the
     # rescan take — or walk — a caller-supplied host path, which is the
