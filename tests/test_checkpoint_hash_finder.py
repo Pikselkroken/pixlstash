@@ -19,8 +19,10 @@ import os
 import pytest
 
 from pixlstash.hub.db import HubDatabase
+from pixlstash.task_runner import TaskRunner
 from pixlstash.tasks.checkpoint_hash_task import CheckpointHashTask
 from pixlstash.tasks.missing_checkpoint_hash_finder import MissingCheckpointHashFinder
+from pixlstash.work_planner import WorkPlanner
 
 
 @pytest.fixture
@@ -363,6 +365,60 @@ class TestFinder:
         finder.on_task_complete(task, RuntimeError("hub went away"))
 
         assert finder.find_task() is None
+
+    def test_a_planner_stop_leaves_the_batch_eligible(self, hub, tmp_path):
+        # A task the planner found but never submitted did not fail, it never
+        # ran. Releasing its claims is right; deferring its rows for the rest of
+        # the session is not, and Vault.stop() takes this path on every restore.
+        checkpoint_id = register(hub, write_model(tmp_path / "a.safetensors"))
+        finder = MissingCheckpointHashFinder(hub)
+        planner = WorkPlanner(task_runner=_NeverSubmits(), task_finders=[finder])
+        real_find_task = finder.find_task
+
+        def find_then_stop():
+            task = real_find_task()
+            planner._stop.set()
+            return task
+
+        finder.find_task = find_then_stop
+        assert planner._run_finders_once() is False
+        finder.find_task = real_find_task
+
+        assert finder._handed_out == set(), "the claim was not released"
+        assert finder._deferred == set(), "a task that never ran was deferred"
+        again = finder.find_task()
+        assert again is not None
+        assert again.params["checkpoint_ids"] == [checkpoint_id]
+
+    def test_a_task_cancelled_off_the_queue_leaves_the_batch_eligible(
+        self, hub, tmp_path
+    ):
+        # The common path: Vault.stop() and every full restore drain the queues.
+        checkpoint_id = register(hub, write_model(tmp_path / "a.safetensors"))
+        finder = MissingCheckpointHashFinder(hub)
+        # No workers are started, so the task can only leave through the drain.
+        runner = TaskRunner(name="checkpoint-cancel-test", num_workers=1)
+        planner = WorkPlanner(task_runner=runner, task_finders=[finder])
+        runner.add_task_complete_callback(planner.on_task_complete)
+
+        try:
+            assert planner._run_finders_once() is True
+            assert runner.cancel_pending_tasks() == 1
+
+            assert finder._handed_out == set(), "the claim was not released"
+            assert finder._deferred == set(), "a cancelled task was deferred"
+            again = finder.find_task()
+            assert again is not None
+            assert again.params["checkpoint_ids"] == [checkpoint_id]
+        finally:
+            runner.stop()
+
+
+class _NeverSubmits:
+    """A runner stand-in for the stop-before-submit path, which never calls it."""
+
+    def submit(self, task):
+        raise AssertionError("the planner submitted a task after it had stopped")
 
 
 class TestProgress:

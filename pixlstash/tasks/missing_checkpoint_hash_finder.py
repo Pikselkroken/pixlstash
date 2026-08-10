@@ -6,6 +6,7 @@ import os
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
+from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
 from pixlstash.tasks.checkpoint_hash_task import CheckpointHashTask
 
@@ -111,8 +112,22 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
         return CheckpointHashTask(hub=self._hub, checkpoints=batch)
 
     def on_task_complete(self, task, error) -> None:
-        """Record which rows must not be handed out again this session."""
+        """Record which rows must not be handed out again this session.
+
+        A cancelled task never ran, so its rows are released and left alone:
+        deferring them would strand checkpoints over a plain planner stop or a
+        queue drain (every restore does both) and log it as a hashing failure.
+        """
         ids = (getattr(task, "params", None) or {}).get("checkpoint_ids") or []
+        if isinstance(error, TaskCancelledError):
+            logger.debug(
+                "Checkpoint hash task for %s was cancelled before it ran: %s. "
+                "Those rows stay eligible.",
+                ids,
+                error,
+            )
+            self._handed_out.difference_update(ids)
+            return
         if error is not None:
             logger.warning(
                 "Checkpoint hashing failed for %s: %s. Deferring those rows for "

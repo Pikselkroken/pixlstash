@@ -771,6 +771,34 @@ def test_snapshot_identity_finder_stops_reissuing_a_failing_archive(tmp_path):
     finder.on_task_complete(second, None)
 
 
+def test_snapshot_identity_finder_reissues_an_archive_that_was_only_cancelled(tmp_path):
+    """A cancelled scrub never ran, so the archive must stay eligible.
+
+    Vault.stop() stops the planner and drains the queues, so both cancel paths
+    are ordinary shutdown, not a rare race. Treating them as a scrub failure
+    skipped the archive for the rest of the process and logged that it could not
+    be scrubbed, which is a lie about data still carrying portable identity.
+    """
+    from pixlstash.task_runner import TaskCancelledError
+    from pixlstash.tasks.missing_snapshot_identity_scrub_finder import (
+        MissingSnapshotIdentityScrubFinder,
+    )
+
+    vault = _vault_with_snapshots(tmp_path, [(1, False)])
+    finder = MissingSnapshotIdentityScrubFinder(
+        database=_StubDatabase(vault, str(tmp_path))
+    )
+
+    first = finder.find_task()
+    assert first.params["snapshot_id"] == 1
+    finder.on_task_complete(first, TaskCancelledError("drained from the queue"))
+
+    assert finder._failed == set(), "a task that never ran was recorded as failed"
+    again = finder.find_task()
+    assert again is not None
+    assert again.params["snapshot_id"] == 1
+
+
 def test_snapshot_identity_task_marks_a_missing_archive_done(tmp_path):
     """A dangling registration has no bytes at rest, so nothing can leak."""
     import sqlite3

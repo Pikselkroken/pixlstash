@@ -3,6 +3,7 @@ from sqlmodel import Session, select
 
 from pixlstash.db_models import Snapshot
 from pixlstash.pixl_logging import get_logger
+from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
 from pixlstash.tasks.snapshot_identity_scrub_task import SnapshotIdentityScrubTask
 
@@ -75,9 +76,20 @@ class MissingSnapshotIdentityScrubFinder(BaseTaskFinder):
         produced hundreds of failing tasks per minute in testing. Skipping it
         for the rest of the process keeps the remaining archives draining, and a
         restart retries it once more.
+
+        A cancelled task never got that far. The claims are released and the
+        archive stays eligible, so a planner stop or a queue drain does not skip
+        it for the rest of the process.
         """
         super().on_task_complete(task, error)
         if error is None:
+            return
+        if isinstance(error, TaskCancelledError):
+            logger.debug(
+                "MissingSnapshotIdentityScrubFinder: scrub task cancelled before "
+                "it ran (%s). The archive stays eligible.",
+                error,
+            )
             return
         snapshot_id = (getattr(task, "params", None) or {}).get("snapshot_id")
         if snapshot_id is None:
