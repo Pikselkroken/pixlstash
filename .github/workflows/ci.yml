@@ -168,8 +168,14 @@ jobs:
     # requirement. Absent on fork PRs by design; the prefetch then runs
     # anonymously, which one sequential job is far more likely to survive than
     # eight parallel ones were.
+    # Only a `push` can save this cache (see the save step), so only a `push`
+    # runs the prefetch — and a run that never fetches has no use for the
+    # token. Scoping it this way keeps the secret out of the environment on
+    # pull-request runs, which are the ones that execute the PR's own tree via
+    # `pip install .`. The shards below still carry it unconditionally: they
+    # reach HuggingFace during the tests themselves.
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_TOKEN: ${{ github.event_name == 'push' && secrets.HF_TOKEN || '' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -178,11 +184,11 @@ jobs:
 
       # Only needed to run the prefetch, so it is skipped whenever the cache is
       # already complete — which is every run that does not change the model set.
-      - if: steps.models.outputs.hit != 'true'
+      - if: steps.models.outputs.hit != 'true' && github.event_name == 'push'
         uses: ./.github/actions/setup-backend
 
       - name: Download every model the gate loads
-        if: steps.models.outputs.hit != 'true'
+        if: steps.models.outputs.hit != 'true' && github.event_name == 'push'
         run: python scripts/prefetch_ci_models.py
 
       # Saved only from a BRANCH run, never from a pull request.
@@ -354,8 +360,14 @@ jobs:
   warm_models_windows:
     name: warm model cache (Windows)
     runs-on: windows-latest
+    # Only a `push` can save this cache (see the save step), so only a `push`
+    # runs the prefetch — and a run that never fetches has no use for the
+    # token. Scoping it this way keeps the secret out of the environment on
+    # pull-request runs, which are the ones that execute the PR's own tree via
+    # `pip install .`. The shards below still carry it unconditionally: they
+    # reach HuggingFace during the tests themselves.
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_TOKEN: ${{ github.event_name == 'push' && secrets.HF_TOKEN || '' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -368,19 +380,19 @@ jobs:
       # and a second 0.4 GB Windows entry is not worth it against the 10 GB
       # repo budget this change is trying to get back under.
       - name: Set up Python
-        if: steps.models.outputs.hit != 'true'
+        if: steps.models.outputs.hit != 'true' && github.event_name == 'push'
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.12'
 
       - name: Install dependencies
-        if: steps.models.outputs.hit != 'true'
+        if: steps.models.outputs.hit != 'true' && github.event_name == 'push'
         run: |
           python -m pip install --upgrade pip
           pip install .[test,dev]
 
       - name: Download every model the Windows shards load
-        if: steps.models.outputs.hit != 'true'
+        if: steps.models.outputs.hit != 'true' && github.event_name == 'push'
         run: python scripts/prefetch_ci_models.py
 
       - name: Save the model cache

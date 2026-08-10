@@ -7,7 +7,10 @@ description: >-
   Covers Linux and Windows. Windows had its own inline copy of this cache in
   ci.yml, with different paths and a key that hashed three of these six files;
   the two definitions could not share an entry and the Windows one was never
-  warmed on a branch. See the `warm_models` matrix in ci.yml.
+  warmed on a branch. The writers are now `warm_models` and
+  `warm_models_windows` in ci.yml — two jobs rather than one matrix, because
+  `needs:` on a matrix job waits for every leg and that would put a Windows
+  runner on the Linux gate's critical path.
 
   RESTORE-ONLY for readers, deliberately. `actions/cache` writes only on a key
   MISS, so a model missing from an entry that keeps hitting its primary key can
