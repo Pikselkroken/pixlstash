@@ -231,7 +231,15 @@
               >
                 <v-icon size="16">mdi-chevron-right</v-icon>
               </span>
-              <span class="shelf-group-mark"></span>
+              <!-- Column 2 carries the axis glyph rather than sitting empty:
+                   the reserved width is there either way, and a folder header
+                   with a gap where the row thumbnails are reads as a missing
+                   image rather than as alignment. -->
+              <span class="shelf-group-mark">
+                <v-icon size="18">{{
+                  GROUP_BY_LABELS[store.view.groupBy].icon
+                }}</v-icon>
+              </span>
               <span
                 class="shelf-group-label"
                 :class="`shelf-group-label--${group.labelKind}`"
@@ -303,6 +311,7 @@ import {
   bandGroups,
   bandUsage,
   formatModelSize,
+  GROUP_BY_LABELS,
   SORT_LABELS,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
@@ -584,8 +593,8 @@ watch(
   grid-template-columns: minmax(0, auto) minmax(80px, 1fr) auto;
   align-items: center;
   gap: var(--space-3);
-  margin: 0 0 var(--space-2);
-  padding: var(--space-2) 0;
+  margin: var(--space-2) 0 var(--space-3);
+  padding: var(--space-3) 0;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
@@ -699,10 +708,17 @@ watch(
   transform: rotate(90deg);
 }
 
-/* Column 2. Reserved and empty, so a header's label starts at the same x as
-   the row names under it. */
+/* Column 2. The same reserved width the row thumbnails occupy, so a header's
+   label starts at the same x as the names under it; the axis glyph sits at its
+   left edge rather than centred, or it would drift away from the label. */
 .shelf-group-mark {
   width: var(--entity-thumb);
+  display: inline-flex;
+  align-items: center;
+  /* 0.7 on the canvas colour, the same secondary weight `.shelf-row-meta`
+     carries and a defined theme key — `on-surface-variant` is Vuetify's and is
+     not in this app's palettes. */
+  color: rgba(var(--v-theme-on-background), 0.7);
 }
 
 /* Rank is size, weight and tracking, never opacity: this label is at FULL

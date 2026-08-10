@@ -472,3 +472,17 @@ describe("drive bands", () => {
     expect(wrapper.findAll(".shelf-group-btn").length).toBeGreaterThan(0);
   });
 });
+
+describe("the group header's reserved column", () => {
+  it("carries the axis glyph rather than an empty gap", async () => {
+    // The width is reserved either way so the header's label lines up with the
+    // row names. Left empty it reads as a thumbnail that failed to load.
+    const wrapper = await mountShelf([adapter()]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
+    await wrapper.vm.$nextTick();
+
+    const mark = wrapper.find(".shelf-group-mark");
+    expect(mark.exists()).toBe(true);
+    expect(mark.find("v-icon-stub").exists()).toBe(true);
+  });
+});
