@@ -260,6 +260,41 @@ describe("withEmptyFolders", () => {
     expect(arranged[1].folderId).toBe(2);
   });
 
+  it("does not call a folder empty just because a filter hid its models", () => {
+    // The failure this guards: `groups` is built from the VISIBLE rows, so a
+    // folder full of adapters has no group while Show is narrowed to
+    // checkpoints. Reading "no group" as "no models" would print "No models in
+    // this folder" over a folder holding ninety.
+    const arranged = withEmptyFolders(
+      [],
+      [
+        {
+          id: 1,
+          path: "/models/loras",
+          last_checked: "2026-08-10T00:00:00Z",
+          file_count: 91,
+        },
+        {
+          id: 2,
+          path: "/models/store",
+          last_checked: "2026-08-10T00:00:00Z",
+          file_count: 0,
+        },
+      ],
+    );
+    expect(arranged.map((g) => g.label)).toEqual(["/models/store"]);
+  });
+
+  it("still shows a folder nothing has looked in, whatever its count says", () => {
+    // `file_count` is 0 for an unscanned folder too, but the two are different
+    // facts and only this one is the owner's to act on.
+    const [only] = withEmptyFolders(
+      [],
+      [{ id: 1, path: "/models/new", last_checked: null, file_count: 0 }],
+    );
+    expect(only.emptyReason).toBe("unscanned");
+  });
+
   it("keeps 'never scanned' apart from 'scanned and empty'", () => {
     // Only one of the two is the owner's to act on, and `last_checked` is the
     // discriminator: a folder that has never been walked has no count to be

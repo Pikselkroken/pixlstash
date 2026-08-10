@@ -193,8 +193,12 @@ export function compareGroups(a, b) {
  *
  * The empty group carries `emptyReason`, because "registered and empty" and
  * "never scanned" are different facts and only one of them is the owner's to
- * act on. `last_checked` is the discriminator rather than a zero count: a
- * folder that has never been walked has no count to be zero.
+ * act on. `last_checked` is the discriminator for that pair rather than a zero
+ * count: a folder that has never been walked has no count to be zero.
+ *
+ * `file_count` decides something else — whether the folder is empty at all.
+ * Absence from `groups` cannot answer that, because `groups` is built from the
+ * visible rows and a filter can empty a folder that is full.
  *
  * @param {Array<Object>} groups - the folder groups the rows produced.
  * @param {Array<Object>} folders - rows from `GET /model-folders`.
@@ -206,12 +210,21 @@ export function withEmptyFolders(groups, folders) {
   for (const folder of folders || []) {
     const key = String(folder.path || folder.id || "");
     if (!key || held.has(key)) continue;
+    // "Has no group" is NOT "is empty". `groups` is built from the VISIBLE
+    // rows, so a folder full of adapters has no group at all while Show is
+    // narrowed to checkpoints — and calling that folder empty would be a plain
+    // lie about the disk. The registry knows better: `file_count` counts the
+    // copies registered under the folder in any state, so a folder that holds
+    // something is skipped and simply stays absent from a filtered view, which
+    // is what every other filtered-out row does.
+    const unscanned = !folder.last_checked;
+    if (!unscanned && Number(folder.file_count) > 0) continue;
     empties.push({
       key,
       label: key,
       labelKind: "path",
       folderId: Number(folder.id),
-      emptyReason: folder.last_checked ? "empty" : "unscanned",
+      emptyReason: unscanned ? "unscanned" : "empty",
       rows: [],
     });
   }

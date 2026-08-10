@@ -728,8 +728,13 @@ onMounted(() => {
   // slow or offline mount must not hold up the models. The folder list comes
   // with them now, because a folder holding nothing is only visible if the
   // shelf knows it is registered — the dialog used to be its only reader.
+  //
+  // NOT `quiet`: that suppresses the folder store's `loading`, and the folders
+  // dialog reads it. Opening the dialog while this first fetch is in flight
+  // would show an empty list with no "Reading the registered folders…" state.
+  // Unawaited already means it does not hold up the shelf.
   foldersStore.refreshDevices();
-  foldersStore.refresh({ quiet: true });
+  foldersStore.refresh();
 });
 
 // A credential change (logout, login, share token, restore) empties the store,

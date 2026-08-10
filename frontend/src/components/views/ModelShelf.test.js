@@ -828,7 +828,12 @@ describe("a registered folder holding no models", () => {
     // It is ruled to always exist and to be the default destination for a drop
     // or an import. A destination you cannot see is not a destination.
     listModelFolders.mockResolvedValue([
-      { id: 1, path: "/models/loras", last_checked: "2026-08-10T00:00:00Z" },
+      {
+        id: 1,
+        path: "/models/loras",
+        last_checked: "2026-08-10T00:00:00Z",
+        file_count: 1,
+      },
       { id: 2, path: "/models/store", last_checked: "2026-08-10T00:00:00Z" },
     ]);
     const wrapper = await mountShelf([
@@ -862,7 +867,12 @@ describe("a registered folder holding no models", () => {
     // case asserted is the one the owner actually hits: models elsewhere, and
     // one folder nothing has looked in.
     listModelFolders.mockResolvedValue([
-      { id: 1, path: "/models/loras", last_checked: "2026-08-10T00:00:00Z" },
+      {
+        id: 1,
+        path: "/models/loras",
+        last_checked: "2026-08-10T00:00:00Z",
+        file_count: 1,
+      },
       { id: 2, path: "/models/store", last_checked: null },
     ]);
     const wrapper = await mountShelf([
@@ -901,7 +911,12 @@ describe("a registered folder holding no models", () => {
   it("is not selectable, having no model to act on", async () => {
     // A verb armed against a folder would be a verb with nothing to write.
     listModelFolders.mockResolvedValue([
-      { id: 1, path: "/models/loras", last_checked: "2026-08-10T00:00:00Z" },
+      {
+        id: 1,
+        path: "/models/loras",
+        last_checked: "2026-08-10T00:00:00Z",
+        file_count: 1,
+      },
       { id: 2, path: "/models/store", last_checked: null },
     ]);
     const wrapper = await mountShelf([

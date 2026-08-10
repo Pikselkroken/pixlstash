@@ -1405,6 +1405,13 @@ models is thirty-six headers. Under `Folder` the second level is spent on the
     folder", discriminated on `last_checked IS NULL` rather than on a zero count,
     because a folder nothing has walked has no count to be zero. Only one of the
     two states is the owner's to act on.
+  - **Absence from `groups` does not mean empty**, which is why the registry's
+    `file_count` decides and not the group list. `groups` is built from the
+    VISIBLE rows, so a folder full of adapters has no group at all while `Show`
+    is narrowed to checkpoints; synthesising an empty group there would print
+    "No models in this folder" over a folder holding ninety. A folder with
+    `file_count > 0` is skipped and stays absent from a filtered view, exactly
+    as every other filtered-out row does.
   - The note is a plain `<li>`, never a `role="option"`: there is no model there
     for a verb to write.
   - It applies under `Group by: Folder` only. A folder appearing while grouped by
