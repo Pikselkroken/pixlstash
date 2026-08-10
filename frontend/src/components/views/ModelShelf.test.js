@@ -31,9 +31,12 @@ const globalOpts = {
       },
       ShelfShowPanel: true,
       ShelfSortPanel: true,
-      // Its own suite mounts it. Here it would only drag Vuetify's dialog and
-      // tooltip providers into a suite that installs neither.
+      // Their own suites mount them. Here they would only drag Vuetify's dialog
+      // and tooltip providers into a suite that installs neither. The selection
+      // BAR is deliberately left real: what a selection does to this view is
+      // this suite's business.
       ModelFoldersDialog: true,
+      ShelfEditDialog: true,
     },
   },
 };
@@ -364,5 +367,67 @@ describe("the Sort split-button", () => {
     await wrapper.vm.$nextTick();
     const status = wrapper.find('[role="status"]');
     expect(status.text()).toBe("Sorted by name: A to Z");
+  });
+});
+
+describe("selecting rows", () => {
+  it("ticks by model, so one file selected in two folders is one selection", async () => {
+    // Under folder grouping a model with copies in two folders is DRAWN twice.
+    // The verbs write the model, so a per-row selection would let the same file
+    // be half selected and ask the reader to hold a distinction the data has
+    // not got.
+    const wrapper = await mountShelf([
+      adapter({
+        locations: [
+          { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
+          { state: "present", folder_id: 2, folder_path: "/b", relpath: "x" },
+        ],
+      }),
+    ]);
+    useModelShelfStore().setView({ groupBy: "folder" });
+    await wrapper.vm.$nextTick();
+
+    const boxes = wrapper.findAll(".shelf-row-pick input");
+    expect(boxes).toHaveLength(2);
+    await boxes[0].trigger("change");
+    await wrapper.vm.$nextTick();
+
+    expect(useModelShelfStore().selectedRows).toHaveLength(1);
+    expect(wrapper.findAll(".shelf-row--selected")).toHaveLength(2);
+  });
+
+  it("shows no selection bar until something is selected", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    expect(wrapper.find(".shelf-selbar").exists()).toBe(false);
+
+    await wrapper.find(".shelf-row-pick input").trigger("change");
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper.find(".shelf-selbar"))).toContain("1 model selected");
+  });
+
+  it("names the row in the checkbox, not just 'checkbox'", async () => {
+    // 1,800 controls all announcing "checkbox" is the same as none of them
+    // announcing anything.
+    const wrapper = await mountShelf([adapter({ display_name: "Clementine" })]);
+    expect(wrapper.find(".shelf-row-pick input").attributes("aria-label")).toBe(
+      "Select Clementine",
+    );
+  });
+
+  it("drops a selected model that the shelf no longer holds", async () => {
+    // Without the prune the bar counts rows that are not on screen and the next
+    // verb posts an id the server has to refuse.
+    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    const store = useModelShelfStore();
+    for (const box of wrapper.findAll(".shelf-row-pick input")) {
+      await box.trigger("change");
+    }
+    expect(store.selectedRows).toHaveLength(2);
+
+    listAdapters.mockResolvedValue([adapter({ id: 1 })]);
+    await store.fetchRows();
+    await wrapper.vm.$nextTick();
+
+    expect([...store.selectedIds]).toEqual([1]);
   });
 });

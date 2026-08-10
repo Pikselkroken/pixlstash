@@ -11,13 +11,23 @@ import { setActivePinia, createPinia } from "pinia";
 const listAdapters = vi.fn();
 const listCheckpoints = vi.fn();
 
+const editModels = vi.fn();
+const forgetModels = vi.fn();
+
 vi.mock("../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
   listAdapters: (...args) => listAdapters(...args),
   listCheckpoints: (...args) => listCheckpoints(...args),
+  editModels: (...args) => editModels(...args),
+  forgetModels: (...args) => forgetModels(...args),
 }));
 
-import { useModelShelfStore } from "./useModelShelfStore";
+import {
+  editReceipt,
+  forgetReceipt,
+  useModelShelfStore,
+} from "./useModelShelfStore";
+import { useNoticeStore } from "./useNoticeStore";
 
 /** One row of the shape `/adapters` really returns (see the fixture probe). */
 function adapter(overrides = {}) {
@@ -598,5 +608,107 @@ describe("the view is remembered", () => {
     const store = useModelShelfStore();
     expect(store.view.groupBy).toBe("none");
     expect(store.view.sortKey).toBe("added_at");
+  });
+});
+
+describe("the verbs", () => {
+  beforeEach(() => {
+    editModels.mockReset();
+    forgetModels.mockReset();
+    listAdapters.mockResolvedValue([]);
+    listCheckpoints.mockResolvedValue([]);
+  });
+
+  it("sends only the fields the verb owns", async () => {
+    // The whole reason `PATCH /models` distinguishes an absent field from a
+    // null one: Set base model across a selection must not blank the names.
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({ id: 1 }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ];
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+    editModels.mockResolvedValue({ updated: [1, 2], fields: ["base_model"] });
+
+    await store.editSelected({ base_model: "FLUX.2" });
+    expect(editModels).toHaveBeenCalledWith([1, 2], { base_model: "FLUX.2" });
+  });
+
+  it("keeps the selection after an edit and drops it after a forget", async () => {
+    // An edit is something you may want to follow with another edit on the same
+    // rows. A forget leaves nothing to act on.
+    const store = useModelShelfStore();
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    // The refetch that follows an edit brings the row back, so the selection
+    // has something to survive on. (A row that really left the shelf is pruned,
+    // which is the next test's business.)
+    listAdapters.mockResolvedValue([adapter({ id: 1 })]);
+    editModels.mockResolvedValue({ updated: [1], fields: ["kind"] });
+    await store.editSelected({ kind: "lokr" });
+    expect([...store.selectedIds]).toEqual([1]);
+
+    forgetModels.mockResolvedValue({ forgotten: [1], refused: [] });
+    await store.forgetSelected();
+    expect([...store.selectedIds]).toEqual([]);
+  });
+
+  it("says what failed rather than swallowing it", async () => {
+    const store = useModelShelfStore();
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    editModels.mockRejectedValue(new Error("nope"));
+
+    expect(await store.editSelected({ base_model: "X" })).toBe(false);
+    expect(useNoticeStore().notices.at(-1).level).toBe("error");
+  });
+});
+
+describe("the receipts", () => {
+  it("names the columns it wrote, because there is no undo to inspect", () => {
+    expect(editReceipt(12, { base_model: "FLUX.2" })).toBe(
+      "Set the base model on 12 models.",
+    );
+    expect(editReceipt(1, { display_name: "Clementine" })).toBe(
+      "Renamed to Clementine.",
+    );
+    expect(editReceipt(1, { display_name: null })).toContain(
+      "derived from the filename",
+    );
+  });
+
+  it("reports the refusals, which are the interesting half", () => {
+    // "3 forgotten, 2 still on disk" is the normal outcome of a selection made
+    // a minute ago; a receipt naming only the 3 reads as a silent partial
+    // failure.
+    expect(forgetReceipt(3, 2)).toBe(
+      "Forgot 3 models. 2 models still have copies and were kept.",
+    );
+    expect(forgetReceipt(1, 0)).toBe("Forgot 1 model.");
+    expect(forgetReceipt(0, 1)).toContain("nothing was forgotten");
+  });
+});
+
+describe("what a verb may reach", () => {
+  it("drops a selected row that the filters stop showing", () => {
+    // Load-bearing: `selectedRows` reads `visibleRows`, not `rows`. A verb must
+    // never act on something the reader cannot see, and with no undo behind any
+    // of it that is the safer half of the trade.
+    const store = useModelShelfStore();
+    store.setFilters({ unclassified: true });
+    store.rows = [
+      adapter({ id: 1 }),
+      adapter({ id: 2, file_kind: "unknown", kind: null }),
+    ];
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+    expect(store.selectedRows.map((r) => r.id)).toEqual([1, 2]);
+
+    store.setFilters({ unclassified: false });
+    expect(store.selectedRows.map((r) => r.id)).toEqual([1]);
+    // The id is still remembered, so re-ticking the box brings it back rather
+    // than making the reader select it again.
+    expect([...store.selectedIds]).toEqual([1, 2]);
   });
 });

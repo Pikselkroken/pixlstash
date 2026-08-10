@@ -2,10 +2,13 @@ import { computed, onScopeDispose, reactive, ref } from "vue";
 import { defineStore } from "pinia";
 import {
   BASE_MODEL_UNASSIGNED,
+  editModels,
+  forgetModels,
   listAdapters,
   listCheckpoints,
 } from "../api/modelShelf";
 import { onSessionReset } from "../utils/apiClient";
+import { useNoticeStore } from "./useNoticeStore";
 import { errorDetail } from "../utils/apiError";
 import { locationState, modelName } from "../utils/modelShelf";
 
@@ -89,6 +92,56 @@ function compareOn(a, b, key, direction) {
       sensitivity: "base",
     }) * sign
   );
+}
+
+/** "1 model" / "12 models", so no receipt ever reads "1 models". */
+function modelCount(n) {
+  return `${Number(n).toLocaleString()} ${n === 1 ? "model" : "models"}`;
+}
+
+/** What each curated column is called in a receipt. */
+const FIELD_WORDS = {
+  display_name: "name",
+  base_model: "base model",
+  kind: "algorithm",
+  file_kind: "type",
+};
+
+/**
+ * Say what an edit did, naming the columns rather than the request.
+ *
+ * There is no undo here, so the receipt is the only record: it has to be
+ * specific enough that a wrong bulk write is recognised as wrong immediately,
+ * while the previous values are still in the reader's head.
+ */
+export function editReceipt(count, changes) {
+  const fields = Object.keys(changes)
+    .map((key) => FIELD_WORDS[key] || key)
+    .join(" and ");
+  if (changes.display_name !== undefined && count === 1) {
+    return changes.display_name
+      ? `Renamed to ${changes.display_name}.`
+      : "Cleared the name. The shelf shows one derived from the filename.";
+  }
+  return `Set the ${fields} on ${modelCount(count)}.`;
+}
+
+/**
+ * Say what a forget destroyed and what it left, in that order.
+ *
+ * The refusals are named rather than swallowed: "3 forgotten, 2 still on disk"
+ * is the normal outcome of a selection made a minute ago, and a receipt that
+ * reported only the 3 would read as a silent partial failure.
+ */
+export function forgetReceipt(gone, kept) {
+  if (!gone && !kept) return "Nothing to forget.";
+  if (!gone) {
+    return `${modelCount(kept)} still ${kept === 1 ? "has a copy" : "have copies"} on this machine, so nothing was forgotten.`;
+  }
+  const forgotten = `Forgot ${modelCount(gone)}.`;
+  return kept
+    ? `${forgotten} ${modelCount(kept)} still ${kept === 1 ? "has a copy" : "have copies"} and ${kept === 1 ? "was" : "were"} kept.`
+    : forgotten;
 }
 
 /** The default view: newest added first, ungrouped, exactly what F1 showed. */
@@ -352,6 +405,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         ...results.flat(),
       ];
       loaded.value = true;
+      pruneSelection();
     } catch (err) {
       if (startedAt !== epoch) return;
       error.value = errorDetail(err) || err?.message || String(err);
@@ -552,9 +606,147 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * selection survives: it is the user's own preference, holds no ids, and is
    * the same reasoning that exempts `useUserPrefsStore`.
    */
+  // ── Selection and the verbs (F3) ────────────────────────────────────────
+
+  /**
+   * The models the verbs will act on, by hub `model.id`.
+   *
+   * By MODEL, not by rendered row. Under folder grouping one model is drawn
+   * once per folder holding a copy of it, and the verbs write the model: a
+   * per-row selection would let the same file be "half selected" and would ask
+   * the reader to understand a distinction the data does not have.
+   *
+   * Not persisted, and dropped by a session reset with the rows: a selection is
+   * a gesture made against a list that is on screen, not a preference.
+   */
+  const selectedIds = ref(new Set());
+
+  /**
+   * The selected models as rows, in the order the list draws them.
+   *
+   * Derived from `visibleRows` and NOT from `rows`, which is load-bearing: a
+   * verb may only ever act on something the reader can see. Narrowing the
+   * `Show` selection therefore drops rows out of the selection, and an
+   * unclassified file has to have its box ticked before it can be corrected at
+   * all. With no undo behind any of this, "you cannot act on what is off
+   * screen" is the safer half of the trade.
+   */
+  const selectedRows = computed(() =>
+    visibleRows.value.filter((row) => selectedIds.value.has(row.id)),
+  );
+
+  function isSelected(id) {
+    return selectedIds.value.has(id);
+  }
+
+  /**
+   * Add or remove one model.
+   *
+   * A new Set rather than a mutation: Vue does not track `Set.add`, so the
+   * bar's count and every row's tick would go stale until something else
+   * happened to re-render.
+   */
+  function toggleSelected(id) {
+    const next = new Set(selectedIds.value);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selectedIds.value = next;
+  }
+
+  /** Select every model the current filters show, ungrouped duplicates and all. */
+  function selectVisible() {
+    selectedIds.value = new Set(visibleRows.value.map((row) => row.id));
+  }
+
+  function clearSelection() {
+    if (selectedIds.value.size) selectedIds.value = new Set();
+  }
+
+  /**
+   * Drop ids the shelf no longer holds.
+   *
+   * Run after every fetch. Without it a forgotten model stays in the selection
+   * for the life of the tab, so the bar counts rows that are not on screen and
+   * the next verb posts an id the server has to refuse.
+   */
+  function pruneSelection() {
+    if (!selectedIds.value.size) return;
+    const known = new Set(rows.value.map((row) => row.id));
+    const kept = [...selectedIds.value].filter((id) => known.has(id));
+    if (kept.length !== selectedIds.value.size) {
+      selectedIds.value = new Set(kept);
+    }
+  }
+
+  /**
+   * Write curated columns onto the selection, then say what happened.
+   *
+   * The caller owns the confirmation: a bulk base-model overwrite is one of the
+   * shelf's two prompts and this is not the layer that knows the selection was
+   * made deliberately.
+   *
+   * @param {Object} changes - any of `display_name`, `base_model`, `kind`,
+   *   `file_kind`. Only the keys present are sent.
+   * @returns {Promise<boolean>} true when the write landed.
+   */
+  async function editSelected(changes) {
+    const notices = useNoticeStore();
+    const ids = selectedRows.value.map((row) => row.id);
+    if (!ids.length) return false;
+    try {
+      const body = await editModels(ids, changes);
+      await fetchRows();
+      notices.push({
+        level: "success",
+        text: editReceipt(body?.updated?.length ?? ids.length, changes),
+      });
+      return true;
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "Could not write that change.",
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Forget the selection, then say what was forgotten and what was kept.
+   *
+   * The refusals are the interesting half of the receipt: the server gates on
+   * each row's state, so "3 forgotten, 2 still on disk" is the normal outcome
+   * of a selection made a minute ago, not an error.
+   *
+   * @returns {Promise<boolean>} true when the call was made at all.
+   */
+  async function forgetSelected() {
+    const notices = useNoticeStore();
+    const ids = selectedRows.value.map((row) => row.id);
+    if (!ids.length) return false;
+    try {
+      const body = await forgetModels(ids);
+      clearSelection();
+      await fetchRows();
+      const gone = body?.forgotten?.length ?? 0;
+      const kept = body?.refused?.length ?? 0;
+      notices.push({
+        level: gone ? "success" : "info",
+        text: forgetReceipt(gone, kept),
+      });
+      return true;
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "Could not forget those models.",
+      });
+      return false;
+    }
+  }
+
   function resetForSession() {
     epoch += 1;
     rows.value = [];
+    selectedIds.value = new Set();
     loaded.value = false;
     error.value = "";
     loading.value = false;
@@ -587,6 +779,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     filters,
     view,
     collapsed,
+    selectedIds,
+    selectedRows,
+    isSelected,
+    toggleSelected,
+    selectVisible,
+    clearSelection,
+    editSelected,
+    forgetSelected,
     rows,
     loading,
     loaded,
