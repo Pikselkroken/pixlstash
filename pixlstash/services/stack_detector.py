@@ -210,6 +210,14 @@ def apply_stack(hub: HubDatabase, model_ids: list[int], name: str | None) -> int
     its own UPDATE changes nothing and aborts the whole stack rather than being
     torn out of the stack it already has.
 
+    :meth:`~pixlstash.hub.db.HubDatabase.transaction` now issues
+    ``BEGIN IMMEDIATE``, so the leading SELECT is inside the write transaction
+    after all and the race described above can no longer be scheduled. The
+    re-check stays regardless. It keeps the invariant *local*: reading this
+    function tells you the guard holds, without also knowing what a different
+    module does at ``BEGIN``, and it is the half that survives if anyone ever
+    relaxes that.
+
     The same reasoning applies to the ``present`` gate. ``propose_stacks``
     refuses a model with no copy on disk, and refusing it here too is what stops
     the route being a way to do what the dry run never offers.

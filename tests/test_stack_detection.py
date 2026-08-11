@@ -294,26 +294,34 @@ def test_applying_refuses_a_model_with_no_copy_on_disk(hub, tmp_path):
     assert exc.value.reason == "already_stacked"
 
 
-def test_a_writer_that_lands_between_the_gate_and_the_update_cannot_be_overwritten(
+def test_a_row_that_stops_being_loose_between_the_gate_and_the_update_aborts(
     hub, tmp_path
 ):
-    """The window pysqlite leaves open, closed on the UPDATE itself.
+    """The gate is re-checked on the UPDATE itself, not merely read first.
 
-    The hub connects with `isolation_level=""`, so a transaction opens on DML
-    only: the gate SELECT runs in autocommit and the INSERT is what begins the
-    write. A second connection committing in that gap used to be silently
-    overwritten.
+    **This test used to drive a SECOND CONNECTION into the gap**, because the
+    gap was reachable: the hub connects ``isolation_level=""``, so pysqlite
+    opened a transaction on DML only and the gate SELECT ran in autocommit,
+    taking no lock. `HubDatabase.transaction` now opens with ``BEGIN
+    IMMEDIATE``, so that connection is refused the write lock instead of
+    slipping in, and the old version of this test failed with "database is
+    locked" rather than proving anything. The cross-process half is asserted
+    directly now, in
+    `test_hub_engine.py::test_another_process_cannot_write_between_a_gate_read_and_its_write`.
 
-    **The writer is forced INTO that gap rather than run before it.** A first
-    attempt at this test committed from the other connection before calling
-    `apply_stack`, which the gate SELECT simply excluded — it exercised the
-    SELECT and left the UPDATE guard untested, and stayed green with that guard
-    deleted. `_step_of` is called by the cover sort, which runs after the SELECT
-    and before the first UPDATE, so patching it is what puts the commit exactly
-    where the race is.
+    So the interleaved write goes through `hub.connection` instead, which is the
+    SAME connection `apply_stack` is holding, and therefore lands inside its open
+    transaction. That still exercises exactly what the guard is for: a row that
+    is loose when the gate reads it and is not loose by the time its own UPDATE
+    runs, whatever moved it.
+
+    **The write is forced INTO the gap rather than run before it.** A first
+    attempt committed before calling `apply_stack`, which the gate SELECT simply
+    excluded: it exercised the SELECT, left the UPDATE guard untested, and
+    stayed green with that guard deleted. `_step_of` is called by the cover sort,
+    which runs after the SELECT and before the first UPDATE, so patching it is
+    what puts the write exactly where the guard has to catch it.
     """
-    import sqlite3
-
     from pixlstash.services import stack_detector
 
     folder = _folder(hub, str(tmp_path / "loras"))
@@ -323,38 +331,40 @@ def test_a_writer_that_lands_between_the_gate_and_the_update_cannot_be_overwritt
     real_step_of = stack_detector._step_of
     landed = []
 
-    def commit_from_another_connection(filename):
+    def write_inside_the_open_transaction(filename):
         if not landed:
             landed.append(True)
-            other = sqlite3.connect(hub.path, isolation_level="")
-            try:
-                other.execute(
-                    "INSERT INTO adapter_stack (id, name, created_at, updated_at) "
-                    "VALUES (99, 'Other', '2026-08-11T00:00:00Z', "
-                    "'2026-08-11T00:00:00Z')"
-                )
-                other.execute("UPDATE model SET stack_id = 99 WHERE id = ?", (second,))
-                other.commit()
-            finally:
-                other.close()
+            conn = hub.connection
+            conn.execute(
+                "INSERT INTO adapter_stack (id, name, created_at, updated_at) "
+                "VALUES (99, 'Other', '2026-08-11T00:00:00Z', "
+                "'2026-08-11T00:00:00Z')"
+            )
+            conn.execute("UPDATE model SET stack_id = 99 WHERE id = ?", (second,))
         return real_step_of(filename)
 
-    stack_detector._step_of = commit_from_another_connection
+    stack_detector._step_of = write_inside_the_open_transaction
     try:
         with pytest.raises(StackRefused):
             apply_stack(hub, [first, second], "Race")
     finally:
         stack_detector._step_of = real_step_of
 
-    assert landed, "the interleaved writer never ran; the window was not exercised"
+    assert landed, "the interleaved write never ran; the window was not exercised"
 
-    # The other writer's stack is intact and nothing half-landed.
+    # StackRefused is not a sqlite3.Error, so it leaves `transaction()` through
+    # `with self._conn`, which rolls back. Nothing half-landed: not the stack the
+    # call was trying to build, and not the interleaved write either.
     row = hub.fetchone("SELECT stack_id FROM model WHERE id = ?", (second,))
-    assert row["stack_id"] == 99
+    assert row["stack_id"] is None
     row = hub.fetchone("SELECT stack_id FROM model WHERE id = ?", (first,))
     assert row["stack_id"] is None
+    assert hub.fetchone("SELECT id FROM adapter_stack WHERE id = 99") is None
     stacks = hub.fetchone("SELECT COUNT(*) AS n FROM adapter_stack")
-    assert stacks["n"] == 1, "the rolled-back INSERT left an orphan stack row"
+    # Zero, where the second-connection version of this test expected one: the
+    # interleaved write is now inside the SAME transaction, so the rollback
+    # takes it too. There is no committed outside writer left to survive.
+    assert stacks["n"] == 0, "a rolled-back INSERT left an orphan stack row"
 
 
 def test_applying_refuses_models_that_are_not_all_in_one_folder(hub, tmp_path):

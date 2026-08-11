@@ -315,10 +315,38 @@ class HubDatabase:
         Deliberately minimal: the hub's multi-process contract depends on write
         transactions staying short, so this is for one logical write, never for
         a block that also touches the filesystem or waits on a user.
+
+        **The ``BEGIN IMMEDIATE`` is load-bearing, not a tidiness flourish.**
+        ``with self._conn`` commits on exit but never begins, and the connection
+        is opened ``isolation_level=""`` (see :meth:`_connect`), which defers
+        ``BEGIN`` to the first *DML* statement. A block that reads before it
+        writes therefore ran its reads in **autocommit**, and in WAL an
+        autocommit read takes no lock at all, so another process could commit
+        between the read and the write, and the write would still land on the
+        strength of what the read saw. Every caller that gates a write on a
+        preceding ``SELECT`` was exposed, and several document a critical
+        section they did not have. ``BEGIN IMMEDIATE`` takes the write lock up
+        front, so the whole block is one transaction and ``HUB_BUSY_TIMEOUT_S``
+        applies to acquiring it.
+
+        The other process is not hypothetical: this module exists because the
+        server and the ``pixlstash.libraries`` CLI open this file at the same
+        moment (see the module docstring). ``self._lock`` is a ``threading``
+        lock and does nothing about that.
         """
         with self._lock:
             try:
                 with self._conn:
+                    # Guarded because SQLite has no nested transactions: a second
+                    # `BEGIN` raises. One can already be open here without any
+                    # nesting in this module's own callers, because
+                    # `HubDatabase.connection` hands the raw connection out and
+                    # a caller that ran DML on it left a transaction behind.
+                    # Deliberately only the BEGIN is skipped: `with self._conn`
+                    # still owns commit and rollback, exactly as before, so this
+                    # adds no second way for a hub write to be published.
+                    if not self._conn.in_transaction:
+                        self._conn.execute("BEGIN IMMEDIATE")
                     yield self._conn
             except sqlite3.Error as exc:
                 logger.error("Hub transaction on %s rolled back: %s", self._path, exc)

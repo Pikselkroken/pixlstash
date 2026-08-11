@@ -1002,3 +1002,92 @@ def test_hub_file_is_the_only_database_touched(hub_path, tmp_path):
     """Opening the hub must not create a vault next to it."""
     HubEngine(hub_path).close()
     assert not os.path.exists(os.path.join(str(tmp_path), "vault.db"))
+
+
+def test_transaction_holds_the_write_lock_before_its_first_write(hub_path):
+    """A gate read inside ``transaction()`` must already be in the transaction.
+
+    ``with self._conn`` commits on exit but never begins, and the connection is
+    opened ``isolation_level=""``, which defers ``BEGIN`` to the first *DML*
+    statement. So a block that read before it wrote ran its read in autocommit
+    and only became a transaction at the write. Callers that gate a write on a
+    preceding ``SELECT`` -- ``forget_models``, ``apply_stack`` -- documented a
+    critical section they did not have.
+
+    Asserting ``in_transaction`` right after a read is the whole check: it is
+    False on the unfixed code and True once ``BEGIN IMMEDIATE`` leads the block.
+    """
+    hub = HubDatabase(hub_path)
+    try:
+        with hub.transaction() as conn:
+            conn.execute("SELECT COUNT(*) FROM model").fetchone()
+            assert conn.in_transaction, (
+                "the gate read ran in autocommit -- another process can commit "
+                "between it and the write it is gating"
+            )
+    finally:
+        hub.close()
+
+
+def test_another_process_cannot_write_between_a_gate_read_and_its_write(hub_path):
+    """The window this closes is cross-process, so prove it with a real one.
+
+    ``self._lock`` is a ``threading`` lock, and the module docstring is explicit
+    that the server and the ``pixlstash.libraries`` CLI open this file at the
+    same moment. In WAL an autocommit read takes no lock whatsoever, so the
+    second connection here could previously acquire the write lock *while the
+    first was between its gate read and its DELETE* -- which is the race in
+    exactly the shape a separate process runs it.
+
+    The second connection asks for the write lock directly rather than writing a
+    row, so the assertion does not depend on any table's columns.
+    """
+    hub = HubDatabase(hub_path)
+    other = sqlite3.connect(hub_path, isolation_level="")
+    other.execute("PRAGMA busy_timeout=100")  # do not wait out the hub's 5 s
+    try:
+        with hub.transaction() as conn:
+            conn.execute("SELECT COUNT(*) FROM model").fetchone()
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                other.execute("BEGIN IMMEDIATE")
+    finally:
+        other.close()
+        hub.close()
+
+
+def test_transaction_survives_an_already_open_transaction(hub_path):
+    """``BEGIN IMMEDIATE`` must not fire when one is already open.
+
+    SQLite has no nested transactions, so an unguarded second ``BEGIN`` raises
+    "cannot start a transaction within a transaction". This is reachable without
+    any nesting in ``pixlstash``'s own callers: :attr:`HubDatabase.connection`
+    hands the raw connection out, and a caller that runs DML on it leaves a
+    transaction open behind ``transaction()``'s back. Several tests in
+    ``test_hub_registry.py`` do exactly that.
+
+    The guard skips only the ``BEGIN``. ``with self._conn`` still owns the
+    commit, so the write below lands just as it did before the fix.
+    """
+    hub = HubDatabase(hub_path)
+    try:
+        # Leave a transaction open the way `hub.connection` lets a caller do.
+        hub.connection.execute(
+            "INSERT INTO model_folder (path, kind, movable) VALUES (?, ?, ?)",
+            ("/left/open", "lora", "no"),
+        )
+        assert hub.connection.in_transaction, "precondition: DML opened one"
+
+        with hub.transaction() as conn:  # must not raise
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, movable) VALUES (?, ?, ?)",
+                ("/written/inside", "lora", "no"),
+            )
+    finally:
+        hub.close()
+
+    survivor = sqlite3.connect(hub_path)
+    try:
+        paths = {row[0] for row in survivor.execute("SELECT path FROM model_folder")}
+    finally:
+        survivor.close()
+    assert "/written/inside" in paths, "the block's own write must still commit"
