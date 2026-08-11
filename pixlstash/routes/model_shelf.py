@@ -19,6 +19,15 @@ default. It surfaces on the *adapters* block under an explicit
 is therefore hash-addressable exactly as an adapter is. ``/checkpoints`` never
 returns one.
 
+**Folding happens on the way out, not in the database.** Every row carries
+``base_model_folded`` beside its raw ``base_model``. That is where the fold
+belongs: ``base_model`` is free text by rule, and the shelf sorts, filters,
+groups and builds its facets **client-side** (one request per selected block,
+concatenated — see ``useModelShelfStore``), so a canonical column or a SQLite
+collation would fold the one path the shelf does not use and leave the other
+four unfolded. One computed field serves all of them, costs a dict lookup per
+row, and needs no migration.
+
 **A null ``base_model`` is a bulk state, not an edge case.** Measured against 91
 real adapters, 37 % carry no title, no base model and no trigger word at all. So
 ``base_model`` is serialised as ``null`` rather than coerced to a string, is never
@@ -79,6 +88,7 @@ from pixlstash.services.model_shelf_service import (
     update_models,
 )
 from pixlstash.utils.adapter_header import FILE_ADAPTER, FILE_CHECKPOINT, FILE_UNKNOWN
+from pixlstash.utils.known_base_models import fold
 
 logger = get_logger(__name__)
 
@@ -193,6 +203,20 @@ class ModelResponse(BaseModel):
             "What the trainer said this was trained against, verbatim. Null for "
             "the large minority of real adapters that record nothing — shown as "
             "'Not set', never dropped, and selectable with base_model=UNASSIGNED."
+        ),
+    )
+    base_model_folded: Optional[str] = Field(
+        default=None,
+        description=(
+            "The canonical label `base_model` folds to, or null when the string "
+            "is one `known_base_models` does not recognise (which is not an "
+            "error: it is stored and displayed verbatim either way).\n\n"
+            "Computed per response rather than stored, because folding is a "
+            "**display** concern and the column is free text by rule. Group, "
+            "filter and facet on this so `sdxl_base_v1-0`, `SDXL`, `sdxl base` "
+            "and `stable diffusion xl` land in one bucket rather than four; "
+            "**show `base_model`**, because the raw spelling is what the file "
+            "actually says."
         ),
     )
     trigger_words: Optional[str] = None
@@ -412,6 +436,7 @@ def _to_response(
         display_name=row["display_name"],
         filename=row["filename"],
         base_model=row["base_model"],
+        base_model_folded=fold(row["base_model"]),
         trigger_words=row["trigger_words"],
         provenance=row["provenance"],
         training_run_id=row["training_run_id"],

@@ -285,6 +285,13 @@
             aria-multiselectable="true"
             :aria-label="grouped ? group.label : 'Models'"
           >
+            <!-- Not a `role="option"`: there is nothing here to select. A
+                 registered folder with no models says which of the two states
+                 it is in, because "we have not looked yet" is the owner's to
+                 act on and "we looked and it is empty" is not. -->
+            <li v-if="!group.rows.length" class="shelf-empty-folder">
+              {{ EMPTY_FOLDER_NOTE[group.emptyReason] }}
+            </li>
             <li
               v-for="row in group.rows"
               :key="row.rowKey"
@@ -360,6 +367,7 @@ import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import {
   bandGroups,
   bandUsage,
+  withEmptyFolders,
   formatModelSize,
   GROUP_BY_LABELS,
   SORT_LABELS,
@@ -588,6 +596,17 @@ function onRowKeydown(row, event) {
   }
 }
 
+/**
+ * What an empty folder group says, per reason.
+ *
+ * Never a bare "0 models": the count is already in the header, and the reader's
+ * question is whether the shelf has looked.
+ */
+const EMPTY_FOLDER_NOTE = {
+  unscanned: "Not scanned yet.",
+  empty: "No models in this folder.",
+};
+
 /** "1 model" / "12 models", so no line ever reads "1 models". */
 function modelCount(n) {
   return `${n.toLocaleString()} ${n === 1 ? "model" : "models"}`;
@@ -603,10 +622,14 @@ function modelCount(n) {
  * arrangement is still testable without a component.
  */
 const shownGroups = computed(() => {
-  if (store.view.groupBy !== "folder" || store.view.folderLayout !== "drive") {
-    return store.groups;
-  }
-  return bandGroups(store.groups, foldersStore.deviceByFolderId);
+  if (store.view.groupBy !== "folder") return store.groups;
+  // A registered folder holding nothing has no rows and therefore no group.
+  // The managed store is exactly that on a fresh install, and it is the ruled
+  // default destination for a drop or an import — which it cannot be while the
+  // owner has no way to see it.
+  const groups = withEmptyFolders(store.groups, foldersStore.folders);
+  if (store.view.folderLayout !== "drive") return groups;
+  return bandGroups(groups, foldersStore.deviceByFolderId);
 });
 
 function usage(band) {
@@ -702,8 +725,16 @@ onMounted(() => {
   rootEl.value?.focus();
   store.fetchRows();
   // Unawaited and never blocking the list: the drives decorate the bands, and a
-  // slow or offline mount must not hold up the models.
+  // slow or offline mount must not hold up the models. The folder list comes
+  // with them now, because a folder holding nothing is only visible if the
+  // shelf knows it is registered — the dialog used to be its only reader.
+  //
+  // NOT `quiet`: that suppresses the folder store's `loading`, and the folders
+  // dialog reads it. Opening the dialog while this first fetch is in flight
+  // would show an empty list with no "Reading the registered folders…" state.
+  // Unawaited already means it does not hold up the shelf.
   foldersStore.refreshDevices();
+  foldersStore.refresh();
 });
 
 // A credential change (logout, login, share token, restore) empties the store,
