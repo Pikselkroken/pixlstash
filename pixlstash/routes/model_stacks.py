@@ -194,7 +194,11 @@ def create_router(server) -> APIRouter:
     )
     def create_stack(request: Request, payload: ApplyStackRequest = Body(...)):
         server.auth.ensure_secure_when_required(request)
-        if len(payload.model_ids) > MAX_MEMBERS_PER_STACK:
+        # Counted on the UNIQUE ids, because `apply_stack` de-dupes: a client
+        # that repeated an id would otherwise be told it sent too many models
+        # while its actual selection was well under the ceiling.
+        unique_ids = list(dict.fromkeys(payload.model_ids))
+        if len(unique_ids) > MAX_MEMBERS_PER_STACK:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -202,13 +206,13 @@ def create_router(server) -> APIRouter:
                     "training run has tens of steps, not thousands."
                 ),
             )
-        if len(set(payload.model_ids)) < MIN_GROUP_SIZE:
+        if len(unique_ids) < MIN_GROUP_SIZE:
             raise HTTPException(
                 status_code=400, detail="A stack needs at least two models."
             )
         try:
             stack_id = apply_stack(
-                server.hub, payload.model_ids, (payload.name or "").strip() or None
+                server.hub, unique_ids, (payload.name or "").strip() or None
             )
         except StackRefused as exc:
             # 409 rather than 400: the request was well formed and was refused by

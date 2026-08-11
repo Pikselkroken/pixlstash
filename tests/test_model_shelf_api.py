@@ -3356,6 +3356,32 @@ def test_applying_refuses_more_than_one_run_is_worth(shelf_env):
     assert r.status_code == 400, r.text
 
 
+def test_the_ceiling_counts_unique_ids_not_repeats(shelf_env):
+    """`apply_stack` de-dupes, so the guard has to as well.
+
+    A client that repeated an id would otherwise be told it sent too many
+    models while its actual selection was two. Reported by the review of #882.
+    """
+    bob = shelf_env.model_ids["bob.safetensors"]
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    r = shelf_env.owner.post(
+        f"{API}/model-stacks",
+        json={"model_ids": [bob, noname] * 400},
+    )
+    assert r.status_code != 400, r.text
+
+    if r.status_code == 200:
+        with shelf_env.server.hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET stack_id = NULL, stack_position = NULL "
+                "WHERE id IN (?, ?)",
+                (bob, noname),
+            )
+            conn.execute(
+                "DELETE FROM adapter_stack WHERE id = ?", (r.json()["stack_id"],)
+            )
+
+
 def test_applying_a_stack_collapses_the_rows_and_reports_the_count(shelf_env):
     # The two seeded adapters that are NOT already in a stack. `alice` and
     # `dana` carry a `stack_position`, so naming them here would be testing the
