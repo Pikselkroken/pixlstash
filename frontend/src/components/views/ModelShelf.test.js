@@ -25,6 +25,20 @@ vi.mock("../../api/modelShelf", () => ({
 // assertion read the default view back.
 const listModelFolderDevices = vi.fn();
 const listModelFolders = vi.fn();
+// `onMounted` calls `moves.adopt()`, which reads the move job so a move
+// started before a reload is picked up. Left unmocked it reaches the network,
+// fails, and `console.warn`s from a promise nothing in the test awaits — which
+// lands AFTER the file tears down and kills the whole vitest run with
+// `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was pending`.
+// Every file passed and the runner still exited 1 (#880's first CI run). It is
+// timing-dependent, so a local run can be green with the same bug present.
+const getModelMoveStatus = vi.fn();
+vi.mock("../../api/modelMoves", () => ({
+  getModelMoveStatus: (...args) => getModelMoveStatus(...args),
+  startModelMove: vi.fn(),
+  cancelModelMove: vi.fn(),
+}));
+
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
   listModelFolderDevices: (...args) => listModelFolderDevices(...args),
@@ -99,6 +113,11 @@ beforeEach(() => {
   listModelFolderDevices.mockResolvedValue([]);
   listModelFolders.mockReset();
   listModelFolders.mockResolvedValue([]);
+  // `idle` is what a machine with no move in flight reports, and `adopt()`
+  // adopts nothing from it — so the mount path stays silent instead of warning
+  // from an unawaited promise.
+  getModelMoveStatus.mockReset();
+  getModelMoveStatus.mockResolvedValue({ status: "idle", results: [] });
 });
 
 describe("a row with nothing in its header", () => {
