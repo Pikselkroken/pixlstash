@@ -2921,3 +2921,77 @@ def test_a_drive_with_no_label_reports_null_rather_than_a_guess(
     band = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
     assert band["label"] is None
     assert band["mount_point"]
+
+
+# ===========================================================================
+# base_model_folded — the fold applied on the way out
+# ===========================================================================
+
+
+def test_a_row_carries_the_canonical_label_beside_the_raw_one(shelf_env):
+    """Both, never one. The raw string is what the file says and is what the
+    shelf displays; the folded one is what a grouping or a facet should key on,
+    so `sdxl_base_v1-0` and `SDXL` land in one bucket rather than two."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'sdxl_base_v1-0' WHERE id = ?", (alice,)
+        )
+
+    row = next(
+        r
+        for r in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+        if r["id"] == alice
+    )
+    assert row["base_model"] == "sdxl_base_v1-0", "the raw spelling was rewritten"
+    assert row["base_model_folded"] == "SDXL 1.0"
+
+
+def test_two_spellings_of_one_base_fold_together(shelf_env):
+    """The whole point: the shelf can group on this and get one row per base
+    rather than one per spelling."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    bob = shelf_env.model_ids["bob.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("UPDATE model SET base_model = 'SDXL' WHERE id = ?", (alice,))
+        conn.execute(
+            "UPDATE model SET base_model = 'stable diffusion xl' WHERE id = ?", (bob,)
+        )
+
+    folded = {
+        r["id"]: r["base_model_folded"]
+        for r in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }
+    assert folded[alice] == "SDXL 1.0"
+    assert folded[bob] == folded[alice], "two spellings of one base did not meet"
+
+
+def test_an_unrecognised_base_model_folds_to_null_and_is_still_served(shelf_env):
+    """Not an error, and not a reason to drop or rewrite the row: an unknown
+    string is stored verbatim, displayed verbatim, and simply has no canonical
+    label yet."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'my private base v3' WHERE id = ?",
+            (alice,),
+        )
+
+    row = next(
+        r
+        for r in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+        if r["id"] == alice
+    )
+    assert row["base_model"] == "my private base v3"
+    assert row["base_model_folded"] is None
+
+
+def test_a_row_with_no_base_model_folds_to_null(shelf_env):
+    """37% of real adapters record nothing. Null in, null out, no exception."""
+    row = next(
+        r
+        for r in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+        if r["id"] == shelf_env.model_ids["sd_xl_noname.safetensors"]
+    )
+    assert row["base_model"] is None
+    assert row["base_model_folded"] is None
