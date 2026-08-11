@@ -506,8 +506,10 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
     # `BEGIN IMMEDIATE`: pysqlite defers `BEGIN` to the first DML, so these
     # SELECTs ran in autocommit and took no lock at all in WAL. The claim above
     # is only true because of that, which is why it is asserted over in
-    # `test_transaction_holds_the_write_lock_before_its_first_write` rather than
-    # here.
+    # `test_transaction_is_already_open_before_its_first_write` (the SELECTs are
+    # inside a transaction) and
+    # `test_another_process_cannot_write_between_a_gate_read_and_its_write` (that
+    # transaction holds the write lock), rather than here.
     with hub.transaction() as conn:
         known = {
             int(row[0])

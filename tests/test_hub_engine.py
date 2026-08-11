@@ -1004,7 +1004,7 @@ def test_hub_file_is_the_only_database_touched(hub_path, tmp_path):
     assert not os.path.exists(os.path.join(str(tmp_path), "vault.db"))
 
 
-def test_transaction_holds_the_write_lock_before_its_first_write(hub_path):
+def test_transaction_is_already_open_before_its_first_write(hub_path):
     """A gate read inside ``transaction()`` must already be in the transaction.
 
     ``with self._conn`` commits on exit but never begins, and the connection is
@@ -1014,8 +1014,14 @@ def test_transaction_holds_the_write_lock_before_its_first_write(hub_path):
     preceding ``SELECT`` -- ``forget_models``, ``apply_stack`` -- documented a
     critical section they did not have.
 
-    Asserting ``in_transaction`` right after a read is the whole check: it is
-    False on the unfixed code and True once ``BEGIN IMMEDIATE`` leads the block.
+    **This proves the transaction is OPEN, and deliberately not that it is
+    ``IMMEDIATE``.** ``in_transaction`` is equally true of a plain deferred
+    ``BEGIN``, which acquires no write lock at all, so the name must not claim
+    one. Measured, not assumed: mutating ``BEGIN IMMEDIATE`` to ``BEGIN`` leaves
+    this test green and turns only
+    :func:`test_another_process_cannot_write_between_a_gate_read_and_its_write`
+    red. That test owns the lock half; this one owns the "not in autocommit"
+    half, and both are needed because either mutant alone survives the other.
     """
     hub = HubDatabase(hub_path)
     try:
