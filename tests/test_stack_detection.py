@@ -357,6 +357,79 @@ def test_a_writer_that_lands_between_the_gate_and_the_update_cannot_be_overwritt
     assert stacks["n"] == 1, "the rolled-back INSERT left an orphan stack row"
 
 
+def test_applying_refuses_models_that_are_not_all_in_one_folder(hub, tmp_path):
+    """ "Grouped per folder, never shelf-wide" is the module's invariant, and it
+    used to hold only in `propose_stacks`.
+
+    `apply_stack` checked that each model had SOME present copy, not that they
+    shared a folder, so the route could build a stack whose members sit on two
+    drives — the run that never existed, which is exactly what the per-folder
+    rule exists to prevent. Reported by the review of #882.
+    """
+    first = _folder(hub, str(tmp_path / "disk-a"))
+    second = _folder(hub, str(tmp_path / "disk-b"))
+    here = _adapter(hub, first, "Split_000000500.safetensors")
+    there = _adapter(hub, second, "Split_000001000.safetensors")
+
+    with pytest.raises(StackRefused) as exc:
+        apply_stack(hub, [here, there], "Split")
+    assert exc.value.reason == "not_one_folder"
+
+    for model_id in (here, there):
+        row = hub.fetchone("SELECT stack_id FROM model WHERE id = ?", (model_id,))
+        assert row["stack_id"] is None
+
+
+def test_a_model_in_two_folders_can_still_join_a_run_in_one_of_them(hub, tmp_path):
+    """The positive control for the rule above — over-blocking is its own
+    regression. A model copied into two folders shares a folder with its run,
+    so the run still stacks."""
+    first = _folder(hub, str(tmp_path / "disk-a"))
+    second = _folder(hub, str(tmp_path / "disk-b"))
+    everywhere = _adapter(hub, first, "Both_000000500.safetensors")
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "VALUES (?, ?, 'Both_000000500.safetensors', 'present')",
+            (everywhere, second),
+        )
+    sibling = _adapter(hub, first, "Both_000001000.safetensors")
+
+    stack_id = apply_stack(hub, [everywhere, sibling], "Both")
+    rows = hub.fetchall("SELECT id FROM model WHERE stack_id = ?", (stack_id,))
+    assert {row["id"] for row in rows} == {everywhere, sibling}
+
+
+def test_a_model_in_two_folders_is_proposed_under_a_stable_one(hub, tmp_path):
+    """One model legitimately has many `model_file` rows, and a bare
+    `mf.model_folder_id` beside `GROUP BY m.id` lets SQLite return any of them.
+
+    That would make proposals nondeterministic — the same run grouping under a
+    different folder call to call, and two members of one run potentially
+    landing in different groups and never being offered together. `MIN()` is
+    what makes the answer stable.
+    """
+    lower = _folder(hub, str(tmp_path / "disk-a"))
+    higher = _folder(hub, str(tmp_path / "disk-b"))
+    assert lower < higher
+
+    # The HIGHER folder's location is written first, deliberately. With the
+    # lower one first, SQLite returns it for a bare column too and the
+    # assertion below cannot tell the two implementations apart — measured:
+    # the mutant survived until this order was flipped.
+    for name in ("Stable_000000500.safetensors", "Stable_000001000.safetensors"):
+        model_id = _adapter(hub, higher, name)
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model_file (model_id, model_folder_id, relpath, "
+                "state) VALUES (?, ?, ?, 'present')",
+                (model_id, lower, name),
+            )
+
+    seen = {propose_stacks(hub)[0].folder_id for _ in range(5)}
+    assert seen == {lower}
+
+
 def test_applying_ignores_a_duplicate_id(hub, tmp_path):
     """A list naming the same model twice is not two members."""
     folder = _folder(hub, str(tmp_path / "loras"))
