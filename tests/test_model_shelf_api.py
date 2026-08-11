@@ -519,10 +519,18 @@ def test_character_and_set_filters_are_mutually_exclusive(shelf_env):
 
 
 def _shelf_paths() -> list[str]:
+    """Every OWNER_ONLY shelf GET.
+
+    One list, three tests: the owner reaches all of them, a resource-scoped
+    share token reaches none, and an unscoped READ token reaches none. Adding a
+    route here is what makes that completeness arithmetic rather than a
+    judgement call, so a new GET belongs in this list on the day it ships.
+    """
     return [
         f"{API}/adapters",
         f"{API}/adapters/{ADAPTER_WITH_BASE}",
         f"{API}/checkpoints",
+        f"{API}/model-stacks/proposals",
     ]
 
 
@@ -3328,3 +3336,84 @@ def test_a_row_with_no_base_model_folds_to_null(shelf_env):
     )
     assert row["base_model"] is None
     assert row["base_model_folded"] is None
+
+
+# ── Stack detection over HTTP (shelf plan F5) ───────────────────────────────
+
+
+def test_every_stack_route_is_declared_owner_only():
+    """Not the §16.3 locality tier its shelf neighbours are on: neither route
+    takes, walks, writes or unlinks a host path."""
+    for method, path in (
+        ("GET", "/api/v1/model-stacks/proposals"),
+        ("POST", "/api/v1/model-stacks"),
+    ):
+        declared = ROUTE_POLICIES.get((method, path))
+        assert declared is not None, f"({method}, {path}) has no ROUTE_POLICIES entry"
+        assert declared.policy is AccessPolicy.OWNER_ONLY, (
+            f"{method} {path} declares {declared.policy}, not OWNER_ONLY"
+        )
+        assert declared.justification, f"{method} {path} declares no reason"
+
+
+def test_the_dry_run_proposes_without_writing(shelf_env):
+    """The house rule over HTTP: reading the proposals changes nothing.
+
+    Asserted against the shelf's own rows rather than a purpose-built fixture,
+    so it also proves detection is safe to call on a real shelf.
+    """
+    before = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    stacked_before = [a for a in before if a.get("stack_id") is not None]
+
+    r = shelf_env.owner.get(f"{API}/model-stacks/proposals")
+    assert r.status_code == 200, r.text
+    assert isinstance(r.json()["proposals"], list)
+
+    after = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    stacked_after = [a for a in after if a.get("stack_id") is not None]
+    assert len(stacked_after) == len(stacked_before)
+
+
+def test_applying_a_stack_needs_at_least_two_models(shelf_env):
+    bob = shelf_env.model_ids["bob.safetensors"]
+    r = shelf_env.owner.post(f"{API}/model-stacks", json={"model_ids": [bob]})
+    assert r.status_code == 400, r.text
+
+
+def test_applying_refuses_more_than_one_run_is_worth(shelf_env):
+    """A training run has tens of steps, not thousands."""
+    r = shelf_env.owner.post(
+        f"{API}/model-stacks", json={"model_ids": list(range(1, 500))}
+    )
+    assert r.status_code == 400, r.text
+
+
+def test_applying_a_stack_collapses_the_rows_and_reports_the_count(shelf_env):
+    # The two seeded adapters that are NOT already in a stack. `alice` and
+    # `dana` carry a `stack_position`, so naming them here would be testing the
+    # refusal below rather than the write.
+    bob = shelf_env.model_ids["bob.safetensors"]
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+
+    r = shelf_env.owner.post(
+        f"{API}/model-stacks", json={"model_ids": [bob, noname], "name": "Duo"}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["member_count"] == 2
+
+    # A second attempt on the same rows is refused by state, not by shape: they
+    # are in a stack now, so fewer than two survive the in-transaction re-read.
+    again = shelf_env.owner.post(
+        f"{API}/model-stacks", json={"model_ids": [bob, noname]}
+    )
+    assert again.status_code == 409, again.text
+
+    # Put them back, so the module-scoped shelf is unchanged for other tests.
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET stack_id = NULL, stack_position = NULL "
+            "WHERE id IN (?, ?)",
+            (bob, noname),
+        )
+        conn.execute("DELETE FROM adapter_stack WHERE id = ?", (body["stack_id"],))
