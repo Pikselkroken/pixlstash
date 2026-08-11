@@ -500,6 +500,7 @@ jobs:
           tests/test_invalid_image_endless_retry.py
           tests/test_ip_locality_fail_closed.py
           tests/test_keep_cover_only.py
+          tests/test_known_base_models.py
           tests/test_label_ledger.py
           tests/test_libraries_routes.py
           tests/test_library_backup.py

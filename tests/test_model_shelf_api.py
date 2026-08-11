@@ -1452,21 +1452,28 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
     calls: list[str] = []
     original = server.hub.fetchall
 
-    # Background shelf workers are excluded by name. The server is shared, so a
-    # move or a folder rescan started by an earlier test runs on its own thread
-    # against this same hub, and letting its queries land in the tally fails
-    # this assertion for a reason that has nothing to do with the list query.
-    # The request handler itself runs on Starlette's threadpool, so "only my
-    # thread" would count nothing at all.
+    # Count the REQUEST's queries by naming the thread that serves them, not by
+    # listing the ones that must not count. The server is shared, so background
+    # workers run against this same hub throughout, and every one of their
+    # queries landing in the tally fails this assertion for a reason that has
+    # nothing to do with the list query.
     #
-    # `model-folder-rescan` was the miss: a rescan outlives the test that starts
-    # it, the scanner reads `server.hub` throughout, and the overlap depends on
-    # machine speed -- so this failed only under CI load, and only when the
-    # sharder happened to schedule a rescan test just before this one.
-    background_prefixes = ("model-move", "model-folder-rescan")
+    # A denylist was tried twice and lost twice. It began as `model-move`, gained
+    # `model-folder-rescan` when a rescan outlived the test that started it, and
+    # was still short: `TaskRunner` names its workers `<name>-cpu-<i>` and
+    # `<name>-gpu` (task_runner.py:423), and `CHECKPOINT_HASH` works on the hub
+    # — so it slipped through and this failed with "3 hub queries for 24 rows"
+    # on an unrelated PR. Every future worker would have to be remembered here.
+    #
+    # An allowlist cannot go stale that way: Starlette serves the handler on its
+    # own threadpool, whose threads are named "AnyIO worker thread", and nothing
+    # else in this process is. It also cannot rot into a dead assertion — the
+    # tally is asserted to be exactly 2, so a naming change that matched nothing
+    # would fail loudly rather than pass silently.
+    request_thread_prefix = "AnyIO worker thread"
 
     def counting(sql, params=()):
-        if not threading.current_thread().name.startswith(background_prefixes):
+        if threading.current_thread().name.startswith(request_thread_prefix):
             calls.append(sql)
         return original(sql, params)
 

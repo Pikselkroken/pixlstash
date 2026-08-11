@@ -300,11 +300,14 @@ class ModelEditRequest(BaseModel):
     base_model: Optional[str] = Field(
         default=None,
         description=(
-            "Free text, folded for the shelf's sort and filters by "
-            "`known_base_models.fold` rather than constrained here. Null "
-            "clears it. Overwriting this in bulk is one of the shelf's two "
-            "confirmations, because the values it replaces cannot be "
-            "reconstructed."
+            "Free text, and stored verbatim: an enum here would reject every "
+            "base model released after this build. `known_base_models.fold` "
+            "canonicalises a string for a caller that wants to group spellings "
+            "of one base together, and `completions` seeds a picker, but "
+            "**nothing folds what is stored** and the shelf's own sort and "
+            "filters still read the raw column. Null clears it. Overwriting "
+            "this in bulk is one of the shelf's two confirmations, because the "
+            "values it replaces cannot be reconstructed."
         ),
     )
     kind: Optional[str] = Field(
