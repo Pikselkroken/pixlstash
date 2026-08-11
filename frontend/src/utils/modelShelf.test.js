@@ -527,9 +527,9 @@ function hslToHex(css) {
 
 describe("the generated mark's contrast", () => {
   it("is legible on every one of the 48, at WCAG AA", () => {
-    // Checked against the SHIPPED `contrastRatio`, so the browser-safe
-    // `luminance()` in `modelShelf.js` cannot drift from the audit module
-    // (which imports `node:fs` and cannot be bundled).
+    // Measured with the SHIPPED `contrastRatio` from `utils/contrastAudit.js`,
+    // the same one the theme audit uses, so this agrees with the rest of the
+    // codebase about what AA means rather than carrying its own arithmetic.
     //
     // Measured on the RAW palette first: 22 of the 48 clear neither white nor
     // near-black, because the mid-tones are unreachable from either end. That

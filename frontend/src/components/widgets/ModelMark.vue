@@ -77,11 +77,13 @@ const mark = computed(() => generatedMark(props.row));
   display: block;
 }
 
-/* The initials carry their own colour from the frozen 48, so the contrast pair
-   is fixed rather than themed: a mark that inverted with the theme would be a
-   different mark for the same model. The INK is bound inline, because it is
-   chosen per background — several of the 48 are light enough that white
-   initials are unreadable on them. */
+/* The initials carry their own colour derived from the frozen 48, so the
+   contrast pair is fixed rather than themed: a mark that inverted with the
+   theme would be a different mark for the same model. Both halves are bound
+   inline because `generatedMark` hands them out together — the tile is
+   renormalised to a pinned lightness precisely so the ink can stay constant,
+   and splitting the pair across inline style and a stylesheet is what would
+   let one of them change without the other. */
 .mmark-initials {
   display: flex;
   align-items: center;

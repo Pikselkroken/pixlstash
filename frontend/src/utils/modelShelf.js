@@ -584,29 +584,6 @@ function initialsOf(text) {
   return (words[0][0] + words[1][0]).toUpperCase();
 }
 
-/**
- * WCAG 2.x relative luminance of a `#rrggbb` colour.
- *
- * A local copy on purpose. `utils/contrastAudit.js` has the shipped
- * implementation, but it imports `node:fs` for the theme audit and so cannot
- * enter the browser bundle. The duplication is pinned rather than trusted:
- * `modelShelf.test.js` cross-checks this against that module's own
- * `contrastRatio`, so the two cannot drift.
- *
- * Exported for that test rather than used by the mark: the tile's lightness is
- * pinned, so the ink no longer has to be chosen. It stays because the assertion
- * that pinning WORKS is what makes the constants above defensible.
- */
-export function luminance(hex) {
-  const channels = [1, 3, 5].map(
-    (i) => parseInt(hex.slice(i, i + 2), 16) / 255,
-  );
-  const linear = channels.map((c) =>
-    c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4,
-  );
-  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
-}
-
 // The mark's tile keeps its palette entry's HUE and pins saturation and
 // lightness, exactly as `applyStackBadgeTint` does for a stack badge — the
 // established way in this codebase to take a colour chosen for identity and
@@ -683,7 +660,9 @@ export function markForeground() {
  * value rather than an absence.
  *
  * @param {Object} row - a shelf row.
- * @returns {{color: string, initials: string}}
+ * @returns {{color: string, ink: string, initials: string}} `color` is an
+ *   `hsl()` string, not a hex, because it is renormalised rather than taken
+ *   from the palette. `ink` travels with it so the pair cannot be separated.
  */
 export function generatedMark(row) {
   const key = baseModelKey(row);
