@@ -101,6 +101,7 @@ from pixlstash.routes.model_folders import create_router as create_model_folders
 from pixlstash.routes.model_imports import create_router as create_model_imports_router
 from pixlstash.routes.model_moves import create_router as create_model_moves_router
 from pixlstash.routes.model_shelf import create_router as create_model_shelf_router
+from pixlstash.routes.model_stacks import create_router as create_model_stacks_router
 from pixlstash.routes.guest_scores import create_router as create_guest_scores_router
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
@@ -1533,6 +1534,11 @@ class Server(
         )
         self.api.include_router(
             create_model_imports_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_model_stacks_router(self),
             prefix=API_V1_PREFIX,
             dependencies=gate,
         )

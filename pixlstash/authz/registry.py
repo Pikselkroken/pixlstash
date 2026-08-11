@@ -408,6 +408,21 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 cancels an in-flight host-filesystem move; halting the owner's own file operation is the same authority as starting it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # ── model_stacks.py (shelf plan F5) ────────────────────────────────────
+    # OWNER_ONLY and deliberately NOT the §16.3 locality tier its shelf
+    # neighbours sit on: neither route touches the host filesystem. Detection
+    # reads `model` rows the scan already wrote and applying writes hub columns,
+    # so there is no host path taken, walked, written or unlinked. They surface
+    # folder ids, never paths — the same reason the shelf's other read routes
+    # stayed owner_only while the folder mutators moved to the locality tier.
+    ("GET", "/api/v1/model-stacks/proposals"): RoutePolicy(
+        _OWNER,
+        justification="Dry run over the caller's own shelf; reads hub rows only, writes nothing, takes no host path; owner only",
+    ),
+    ("POST", "/api/v1/model-stacks"): RoutePolicy(
+        _OWNER,
+        justification="Collapses the owner's own models into a stack; writes hub columns only, no filesystem access; POST blocked for READ tokens; owner only",
+    ),
     # ── model_imports.py (shelf plan B7; §16.3 host-capability) ────────────
     # The listing walks a registered output root; the import writes into one
     # registered folder and may unlink from another. Neither takes a host path:
