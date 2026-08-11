@@ -1500,12 +1500,54 @@ re-ticking the box brings it back rather than making the reader select it again.
 `pruneSelection` runs after every fetch and drops ids the shelf no longer holds,
 or a forgotten model would be counted by the bar for the life of the tab.
 
-**The checkbox goes in column 1, where the reserved glyph slot already was**, so
-ticking a row moves nothing. It is labelled with the row's own name: 1,800
-controls announcing "checkbox" is the same as none of them announcing anything.
-This is also the one rule F3 changed — the row itself is still not a focus stop,
-but its checkbox is, which is exactly what the old "rows carry no verb" comment
-anticipated.
+**Selection is the file manager's, not a checkbox's.** Plain click replaces the
+selection with the row clicked, Ctrl/Cmd+click toggles one, Shift+click takes the
+contiguous run from the anchor and **replaces** rather than merges — the same
+three gestures, and the same replace rule, as `ImageGrid.handleImageCardClick`.
+Replacing is what makes a mis-aimed range one click to correct instead of two.
+The anchor is held apart from the selection (`anchorId`, mirroring
+`useMultiSelect`'s `lastSelectedImageId`) precisely because a range replaces
+what was there: it could not be recovered from the selection afterwards.
+
+The shelf shipped a per-row checkbox first and it was the wrong call — a second
+selection dialect on the one list in the app that most looks like a file
+manager. The tick that remains in column 1 is a *mark*, not a control.
+
+**The range spans the DRAWN order, de-duplicated.** `orderedRowIds` walks
+`shownGroups` and skips collapsed groups, because banding re-orders groups and a
+range measured against an order the reader cannot see would select a run they
+did not point at. A model drawn under two folders appears once in that sequence,
+since the range is over models and models are what the verbs act on.
+
+**The rows are a multi-select listbox with a roving tabindex.** Removing the
+checkbox removed the only focus stop a row had, so the row takes the role
+instead: `role="listbox"` + `aria-multiselectable` on the `<ul>`,
+`role="option"` + `aria-selected` on each row, and exactly one row at
+`tabindex="0"` — seeded to the first drawn row, or a roving tabindex with
+nothing at 0 makes the whole list unreachable by Tab.
+
+**Focus is keyed per DRAWN ROW (`rowKey`), selection per MODEL (`id`), and the
+two lists are not the same.** Under folder grouping a model with copies in two
+folders is drawn twice, and both draws are places the cursor can be — but the
+verbs write the model, so the range de-duplicates. Keying focus by model id
+instead put `tabindex="0"` on every draw of the same model at once, which is two
+focusable options for one listbox position, and made the arrows read the first
+draw's index whichever draw the cursor was on. `rowKey` is assigned on **both**
+branches of `groups`, including the ungrouped default, where it was previously
+absent and left the list's `v-for` key `undefined` for every row. That is the same "1,800
+tab stops is a trap" rule as before, now solved by roving rather than by having
+no stop at all. The listbox role is legitimate here and was refused in
+`ModelFoldersDialog` for the mirror-image reason: these rows hold no interactive
+controls, and a control inside `role="option"` is unreachable.
+
+Arrows move the stop **without** selecting, so a reader can walk the list
+without arming a verb against every row they pass; Space and Enter pick;
+Shift+arrow extends from the anchor, the keyboard's Shift+click; Escape clears.
+A click that ends a text drag **inside that row** is ignored, or dragging across
+a name to copy it would collapse the selection on mouseup. Scoped to the clicked
+row: asking only whether any text is selected anywhere would make the entire
+list unclickable for as long as the reader had a selection elsewhere on the
+page.
 
 **`ShelfSelectionBar.vue` emits; `ModelShelf.vue` acts.** Every button is an
 emit, so both confirmations live in one place instead of half in the bar and
