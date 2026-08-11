@@ -54,6 +54,7 @@ import { useOperationStore } from "./useOperationStore";
 import { useLibrariesStore } from "./useLibrariesStore";
 import { useModelShelfStore } from "./useModelShelfStore";
 import { useModelFoldersStore } from "./useModelFoldersStore";
+import { useModelMovesStore } from "./useModelMovesStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -87,10 +88,29 @@ const STORES = [
     name: "useModelFoldersStore",
     use: useModelFoldersStore,
     seed: (s) => {
-      s.folders = [{ id: 1, path: "/home/g/loras", kind: "user", file_count: 91 }];
+      s.folders = [
+        { id: 1, path: "/home/g/loras", kind: "user", file_count: 91 },
+      ];
       s.loaded = true;
     },
     isEmpty: (s) => s.folders.length === 0 && !s.loaded,
+  },
+  {
+    // A move names registered folders by id and shifts files between absolute
+    // host paths, so it is owner-only for the same reason the registry is. The
+    // job itself carries on server-side — this session simply stops watching
+    // it, because it no longer has standing to ask.
+    name: "useModelMovesStore",
+    use: useModelMovesStore,
+    seed: (s) => {
+      s.job = {
+        status: "running",
+        total: 4,
+        done: 1,
+        results: [],
+      };
+    },
+    isEmpty: (s) => s.job === null && s.status === "idle",
   },
   {
     name: "useLockedSetsStore",

@@ -1662,6 +1662,56 @@ tooltip rather than hiding the verb, and a mixed selection stays enabled with
 the count it will actually take, because the server forgets what it can and
 reports the rest.
 
+#### Moving files (F4)
+
+**`useModelMovesStore` owns the job, not the dialog.** The same reason folder
+scans are a store: a move outlives whatever started it. The owner drags 400
+files onto another drive and navigates away, and the server keeps copying
+either way — so the progress has to survive the component, and `adopt()` on
+mount picks up a job already running (from another tab, or from before a
+reload). Only a `running` job is adopted; a `finished` one belongs to a receipt
+that has already been shown, and re-reporting it on every mount is how a
+completed move announces itself forever.
+
+**One job, machine-wide**, which is the server's rule and not a convenience:
+two concurrent moves would race for the same free space that both of them
+checked before either started. `busy` is what every entry point tests first.
+
+**Progress is counted in ITEMS, never bytes.** `bytes_to_copy` is *zero* for a
+same-drive move, because those are renames — a byte-based bar would sit at 0%
+through the entire fastest case and then jump.
+
+**Two ways in, one dialog, and a drop does not move on release.** The selection
+bar's Move button and a drag onto a folder header both resolve to the same list
+of copies and both open `ShelfMoveDialog`, which states the move in files, bytes
+and rename-versus-copy before anything starts. There is no undo behind a move,
+so a 438 GB copy across a USB drive must never be one slip of the pointer away.
+A drop seeds the destination it was aimed at; the select still lets it be
+corrected.
+
+**`movableCopies` is the single gate**, per COPY rather than per model, because
+`model_file`'s key is `(folder_id, relpath)` and a model catalogued in three
+folders offers three of them. It drops three things: a copy that is not
+`present` (there are no bytes to move — `missing` is a fact, `unreachable` is
+the absence of one, and neither has a file to read), a copy in PixlStash's own
+folder (declared rather than scanned, and every engine loader looks for them at
+a fixed path), and a copy in an `external` folder (the HuggingFace cache and
+insightface's store are shared with other software).
+
+**The drag carries its own MIME marker.** `MODEL_FILE_DRAG_MIME` joins the
+picture and face markers in `utils/media.js`, and for the same reason: only
+`types` is readable during `dragover`, so the key is the only thing that can
+discriminate before the drop has happened. A model dropped on a sidebar set row
+has no meaning, and this is what refuses it. `dragover` carries **no**
+`.prevent` modifier — calling `preventDefault()` is what *accepts* a drop, so it
+happens inside the handler and only for a payload the target takes (#757).
+
+**The list is `inert` while a move runs, not merely dimmed.** A move repoints
+`model_file` rows underneath it, so a verb pressed mid-move acts on a location
+that is about to be wrong; a veil that only *looks* disabled leaves every row
+clickable and in the tab order, which is worse than none. The toolbar stays
+live, because Show and Sort still answer correctly while files are in flight.
+
 **Receipts are notices, not `useActionReceipt`.** That composable is built on
 `useOperationStore`, which is the vault-only operation log with undo keycaps —
 the exact machinery the shelf ruled out. Shelf outcomes go through

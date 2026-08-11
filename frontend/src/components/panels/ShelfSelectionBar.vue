@@ -77,6 +77,21 @@
       @detach="onAttach($event, false)"
     />
 
+    <!-- Move is the keyboard path to what a drag does. The shelf's definition
+         of done requires every verb to be reachable without a pointer, and a
+         drag is not; it is also where the move is stated in files, bytes and
+         rename-versus-copy before a 438 GB operation starts. -->
+    <AppButton
+      size="sm"
+      variant="secondary"
+      icon-left="folder-move-outline"
+      :disabled="!movable.length || moves.busy"
+      :title="moveTitle"
+      @click="emit('move')"
+    >
+      Move
+    </AppButton>
+
     <!-- Forget is gated on the rows' STATE, not on how many are selected: it is
          offered only when every selected model has already lost its files.
          Disabled with the reason in the tooltip rather than hidden, or the
@@ -111,11 +126,22 @@ import { computed } from "vue";
 
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import AppButton from "../widgets/AppButton.vue";
+import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
+import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { movableCopies } from "../../utils/modelShelf";
 
-const emit = defineEmits(["rename", "set-base-model", "set-kind", "forget"]);
+const emit = defineEmits([
+  "rename",
+  "set-base-model",
+  "set-kind",
+  "move",
+  "forget",
+]);
 
 const store = useModelShelfStore();
+const folders = useModelFoldersStore();
+const moves = useModelMovesStore();
 
 const countLabel = computed(() => {
   const n = store.selectedRows.length;
@@ -209,6 +235,35 @@ const assignTitle = computed(() => {
   return `Applies to the ${assignable.value.length} of ${total} that can be assigned`;
 });
 
+/** `model_folder.id` to the folder row, for `movableCopies`' folder rules. */
+const foldersById = computed(
+  () => new Map(folders.folders.map((folder) => [Number(folder.id), folder])),
+);
+
+/**
+ * The copies in the selection a move could pick up.
+ *
+ * Gated per COPY and not per model, so a model with one file on an unplugged
+ * NAS and another on this disk IS movable — its present copy is. What the
+ * button acts on and what the tooltip counts are the same list, and the view
+ * recomputes it for the dialog rather than this being handed up, because a drop
+ * onto a folder header has to reach the same list without a selection.
+ */
+const movable = computed(
+  () => movableCopies(store.selectedRows, foldersById.value).items,
+);
+
+const moveTitle = computed(() => {
+  if (moves.busy) return "A move is already running. One at a time, one disk.";
+  if (!movable.value.length) {
+    return "Only files that are actually on this machine can be moved";
+  }
+  // Counted in COPIES, which is what moves, and named as files rather than
+  // models so the number cannot be read against the selection count beside it.
+  const n = movable.value.length;
+  return `Move ${n.toLocaleString()} ${n === 1 ? "file" : "files"} into another folder`;
+});
+
 function onAttach(payload, attach) {
   return store.setAttachment({ ...payload, attach });
 }
@@ -217,7 +272,7 @@ function clear() {
   store.clearSelection();
 }
 
-defineExpose({ forgettable, assignable, membership });
+defineExpose({ forgettable, assignable, membership, movable });
 </script>
 
 <style scoped>
