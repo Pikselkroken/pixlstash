@@ -210,7 +210,35 @@ const props = defineProps({
   // create rule has to serve both call sites.
   type: { type: String, required: true },
   backendUrl: { type: String, default: () => API_BASE_URL },
-  pictureIds: { type: Array, default: () => [] },
+  // The subjects the tri-state is computed across. Named for what it is rather
+  // than for pictures, because the model shelf attaches ADAPTERS through this
+  // same picker (shelf plan F3) and an adapter is not a picture.
+  //
+  // `required` on purpose, and it is the only protection that works here: every
+  // call site stubs this component in its tests, so a binding that goes missing
+  // would land in `$attrs` with no warning, leave this list empty, and make the
+  // menu open with every row unchecked and every click a no-op. Vue warns for a
+  // missing REQUIRED prop; it says nothing about an unknown attribute. Face
+  // mode has no subject list and passes `[]`.
+  subjectIds: { type: Array, required: true },
+  // Membership supplied by the host: `item.key -> Set<string>` of subject ids.
+  //
+  // Supplying it is the single switch into host-driven mode. The internal
+  // readers below answer "which of these PICTURES are in each entity", which
+  // only the picture hosts can ask; the model shelf already has every adapter's
+  // attachments on the rows it drew, so it hands them straight in and no read
+  // happens at all. Null keeps the picture path exactly as it was.
+  membership: { type: Object, default: null },
+  // Emit the intent and write nothing. Not a new behaviour: `face` has always
+  // worked this way and so has `project`, which emits `selected` and updates
+  // optimistically. This names it so a fourth host can ask for it, and so the
+  // two existing cases stop reading as special.
+  //
+  // Supplying `membership` implies it. A host that owns the data owns the
+  // writes; "your membership, my API calls" is a combination with no meaning
+  // and no caller, and leaving it representable is how it eventually gets
+  // written by accident.
+  hostOwnsWrites: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   readonly: { type: Boolean, default: false },
   label: { type: String, default: null },
@@ -257,6 +285,8 @@ const emit = defineEmits([
   "create",
   "assign",
   "unassign",
+  "attach",
+  "detach",
 ]);
 
 // --- Type-derived helpers ---
@@ -335,7 +365,31 @@ const searchInputRef = ref(null);
 const menuOpen = ref(false);
 const searchQuery = ref("");
 const statusMessage = ref("");
-const membersById = ref({}); // key: item.key → Set<string> of picture IDs
+const membersById = ref({}); // key: item.key → Set<string> of subject IDs
+
+/**
+ * The membership in play: the host's when it supplied one, else what was read.
+ *
+ * Resolved once so no reader has to remember which mode it is in, and so the
+ * host's map cannot be half-applied — every consumer of membership goes through
+ * this.
+ */
+const effectiveMembers = computed(() => props.membership ?? membersById.value);
+
+/**
+ * Whether this control writes, or only announces.
+ *
+ * `face` and `project` were already announce-only before the flag existed, so
+ * they are listed here rather than converted: the behaviour is unchanged and
+ * the flag simply has three users on its first day instead of one.
+ */
+const writesAreHosted = computed(
+  () =>
+    props.hostOwnsWrites ||
+    Boolean(props.membership) ||
+    isFace.value ||
+    isProject.value,
+);
 // The trigger's aria-controls target. Several of these controls sit in one menu,
 // so the id has to be per-instance.
 const listboxId = useId();
@@ -437,9 +491,9 @@ const baseUrl = computed(() =>
 // means "address the API relatively", which is what a missing prop implies.
 const apiOpts = computed(() => ({ baseUrl: baseUrl.value || "" }));
 
-// --- Normalised picture IDs ---
+// --- Normalised subject IDs ---
 const normalisedPictureIds = computed(() =>
-  (Array.isArray(props.pictureIds) ? props.pictureIds : [])
+  (Array.isArray(props.subjectIds) ? props.subjectIds : [])
     .map((id) => String(id))
     .filter(Boolean),
 );
@@ -548,12 +602,17 @@ function getAriaSelected(item) {
 function getItemState(item) {
   const ids = normalisedPictureIds.value;
   if (!ids.length) return "unchecked";
-  const members = membersById.value?.[item.key];
+  const members = effectiveMembers.value?.[item.key];
   if (!members || members.size === 0) return "unchecked";
 
-  const relevantIds = isCharacter.value
-    ? ids.filter((id) => picturesWithFaces.value.has(String(id)))
-    : ids;
+  // The face narrowing is a PICTURE rule — a picture with no face cannot be a
+  // character member — so it must not survive into host-driven mode. Left in,
+  // it would filter the shelf's adapter ids against a set that never contains
+  // them, and every row would read `unchecked` however many were attached.
+  const relevantIds =
+    isCharacter.value && !props.membership
+      ? ids.filter((id) => picturesWithFaces.value.has(String(id)))
+      : ids;
   if (!relevantIds.length) return "unchecked";
 
   const matched = relevantIds.filter((id) => members.has(String(id))).length;
@@ -772,6 +831,12 @@ function handleOutsideClick(event) {
 async function fetchMembers() {
   const ids = normalisedPictureIds.value;
   const requestKey = normalisedIdsKey.value;
+  // Host-driven: the membership arrived as a prop, so there is nothing to read
+  // and the picture readers would not understand these ids anyway.
+  if (props.membership) {
+    membershipLoaded.value = true;
+    return;
+  }
   if (!props.backendUrl || !ids.length) {
     membersById.value = {};
     picturesWithFaces.value = new Set();
@@ -873,9 +938,56 @@ async function toggleItem(item) {
     selectFacePerson(item);
     return;
   }
+  if (isProject.value) {
+    toggleProject(item);
+    return;
+  }
+  // Announce-only: the host holds the API. The payload carries the resolved
+  // intent rather than the raw click, because only this component knows whether
+  // a partially-applied entity resolves up (it does) and therefore which
+  // subjects still need writing.
+  if (writesAreHosted.value) {
+    announceToggle(item);
+    return;
+  }
   if (isSet.value) await toggleSet(item);
-  else if (isProject.value) toggleProject(item);
   else await toggleCharacter(item);
+}
+
+/**
+ * Emit what a click means, for a host that owns the writes.
+ *
+ * `attach` / `detach` rather than `added` / `removed`: those two are already
+ * spoken for by the picture modes, carry `pictureIds`, and are forwarded
+ * verbatim into grid stores. A new name keeps this addition from reaching any
+ * existing listener.
+ */
+function announceToggle(item) {
+  const ids = normalisedPictureIds.value;
+  if (!ids.length) return;
+  const members = effectiveMembers.value?.[item.key];
+  const state = getItemState(item);
+  if (state === "checked") {
+    emit("detach", {
+      entityType: props.type,
+      entityId: item.id,
+      subjectIds: ids,
+    });
+  } else {
+    // Partial resolves UP, the same rule the writing paths apply: only the
+    // subjects that are not already in get written, and nothing is detached.
+    const missing = members
+      ? ids.filter((id) => !members.has(String(id)))
+      : ids;
+    if (!missing.length) return;
+    emit("attach", {
+      entityType: props.type,
+      entityId: item.id,
+      entityName: item.name,
+      subjectIds: missing,
+    });
+  }
+  closeMenu();
 }
 
 // Face mode performs no writes: the host owns the face-level API calls and its

@@ -249,7 +249,7 @@
           v-if="entityLists.canSeeProjects"
           type="project"
           placement="right"
-          :picture-ids="selectedImageIds"
+          :subject-ids="selectedImageIds"
           :disabled="!selectedImageIds.length || !!groupingLockReason"
           :title="groupingLockReason || undefined"
           :readonly="isReadOnly"
@@ -259,7 +259,7 @@
           type="character"
           placement="right"
           allow-create
-          :picture-ids="selectedImageIds"
+          :subject-ids="selectedImageIds"
           :disabled="!selectedImageIds.length || !!groupingLockReason"
           :title="groupingLockReason || undefined"
           :readonly="isReadOnly"
@@ -270,7 +270,7 @@
         <AddToEntityControl
           type="set"
           placement="right"
-          :picture-ids="selectedImageIds"
+          :subject-ids="selectedImageIds"
           :disabled="!selectedImageIds.length || !!groupingLockReason"
           :title="groupingLockReason || undefined"
           :readonly="isReadOnly"

@@ -86,7 +86,7 @@ function mountControl(props = {}) {
     props: {
       type: "set",
       backendUrl: "http://backend.test",
-      pictureIds: ["101"],
+      subjectIds: ["101"],
       ...props,
     },
     global: {
@@ -183,7 +183,7 @@ describe("AddToEntityControl", () => {
 
     const slowMembership = deferred();
     getPictureSetMembership.mockReturnValueOnce(slowMembership.promise);
-    await wrapper.setProps({ pictureIds: ["202"] });
+    await wrapper.setProps({ subjectIds: ["202"] });
     await flushPromises();
 
     // The previous selection's ticks are gone the moment the selection changes.
@@ -208,12 +208,12 @@ describe("AddToEntityControl", () => {
       .mockReturnValueOnce(slowFirst.promise)
       .mockReturnValueOnce(fastSecond.promise);
 
-    const wrapper = mountControl({ type: "character", pictureIds: ["101"] });
+    const wrapper = mountControl({ type: "character", subjectIds: ["101"] });
     await wrapper.find("button.ate-btn").trigger("click");
     await flushPromises();
 
     // The selection moves on while the first membership read is still open.
-    await wrapper.setProps({ pictureIds: ["202"] });
+    await wrapper.setProps({ subjectIds: ["202"] });
     fastSecond.resolve({
       character_assignments: { 12: ["202"] },
       pictures_with_faces: ["202"],
@@ -268,7 +268,7 @@ async function mountOpen(props = {}) {
     props: {
       type: "character",
       backendUrl: "http://x",
-      pictureIds: ["10", "11"],
+      subjectIds: ["10", "11"],
       allowCreate: true,
       ...props,
     },
@@ -350,7 +350,7 @@ describe("pinned New person row", () => {
   });
 
   it("is disabled when there is no picture selection", async () => {
-    const wrapper = await mountOpen({ pictureIds: [] });
+    const wrapper = await mountOpen({ subjectIds: [] });
     expect(pinnedCreateButton(wrapper).attributes("disabled")).toBeDefined();
   });
 });
@@ -393,7 +393,7 @@ describe("no-match empty state", () => {
   });
 
   it("Enter does nothing when disabled by an empty selection", async () => {
-    const wrapper = await mountOpen({ pictureIds: [] });
+    const wrapper = await mountOpen({ subjectIds: [] });
     const input = wrapper.find(".ate-search input");
     await input.setValue("Zed");
     await input.trigger("keydown.enter");
@@ -688,7 +688,7 @@ describe("keyboard operation and ARIA structure", () => {
       props: {
         type: "set",
         backendUrl: "http://x",
-        pictureIds: ["10", "11"],
+        subjectIds: ["10", "11"],
         ...props,
       },
       attachTo: document.body,
@@ -803,7 +803,7 @@ describe("keyboard operation and ARIA structure", () => {
       props: {
         type: "character",
         backendUrl: "http://x",
-        pictureIds: ["10", "11"],
+        subjectIds: ["10", "11"],
         allowCreate: true,
       },
       attachTo: document.body,
@@ -905,5 +905,108 @@ describe("keyboard operation and ARIA structure", () => {
     // The click-outside target keeps the focus it just took.
     expect(document.activeElement).toBe(outside);
     outside.remove();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Host-driven mode (model shelf F3).
+//
+// The shelf attaches ADAPTERS through this same picker, so the control has to
+// work for subjects it cannot read membership for and must not write. These
+// cases pin the two regressions the generalisation could cause: a picture-only
+// rule leaking into a non-picture host, and the writing paths still firing.
+// ---------------------------------------------------------------------------
+
+describe("host-driven mode", () => {
+  const SETS = [
+    { id: 1, name: "Alpha" },
+    { id: 2, name: "Beta" },
+  ];
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+    listPictureSets.mockResolvedValue(SETS);
+    listCharacters.mockResolvedValue(PEOPLE);
+    getPictureSetMembership.mockResolvedValue({});
+    getCharacterMembership.mockResolvedValue({});
+  });
+
+  async function mountHosted(props = {}) {
+    const wrapper = mount(AddToEntityControl, {
+      props: {
+        type: "set",
+        backendUrl: "http://backend.test",
+        subjectIds: ["a", "b", "c"],
+        membership: { 1: new Set(["a", "b"]) },
+        ...props,
+      },
+      global: { plugins: [pinia], stubs: { "v-icon": true, Teleport: true } },
+    });
+    await wrapper.find(".ate-btn").trigger("click");
+    await flushPromises();
+    return wrapper;
+  }
+
+  const rowFor = (wrapper, name) =>
+    wrapper.findAll(".ate-item").find((r) => r.text().includes(name));
+
+  it("reads its tri-state from the host's map, without fetching", async () => {
+    const wrapper = await mountHosted();
+    // Two of the three subjects are in Alpha, so it is partial and says so.
+    expect(rowFor(wrapper, "Alpha").text()).toContain("partially applied");
+    expect(rowFor(wrapper, "Beta").text()).not.toContain("partially applied");
+    // The readers would not understand these ids, so they must not be called.
+    expect(getPictureSetMembership).not.toHaveBeenCalled();
+  });
+
+  it("resolves a partial entity UP, writing only the missing subjects", async () => {
+    // The same rule the writing paths apply. Detaching from a mixed state would
+    // drop an attachment the user never named, and the shelf has no undo.
+    const wrapper = await mountHosted();
+    await rowFor(wrapper, "Alpha").trigger("click");
+
+    expect(wrapper.emitted("detach")).toBeUndefined();
+    expect(wrapper.emitted("attach")[0][0]).toEqual({
+      entityType: "set",
+      entityId: 1,
+      entityName: "Alpha",
+      subjectIds: ["c"],
+    });
+  });
+
+  it("detaches only from a fully applied entity", async () => {
+    const wrapper = await mountHosted({
+      membership: { 1: new Set(["a", "b", "c"]) },
+    });
+    await rowFor(wrapper, "Alpha").trigger("click");
+
+    expect(wrapper.emitted("attach")).toBeUndefined();
+    expect(wrapper.emitted("detach")[0][0]).toEqual({
+      entityType: "set",
+      entityId: 1,
+      subjectIds: ["a", "b", "c"],
+    });
+  });
+
+  it("writes nothing itself", async () => {
+    const wrapper = await mountHosted();
+    await rowFor(wrapper, "Beta").trigger("click");
+    expect(addPictureToSet).not.toHaveBeenCalled();
+    expect(wrapper.emitted("attach")).toHaveLength(1);
+  });
+
+  it("does not narrow character membership by which subjects have faces", async () => {
+    // The regression this generalisation could cause. "A picture with no face
+    // cannot be a character member" is a picture rule; applied to adapters it
+    // filters every id away and the whole list reads unchecked however many are
+    // attached.
+    const wrapper = await mountHosted({
+      type: "character",
+      membership: { 1: new Set(["a", "b", "c"]) },
+    });
+    const alice = rowFor(wrapper, "Alice");
+    expect(alice.classes()).toContain("ate-item--checked");
+    expect(alice.attributes("aria-selected")).toBe("true");
   });
 });

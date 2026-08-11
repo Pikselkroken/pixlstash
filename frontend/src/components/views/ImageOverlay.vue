@@ -252,7 +252,7 @@
             type="set"
             ref="addToSetControlRef"
             :key="addToSetControlKey"
-            :picture-ids="[image.id]"
+            :subject-ids="[image.id]"
             :include-deleted-members="true"
             :force-dark="true"
             :disabled="!!stackGroupingLockReason"
@@ -264,7 +264,7 @@
           <AddToEntityControl
             v-if="image && !isReadOnly"
             type="project"
-            :picture-ids="[image.id]"
+            :subject-ids="[image.id]"
             :include-deleted-members="true"
             :expand-stacks="false"
             :force-dark="true"
@@ -703,13 +703,16 @@
                            popups as OS menus that ignore option colour. This
                            is the same menu language as the rest of the app
                            (AddToEntityControl's force-dark skin), in its
-                           single-select face mode. -->
+                           single-select face mode. Face mode picks one person
+                           for one face, so it has no subject list to compute a
+                           tri-state across and passes an empty one. -->
                       <div class="face-assign-person">
                         <AddToEntityControl
                           :ref="(el) => setFaceMenuRef(face.faceKey, el)"
                           type="face"
                           allow-create
                           float-menu
+                          :subject-ids="[]"
                           :force-dark="true"
                           :face-id="face.id"
                           :assigned-character-id="face.character_id"
