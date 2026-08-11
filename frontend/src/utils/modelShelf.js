@@ -398,8 +398,11 @@ export function importReceipt(report) {
     `${n.toLocaleString()} ${n === 1 ? "checkpoint" : "checkpoints"}`;
   const notes = [];
   if (failed) {
+    // The verb agrees with the count. `moveReceipt` had this same bug and it
+    // was fixed there; writing it again a few hundred lines later is why the
+    // singular case is now asserted in both receipts' tests.
     notes.push(
-      `${count(failed)} could not be copied and were left in the run.`,
+      `${count(failed)} could not be copied and ${failed === 1 ? "was" : "were"} left in the run.`,
     );
   }
   if (report?.deleted_source && landed) {

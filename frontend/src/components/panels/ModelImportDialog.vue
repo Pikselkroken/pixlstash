@@ -53,9 +53,10 @@
         @keydown.enter.prevent="pick(run)"
         @keydown.space.prevent="pick(run)"
       >
-        <!-- The newest sample, because a run's last preview is the one that
-             shows what it learned. `loading="lazy"`: a run carries up to 130
-             and only the visible cards need to fetch. -->
+        <!-- The first prompt at the run's highest step: what it has learned so
+             far, on a prompt that stays the same across runs so two cards are
+             comparable (see `coverOf`). `loading="lazy"`, because a run carries
+             up to 130 samples and only the visible cards need to fetch. -->
         <img
           v-if="coverOf(run)"
           class="mid-card-preview"
@@ -242,16 +243,30 @@ const canSubmit = computed(
     destinationId.value != null,
 );
 
-/** A run's newest sample, which is the one showing what it learned. */
+/**
+ * The run's cover: the FIRST prompt at its highest step.
+ *
+ * Highest step because that is what the run has learned so far. First prompt,
+ * and deliberately not the last one rendered — `index` distinguishes *prompts*
+ * within a step, not time, so every sample at the top step is equally "newest"
+ * and a tie-break on recency has nothing to break. Choosing index 0 keeps the
+ * cover on the same prompt for every run and at every step, which is what makes
+ * two cards in this grid comparable and stops a card changing subject when a
+ * later step renders more prompts.
+ *
+ * The reviewer of #878 read the old comment here — which claimed "the last
+ * preview" — and reasonably called the tie-break a bug. The comment was the
+ * bug; this is what the code should have said it does.
+ */
 function coverOf(run) {
   const samples = run.samples || [];
   if (!samples.length || sourceId.value == null) return "";
-  const newest = samples.reduce((best, s) =>
+  const cover = samples.reduce((best, s) =>
     s.step > best.step || (s.step === best.step && s.index < best.index)
       ? s
       : best,
   );
-  return runSampleUrl(sourceId.value, run.name, newest.filename);
+  return runSampleUrl(sourceId.value, run.name, cover.filename);
 }
 
 /** True when the run wrote the bare final file that confirms it finished. */

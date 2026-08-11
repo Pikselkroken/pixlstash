@@ -91,8 +91,19 @@ describe("drawing the grid", () => {
     expect(importRun).not.toHaveBeenCalled();
   });
 
-  it("shows the newest sample, which is what the run learned last", async () => {
-    const wrapper = await openWith([run()]);
+  it("covers with the first prompt at the highest step", async () => {
+    // Highest step is what the run has learned so far. First PROMPT, not the
+    // last rendered: `index` separates prompts within a step rather than time,
+    // so the cover stays on one prompt and two cards stay comparable.
+    const wrapper = await openWith([
+      run({
+        samples: [
+          { filename: "s_250_0.jpg", step: 250, index: 0 },
+          { filename: "s_500_1.jpg", step: 500, index: 1 },
+          { filename: "s_500_0.jpg", step: 500, index: 0 },
+        ],
+      }),
+    ]);
     expect(wrapper.find(".mid-card-preview").attributes("src")).toContain(
       "s_500_0.jpg",
     );

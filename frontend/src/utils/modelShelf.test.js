@@ -374,7 +374,7 @@ describe("importReceipt", () => {
         ],
       }),
     ).toBe(
-      "Imported 2 checkpoints from Clementine. 1 checkpoint could not be copied and were left in the run.",
+      "Imported 2 checkpoints from Clementine. 1 checkpoint could not be copied and was left in the run.",
     );
   });
 
@@ -389,8 +389,26 @@ describe("importReceipt", () => {
         files: [{ status: "failed" }],
       }),
     ).toBe(
-      "Nothing was imported from Clementine. 1 checkpoint could not be copied and were left in the run.",
+      "Nothing was imported from Clementine. 1 checkpoint could not be copied and was left in the run.",
     );
+  });
+
+  it("agrees its verb with the count, in both directions", () => {
+    // Written twice and got wrong twice: `moveReceipt` had this exact bug, it
+    // was fixed there, and then this function repeated it a few hundred lines
+    // later. Both numbers are asserted so the next copy cannot.
+    expect(
+      importReceipt({
+        run_name: "R",
+        files: [{ status: "failed" }],
+      }),
+    ).toContain("1 checkpoint could not be copied and was left in the run.");
+    expect(
+      importReceipt({
+        run_name: "R",
+        files: [{ status: "failed" }, { status: "failed" }],
+      }),
+    ).toContain("2 checkpoints could not be copied and were left in the run.");
   });
 
   it("says the run is gone when it is", () => {
