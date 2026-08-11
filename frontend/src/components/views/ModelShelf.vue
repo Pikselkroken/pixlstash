@@ -389,7 +389,13 @@
                     v-if="row.memberCount > 1"
                     :count="row.memberCount"
                   />
-                  <v-icon size="16">{{ KIND_ICON[row.file_kind] }}</v-icon>
+                  <!-- The identity slot: the model's icon if it has one, else a
+                       generated mark. Never the bare kind glyph on its own —
+                       every checkpoint row and 37% of adapter rows would then
+                       be visually identical, which is the blank column the
+                       icon verb exists to fill. The kind is still said on the
+                       metadata line below, so nothing is lost by the swap. -->
+                  <ModelMark :row="row" />
                 </span>
                 <span class="shelf-row-label">
                   <span
@@ -513,6 +519,7 @@ import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
+import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
