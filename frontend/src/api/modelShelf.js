@@ -79,6 +79,35 @@ export async function editModels(ids, changes) {
 }
 
 /**
+ * Set which characters and sets use one adapter.
+ *
+ * **This REPLACES the adapter's whole attachment set**, so a caller adding one
+ * entity has to send the ones already there with it. That is why Assign is N
+ * calls rather than one: the route is per-adapter by design, because the hash
+ * is what an imported file arrives with and an id is not.
+ *
+ * @param {string} sha256 - the adapter's interop hash. A checkpoint 400s here,
+ *   and a row the hash worker has not reached yet has none to address.
+ * @param {Array<{entity_type: string, entity_id: number}>} attachments - the
+ *   complete set. Empty detaches from everything. Send ONLY these two keys: the
+ *   request model forbids extras, while the response model allows them, so
+ *   echoing a row's `attachments` back verbatim would start failing the day the
+ *   server adds a field to the response.
+ * @returns {Promise<{sha256: string, attachments: Array<Object>}>}
+ */
+export async function setAdapterAttachments(sha256, attachments) {
+  return unwrap(
+    apiClient.put(
+      `/adapters/${encodeURIComponent(sha256)}/attachments`,
+      attachments.map((att) => ({
+        entity_type: att.entity_type,
+        entity_id: att.entity_id,
+      })),
+    ),
+  );
+}
+
+/**
  * Forget models whose files are gone.
  *
  * The one shelf call that destroys curation, so its caller confirms first. The

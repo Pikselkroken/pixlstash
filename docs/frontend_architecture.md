@@ -1588,7 +1588,53 @@ page.
 
 **`ShelfSelectionBar.vue` emits; `ModelShelf.vue` acts.** Every button is an
 emit, so both confirmations live in one place instead of half in the bar and
-half in the view, and the bar mounts in a test with nothing but a store.
+half in the view, and the bar mounts in a test with nothing but a store. Assign
+is the one exception, and only because it is not a button: it is the shared
+`AddToEntityControl`, which owns its own menu and emits the entity it was
+pointed at, so relaying that up and calling back down would buy nothing.
+
+**Assign reuses the grid's picker rather than a shelf-local one.** Two
+instances, `type="character"` and `type="set"`, so the search, the tri-state and
+the keyboard model are learned once. Three things make a picture picker work for
+adapters:
+
+- **`subjectIds` is a generic id list**, not `pictureIds`. The shelf passes hub
+  `model.id` values.
+- **`membership` is supplied by the host**, which is the single switch into
+  host-driven mode. The picker's own readers ask which *pictures* are in each
+  entity, a question with no answer here; `attachments` already come back on the
+  list payload, so the bar builds `entity id -> Set of model ids` off the rows
+  it drew and **nothing is fetched**. An empty `{}` still switches the mode on —
+  only `null` sends the picker back to reading picture membership.
+- **The writes are the store's.** `PUT /adapters/{sha256}/attachments`
+  **replaces** one adapter's whole set, so Assign is N calls with the union
+  computed in `setAttachment`. Writing just the new entity would silently detach
+  every other character already using the model, with no undo behind it and no
+  error to notice. The rows are re-read from `selectedRows` rather than trusted
+  from the payload, because the picker emits the ids it was handed when the menu
+  opened and the selection may have moved since.
+
+Partial resolves **up**, the picker's existing rule: a half-attached row adds
+the rest and never detaches, so the only way to detach is to click a row that is
+fully attached.
+
+**Assign is gated by what can be addressed**, the same shape as Forget and for
+the same reason, but on two different refusals. A **checkpoint** is refused on
+meaning — "this character uses this LoRA" is not something you say about a base
+model, and the route 400s. A row with **no `sha256`** is refused on addressing:
+the attachment table is keyed by the interop hash, and a 24 GB file the hash
+worker has not reached has none, so it becomes assignable on its own once the
+hash lands. Only the assignable subset is handed to the picker; passing the
+whole selection would compute the tri-state across rows that can never be
+attached, so a person every adapter was already assigned to would still read as
+partial. The tooltip says how many of how many.
+
+**No confirmation on Assign**, though the shelf has no undo. An assignment is
+fully reconstructable from what is on screen, so a prompt would cost a click on
+every use and prevent nothing. `assignReceipt` is the record, and because Assign
+is N calls a partial failure is a real outcome rather than an error: it reports
+what landed first, or the reader re-runs the verb on the rows that already have
+it.
 
 **Three verbs, one dialog.** `ShelfEditDialog.vue` carries Rename, Set base
 model and Set kind because all three write one curated column and differ only in

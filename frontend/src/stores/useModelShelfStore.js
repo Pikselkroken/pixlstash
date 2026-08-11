@@ -6,6 +6,7 @@ import {
   forgetModels,
   listAdapters,
   listCheckpoints,
+  setAdapterAttachments,
 } from "../api/modelShelf";
 import { onSessionReset } from "../utils/apiClient";
 import { useNoticeStore } from "./useNoticeStore";
@@ -176,6 +177,35 @@ export function forgetReceipt(gone, kept, vanished = 0) {
       : "Nothing to forget.";
   }
   return [`Forgot ${modelCount(gone)}.`, ...notes].join(" ");
+}
+
+/**
+ * Say what an Assign wrote, and name what it could not write.
+ *
+ * Assign is the one shelf verb that is N calls rather than one, because the
+ * route replaces a single adapter's whole attachment set. A partial failure is
+ * therefore a real outcome and not an error case: four adapters attached and
+ * one refused has to read as four attached, or the reader re-runs the verb on
+ * the four that already landed.
+ *
+ * @param {number} done - adapters the call wrote.
+ * @param {number} failed - adapters whose write was refused or never landed.
+ * @param {string} entityName - the character or set, named rather than typed:
+ *   "Assigned to Alice" is checkable against what the reader meant, and
+ *   "Assigned to a character" is not.
+ * @param {boolean} attaching - false when the verb was a detach.
+ */
+export function assignReceipt(done, failed, entityName, attaching) {
+  const target = entityName || "that entity";
+  const verb = attaching ? "Assigned" : "Removed";
+  const preposition = attaching ? "to" : "from";
+  const notes = failed ? ` ${modelCount(failed)} could not be written.` : "";
+  if (!done) {
+    return failed
+      ? `Nothing was ${attaching ? "assigned" : "removed"}.${notes}`
+      : `Nothing to ${attaching ? "assign" : "remove"}.`;
+  }
+  return `${verb} ${modelCount(done)} ${preposition} ${target}.${notes}`;
 }
 
 /**
@@ -851,6 +881,78 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     }
   }
 
+  /**
+   * Attach or detach one character/set across the selected adapters.
+   *
+   * `PUT /adapters/{sha256}/attachments` REPLACES one adapter's whole set, so
+   * this is N calls with the union computed here — never one call, and never a
+   * blind write of just the new entity, which would silently detach every other
+   * character already using the model.
+   *
+   * The rows are re-read from `selectedRows` rather than trusted from the
+   * payload: the picker emits ids it was handed, and between the menu opening
+   * and the click landing the selection may have moved. Anything no longer
+   * selected, or without a hash to address, is dropped rather than written.
+   *
+   * No confirmation, deliberately, though the shelf has no undo: an assignment
+   * is fully reconstructable from what is on screen, so the prompt would cost a
+   * click on every use and prevent nothing. The receipt is the record.
+   *
+   * @param {Object} payload - as emitted by `AddToEntityControl`.
+   * @param {string} payload.entityType - `character` or `set`.
+   * @param {number} payload.entityId
+   * @param {string} [payload.entityName] - for the receipt.
+   * @param {Array<string|number>} payload.subjectIds - hub `model.id` values.
+   * @param {boolean} [payload.attach=true] - false detaches.
+   * @returns {Promise<boolean>} true when at least one write landed.
+   */
+  async function setAttachment({
+    entityType,
+    entityId,
+    entityName = "",
+    subjectIds = [],
+    attach = true,
+  }) {
+    const notices = useNoticeStore();
+    const wanted = new Set(subjectIds.map((id) => String(id)));
+    const targets = selectedRows.value.filter(
+      (row) => wanted.has(String(row.id)) && row.sha256,
+    );
+    if (!targets.length) return false;
+
+    const results = await Promise.allSettled(
+      targets.map((row) => {
+        // Drop any existing entry for this entity first, so an attach cannot
+        // duplicate one and a detach removes it however it was recorded.
+        const rest = (row.attachments ?? []).filter(
+          (att) =>
+            !(att.entity_type === entityType && att.entity_id === entityId),
+        );
+        const next = attach
+          ? [...rest, { entity_type: entityType, entity_id: entityId }]
+          : rest;
+        return setAdapterAttachments(row.sha256, next);
+      }),
+    );
+
+    const failures = results.filter((r) => r.status === "rejected");
+    const done = results.length - failures.length;
+    if (failures.length) {
+      // Logged as well as counted: the receipt says how many failed, and this
+      // says why, which is the only place the reason survives.
+      console.warn(
+        `[modelShelf] ${failures.length} attachment write(s) failed:`,
+        failures.map((f) => errorDetail(f.reason) || f.reason),
+      );
+    }
+    await fetchRows();
+    notices.push({
+      level: done ? "success" : "error",
+      text: assignReceipt(done, failures.length, entityName, attach),
+    });
+    return done > 0;
+  }
+
   function resetForSession() {
     epoch += 1;
     rows.value = [];
@@ -898,6 +1000,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     clearSelection,
     editSelected,
     forgetSelected,
+    setAttachment,
     rows,
     loading,
     loaded,
