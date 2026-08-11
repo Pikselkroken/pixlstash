@@ -75,6 +75,14 @@ FILE_ADAPTER = "adapter"
 FILE_CHECKPOINT = "checkpoint"
 FILE_UNKNOWN = "unknown"
 
+# What PixlStash downloaded for itself: a tagger, a captioner, a scorer, a face
+# pack. Never produced by `classify_model_file` — these rows are DECLARED by
+# `services/builtin_models.py`, because we chose to download them and therefore
+# know what they are without reading a header (half of them are ONNX or `.pt`,
+# which the scanner does not even yield). The role goes in `model.kind`, which
+# already holds free text, so this vocabulary stays four values wide.
+FILE_ENGINE = "engine"
+
 # Parameter count above which a marker-free file is a base checkpoint rather
 # than an adapter we failed to recognise.
 #

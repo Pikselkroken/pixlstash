@@ -2921,3 +2921,107 @@ def test_a_drive_with_no_label_reports_null_rather_than_a_guess(
     band = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
     assert band["label"] is None
     assert band["mount_point"]
+
+
+# ===========================================================================
+# Built-in engines: listed for completeness, refused by every verb
+# ===========================================================================
+
+
+def _declare_engine(shelf_env, display_name="PixlStash anomaly tagger") -> int:
+    """An `engine` row in a folder PixlStash owns. Returns its model id."""
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (id, path, kind, owner, movable, created_at) "
+            "VALUES (9, '/engines', 'foreign', 'pixlstash', 'root_only', "
+            "'2026-08-11T00:00:00Z')"
+        )
+        cursor = conn.execute(
+            "INSERT INTO model (file_kind, kind, display_name, filename, "
+            "provenance, file_size, created_at) VALUES ('engine', 'tagger', ?, "
+            "'tagger.safetensors', 'builtin', 99, '2026-08-11T00:00:00Z')",
+            (display_name,),
+        )
+        model_id = int(cursor.lastrowid)
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+            "seen_at) VALUES (?, 9, 'tagger.safetensors', 'present', "
+            "'2026-08-11T00:00:00Z')",
+            (model_id,),
+        )
+    return model_id
+
+
+def test_an_engine_is_listed_only_when_asked_for(shelf_env):
+    """It rides the adapters block as `unknown` does, under an explicit
+    `file_kind`. The shelf's first question is which LoRA, not which tagger."""
+    engine = _declare_engine(shelf_env)
+
+    default = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    assert engine not in {row["id"] for row in default}
+
+    asked = shelf_env.owner.get(
+        f"{API}/adapters", params={"file_kind": "engine"}
+    ).json()["adapters"]
+    listed = {row["id"]: row for row in asked}
+    assert engine in listed
+    assert listed[engine]["kind"] == "tagger", "the role is what the row shows"
+
+
+def test_an_engine_is_never_served_as_a_checkpoint(shelf_env):
+    """The same rule `unknown` has: a file we downloaded for ourselves is not a
+    base model, and must not read as one."""
+    engine = _declare_engine(shelf_env)
+    served = shelf_env.owner.get(f"{API}/checkpoints").json()["checkpoints"]
+    assert engine not in {row["id"] for row in served}
+
+
+def test_every_editing_verb_refuses_an_engine(shelf_env):
+    """409, not 403: the caller is authorized and the request is well formed.
+    What refuses it is what the target IS."""
+    engine = _declare_engine(shelf_env)
+    for change in (
+        {"display_name": "Mine now"},
+        {"base_model": "SDXL 1.0"},
+        {"file_kind": "adapter", "kind": "lora"},
+    ):
+        r = shelf_env.owner.patch(f"{API}/models", json={"ids": [engine], **change})
+        assert r.status_code == 409, f"{change} was allowed: {r.text}"
+        assert "PixlStash downloaded" in r.text
+
+    row = _model_row(shelf_env, engine)
+    assert (row["display_name"], row["file_kind"]) == (
+        "PixlStash anomaly tagger",
+        "engine",
+    )
+
+
+def test_forget_reports_an_engine_rather_than_deleting_it(shelf_env):
+    """Reported like every other refusal rather than raised, and refused inside
+    the same transaction as the state gate — forgetting one would delete a row
+    that the next start-up declares straight back."""
+    engine = _declare_engine(shelf_env)
+    _set_states(shelf_env, engine, "missing")
+
+    r = shelf_env.owner.post(f"{API}/models/forget", json={"ids": [engine]})
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "forgotten": [],
+        "refused": [{"id": engine, "reason": "is_a_builtin_engine"}],
+    }
+    assert _model_row(shelf_env, engine)["display_name"] == "PixlStash anomaly tagger"
+
+
+def test_the_folder_pixlstash_owns_cannot_be_forgotten_or_rescanned(shelf_env):
+    """Rescan especially: the scanner yields only `.safetensors` and sweeps what
+    it did not see to `missing`, so pointing it at a folder of ONNX and `.pth`
+    engines would mark them all missing on every pass."""
+    _declare_engine(shelf_env)
+
+    forgotten = shelf_env.owner.delete(f"{API}/model-folders/9")
+    assert forgotten.status_code == 409, forgotten.text
+    assert "downloaded for itself" in forgotten.text
+
+    rescan = shelf_env.owner.post(f"{API}/model-folders/9/rescan")
+    assert rescan.status_code == 202, rescan.text
+    assert rescan.json()["status"] == "skipped"

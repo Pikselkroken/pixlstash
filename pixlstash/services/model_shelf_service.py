@@ -43,6 +43,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
+    FILE_ENGINE,
     FILE_UNKNOWN,
 )
 
@@ -514,9 +515,23 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
             ).fetchall()
         }
 
+        # Engines are declared by PixlStash on every start, so forgetting one
+        # deletes a row that comes straight back. Refused here rather than at the
+        # route because the read belongs inside this transaction — the same
+        # critical section the state gate runs in.
+        builtin = {
+            int(row[0])
+            for row in conn.execute(
+                f"SELECT id FROM model WHERE id IN ({placeholders}) AND file_kind = ?",
+                (*ids, FILE_ENGINE),
+            ).fetchall()
+        }
+
         for model_id in ids:
             if model_id not in known:
                 refused.append({"id": model_id, "reason": "no_such_model"})
+            elif model_id in builtin:
+                refused.append({"id": model_id, "reason": "is_a_builtin_engine"})
             elif model_id in alive:
                 refused.append({"id": model_id, "reason": "still_has_a_copy"})
             else:

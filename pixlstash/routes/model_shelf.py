@@ -78,14 +78,23 @@ from pixlstash.services.model_shelf_service import (
     replace_attachments,
     update_models,
 )
-from pixlstash.utils.adapter_header import FILE_ADAPTER, FILE_CHECKPOINT, FILE_UNKNOWN
+from pixlstash.utils.adapter_header import (
+    FILE_ADAPTER,
+    FILE_CHECKPOINT,
+    FILE_ENGINE,
+    FILE_UNKNOWN,
+)
 
 logger = get_logger(__name__)
 
 # What ``GET /adapters`` will serve. ``checkpoint`` is deliberately absent: it has
 # its own block because it is not addressable by hash, and folding it in here
 # would be the "unknown renders as checkpoint" defect in the other direction.
-ADAPTER_BLOCK_FILE_KINDS = (FILE_ADAPTER, FILE_UNKNOWN)
+#
+# ``engine`` rides here rather than gaining a fourth route: PixlStash's own
+# taggers and scorers are a *filter* over the same table, not a different shape,
+# and this block already serves a kind that is not an adapter.
+ADAPTER_BLOCK_FILE_KINDS = (FILE_ADAPTER, FILE_UNKNOWN, FILE_ENGINE)
 
 # Constrained here rather than validated in the handler, so an unknown key is a
 # 422 from FastAPI and never reaches the SQL builder. The values are the five
@@ -361,8 +370,10 @@ class ForgetRefusal(BaseModel):
     id: int
     reason: str = Field(
         description=(
-            "`no_such_model` (the id names no row) or `still_has_a_copy` (a "
-            "location is `present` or `unreachable`)."
+            "`no_such_model` (the id names no row), `still_has_a_copy` (a "
+            "location is `present` or `unreachable`), or `is_a_builtin_engine` "
+            "(PixlStash downloaded it for itself and re-declares it on every "
+            "start, so forgetting it would achieve nothing)."
         )
     )
 
@@ -665,6 +676,17 @@ def create_router(server) -> APIRouter:
         row = fetch_model_by_hash(server.hub, sha256)
         if row is None:
             raise HTTPException(status_code=404, detail="No such adapter.")
+        if row["file_kind"] == FILE_ENGINE:
+            # Unreachable today — nothing hashes an engine, so it has no
+            # sha256 to be addressed by — but the rule should not rest on
+            # that staying true.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "An engine PixlStash downloaded for itself is not "
+                    "something a character uses."
+                ),
+            )
         if row["file_kind"] == FILE_CHECKPOINT:
             # Attachment means "this character uses this LoRA". A base model is
             # not something a character uses in that sense, and the table is
@@ -758,6 +780,7 @@ def create_router(server) -> APIRouter:
                 detail="file_kind cannot be cleared; use 'unknown'.",
             )
 
+        _refuse_builtin_engines(payload.ids)
         _refuse_impossible_adapters(payload.ids, changes)
 
         updated = update_models(server.hub, payload.ids, changes)
@@ -765,6 +788,41 @@ def create_router(server) -> APIRouter:
             "Shelf edit wrote %s on %d model(s).", ", ".join(sent), len(updated)
         )
         return ModelEditResponse(updated=updated, fields=sent)
+
+    def _refuse_builtin_engines(ids: list[int]) -> None:
+        """Refuse any verb aimed at a model PixlStash downloaded for itself.
+
+        Engines are on the shelf for completeness — so the owner can see what is
+        on their disk and what it costs — not to be curated. Renaming our own
+        tagger would make the shelf lie about it, correcting its kind would
+        overrule a fact we declared, assigning a tagger to a character means
+        nothing, and forgetting one only makes the next start-up declare it
+        again.
+
+        409 rather than 403, the same reasoning the managed store's DELETE uses:
+        the caller is authorized and the request is well formed, and what refuses
+        it is what the target IS.
+        """
+        placeholders = ", ".join("?" for _ in ids)
+        blocked = [
+            dict(row)
+            for row in server.hub.fetchall(
+                f"SELECT id, display_name FROM model "
+                f"WHERE id IN ({placeholders}) AND file_kind = ?",
+                (*ids, FILE_ENGINE),
+            )
+        ]
+        if not blocked:
+            return
+        first = blocked[0]["display_name"] or "an engine"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{len(blocked)} of these are engines PixlStash downloaded for "
+                f"itself ({first}). They are listed so you can see them, not "
+                "curated."
+            ),
+        )
 
     def _refuse_impossible_adapters(ids: list[int], changes: dict) -> None:
         """Refuse a correction the hub's own CHECK constraints would reject.

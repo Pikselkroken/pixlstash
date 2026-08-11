@@ -1240,6 +1240,62 @@ Three guards on it, none of them authz:
 
 **No undo, and no operation-log half.** The v1.9 operation log is vault-only and the shelf's rows are hub-side; the decision to span it was overturned on 2026-08-09 and reaffirmed 2026-08-10. Confirmation only where the prior state cannot be reconstructed: a bulk base-model overwrite and Forget.
 
+### The built-in model folder: declared, never scanned
+
+**PixlStash downloads engines for itself, so it declares what they are.** The
+shelf catalogues by *reading* — the scanner walks a folder, reads each
+`.safetensors` header and decides. That is right for a folder of LoRAs the owner
+assembled and wrong for our own engines: half of them are ONNX or `.pt`, which
+the scanner does not even yield (`MODEL_SUFFIX` is `.safetensors`), and every one
+of them is a file we chose to fetch. `services/builtin_models.py` declares them
+and writes the rows; nothing is parsed and nothing is hashed, so a 339 MB tagger
+costs an existence check at start-up.
+
+**`file_kind = 'engine'`, with the role in `kind`.** `kind` already holds free
+text (`lora`, `lokr`) and already renders as the row's label, so `tagger` /
+`captioner` / `scorer` / `face` ride there and `file_kind` stays four values
+wide instead of growing one entry per role. No schema change: the `model` CHECK
+constraints bind only `adapter`.
+
+**The scanner must skip these folders**, which is what `model_folder.owner`
+marks. It yields only `.safetensors` and sweeps whatever it did not see to
+`missing`, so pointed here it would mark the ONNX tagger and both `.pth` scorers
+missing on every pass. `POST /model-folders/{id}/rescan` answers `skipped` for
+them, as it already does for a `source` folder.
+
+**The filenames are restated rather than imported.** Every downloader names its
+files as module constants, but those modules import onnxruntime, torch, cv2 and
+PIL at module level and start-up must not pay that to learn two strings. The
+duplicate is pinned by `tests/test_builtin_models.py`, which imports the real
+constants where the cost is free. Drift is self-announcing rather than silent: a
+renamed file makes its declared row go `missing` *and* the real file appear in
+the unclaimed readout, which is a visible pair.
+
+**Protected, because they are ours.** `DELETE` on the folder answers 409 (the
+caller is authorized; what refuses is what the target is), and every verb refuses
+an engine row: renaming our own tagger would make the shelf lie about it,
+assigning one to a character means nothing, and forgetting one deletes a row the
+next start-up declares straight back. Forget reports `is_a_builtin_engine` as a
+**refusal reason** rather than raising, which is the shape that route already
+speaks — and the check runs *inside* the delete transaction, alongside the state
+gate, rather than as a route-level read that would break the one-critical-section
+invariant.
+
+**Declared-but-absent is normal.** `sac+logos+ava1-l14-linearMSE.pth` is fetched
+only for the CLIP model that needs it, so about half of these are `missing` on
+any given machine. That is a state, not a warning.
+
+**The unclaimed readout.** `unclaimed_files()` reports what is present and *not*
+declared — on a measured machine, `best.pt` at 339 MB, which nothing in the tree
+references by name or by pattern. It is called "not claimed by anything in this
+build", never "orphaned": we know our own manifest, we do not know that a
+previous build, a plugin or the owner did not put it there. Same epistemics as
+`missing` (a fact) against `unreachable` (the absence of one), and the same
+doctrine — detection proposes, it never applies, so nothing here deletes.
+`hf_hub_download(local_dir=…)` leaves `.cache/huggingface` beside what it writes,
+at the top level and inside every subdirectory it fills; that is the tool's, and
+reporting it would train the reader to ignore the list.
+
 ### The managed model store (shelf plan B7)
 
 **Exactly one `model_folder` row with `kind='managed'` always exists.** It is
