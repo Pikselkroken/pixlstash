@@ -1,6 +1,7 @@
 import gc
 import uvicorn
 import os
+import sqlite3
 import json
 import re
 import socket
@@ -54,6 +55,10 @@ from pixlstash.hub.registry import LibraryRegistry
 from pixlstash.services.library_switch_service import LibrarySwitchService
 from pixlstash.services.library_generation_coordinator import (
     LibraryGenerationCoordinator,
+)
+from pixlstash.services.builtin_models import (
+    builtin_model_dir,
+    declare_builtin_models,
 )
 from pixlstash.services.managed_model_store import ensure_managed_folder
 from pixlstash.telemetry import ensure_install_identity, start_periodic_sender
@@ -446,6 +451,24 @@ class Server(
         # services/managed_model_store.py for why it is `managed` rather than a
         # seeded `user` folder nobody is allowed to remove.
         ensure_managed_folder(self.hub, os.path.dirname(self._server_config_path))
+        # PixlStash's own engines, declared rather than scanned: we downloaded
+        # them, so we know what they are without reading a header — and half of
+        # them are ONNX or `.pt`, which the scanner does not yield at all.
+        # Cheap: existence checks and a handful of upserts, no hashing.
+        try:
+            declare_builtin_models(self.hub, builtin_model_dir())
+        except (sqlite3.Error, OSError) as exc:
+            # The shelf losing its engine rows is not a reason to refuse to
+            # start; everything else on it still works. `OSError` as well as
+            # the database errors: the declaration walks a machine-global
+            # directory that may be unreadable, on a different mount, or gone,
+            # and this comment promised non-critical while the handler only
+            # covered half of what the call can raise.
+            logger.error(
+                "Could not declare the built-in model folder (%s); PixlStash's "
+                "own engines will not be listed on the shelf this session.",
+                exc,
+            )
         if self._hub_bootstrap.migrated:
             logger.info(
                 "First run after the hub/vault split: identity now lives in %s",

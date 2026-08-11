@@ -462,6 +462,7 @@ jobs:
           tests/test_authz_library_pin.py
           tests/test_backend_order_stability.py
           tests/test_batch_character_likeness_scope.py
+          tests/test_builtin_models.py
           tests/test_character_face_assignment.py
           tests/test_characters_api.py
           tests/test_checkpoint_hash_finder.py

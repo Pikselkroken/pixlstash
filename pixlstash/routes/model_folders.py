@@ -53,6 +53,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.builtin_models import BUILTIN_OWNER
 from pixlstash.services.managed_model_store import MANAGED_KIND
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.model_folder_scan_task import ModelFolderScanTask
@@ -288,7 +289,9 @@ class ModelFolderRescanResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str = Field(
-        description="`started`, `already_running`, or `skipped` for a source folder."
+        description="`started`, `already_running`, or `skipped` — for a `source` folder, "
+        "which holds runs rather than models, and for a built-in folder, "
+        "whose rows are declared rather than scanned."
     )
     id: int
     task_id: Optional[str] = Field(
@@ -630,6 +633,19 @@ def create_router(server) -> APIRouter:
     def delete_model_folder(folder_id: int, request: Request):
         server.auth.ensure_secure_when_required(request)
         folder = _fetch_folder(folder_id)
+        if folder["owner"] == BUILTIN_OWNER:
+            # Same 409 reasoning as the managed store one line down: the caller
+            # is authorized and the request is well formed, and what refuses it
+            # is that this folder is PixlStash's own. Forgetting it would only
+            # make the next start-up declare it again.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This folder holds the engines PixlStash downloaded for "
+                    "itself. It is registered so you can see what is on your "
+                    "disk, and re-registers itself on the next start."
+                ),
+            )
         if folder["kind"] == MANAGED_KIND:
             # 409, not 403: the caller is fully authorized and the request is
             # well formed. What refuses it is the state of the target — this row
@@ -685,7 +701,12 @@ def create_router(server) -> APIRouter:
     def rescan_model_folder(folder_id: int, request: Request):
         server.auth.ensure_secure_when_required(request)
         folder = _fetch_folder(folder_id)
-        if folder["kind"] == "source":
+        if folder["kind"] == "source" or folder["owner"] == BUILTIN_OWNER:
+            # A source folder holds runs to import, not models to catalogue. A
+            # built-in folder is DECLARED, and pointing the scanner at it would
+            # be actively wrong: it yields only `.safetensors` and sweeps what it
+            # did not see to `missing`, so it would mark the ONNX tagger and both
+            # `.pth` scorers missing on every pass.
             return ModelFolderRescanResponse(status="skipped", id=folder_id)
 
         with _scans_lock:

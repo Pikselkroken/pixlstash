@@ -191,16 +191,30 @@ It lost work here on 2026-08-11. Three shelf PRs merged inside forty seconds:
 
 Neither was recoverable by looking at the PR list, because both said MERGED.
 
-**If you need to add to an open PR, there are exactly two ways:**
+**This rule is about the BASE, not about waiting.** It does not say "wait for the
+open PR to merge before you start". Depending on unmerged work is fine and
+normal; *targeting its branch* is what is banned. There are exactly two ways:
 
-1. **Push the commits onto that PR's own branch.** This is almost always right.
-   The PR updates, its checks re-run, and there is one thing to merge.
-2. **Open a replacement PR carrying the old PR's full history, targeting the same
-   base the old one did** (usually `develop`), then close the old one. Use this
-   when the addition deserves its own review rather than riding along.
+1. **Push the commits onto that PR's own branch.** Right when the new work
+   *belongs* to that PR — a review fix, a test it was missing. The PR updates,
+   its checks re-run, and there is one thing to merge.
+2. **Branch off the open PR to get its content, and target `develop` anyway.**
+   Right when the new work is its own step that merely needs the other's code,
+   which is the common case. The new PR carries the old one's commits in its
+   history and in its diff until the old PR merges, at which point they become
+   common ancestors and drop out of the diff by themselves. Nothing has to be
+   rebased and nothing has to wait.
+
+   The same shape *replaces* a PR: carry its full history, target the base it
+   targeted, close the old one.
 
 Both keep a single merge into a long-lived branch. Neither creates a base that
 can be merged, deleted or retargeted out from under you.
+
+**The misreading to guard against**, which happened the day this was written:
+treating option 2 as "open a PR only once the other has landed". That serialises
+every dependent piece of work behind a review queue and buys nothing — the risk
+was never *depending* on an open PR, only *merging into* one.
 
 **Corollary — verify the merge, not the badge.** After a PR you care about is
 merged, confirm its content actually reached the target:
