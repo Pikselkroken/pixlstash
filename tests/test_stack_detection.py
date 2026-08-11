@@ -26,7 +26,7 @@ def hub(tmp_path):
     database.close()
 
 
-def _folder(hub, path, folder_id=None):
+def _folder(hub, path):
     with hub.transaction() as conn:
         return int(
             conn.execute(
@@ -275,6 +275,86 @@ def test_applying_drops_a_row_something_else_stacked_first(hub, tmp_path):
     assert row["stack_id"] is None
     row = hub.fetchone("SELECT stack_id FROM model WHERE id = ?", (second,))
     assert row["stack_id"] == other
+
+
+def test_applying_refuses_a_model_with_no_copy_on_disk(hub, tmp_path):
+    """The route must not offer what the dry run refuses.
+
+    `propose_stacks` skips a model whose only copies are `missing` or
+    `unreachable` — files nobody has seen are not something to reorganise a
+    shelf around. Without the same gate here, `POST /model-stacks` would be a
+    way to build a stack the detector would never have suggested.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    gone_a = _adapter(hub, folder, "Gone_000000500.safetensors", state="missing")
+    gone_b = _adapter(hub, folder, "Gone_000001000.safetensors", state="unreachable")
+
+    with pytest.raises(StackRefused) as exc:
+        apply_stack(hub, [gone_a, gone_b], "Gone")
+    assert exc.value.reason == "already_stacked"
+
+
+def test_a_writer_that_lands_between_the_gate_and_the_update_cannot_be_overwritten(
+    hub, tmp_path
+):
+    """The window pysqlite leaves open, closed on the UPDATE itself.
+
+    The hub connects with `isolation_level=""`, so a transaction opens on DML
+    only: the gate SELECT runs in autocommit and the INSERT is what begins the
+    write. A second connection committing in that gap used to be silently
+    overwritten.
+
+    **The writer is forced INTO that gap rather than run before it.** A first
+    attempt at this test committed from the other connection before calling
+    `apply_stack`, which the gate SELECT simply excluded — it exercised the
+    SELECT and left the UPDATE guard untested, and stayed green with that guard
+    deleted. `_step_of` is called by the cover sort, which runs after the SELECT
+    and before the first UPDATE, so patching it is what puts the commit exactly
+    where the race is.
+    """
+    import sqlite3
+
+    from pixlstash.services import stack_detector
+
+    folder = _folder(hub, str(tmp_path / "loras"))
+    first = _adapter(hub, folder, "Race_000000500.safetensors")
+    second = _adapter(hub, folder, "Race_000001000.safetensors")
+
+    real_step_of = stack_detector._step_of
+    landed = []
+
+    def commit_from_another_connection(filename):
+        if not landed:
+            landed.append(True)
+            other = sqlite3.connect(hub.path, isolation_level="")
+            try:
+                other.execute(
+                    "INSERT INTO adapter_stack (id, name, created_at, updated_at) "
+                    "VALUES (99, 'Other', '2026-08-11T00:00:00Z', "
+                    "'2026-08-11T00:00:00Z')"
+                )
+                other.execute("UPDATE model SET stack_id = 99 WHERE id = ?", (second,))
+                other.commit()
+            finally:
+                other.close()
+        return real_step_of(filename)
+
+    stack_detector._step_of = commit_from_another_connection
+    try:
+        with pytest.raises(StackRefused):
+            apply_stack(hub, [first, second], "Race")
+    finally:
+        stack_detector._step_of = real_step_of
+
+    assert landed, "the interleaved writer never ran; the window was not exercised"
+
+    # The other writer's stack is intact and nothing half-landed.
+    row = hub.fetchone("SELECT stack_id FROM model WHERE id = ?", (second,))
+    assert row["stack_id"] == 99
+    row = hub.fetchone("SELECT stack_id FROM model WHERE id = ?", (first,))
+    assert row["stack_id"] is None
+    stacks = hub.fetchone("SELECT COUNT(*) AS n FROM adapter_stack")
+    assert stacks["n"] == 1, "the rolled-back INSERT left an orphan stack row"
 
 
 def test_applying_ignores_a_duplicate_id(hub, tmp_path):

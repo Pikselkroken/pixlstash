@@ -159,7 +159,10 @@ def propose_stacks(hub: HubDatabase) -> list[StackProposal]:
     for proposal in proposals:
         proposal.members.sort(key=_cover_first_key)
     proposals.sort(key=lambda p: (-len(p.members), p.name.casefold()))
-    logger.info(
+    # DEBUG, not INFO: this writes nothing, so it has no audit value, and the
+    # module's whole framing is that reading is "free, silent and continuous".
+    # The APPLY is what deserves a durable line, and it logs one.
+    logger.debug(
         "Stack detection proposes %d group(s) over %d loose adapter(s).",
         len(proposals),
         sum(len(p.members) for p in proposals),
@@ -181,13 +184,25 @@ def apply_stack(hub: HubDatabase, model_ids: list[int], name: str | None) -> int
     The applying half, and the only thing here that writes. Called after the
     owner has seen the dry run, never from detection.
 
-    **The gate is re-read inside the write transaction**, not trusted from the
-    proposal. A proposal is a snapshot the owner may have been looking at for a
-    minute; between the dry run and the confirmation a scan can stack a row, a
-    folder can be forgotten, or another tab can act. Reading through
-    ``hub.fetchall`` first would take and release the hub lock before the
-    INSERT, leaving exactly that window open — the same defect the CSO review of
-    ``forget_models`` found, and this is the shape that closes it.
+    **Every gate is re-checked on the UPDATE itself, not just read first.**
+    An earlier version read the gate with a SELECT inside ``hub.transaction()``
+    and believed that was one critical section. It is not: the hub connects with
+    ``isolation_level=""``, so pysqlite opens a transaction on *DML only* — a
+    leading SELECT runs in autocommit and the INSERT below is what actually
+    begins the write. Measured, not reasoned: with two connections on one WAL
+    database, ``in_transaction`` reads ``False`` after the SELECT, and a second
+    writer that stacks a row in the gap is then silently overwritten by the
+    unguarded UPDATE. This is the same pysqlite behaviour CLAUDE.md already
+    records for ``PRAGMA defer_foreign_keys``.
+
+    So the ``stack_id IS NULL`` predicate is repeated **on the UPDATE**, and the
+    row count is checked: a row that stopped being loose between the SELECT and
+    its own UPDATE changes nothing and aborts the whole stack rather than being
+    torn out of the stack it already has.
+
+    The same reasoning applies to the ``present`` gate. ``propose_stacks``
+    refuses a model with no copy on disk, and refusing it here too is what stops
+    the route being a way to do what the dry run never offers.
 
     Args:
         hub: The hub database.
@@ -212,11 +227,15 @@ def apply_stack(hub: HubDatabase, model_ids: list[int], name: str | None) -> int
     placeholders = ",".join("?" for _ in ids)
     with hub.transaction() as conn:
         rows = conn.execute(
-            # `stack_id IS NULL` re-checked here, so a row stacked since the dry
-            # run is dropped rather than torn out of the stack it already has.
-            f"SELECT id, filename FROM model "
-            f"WHERE id IN ({placeholders}) AND stack_id IS NULL "
-            f"AND file_kind = ?",
+            # `state = 'present'` matches `propose_stacks`: a model whose only
+            # copies are `missing` or `unreachable` is not something to
+            # reorganise a shelf around, and the route must not offer what the
+            # dry run refuses.
+            f"SELECT m.id AS id, m.filename AS filename FROM model m "
+            f"WHERE m.id IN ({placeholders}) AND m.stack_id IS NULL "
+            f"AND m.file_kind = ? AND EXISTS ("
+            f"  SELECT 1 FROM model_file mf "
+            f"  WHERE mf.model_id = m.id AND mf.state = 'present')",
             (*ids, FILE_ADAPTER),
         ).fetchall()
         if len(rows) < MIN_GROUP_SIZE:
@@ -245,10 +264,20 @@ def apply_stack(hub: HubDatabase, model_ids: list[int], name: str | None) -> int
             ).lastrowid
         )
         for position, (model_id, _) in enumerate(ordered):
-            conn.execute(
-                "UPDATE model SET stack_id = ?, stack_position = ? WHERE id = ?",
+            changed = conn.execute(
+                "UPDATE model SET stack_id = ?, stack_position = ? "
+                "WHERE id = ? AND stack_id IS NULL",
                 (stack_id, position, model_id),
-            )
+            ).rowcount
+            if not changed:
+                # Raised inside the transaction, so the INSERT above and every
+                # UPDATE before this one roll back together: a run is stacked
+                # whole or not at all, never half.
+                raise StackRefused(
+                    f"Model {model_id} was stacked by something else while this "
+                    "was being confirmed; nothing was changed.",
+                    reason="already_stacked",
+                )
     logger.info(
         "Stacked %d model(s) as adapter_stack %d (%s).", len(ordered), stack_id, name
     )
