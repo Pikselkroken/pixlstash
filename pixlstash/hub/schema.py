@@ -329,6 +329,15 @@ CREATE TABLE IF NOT EXISTS model (
     stack_id              INTEGER REFERENCES adapter_stack(id),
     stack_position        INTEGER,
     run_key               TEXT,
+    -- The authored mark, content-addressed at <hub_dir>/icons/<sha256>.webp.
+    -- A HASH, never a vault picture id: `model` is a hub table, no foreign key
+    -- spans hub and vault, and SQLite recycles deleted ids — so an
+    -- `icon_picture_id` would silently re-point at a different picture after a
+    -- delete-plus-insert and break on every library switch. Picking a library
+    -- picture therefore COPIES it into the icon store rather than referencing
+    -- it. NULL means no icon, which the client draws as a generated mark rather
+    -- than as a blank.
+    icon_sha256           TEXT,
     created_at            TEXT,
     CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL),
     -- Same shape one column over: every producer already supplies an algorithm
@@ -598,6 +607,17 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
 
     for statement in _V2_MODEL_SHELF_TABLES:
         conn.execute(statement)
+
+    # The icon column (shelf plan, the sixth verb) lands the same way the rest
+    # of v2 does: amended in place rather than as a v3, because a build shipped
+    # before this change has CURRENT_SCHEMA_VERSION = 2 and would refuse a v3
+    # hub with HubSchemaTooNewError. Guarded on PRAGMA table_info, so it is a
+    # no-op on a fresh hub (the CREATE above already carries it) and on re-run.
+    model_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(model)").fetchall()
+    }
+    if "icon_sha256" not in model_columns:
+        conn.execute("ALTER TABLE model ADD COLUMN icon_sha256 TEXT")
 
     # Rows from the earliest feature-lane v1 may predate the column entirely.
     # Backfill in Python so every library gets a distinct cryptographic value;

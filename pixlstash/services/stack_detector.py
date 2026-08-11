@@ -112,8 +112,18 @@ def propose_stacks(hub: HubDatabase) -> list[StackProposal]:
     rows = hub.fetchall(
         # `stack_id IS NULL` is the whole work queue: an imported run is already
         # a stack and a ratified one must never be re-proposed.
+        #
+        # MIN() on the folder, and that is not cosmetic. One model legitimately
+        # has many `model_file` rows, so a bare `mf.model_folder_id` beside
+        # `GROUP BY m.id` is a bare column: SQLite may return the folder of ANY
+        # of its rows, so a model catalogued on two disks would group under one
+        # folder on this call and the other on the next — proposals would be
+        # nondeterministic, and two members of one run could land in different
+        # groups and never be offered together. MIN makes the choice stable, and
+        # `apply_stack` re-derives the same common-folder rule, so a proposal
+        # cannot be something the apply then refuses.
         "SELECT m.id AS id, m.filename AS filename, m.file_size AS file_size, "
-        "mf.model_folder_id AS folder_id "
+        "MIN(mf.model_folder_id) AS folder_id "
         "FROM model m "
         "JOIN model_file mf ON mf.model_id = m.id "
         "WHERE m.stack_id IS NULL AND m.file_kind = ? AND mf.state = 'present' "
@@ -238,6 +248,29 @@ def apply_stack(hub: HubDatabase, model_ids: list[int], name: str | None) -> int
             f"  WHERE mf.model_id = m.id AND mf.state = 'present')",
             (*ids, FILE_ADAPTER),
         ).fetchall()
+
+        # "Grouped per folder, never shelf-wide" is the module's invariant, and
+        # until now only `propose_stacks` enforced it — so the route could build
+        # a stack whose members sit on two drives, which is exactly the run that
+        # never existed. Checked as "is there ONE folder holding a present copy
+        # of every named model", which is the honest reading of a run being
+        # files that sit together.
+        surviving = [int(row["id"]) for row in rows]
+        if surviving:
+            marks = ",".join("?" for _ in surviving)
+            shared = conn.execute(
+                f"SELECT model_folder_id FROM model_file "
+                f"WHERE model_id IN ({marks}) AND state = 'present' "
+                f"GROUP BY model_folder_id HAVING COUNT(DISTINCT model_id) = ?",
+                (*surviving, len(surviving)),
+            ).fetchone()
+            if shared is None:
+                raise StackRefused(
+                    "Those models are not all in one folder. A run is files "
+                    "that sit together; stacking across folders would invent "
+                    "one and put its members on two drives.",
+                    reason="not_one_folder",
+                )
         if len(rows) < MIN_GROUP_SIZE:
             raise StackRefused(
                 "Fewer than two of those models are still loose adapters; "

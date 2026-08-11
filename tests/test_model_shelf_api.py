@@ -3388,6 +3388,32 @@ def test_applying_refuses_more_than_one_run_is_worth(shelf_env):
     assert r.status_code == 400, r.text
 
 
+def test_the_ceiling_counts_unique_ids_not_repeats(shelf_env):
+    """`apply_stack` de-dupes, so the guard has to as well.
+
+    A client that repeated an id would otherwise be told it sent too many
+    models while its actual selection was two. Reported by the review of #882.
+    """
+    bob = shelf_env.model_ids["bob.safetensors"]
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    r = shelf_env.owner.post(
+        f"{API}/model-stacks",
+        json={"model_ids": [bob, noname] * 400},
+    )
+    assert r.status_code != 400, r.text
+
+    if r.status_code == 200:
+        with shelf_env.server.hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET stack_id = NULL, stack_position = NULL "
+                "WHERE id IN (?, ?)",
+                (bob, noname),
+            )
+            conn.execute(
+                "DELETE FROM adapter_stack WHERE id = ?", (r.json()["stack_id"],)
+            )
+
+
 def test_applying_a_stack_collapses_the_rows_and_reports_the_count(shelf_env):
     # The two seeded adapters that are NOT already in a stack. `alice` and
     # `dana` carry a `stack_position`, so naming them here would be testing the
@@ -3417,3 +3443,117 @@ def test_applying_a_stack_collapses_the_rows_and_reports_the_count(shelf_env):
             (bob, noname),
         )
         conn.execute("DELETE FROM adapter_stack WHERE id = ?", (body["stack_id"],))
+
+
+# ── The icon verb over HTTP (shelf plan, the sixth verb) ────────────────────
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+
+def test_every_icon_route_is_declared_owner_only():
+    """Not §16.3: the store is PixlStash's own directory beside the hub, and no
+    route here takes, walks or serves a caller-supplied host path."""
+    for method, path in (
+        ("POST", "/api/v1/models/{model_id}/icon"),
+        ("GET", "/api/v1/model-icons/{sha256}"),
+        ("POST", "/api/v1/models/icons/clear"),
+    ):
+        declared = ROUTE_POLICIES.get((method, path))
+        assert declared is not None, f"({method}, {path}) has no ROUTE_POLICIES entry"
+        assert declared.policy is AccessPolicy.OWNER_ONLY, (
+            f"{method} {path} declares {declared.policy}, not OWNER_ONLY"
+        )
+        assert declared.justification, f"{method} {path} declares no reason"
+
+
+def test_setting_an_icon_surfaces_it_on_the_list(shelf_env):
+    alice = shelf_env.model_ids["alice.safetensors"]
+    r = shelf_env.owner.post(
+        f"{API}/models/{alice}/icon",
+        files={"file": ("logo.png", _PNG, "image/png")},
+    )
+    assert r.status_code == 200, r.text
+    digest = r.json()["icon_sha256"]
+
+    rows = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    row = next(a for a in rows if a["id"] == alice)
+    assert row["icon_sha256"] == digest
+
+    served = shelf_env.owner.get(f"{API}/model-icons/{digest}")
+    assert served.status_code == 200, served.text
+    assert served.headers["content-type"] == "image/png"
+    assert served.content == _PNG
+
+    shelf_env.owner.post(f"{API}/models/icons/clear", json={"ids": [alice]})
+
+
+def test_two_models_given_one_logo_share_a_single_file(shelf_env):
+    """The dedup that makes an icon the right object for a base-model mark:
+    forty Flux checkpoints wanting one logo is the normal case."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    bob = shelf_env.model_ids["bob.safetensors"]
+    first = shelf_env.owner.post(
+        f"{API}/models/{alice}/icon", files={"file": ("a.png", _PNG, "image/png")}
+    ).json()["icon_sha256"]
+    second = shelf_env.owner.post(
+        f"{API}/models/{bob}/icon", files={"file": ("b.png", _PNG, "image/png")}
+    ).json()["icon_sha256"]
+    assert first == second
+
+    icons = os.path.join(os.path.dirname(shelf_env.server.hub.path), "icons")
+    assert os.listdir(icons) == [f"{first}.webp"]
+
+    shelf_env.owner.post(f"{API}/models/icons/clear", json={"ids": [alice, bob]})
+
+
+def test_a_non_image_upload_is_refused(shelf_env):
+    """Checked on the bytes, not on the filename or the declared type — both of
+    which say `image/png` here."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    r = shelf_env.owner.post(
+        f"{API}/models/{alice}/icon",
+        files={"file": ("logo.png", b"<script>alert(1)</script>", "image/png")},
+    )
+    assert r.status_code == 400, r.text
+    row = _model_row(shelf_env, alice)
+    assert row["icon_sha256"] is None
+
+
+def test_an_icon_path_that_is_not_a_digest_is_refused(shelf_env):
+    """400 rather than 404: the segment is not an icon address at all."""
+    r = shelf_env.owner.get(f"{API}/model-icons/not-a-digest")
+    assert r.status_code == 400, r.text
+
+
+def test_clearing_reports_what_changed_not_what_was_sent(shelf_env):
+    """A selection of two where one had an icon is "1 cleared", not "2"."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    bob = shelf_env.model_ids["bob.safetensors"]
+    shelf_env.owner.post(
+        f"{API}/models/{alice}/icon", files={"file": ("a.png", _PNG, "image/png")}
+    )
+
+    r = shelf_env.owner.post(f"{API}/models/icons/clear", json={"ids": [alice, bob]})
+    assert r.status_code == 200, r.text
+    assert r.json()["cleared"] == [alice]
+    assert _model_row(shelf_env, alice)["icon_sha256"] is None
+
+
+def test_clearing_leaves_the_stored_file_for_the_rows_still_using_it(shelf_env):
+    """The store is shared, so a clear must not delete a mark forty rows use."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    bob = shelf_env.model_ids["bob.safetensors"]
+    digest = shelf_env.owner.post(
+        f"{API}/models/{alice}/icon", files={"file": ("a.png", _PNG, "image/png")}
+    ).json()["icon_sha256"]
+    shelf_env.owner.post(
+        f"{API}/models/{bob}/icon", files={"file": ("b.png", _PNG, "image/png")}
+    )
+
+    shelf_env.owner.post(f"{API}/models/icons/clear", json={"ids": [alice]})
+
+    still = shelf_env.owner.get(f"{API}/model-icons/{digest}")
+    assert still.status_code == 200, "bob's mark was deleted with alice's clear"
+    assert _model_row(shelf_env, bob)["icon_sha256"] == digest
+
+    shelf_env.owner.post(f"{API}/models/icons/clear", json={"ids": [bob]})
