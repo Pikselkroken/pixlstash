@@ -2001,6 +2001,83 @@ def test_the_sample_join_refuses_a_name_that_climbs_out(tmp_path):
             sample_path_within(str(run_dir), escape)
 
 
+def test_the_filename_segment_cannot_carry_a_slash_through_routing(shelf_env):
+    """Pin the routing SHAPE, which is what makes the HTTP traversal unreachable.
+
+    The test that used to assert this over HTTP was deleted: the request never
+    reached the API, so it asserted nothing (see the docstring above). The
+    adversarial review of #878 asked for a structural replacement, on the
+    grounds that `{filename}` matching one path segment was left guarded by a
+    prose comment alone.
+
+    Measured while writing it, the property turns out to be guarded twice, and
+    the stronger guard is the one nobody wrote for this purpose: switching to
+    `{filename:path}` changes the route's *effective path*, which then no longer
+    matches its `ROUTE_POLICIES` key, and `AuthzGate.enforce_startup` refuses to
+    boot the server at all. The deny-by-default registry pins the route shape as
+    a side effect of pinning its policy.
+
+    This test is kept anyway, because that guard only fires while the two
+    disagree: someone changing the route AND the registry key together would
+    satisfy it, and this says the shape itself is the requirement.
+    """
+    from tests.authz_guard import resolves_to_real_route
+
+    app = shelf_env.server.api
+    # The legitimate shape resolves...
+    assert resolves_to_real_route(
+        app, "GET", f"{API}/model-folders/1/runs/Clementine/samples/a.png"
+    )
+    # ...and one carrying a separator does not, because it is an extra segment.
+    assert not resolves_to_real_route(
+        app, "GET", f"{API}/model-folders/1/runs/Clementine/samples/../a.png"
+    )
+
+
+def test_a_symlinked_samples_directory_is_not_its_own_safe_base(tmp_path):
+    """A planted `samples` symlink must not become the containment root.
+
+    `resolve_path_within` derives its safe base by `realpath`-ing the base it is
+    handed, so containing the filename against `run_dir/samples` directly makes
+    a symlinked `samples` its own safe base and turns this route into an
+    arbitrary-image reader for any allowlisted extension.
+
+    Not hypothetical for a `source` folder. Every other registered path is one
+    the owner chose; a source folder's *contents* are third-party tool output
+    the owner merely pointed at, and both tarballs and git repositories carry
+    symlinks. A directory symlink or an NTFS junction does the same on Windows,
+    where four CI shards run.
+
+    Found by the adversarial review of this PR, which is the point of having
+    one: the author had already convinced himself the containment held, and the
+    module docstring said so.
+    """
+    run_dir = tmp_path / "Clementine"
+    run_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.png").write_bytes(b"\x89PNG\r\n\x1a\nsecret")
+    (run_dir / "samples").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError):
+        sample_path_within(str(run_dir), "private.png")
+
+
+def test_a_symlinked_sample_file_is_refused_too(tmp_path):
+    """The sibling case, kept so a fix to the directory hinge cannot quietly
+    drop the file hinge: a real `samples/` holding a symlink OUT is the other
+    half, and it was already closed."""
+    run_dir = tmp_path / "Clementine"
+    (run_dir / "samples").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.png").write_bytes(b"\x89PNG\r\n\x1a\nsecret")
+    (run_dir / "samples" / "innocent.png").symlink_to(outside / "private.png")
+
+    with pytest.raises(ValueError):
+        sample_path_within(str(run_dir), "innocent.png")
+
+
 def test_a_file_that_is_not_an_image_is_never_served_from_our_origin(
     shelf_env, import_folders
 ):

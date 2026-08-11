@@ -422,7 +422,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
     ): RoutePolicy(
         _LOCAL,
-        justification="§16.3 reads and serves one image file from inside a registered ai-toolkit output root — narrower than the listing beside it, which already walks the whole root; both path segments are names joined and contained against the registered path, and the extension is allowlisted so nothing but an image can be served from our origin; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 reads inside a registered ai-toolkit output root and writes nothing — the same authority class as model-folders/{folder_id}/rescan. NOT a subset of the listing beside it: that returns metadata for names matching the sample regex, this returns raw bytes for any allowlisted extension, which is a new capability rather than a narrower one. Both path segments are names joined and contained against the registered path, the samples directory is contained too (a symlinked one would otherwise become its own safe base), and the extension is allowlisted so nothing but an image can be served from our origin; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("POST", "/api/v1/model-imports"): RoutePolicy(
         _LOCAL,

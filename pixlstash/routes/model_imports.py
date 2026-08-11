@@ -197,10 +197,25 @@ def sample_path_within(run_dir: str, filename: str) -> str:
     separator, there is. Exposing the join lets the refusal be asserted on every
     platform instead of only on the one where an attacker could reach it.
 
-    Contained against the SAMPLES DIRECTORY, not against the run. A single
-    run-level join would let ``samples/../config.yaml`` through: it lands inside
-    the run, so a run-level check passes it, and it is a file this route has no
-    business serving.
+    **Two calls, and neither collapses into the other.**
+
+    The second contains the filename against the SAMPLES DIRECTORY rather than
+    against the run, because a single run-level join would let
+    ``samples/../config.yaml`` through: it lands inside the run, so a run-level
+    check passes it, and it is a file this route has no business serving.
+
+    The first contains the samples directory itself, and it exists because
+    ``resolve_path_within`` derives its safe base by ``realpath``-ing the base it
+    is *handed*. Passing ``run_dir/samples`` directly therefore makes a
+    **symlinked** ``samples`` its own safe base, and every file under the link
+    target passes containment — an arbitrary-image reader for any allowlisted
+    extension. That is not hypothetical for a ``source`` folder: unlike every
+    other registered path, its contents are third-party tool output the owner
+    merely pointed at, and both tarballs and git repositories carry symlinks. A
+    directory symlink or an NTFS junction named ``samples`` does the same on
+    Windows. Found by the adversarial review of this PR and reproduced
+    end-to-end; the sibling joins were already safe (a symlinked *run* is caught
+    here, a symlinked *file* inside a real ``samples/`` by the second call).
 
     Args:
         run_dir: The run's directory, itself already contained within a
@@ -211,9 +226,10 @@ def sample_path_within(run_dir: str, filename: str) -> str:
         The resolved absolute path to the sample.
 
     Raises:
-        ValueError: If the name resolves outside the run's ``samples/``.
+        ValueError: If ``samples/`` or the name resolves outside the run.
     """
-    return resolve_path_within(os.path.join(run_dir, SAMPLES_DIRNAME), filename)
+    samples_dir = resolve_path_within(run_dir, SAMPLES_DIRNAME)
+    return resolve_path_within(samples_dir, filename)
 
 
 def _to_run_response(run) -> RunResponse:
