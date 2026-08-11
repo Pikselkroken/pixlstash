@@ -1158,6 +1158,49 @@ describe("a run's disclosure", () => {
   });
 });
 
+describe("the icon verb", () => {
+  it("offers Set icon for one model and refuses it for two", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    const setIcon = () =>
+      wrapper.findAll("button").find((b) => b.text().includes("Set icon"));
+    expect(setIcon().attributes("disabled")).toBeUndefined();
+
+    store.toggleSelected(2);
+    await wrapper.vm.$nextTick();
+    expect(setIcon().attributes("disabled")).toBeDefined();
+  });
+
+  it("offers Clear icon only when something has one", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    const clear = () =>
+      wrapper.findAll("button").find((b) => b.text().includes("Clear icon"));
+    expect(clear()).toBeUndefined();
+
+    store.rows = [adapter({ id: 1, icon_sha256: "a".repeat(64) })];
+    await wrapper.vm.$nextTick();
+    expect(clear()).toBeDefined();
+  });
+
+  it("accepts only the image types the store will take", async () => {
+    // The server checks magic bytes, but the picker should not offer a file it
+    // is going to refuse.
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const input = wrapper.find('input[type="file"]');
+    expect(input.attributes("accept")).toBe(
+      "image/png,image/jpeg,image/webp",
+    );
+  });
+});
+
 describe("Escape", () => {
   it("clears the selection from anywhere in the shelf, not only from a row", async () => {
     // It used to be handled on the row, so it only worked while a row held the

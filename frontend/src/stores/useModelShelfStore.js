@@ -1,5 +1,6 @@
 import { computed, onScopeDispose, reactive, ref } from "vue";
 import { defineStore } from "pinia";
+import { clearModelIcons, setModelIcon } from "../api/modelIcons";
 import {
   BASE_MODEL_UNASSIGNED,
   editModels,
@@ -998,6 +999,75 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return done > 0;
   }
 
+  /**
+   * Give one model an icon.
+   *
+   * Single-row by nature, and gated that way in the bar: an icon answers
+   * "which one is this?", so giving forty rows the same mark would remove the
+   * only thing telling them apart. (Two models legitimately SHARING a logo is
+   * different — that is the owner setting each one, and the content-addressed
+   * store then keeps one file.)
+   *
+   * No confirmation: setting an icon is reconstructable by setting it again.
+   *
+   * @param {File|Blob} file
+   * @returns {Promise<boolean>} true when the icon landed.
+   */
+  async function setIconOnSelected(file) {
+    const notices = useNoticeStore();
+    const row = selectedRows.value[0];
+    if (!row || !file) return false;
+    try {
+      await setModelIcon(row.id, file);
+      await fetchRows();
+      notices.push({
+        level: "success",
+        text: `Set the icon on ${row.name.text}.`,
+      });
+      return true;
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "Could not set that icon.",
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Clear the icon on the selection.
+   *
+   * The caller confirms a BULK clear: one row is reconstructable by setting it
+   * again, and a selection is not — the same test the bulk base-model overwrite
+   * falls on. The server reports which rows actually had one, so the receipt
+   * says what changed rather than how many ids were sent.
+   *
+   * @returns {Promise<boolean>} true when the call was made.
+   */
+  async function clearIconsOnSelected() {
+    const notices = useNoticeStore();
+    const ids = selectedModelIds.value;
+    if (!ids.length) return false;
+    try {
+      const body = await clearModelIcons(ids);
+      await fetchRows();
+      const cleared = body?.cleared?.length ?? 0;
+      notices.push({
+        level: cleared ? "success" : "info",
+        text: cleared
+          ? `Cleared the icon on ${modelCount(cleared)}.`
+          : "None of those had an icon.",
+      });
+      return true;
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "Could not clear those icons.",
+      });
+      return false;
+    }
+  }
+
   function resetForSession() {
     epoch += 1;
     rows.value = [];
@@ -1045,6 +1115,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     clearSelection,
     editSelected,
     forgetSelected,
+    setIconOnSelected,
+    clearIconsOnSelected,
     selectedModelIds,
     setAttachment,
     rows,

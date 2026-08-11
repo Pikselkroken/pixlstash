@@ -178,7 +178,22 @@
       @set-base-model="editVerb = 'base-model'"
       @set-kind="editVerb = 'kind'"
       @move="openMove(store.selectedRows)"
+      @set-icon="pickIcon"
+      @clear-icons="confirmClearIcons"
       @forget="confirmForget"
+    />
+
+    <!-- The file picker the Set icon button drives. A real <input type=file>
+         rather than a drop zone or a dialog: it is the platform's own chooser,
+         it is keyboard-accessible for free, and picking a file is the whole
+         interaction. Hidden rather than styled, because the button beside it
+         is already the affordance. -->
+    <input
+      ref="iconInputRef"
+      class="visually-hidden"
+      type="file"
+      accept="image/png,image/jpeg,image/webp"
+      @change="onIconChosen"
     />
 
     <!-- `inert` while a move runs, not merely dimmed. A move repoints
@@ -744,6 +759,50 @@ function onShelfEscape(event) {
   if (!store.selectedRows.length) return;
   event.preventDefault();
   store.clearSelection();
+}
+
+// ── The icon verb ───────────────────────────────────────────────────────────
+
+const iconInputRef = ref(null);
+
+function pickIcon() {
+  // Cleared first, so choosing the SAME file twice still fires `change` — the
+  // obvious way to retry after a refusal, and silent if the value persisted.
+  if (iconInputRef.value) iconInputRef.value.value = "";
+  iconInputRef.value?.click();
+}
+
+async function onIconChosen(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  await store.setIconOnSelected(file);
+}
+
+/**
+ * Clearing one row needs no prompt; clearing a selection does.
+ *
+ * The shelf's rule is to confirm only where the prior state cannot be
+ * reconstructed. One icon is one file-picker away from back; a bulk clear is
+ * not, and falls on the same side of that test as the bulk base-model
+ * overwrite. Counted on the rows that HAVE one, because that is what the verb
+ * will actually destroy.
+ */
+async function confirmClearIcons() {
+  const withIcons = store.selectedRows.filter((row) => row.icon_sha256);
+  if (!withIcons.length) return;
+  if (withIcons.length > 1) {
+    const ok = await confirm({
+      title: `Clear ${withIcons.length} icons?`,
+      message:
+        "Those models go back to a generated mark. The images stay in the " +
+        "icon store, but which model wore which is not recorded anywhere else.",
+      warning: "There is no undo for this.",
+      confirmLabel: "Clear them",
+      danger: true,
+    });
+    if (!ok) return;
+  }
+  await store.clearIconsOnSelected();
 }
 
 // ── Stacks (shelf plan F5) ──────────────────────────────────────────────────
