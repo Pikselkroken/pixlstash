@@ -10,7 +10,13 @@ import {
 import { onSessionReset } from "../utils/apiClient";
 import { useNoticeStore } from "./useNoticeStore";
 import { errorDetail } from "../utils/apiError";
-import { locationState, modelName } from "../utils/modelShelf";
+import {
+  baseModelKey,
+  compareGroups,
+  locationState,
+  modelName,
+  UNSET_GROUP_KEY,
+} from "../utils/modelShelf";
 
 /** Where the `Show` selection is remembered between visits. */
 const FILTERS_KEY = "pixlstash:modelShelfFilters";
@@ -73,7 +79,8 @@ const SORT_VALUE = {
   // The cover alone understates a six-step run by about six times, in the
   // column the shelf exists to answer.
   size: (row) => row.total_size ?? row.file_size ?? null,
-  base_model: (row) => row.base_model || null,
+  // Sorted by the folded value so the run is by base rather than by spelling.
+  base_model: (row) => baseModelKey(row) || null,
 };
 
 /**
@@ -299,9 +306,6 @@ function storedCollapsed() {
   return collapsed;
 }
 
-/** The group a row with no value on the current axis falls into. */
-const UNSET_GROUP_KEY = "\u0000unset";
-
 /**
  * Every group a row belongs to on one axis, as `{key, label, labelKind}`.
  *
@@ -314,7 +318,10 @@ const UNSET_GROUP_KEY = "\u0000unset";
  */
 function groupsOf(row, axis) {
   if (axis === "base_model") {
-    const base = row.base_model || "";
+    // Grouped by the FOLDED value, so four spellings of one base make one
+    // header. The label is that canonical string: a header reading
+    // `sdxl_base_v1-0` over rows that say `SDXL` would be the fold leaking.
+    const base = baseModelKey(row);
     return base
       ? [{ key: base, label: base, labelKind: "name" }]
       : [
@@ -341,30 +348,6 @@ function groupsOf(row, axis) {
     labelKind: "path",
     location: loc,
   }));
-}
-
-/**
- * Order two groups.
- *
- * Alphabetical by label, with the "not set" group ALWAYS last, in both sort
- * directions. It is the absence of a value rather than a value, so it never
- * joins the alphabetical run and never swaps ends when the direction flips.
- * That is the same rule `baseModelOptions` already applies to the filter's
- * `UNASSIGNED` option, and it matters here because "not set" is not a tail: 37%
- * of real adapters record no base model, so it is one of the largest groups on
- * the shelf and putting it first would bury everything identifiable under it.
- *
- * The sort keys never reorder groups, only rows inside them. Switching to
- * "Largest first" moving every header out from under the reader would be a
- * different view, not a sorted one.
- */
-function compareGroups(a, b) {
-  if (a.key === UNSET_GROUP_KEY) return b.key === UNSET_GROUP_KEY ? 0 : 1;
-  if (b.key === UNSET_GROUP_KEY) return -1;
-  return a.label.localeCompare(b.label, undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
 }
 
 /** The three top-level type checkboxes, each one request and one row bucket. */
@@ -487,10 +470,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * a row the filter quietly drops.
    */
   const baseModelOptions = computed(() => {
+    // Faceted on the folded value too, or the filter offers four boxes that
+    // each tick a quarter of one base — and ticking "SDXL" would hide the rows
+    // whose file happens to spell it `sdxl base`.
     const named = [
-      ...new Set(rows.value.map((r) => r.base_model).filter(Boolean)),
+      ...new Set(rows.value.map(baseModelKey).filter(Boolean)),
     ].sort();
-    const hasUnset = rows.value.some((r) => !r.base_model);
+    const hasUnset = rows.value.some((r) => !baseModelKey(r));
     return hasUnset ? [...named, BASE_MODEL_UNASSIGNED] : named;
   });
 
@@ -507,7 +493,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           if (!kinds.includes(String(row.kind))) return false;
         }
         if (bases.length) {
-          const key = row.base_model || BASE_MODEL_UNASSIGNED;
+          // Matched against the same key the facet list was built from.
+          const key = baseModelKey(row) || BASE_MODEL_UNASSIGNED;
           if (!bases.includes(key)) return false;
         }
         return true;

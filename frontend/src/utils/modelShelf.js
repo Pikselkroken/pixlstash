@@ -151,6 +151,106 @@ export function formatModelSize(bytes) {
   return `${value.toFixed(digits)} ${SIZE_UNITS[unit]}`;
 }
 
+/**
+ * The group a row with no value on the current axis falls into.
+ *
+ * Here rather than in the store because {@link compareGroups} needs it and the
+ * store imports this module, so the other direction would be a cycle.
+ */
+export const UNSET_GROUP_KEY = "\u0000unset";
+
+/**
+ * Order two groups.
+ *
+ * Alphabetical by label, with the "not set" group ALWAYS last, in both sort
+ * directions. It is the absence of a value rather than a value, so it never
+ * joins the alphabetical run and never swaps ends when the direction flips.
+ * That is the same rule `baseModelOptions` already applies to the filter's
+ * `UNASSIGNED` option, and it matters here because "not set" is not a tail: 37%
+ * of real adapters record no base model, so it is one of the largest groups on
+ * the shelf and putting it first would bury everything identifiable under it.
+ *
+ * The sort keys never reorder groups, only rows inside them. Switching to
+ * "Largest first" moving every header out from under the reader would be a
+ * different view, not a sorted one.
+ */
+export function compareGroups(a, b) {
+  if (a.key === UNSET_GROUP_KEY) return b.key === UNSET_GROUP_KEY ? 0 : 1;
+  if (b.key === UNSET_GROUP_KEY) return -1;
+  return a.label.localeCompare(b.label, undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+/**
+ * Add a group for every registered folder that has none.
+ *
+ * Groups are built from `model_file` rows, so a folder holding nothing produces
+ * no group at all — and the managed store holds nothing on every fresh install,
+ * despite being the ruled default destination for a drop or an import. A
+ * destination you cannot see is not a destination.
+ *
+ * The empty group carries `emptyReason`, because "registered and empty" and
+ * "never scanned" are different facts and only one of them is the owner's to
+ * act on. `last_checked` is the discriminator for that pair rather than a zero
+ * count: a folder that has never been walked has no count to be zero.
+ *
+ * `file_count` decides something else — whether the folder is empty at all.
+ * Absence from `groups` cannot answer that, because `groups` is built from the
+ * visible rows and a filter can empty a folder that is full.
+ *
+ * @param {Array<Object>} groups - the folder groups the rows produced.
+ * @param {Array<Object>} folders - rows from `GET /model-folders`.
+ * @returns {Array<Object>} groups plus the empties, in one sorted run.
+ */
+export function withEmptyFolders(groups, folders) {
+  const held = new Set(groups.map((group) => group.key));
+  const empties = [];
+  for (const folder of folders || []) {
+    const key = String(folder.path || folder.id || "");
+    if (!key || held.has(key)) continue;
+    // "Has no group" is NOT "is empty". `groups` is built from the VISIBLE
+    // rows, so a folder full of adapters has no group at all while Show is
+    // narrowed to checkpoints — and calling that folder empty would be a plain
+    // lie about the disk. The registry knows better: `file_count` counts the
+    // copies registered under the folder in any state, so a folder that holds
+    // something is skipped and simply stays absent from a filtered view, which
+    // is what every other filtered-out row does.
+    const unscanned = !folder.last_checked;
+    if (!unscanned && Number(folder.file_count) > 0) continue;
+    empties.push({
+      key,
+      label: key,
+      labelKind: "path",
+      folderId: Number(folder.id),
+      emptyReason: unscanned ? "unscanned" : "empty",
+      rows: [],
+    });
+  }
+  return empties.length ? [...groups, ...empties].sort(compareGroups) : groups;
+}
+
+/**
+ * The base model a row should be GROUPED, FILTERED and FACETED by.
+ *
+ * `base_model_folded` when the server recognised the string, the raw one when
+ * it did not. Folding is what makes `sdxl_base_v1-0`, `SDXL`, `sdxl base` and
+ * `stable diffusion xl` one bucket instead of four; falling back to the raw
+ * value is what keeps a base model nobody has heard of selectable rather than
+ * swept into "not set".
+ *
+ * Note what this is NOT for: the row still DISPLAYS `base_model`, because the
+ * raw spelling is what the file actually says. Group by the fold, show the
+ * original.
+ *
+ * @param {Object} row - a row from `/adapters` or `/checkpoints`.
+ * @returns {string} the grouping key, or `""` when the row records nothing.
+ */
+export function baseModelKey(row) {
+  return row?.base_model_folded || row?.base_model || "";
+}
+
 /** What each folder layout is called, and the glyph that stands for it. */
 export const FOLDER_LAYOUT_LABELS = {
   drive: { label: "Drive, then folder", icon: "mdi-harddisk" },

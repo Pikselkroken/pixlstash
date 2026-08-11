@@ -6,6 +6,8 @@ import { describe, it, expect } from "vitest";
 import {
   bandGroups,
   bandUsage,
+  baseModelKey,
+  withEmptyFolders,
   cleanAssetName,
   deriveModelName,
   formatModelSize,
@@ -228,5 +230,132 @@ describe("bandUsage", () => {
       shelfBytes: 5000,
     });
     expect(usage.shelfPct).toBe(usage.usedPct);
+  });
+});
+
+describe("withEmptyFolders", () => {
+  const group = (path) => ({
+    key: path,
+    label: path,
+    labelKind: "path",
+    folderId: 1,
+    rows: [{ id: 1 }],
+  });
+
+  it("adds the registered folder that produced no group", () => {
+    // The managed store is exactly this on a fresh install: registered, ruled
+    // to be the default drop destination, and holding nothing — so it has no
+    // rows, no group, and no way to be seen.
+    const arranged = withEmptyFolders(
+      [group("/models/loras")],
+      [
+        { id: 1, path: "/models/loras", last_checked: "2026-08-10T00:00:00Z" },
+        { id: 2, path: "/models/store", last_checked: "2026-08-10T00:00:00Z" },
+      ],
+    );
+    expect(arranged.map((g) => g.label)).toEqual([
+      "/models/loras",
+      "/models/store",
+    ]);
+    expect(arranged[1].rows).toEqual([]);
+    expect(arranged[1].folderId).toBe(2);
+  });
+
+  it("does not call a folder empty just because a filter hid its models", () => {
+    // The failure this guards: `groups` is built from the VISIBLE rows, so a
+    // folder full of adapters has no group while Show is narrowed to
+    // checkpoints. Reading "no group" as "no models" would print "No models in
+    // this folder" over a folder holding ninety.
+    const arranged = withEmptyFolders(
+      [],
+      [
+        {
+          id: 1,
+          path: "/models/loras",
+          last_checked: "2026-08-10T00:00:00Z",
+          file_count: 91,
+        },
+        {
+          id: 2,
+          path: "/models/store",
+          last_checked: "2026-08-10T00:00:00Z",
+          file_count: 0,
+        },
+      ],
+    );
+    expect(arranged.map((g) => g.label)).toEqual(["/models/store"]);
+  });
+
+  it("still shows a folder nothing has looked in, whatever its count says", () => {
+    // `file_count` is 0 for an unscanned folder too, but the two are different
+    // facts and only this one is the owner's to act on.
+    const [only] = withEmptyFolders(
+      [],
+      [{ id: 1, path: "/models/new", last_checked: null, file_count: 0 }],
+    );
+    expect(only.emptyReason).toBe("unscanned");
+  });
+
+  it("keeps 'never scanned' apart from 'scanned and empty'", () => {
+    // Only one of the two is the owner's to act on, and `last_checked` is the
+    // discriminator: a folder that has never been walked has no count to be
+    // zero.
+    const [never, walked] = withEmptyFolders(
+      [],
+      [
+        { id: 1, path: "/a", last_checked: null },
+        { id: 2, path: "/b", last_checked: "2026-08-10T00:00:00Z" },
+      ],
+    );
+    expect(never.emptyReason).toBe("unscanned");
+    expect(walked.emptyReason).toBe("empty");
+  });
+
+  it("never duplicates a folder that already has rows", () => {
+    const arranged = withEmptyFolders(
+      [group("/models/loras")],
+      [{ id: 1, path: "/models/loras", last_checked: null }],
+    );
+    expect(arranged).toHaveLength(1);
+    expect(arranged[0].rows).toHaveLength(1);
+  });
+
+  it("returns the groups untouched when every folder has some", () => {
+    // Identity, not a copy: the caller bands this result, and a needless new
+    // array would invalidate every downstream computed on each keystroke.
+    const groups = [group("/models/loras")];
+    expect(withEmptyFolders(groups, [{ id: 1, path: "/models/loras" }])).toBe(
+      groups,
+    );
+  });
+});
+
+describe("baseModelKey", () => {
+  it("prefers the folded label, so four spellings make one bucket", () => {
+    const rows = [
+      { base_model: "sdxl_base_v1-0", base_model_folded: "SDXL 1.0" },
+      { base_model: "SDXL", base_model_folded: "SDXL 1.0" },
+      { base_model: "stable diffusion xl", base_model_folded: "SDXL 1.0" },
+    ];
+    expect(new Set(rows.map(baseModelKey)).size).toBe(1);
+  });
+
+  it("falls back to the raw string the server did not recognise", () => {
+    // Not "not set": an unrecognised base model is a real value the owner can
+    // still group and filter by. Sweeping it into the unset bucket would hide
+    // every private or brand-new base.
+    expect(
+      baseModelKey({
+        base_model: "my private base v3",
+        base_model_folded: null,
+      }),
+    ).toBe("my private base v3");
+  });
+
+  it("reports nothing for a row that records nothing", () => {
+    expect(baseModelKey({ base_model: null, base_model_folded: null })).toBe(
+      "",
+    );
+    expect(baseModelKey(undefined)).toBe("");
   });
 });

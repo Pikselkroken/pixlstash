@@ -172,6 +172,56 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 - **Build frontend:** `npm run build` (in `frontend/`)
 - **Dev frontend:** `npm run dev` (in `frontend/`)
 
+## Never open a PR onto another PR
+
+**A PR's base must be a long-lived branch — `develop`, `main`, a release branch.
+Never another PR's branch.** Stacking reads as tidy and loses work.
+
+It lost work here on 2026-08-11. Three shelf PRs merged inside forty seconds:
+
+* **#873** had **#871**'s branch as its base. #871 merged to `develop`; #873 then
+  merged **into #871's branch**, not into `develop`. GitHub only auto-retargets a
+  PR when its base branch is *deleted*, and this one was not. The badge said
+  merged, the content was not in the product, and it was found by chance two
+  hours later — `grep -c withEmptyFolders frontend/src/utils/modelShelf.js`
+  returned **0** on `develop`.
+* **#872** merged at the head GitHub had recorded, which was one commit behind
+  what had just been pushed to it. The newer commit was simply left on the
+  branch. Same silent shape, different cause.
+
+Neither was recoverable by looking at the PR list, because both said MERGED.
+
+**This rule is about the BASE, not about waiting.** It does not say "wait for the
+open PR to merge before you start". Depending on unmerged work is fine and
+normal; *targeting its branch* is what is banned. There are exactly two ways:
+
+1. **Push the commits onto that PR's own branch.** Right when the new work
+   *belongs* to that PR — a review fix, a test it was missing. The PR updates,
+   its checks re-run, and there is one thing to merge.
+2. **Branch off the open PR to get its content, and target `develop` anyway.**
+   Right when the new work is its own step that merely needs the other's code,
+   which is the common case. The new PR carries the old one's commits in its
+   history and in its diff until the old PR merges, at which point they become
+   common ancestors and drop out of the diff by themselves. Nothing has to be
+   rebased and nothing has to wait.
+
+   The same shape *replaces* a PR: carry its full history, target the base it
+   targeted, close the old one.
+
+Both keep a single merge into a long-lived branch. Neither creates a base that
+can be merged, deleted or retargeted out from under you.
+
+**The misreading to guard against**, which happened the day this was written:
+treating option 2 as "open a PR only once the other has landed". That serialises
+every dependent piece of work behind a review queue and buys nothing — the risk
+was never *depending* on an open PR, only *merging into* one.
+
+**Corollary — verify the merge, not the badge.** After a PR you care about is
+merged, confirm its content actually reached the target:
+`git merge-base --is-ancestor <head-at-merge> origin/develop`, or grep for a
+symbol the PR introduced. `MERGED` is a statement about a pull request, not about
+the branch you are going to build on next.
+
 ## Fixing a CI failure: update the existing PR, do not open another
 
 **One full gate run costs ~200 runner-minutes** (8 Linux shards, 4 Windows, e2e,
