@@ -665,6 +665,35 @@ describe("stacks are atomic", () => {
     expect([...store.selectedIds].sort()).toEqual([1, 2, 3, 4]);
   });
 
+  it("never hands a verb the same model twice, even drawn in two folders", () => {
+    // The review of #881 read `selectedRows` as one entry per DRAWN row, which
+    // would duplicate under folder grouping — a model with copies in two
+    // folders is drawn twice. It is not: `selectedRows` filters `visibleRows`,
+    // which is one entry per model, and the per-folder duplication happens in
+    // `groups` for rendering only. Asserted rather than argued, and it stays
+    // asserted so a future change to that derivation cannot quietly reintroduce
+    // duplicate ids on the wire.
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({
+        id: 1,
+        locations: [
+          { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
+          { state: "present", folder_id: 2, folder_path: "/b", relpath: "x" },
+        ],
+      }),
+    ];
+    store.setView({ groupBy: "folder" });
+    store.toggleSelected(1);
+
+    // Drawn twice...
+    const drawn = store.groups.flatMap((g) => g.rows.map((r) => r.id));
+    expect(drawn).toEqual([1, 1]);
+    // ...selected once, and sent once.
+    expect(store.selectedRows.map((r) => r.id)).toEqual([1]);
+    expect(store.selectedModelIds).toEqual([1]);
+  });
+
   it("selects every member with Select visible", () => {
     const store = shelfWithARun();
     store.selectVisible();

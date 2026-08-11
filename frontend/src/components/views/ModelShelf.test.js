@@ -1108,3 +1108,82 @@ describe("dragging models onto a folder", () => {
     expect(dialog.props("items")).toEqual([{ folder_id: 1, relpath: "a" }]);
   });
 });
+
+describe("a run's disclosure", () => {
+  function run() {
+    return [
+      adapter({ id: 1, stack_id: 7, stack_position: 0 }),
+      adapter({ id: 2, stack_id: 7, stack_position: 1, sha256: "b".repeat(64) }),
+    ];
+  }
+
+  it("puts no focusable control inside the option", async () => {
+    // The defect the review of #881 found, and the one this list's own comment
+    // already warned about: a <button> inside `role="option"` is unreachable to
+    // a listbox's keyboard model. The count is drawn, but it is not a control.
+    const wrapper = await mountShelf(run());
+    const option = wrapper.find('[role="option"]');
+    expect(option.exists()).toBe(true);
+    // Anything FOCUSABLE, not just the obvious tags: a `<span role="button"
+    // tabindex="0">` is exactly as unreachable inside an option, and a
+    // tag-name-only assertion let that mutant through when this was checked.
+    expect(
+      option.findAll(
+        'button, a[href], input, select, textarea, [tabindex], [role="button"]',
+      ),
+    ).toHaveLength(0);
+    expect(option.find(".shelf-row-steps").exists()).toBe(true);
+  });
+
+  it("opens and closes from the row with Right and Left", async () => {
+    const wrapper = await mountShelf(run());
+    const option = wrapper.find('[role="option"]');
+    expect(wrapper.findAll(".shelf-row--member")).toHaveLength(0);
+
+    await option.trigger("keydown", { key: "ArrowRight" });
+    expect(wrapper.findAll(".shelf-row--member")).toHaveLength(1);
+
+    await option.trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.findAll(".shelf-row--member")).toHaveLength(0);
+  });
+
+  it("speaks the count and the state, since the span is aria-hidden", async () => {
+    const wrapper = await mountShelf(run());
+    const option = wrapper.find('[role="option"]');
+    expect(option.attributes("aria-label")).toContain("2 files");
+    expect(option.attributes("aria-label")).toContain("collapsed");
+
+    await option.trigger("keydown", { key: "ArrowRight" });
+    expect(option.attributes("aria-label")).toContain("expanded");
+  });
+});
+
+describe("Escape", () => {
+  it("clears the selection from anywhere in the shelf, not only from a row", async () => {
+    // It used to be handled on the row, so it only worked while a row held the
+    // roving tab stop — not after a click moved focus, and not from the
+    // toolbar. "Escape clears the selection" has to mean everywhere.
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(1);
+
+    await wrapper.find(".shelf-toolbar").trigger("keydown", { key: "Escape" });
+    expect(store.selectedRows).toHaveLength(0);
+  });
+
+  it("leaves the selection alone when a dialog owns the key", async () => {
+    // Escape inside a dialog means "close me". Clearing the selection
+    // underneath at the same time is a second, unasked-for effect.
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.find(".shelf-toolbar").trigger("click");
+    wrapper.vm.editVerb = "rename";
+    await wrapper.vm.$nextTick();
+
+    await wrapper.find(".shelf-toolbar").trigger("keydown", { key: "Escape" });
+    expect(store.selectedRows).toHaveLength(1);
+  });
+});

@@ -9,12 +9,15 @@
     tabindex="-1"
     aria-label="Model shelf"
     aria-describedby="shelf-help"
+    @keydown.escape="onShelfEscape"
   >
     <p id="shelf-help" class="visually-hidden">
       Every adapter and checkpoint PixlStash has found on this machine. Show
       chooses which kinds are listed and which base models. Sort chooses the
       order and whether the list is cut into groups. A name in a monospaced face
-      was taken from the filename, because nobody has named that file yet.
+      was taken from the filename, because nobody has named that file yet. A row
+      that stands for a training run says how many files it holds; Right and
+      Left open and close it. Escape clears the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -356,6 +359,7 @@
                 :class="{ 'shelf-row--selected': store.isSelected(row.id) }"
                 :title="rowTitle(row)"
                 role="option"
+                :aria-label="rowLabel(row)"
                 :aria-selected="store.isSelected(row.id)"
                 :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
                 :data-row-key="row.rowKey"
@@ -404,17 +408,32 @@
                     }}</span>
                   </span>
                 </span>
-                <!-- The badge is the disclosure: it carries `aria-expanded`, so
-                   the count and the control are one thing rather than a number
-                   beside a chevron. `.stop` on its own click keeps expanding a
-                   run from also selecting it. -->
-                <StackBadge
+                <!-- A plain span, NOT `StackBadge`, and that is the whole point:
+                     `StackBadge` renders a real <button>, and a focusable control
+                     inside `role="option"` is unreachable to a listbox's own
+                     keyboard model — which is what the comment above this list
+                     already said and what the first version of this row broke.
+                     The row owns the disclosure instead: Right/Left expand and
+                     collapse, and clicking here toggles without focus ever
+                     landing on a nested control. -->
+                <span
                   v-if="row.memberCount > 1"
-                  :count="row.memberCount"
-                  :expanded="isStackOpen(row.stack_id)"
-                  :action-title="`${row.memberCount} steps in this run`"
-                  @activate="toggleStack(row.stack_id)"
-                />
+                  class="shelf-row-steps"
+                  aria-hidden="true"
+                  @click.stop="toggleStack(row.stack_id)"
+                >
+                  <v-icon
+                    size="14"
+                    class="shelf-row-steps-chevron"
+                    :class="{
+                      'shelf-row-steps-chevron--open': isStackOpen(
+                        row.stack_id,
+                      ),
+                    }"
+                    >mdi-chevron-right</v-icon
+                  >
+                  {{ row.memberCount }}
+                </span>
                 <span
                   class="shelf-row-loc"
                   :class="`shelf-row-loc--${row.locState}`"
@@ -495,7 +514,6 @@ import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
-import StackBadge from "../widgets/StackBadge.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -691,6 +709,34 @@ function onGroupDrop(group, event) {
   if (!isModelFileDrag(event.dataTransfer) || !isDropTarget(group)) return;
   event.preventDefault();
   openMove(store.selectedRows, Number(group.folderId));
+}
+
+/**
+ * Escape clears the selection, from anywhere in the shelf.
+ *
+ * On the ROOT rather than on the row: a selection made by clicking leaves focus
+ * on the row, but a selection survives Tab to the toolbar, a dialog opening and
+ * closing, or a click on empty space — and "Escape clears the selection" has to
+ * mean that everywhere, not only while a row holds the roving tab stop.
+ *
+ * A dialog is checked for first. Vuetify's own overlays stop the key before it
+ * reaches here, but the shelf's `AppDialog`s and the entity picker are inside
+ * this subtree, and Escape inside one of those means "close me" — clearing the
+ * selection underneath at the same time would be a second, unasked-for effect.
+ */
+function onShelfEscape(event) {
+  if (
+    moveOpen.value ||
+    importOpen.value ||
+    stacksOpen.value ||
+    editVerb.value
+  ) {
+    return;
+  }
+  if (event.target?.closest?.(".ate, [role='dialog']")) return;
+  if (!store.selectedRows.length) return;
+  event.preventDefault();
+  store.clearSelection();
 }
 
 // ── Stacks (shelf plan F5) ──────────────────────────────────────────────────
@@ -927,6 +973,19 @@ function onRowKeydown(row, event) {
     nextTick(() => focusDrawnRow(next.key));
     return;
   }
+  // Right opens a run, Left closes it — the disclosure keys, on the row rather
+  // than on a control inside it. Ignored for a row that is not a stack, so they
+  // stay free for anything a single model might want later.
+  if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+    if (row.memberCount > 1) {
+      const open = isStackOpen(row.stack_id);
+      if (open !== (event.key === "ArrowRight")) {
+        event.preventDefault();
+        toggleStack(row.stack_id);
+      }
+    }
+    return;
+  }
   if (event.key === " " || event.key === "Enter") {
     event.preventDefault();
     store.selectFromClick(
@@ -936,10 +995,27 @@ function onRowKeydown(row, event) {
     );
     return;
   }
-  if (event.key === "Escape" && store.selectedRows.length) {
-    event.preventDefault();
-    store.clearSelection();
-  }
+  // Escape is NOT handled here. It is owned by the shelf root, so it works
+  // wherever focus happens to be — on a row, on the toolbar, or nowhere at all
+  // after a click — rather than only while a row holds the roving tab stop,
+  // which is what it used to mean and is not what a reader expects from
+  // "Escape clears the selection".
+}
+
+/**
+ * The row's accessible name.
+ *
+ * The step count and the open/closed state are drawn in an `aria-hidden` span,
+ * because the only non-hidden way to expose them inside `role="option"` would
+ * be a nested control — the thing this row must not have. So they are spoken
+ * here instead, and a reader hears "6 files, collapsed" rather than meeting a
+ * button that the listbox's arrow keys cannot reach.
+ */
+function rowLabel(row) {
+  const name = row.name.text;
+  if (!(row.memberCount > 1)) return name;
+  const state = isStackOpen(row.stack_id) ? "expanded" : "collapsed";
+  return `${name}, ${row.memberCount} files, ${state}`;
 }
 
 /**
