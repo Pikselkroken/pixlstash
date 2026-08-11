@@ -98,6 +98,7 @@ MODEL_COLUMNS = (
     "stack_id",
     "stack_position",
     "run_key",
+    "icon_sha256",
     "created_at",
 )
 

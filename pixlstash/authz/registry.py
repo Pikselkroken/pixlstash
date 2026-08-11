@@ -408,6 +408,25 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 cancels an in-flight host-filesystem move; halting the owner's own file operation is the same authority as starting it; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # ── model_icons.py (shelf plan, the sixth verb) ────────────────────────
+    # OWNER_ONLY, not the §16.3 locality tier. The icon store lives beside the
+    # hub and is written and read by PixlStash alone: no route here takes,
+    # walks or serves a caller-supplied host path. The GET serves bytes, but
+    # they are bytes PixlStash put there itself under a name it computed, which
+    # is categorically not the ai-toolkit sample route's "read inside a folder
+    # the owner registered".
+    ("POST", "/api/v1/models/{model_id}/icon"): RoutePolicy(
+        _OWNER,
+        justification="Stores an uploaded image in the hub's own icon store and points the caller's own model at it; no host path taken; POST blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/model-icons/{sha256}"): RoutePolicy(
+        _OWNER,
+        justification="Serves one icon PixlStash itself stored, addressed by the content hash it computed; the path segment is validated as a digest and contained against the icon directory; owner only",
+    ),
+    ("POST", "/api/v1/models/icons/clear"): RoutePolicy(
+        _OWNER,
+        justification="Clears the icon column on the caller's own models; writes one hub column and no filesystem; POST blocked for READ tokens; owner only",
+    ),
     # ── model_stacks.py (shelf plan F5) ────────────────────────────────────
     # OWNER_ONLY and deliberately NOT the §16.3 locality tier its shelf
     # neighbours sit on: neither route touches the host filesystem. Detection

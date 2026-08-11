@@ -63,6 +63,10 @@ def table_names(conn):
     }
 
 
+def column_names(conn, table):
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
 def ddl_for(conn, name):
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (name,)
@@ -206,6 +210,48 @@ class TestReRunIsSafe:
 
         apply_migrations(hub)
         assert set(SHELF_TABLES) <= table_names(hub)
+
+    def test_an_existing_v2_hub_gains_the_icon_column_on_next_open(self, hub):
+        """The icon verb's column, added the same way and for the same reason.
+
+        A build shipped before it has `CURRENT_SCHEMA_VERSION = 2` and would
+        refuse a v3 hub with `HubSchemaTooNewError`, locking that user out of a
+        downgrade — so the column amends v2 in place rather than bumping it.
+        The rows already in `model` must survive the amend, which is what makes
+        this different from the table case above: those could be dropped and
+        recreated because nothing had ever written them.
+        """
+        apply_migrations(hub)
+        ddl = hub.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='model'"
+        ).fetchone()[0]
+        assert "icon_sha256" in ddl
+
+        # Rebuild `model` as the pre-icon build had it, with a row in it.
+        hub.execute("DROP TABLE model")
+        hub.execute(re.sub(r"\n\s*icon_sha256\s+TEXT,", "", ddl))
+        hub.execute(
+            "INSERT INTO model (file_kind, kind, sha256, filename, provenance, "
+            "created_at) VALUES ('adapter', 'lora', ?, 'keep.safetensors', "
+            "'scanned', '2026-08-11T00:00:00Z')",
+            ("a" * 64,),
+        )
+        # Committed explicitly, and the reason is the same pysqlite behaviour the
+        # stack detector's UPDATE guard exists for: with `isolation_level=""` a
+        # transaction opens on DML, so this INSERT leaves one open while the
+        # DROP/CREATE above did not. `apply_migrations` then fails with "cannot
+        # start a transaction within a transaction" — which is how this test
+        # first failed.
+        hub.commit()
+        assert "icon_sha256" not in column_names(hub, "model")
+        assert read_schema_version(hub) == 2
+
+        apply_migrations(hub)
+
+        assert "icon_sha256" in column_names(hub, "model")
+        kept = hub.execute("SELECT filename, icon_sha256 FROM model").fetchone()
+        assert kept == ("keep.safetensors", None)
+        assert read_schema_version(hub) == 2, "the amend must not bump to v3"
 
     def test_the_re_run_takes_the_write_lock_before_it_reads_the_schema(self, tmp_path):
         """The tail is the same read-then-ALTER logic the versioned path guards.

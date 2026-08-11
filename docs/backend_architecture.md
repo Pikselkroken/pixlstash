@@ -514,6 +514,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/model-folders/{folder_id}/rescan                                      | model_shelf     | Rescan a registered model folder                           |
 | GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder      |
 | GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview image from a training run                      |
+| GET    | /api/v1/model-icons/{sha256}                                                  | model_shelf     | Serve one stored icon                                      |
 | POST   | /api/v1/model-imports                                                         | model_shelf     | Import a training run onto the shelf                       |
 | GET    | /api/v1/model-moves                                                           | model_shelf     | How the current or last model move is going                |
 | POST   | /api/v1/model-moves                                                           | model_shelf     | Move model files into another registered folder            |
@@ -522,6 +523,8 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/model-stacks/proposals                                                | model_shelf     | Groups of loose adapters that look like one training run   |
 | PATCH  | /api/v1/models                                                                | model_shelf     | Correct what the shelf records about one or more models    |
 | POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                         |
+| POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                       |
+| POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                         |
 | GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                    |
 | POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                 |
 | POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                |

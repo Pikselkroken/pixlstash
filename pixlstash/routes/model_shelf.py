@@ -275,6 +275,16 @@ class ModelResponse(BaseModel):
             "its newest member's, never its cover's. Null when not stacked."
         ),
     )
+    icon_sha256: Optional[str] = Field(
+        default=None,
+        description=(
+            "The model's authored mark, if it has one — fetch it from "
+            "`GET /model-icons/{sha256}`. Null means no icon, which the client "
+            "draws as a generated mark rather than as a blank cell. A hash "
+            "rather than a URL so several rows sharing a logo are visibly the "
+            "same object and the browser caches one response for all of them."
+        ),
+    )
     locations: list[ModelLocation] = Field(
         default_factory=list,
         description="Every registered copy. Empty means every copy was forgotten.",
@@ -458,6 +468,7 @@ def _to_response(
         stack_id=row["stack_id"],
         stack_position=row["stack_position"],
         run_key=row["run_key"],
+        icon_sha256=row["icon_sha256"],
         added_at=row["created_at"],
         newest_file_mtime=row["newest_file_mtime"],
         member_count=row["member_count"],
