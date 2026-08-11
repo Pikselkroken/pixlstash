@@ -10,7 +10,12 @@ import {
 import { onSessionReset } from "../utils/apiClient";
 import { useNoticeStore } from "./useNoticeStore";
 import { errorDetail } from "../utils/apiError";
-import { locationState, modelName } from "../utils/modelShelf";
+import {
+  compareGroups,
+  locationState,
+  modelName,
+  UNSET_GROUP_KEY,
+} from "../utils/modelShelf";
 
 /** Where the `Show` selection is remembered between visits. */
 const FILTERS_KEY = "pixlstash:modelShelfFilters";
@@ -299,9 +304,6 @@ function storedCollapsed() {
   return collapsed;
 }
 
-/** The group a row with no value on the current axis falls into. */
-const UNSET_GROUP_KEY = "\u0000unset";
-
 /**
  * Every group a row belongs to on one axis, as `{key, label, labelKind}`.
  *
@@ -341,30 +343,6 @@ function groupsOf(row, axis) {
     labelKind: "path",
     location: loc,
   }));
-}
-
-/**
- * Order two groups.
- *
- * Alphabetical by label, with the "not set" group ALWAYS last, in both sort
- * directions. It is the absence of a value rather than a value, so it never
- * joins the alphabetical run and never swaps ends when the direction flips.
- * That is the same rule `baseModelOptions` already applies to the filter's
- * `UNASSIGNED` option, and it matters here because "not set" is not a tail: 37%
- * of real adapters record no base model, so it is one of the largest groups on
- * the shelf and putting it first would bury everything identifiable under it.
- *
- * The sort keys never reorder groups, only rows inside them. Switching to
- * "Largest first" moving every header out from under the reader would be a
- * different view, not a sorted one.
- */
-function compareGroups(a, b) {
-  if (a.key === UNSET_GROUP_KEY) return b.key === UNSET_GROUP_KEY ? 0 : 1;
-  if (b.key === UNSET_GROUP_KEY) return -1;
-  return a.label.localeCompare(b.label, undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
 }
 
 /** The three top-level type checkboxes, each one request and one row bucket. */
