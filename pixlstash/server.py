@@ -457,9 +457,13 @@ class Server(
         # Cheap: existence checks and a handful of upserts, no hashing.
         try:
             declare_builtin_models(self.hub, builtin_model_dir())
-        except sqlite3.Error as exc:
+        except (sqlite3.Error, OSError) as exc:
             # The shelf losing its engine rows is not a reason to refuse to
-            # start; everything else on it still works.
+            # start; everything else on it still works. `OSError` as well as
+            # the database errors: the declaration walks a machine-global
+            # directory that may be unreadable, on a different mount, or gone,
+            # and this comment promised non-critical while the handler only
+            # covered half of what the call can raise.
             logger.error(
                 "Could not declare the built-in model folder (%s); PixlStash's "
                 "own engines will not be listed on the shelf this session.",

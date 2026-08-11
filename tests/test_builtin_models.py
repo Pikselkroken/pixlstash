@@ -142,6 +142,33 @@ def test_declaring_twice_does_not_duplicate_a_row(server_hub, tmp_path):
     assert count["n"] == len(BUILTIN_ENGINES)
 
 
+def test_claiming_a_path_the_owner_registered_resets_every_column(server_hub, tmp_path):
+    """The upsert has to assert `movable` too, not just `kind` and `owner`.
+
+    The managed store is relocatable as a whole and never per file, which is
+    what `root_only` says. A path the owner had already registered as an
+    ordinary `user` folder carries `per_item`, and an ON CONFLICT that updated
+    only `kind` and `owner` would leave that standing — the built-in folder
+    claimed for PixlStash while still advertising that its engines may be moved
+    out one at a time. Reported by the review of #876.
+    """
+    with server_hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, movable, created_at) "
+            "VALUES (?, 'user', 'per_item', '2026-08-09T00:00:00Z')",
+            (str(tmp_path),),
+        )
+
+    folder_id = declare_builtin_models(server_hub, str(tmp_path))
+
+    row = server_hub.fetchone(
+        "SELECT kind, owner, movable FROM model_folder WHERE id = ?", (folder_id,)
+    )
+    assert row["owner"] == "pixlstash"
+    assert row["kind"] == "foreign"
+    assert row["movable"] == "root_only"
+
+
 def test_a_file_that_disappears_flips_its_row_to_missing(server_hub, tmp_path):
     """Declared, not scanned — but the state still has to tell the truth."""
     weights = tmp_path / "sa_0_4_vit_b_32_linear.pth"

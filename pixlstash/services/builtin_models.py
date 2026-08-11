@@ -141,12 +141,29 @@ BUILTIN_MODEL_DIR_ENV = "PIXLSTASH_BUILTIN_MODEL_DIR"
 def builtin_model_dir() -> str:
     """Where PixlStash downloads its engines.
 
-    The same expression `inference/engine.py` and `image_embedding_task.py`
-    build for themselves, in one place so the declaration cannot point at a
-    different folder than the downloaders fill.
-
     Machine-global on purpose: one download serves every library and every
     server instance on the host, exactly as the hub itself does.
+
+    **The same expression the downloaders build, not a shared one.**
+    `inference/engine.py` and `image_embedding_task.py` each compute
+    `user_data_dir("pixlstash")/downloaded_models` for themselves, and an earlier
+    version of this docstring claimed being "in one place" meant the declaration
+    could not point somewhere the downloaders do not fill. It does not — the
+    three agree because they spell the same thing, which is a convention rather
+    than a guarantee.
+
+    That matters because of the override below, which redirects **only this
+    function**. That is exactly what the test suite wants: point the declaration
+    at an empty directory so a Server built on a temp config does not describe
+    the developer's real home, while nothing redirects downloads that the tests
+    never make. It is a test seam and is not safe as a way to relocate the
+    store — set it in production and the shelf would declare an empty folder
+    while the engines kept landing in the real one. Relocating for real is
+    `POST /model-folders/{id}/relocate`, which moves the files too.
+
+    Making all three share this function is the right end state; it needs
+    `ImageEmbeddingTask.AESTHETIC_MODELS` to stop being built at import time,
+    which is a change to the download path and not to this one.
     """
     override = os.environ.get(BUILTIN_MODEL_DIR_ENV, "").strip()
     if override:
@@ -232,8 +249,14 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
         conn.execute(
             "INSERT INTO model_folder (path, kind, owner, movable, created_at) "
             "VALUES (?, ?, ?, 'root_only', ?) "
+            # `movable` is re-asserted with the rest. A path the owner had
+            # already registered as a `user` folder keeps its own
+            # `movable` otherwise, so claiming it for PixlStash would
+            # leave the built-in folder advertising `per_item` — the
+            # engines individually movable, which is exactly what the
+            # protection exists to prevent.
             "ON CONFLICT(path) DO UPDATE SET kind = excluded.kind, "
-            "owner = excluded.owner",
+            "owner = excluded.owner, movable = excluded.movable",
             (folder_path, BUILTIN_KIND, BUILTIN_OWNER, now),
         )
         row = conn.execute(
@@ -250,8 +273,17 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
 
         for engine in BUILTIN_ENGINES:
             absolute = os.path.join(folder_path, engine.relpath)
-            present = os.path.isfile(absolute)
-            size = os.path.getsize(absolute) if present else None
+            # One `stat` rather than `isfile` then `getsize`. The pair is a race
+            # on the one directory the downloaders are actively writing into: a
+            # file that arrives or is replaced between the two calls makes
+            # `getsize` raise `OSError` on a path `isfile` just confirmed, and
+            # that would abort the declaration for every engine after it.
+            try:
+                size = os.stat(absolute).st_size
+                present = True
+            except OSError:
+                size = None
+                present = False
             state = "present" if present else "missing"
             # An engine that has not been downloaded yet is NOT an error and not
             # a warning: the ViT-L/14 scorer is fetched only for the CLIP model

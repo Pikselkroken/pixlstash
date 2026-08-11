@@ -400,9 +400,17 @@ def pytest_configure(config):
     # to have downloaded. `test_workers_api` caught it as `assert 3 == 0` on a
     # runner whose model cache was warm; every engine simply reads `missing`
     # here, which is a state the suite can rely on.
+    #
+    # `mkdtemp` rather than a fixed name under the temp dir: a stable path is
+    # shared by every concurrent test session on the machine (the gate runs
+    # eight shards) and is whatever a previous run or a passing developer left
+    # in it. An engine that turned up there would read `present` and put the
+    # suite back on machine-dependent state, which is the exact bug this
+    # override exists to remove. A fresh directory is empty by construction and
+    # needs nothing deleted to stay that way.
     os.environ.setdefault(
         BUILTIN_MODEL_DIR_ENV,
-        os.path.join(tempfile.gettempdir(), "pixlstash-test-builtin-models"),
+        tempfile.mkdtemp(prefix="pixlstash-test-builtin-models-"),
     )
     # Pick a free port for the test session so Server instances don't collide
     # with the production app when it is already running on the default port.
