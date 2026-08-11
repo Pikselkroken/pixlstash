@@ -628,8 +628,18 @@ describe("stacks are atomic", () => {
     const store = useModelShelfStore();
     store.rows = [
       adapter({ id: 1, stack_id: 7, stack_position: 0 }),
-      adapter({ id: 2, stack_id: 7, stack_position: 1, sha256: "b".repeat(64) }),
-      adapter({ id: 3, stack_id: 7, stack_position: 2, sha256: "c".repeat(64) }),
+      adapter({
+        id: 2,
+        stack_id: 7,
+        stack_position: 1,
+        sha256: "b".repeat(64),
+      }),
+      adapter({
+        id: 3,
+        stack_id: 7,
+        stack_position: 2,
+        sha256: "c".repeat(64),
+      }),
       adapter({ id: 4, sha256: "d".repeat(64) }),
     ];
     return store;
@@ -912,6 +922,22 @@ describe("the icon verb", () => {
 
     expect(await store.setIconOnSelected(file)).toBe(true);
     expect(setModelIcon).toHaveBeenCalledWith(1, file);
+  });
+
+  it("refuses a multi-row selection instead of marking the first row", async () => {
+    // The bar disables the button, but a UI state is not an invariant — any
+    // other caller would otherwise silently mark whichever row happened to sort
+    // first, which is the surprise this verb can least afford.
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({ id: 1 }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ];
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+
+    expect(await store.setIconOnSelected(new Blob(["x"]))).toBe(false);
+    expect(setModelIcon).not.toHaveBeenCalled();
   });
 
   it("does nothing without a file, rather than posting an empty body", async () => {

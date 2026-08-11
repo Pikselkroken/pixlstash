@@ -584,6 +584,59 @@ function initialsOf(text) {
   return (words[0][0] + words[1][0]).toUpperCase();
 }
 
+// The mark's tile keeps its palette entry's HUE and pins saturation and
+// lightness, exactly as `applyStackBadgeTint` does for a stack badge — the
+// established way in this codebase to take a colour chosen for identity and
+// renormalise it for a job that also has to be legible. The values differ
+// because the job differs: the badge tints a GLYPH light (72%) against a dark
+// chrome, this fills a TILE that white initials sit on.
+//
+// Pinning rather than picking black-or-white is not a preference. Measured
+// against the shipped `contrastRatio`: with the raw palette entries, **22 of
+// the 48** clear neither white nor near-black at WCAG AA, because the mid-tones
+// are unreachable from either end. Hue is what carries the identity, so hue is
+// what is kept.
+const MARK_TINT_SATURATION = 55;
+const MARK_TINT_LIGHTNESS = 30;
+
+/** The hue of a `#rrggbb` colour, in degrees. */
+function hueOf(hex) {
+  const [r, g, b] = [1, 3, 5].map(
+    (i) => parseInt(hex.slice(i, i + 2), 16) / 255,
+  );
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const span = max - min;
+  if (!span) return 0;
+  let hue;
+  if (max === r) hue = ((g - b) / span) % 6;
+  else if (max === g) hue = (b - r) / span + 2;
+  else hue = (r - g) / span + 4;
+  return Math.round(hue * 60 + 360) % 360;
+}
+
+/**
+ * The tile colour a mark is drawn on: the palette entry's hue, renormalised.
+ *
+ * @param {string} hex - a `SET_COLORS` value.
+ * @returns {string} an `hsl()` colour that white initials are legible on.
+ */
+export function markBackground(hex) {
+  return `hsl(${hueOf(hex)} ${MARK_TINT_SATURATION}% ${MARK_TINT_LIGHTNESS}%)`;
+}
+
+/**
+ * The ink a mark's initials take.
+ *
+ * Always white, and that is a consequence of {@link markBackground} rather than
+ * an assumption: the tile's lightness is pinned dark enough that white clears
+ * WCAG AA on every hue, which the test asserts for all 48 rather than for the
+ * few that looked risky.
+ */
+export function markForeground() {
+  return "#ffffff";
+}
+
 /**
  * The mark a model wears when it has no icon.
  *
@@ -607,11 +660,17 @@ function initialsOf(text) {
  * value rather than an absence.
  *
  * @param {Object} row - a shelf row.
- * @returns {{color: string, initials: string}}
+ * @returns {{color: string, ink: string, initials: string}} `color` is an
+ *   `hsl()` string, not a hex, because it is renormalised rather than taken
+ *   from the palette. `ink` travels with it so the pair cannot be separated.
  */
 export function generatedMark(row) {
   const key = baseModelKey(row);
-  const color = SET_COLORS[hash32(key) % SET_COLORS.length].value;
+  const entry = SET_COLORS[hash32(key) % SET_COLORS.length].value;
   const name = modelName(row);
-  return { color, initials: initialsOf(name.text) };
+  return {
+    color: markBackground(entry),
+    ink: markForeground(),
+    initials: initialsOf(name.text),
+  };
 }

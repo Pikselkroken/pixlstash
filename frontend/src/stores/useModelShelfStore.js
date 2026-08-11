@@ -1010,13 +1010,19 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    *
    * No confirmation: setting an icon is reconstructable by setting it again.
    *
+   * **Refuses a selection that is not exactly one**, rather than taking the
+   * first row. The bar disables the button, but a UI state is not an invariant:
+   * any other caller would silently mark whichever row happened to sort first,
+   * which is the surprise this verb can least afford.
+   *
    * @param {File|Blob} file
-   * @returns {Promise<boolean>} true when the icon landed.
+   * @returns {Promise<boolean>} true when the icon landed; false if it was
+   *   refused or the request failed.
    */
   async function setIconOnSelected(file) {
     const notices = useNoticeStore();
+    if (selectedRows.value.length !== 1 || !file) return false;
     const row = selectedRows.value[0];
-    if (!row || !file) return false;
     try {
       await setModelIcon(row.id, file);
       await fetchRows();
@@ -1042,7 +1048,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * falls on. The server reports which rows actually had one, so the receipt
    * says what changed rather than how many ids were sent.
    *
-   * @returns {Promise<boolean>} true when the call was made.
+   * @returns {Promise<boolean>} true when the clear landed. False covers both
+   *   "nothing was selected" and a failed request — the receipt says which,
+   *   and no caller currently branches on the difference.
    */
   async function clearIconsOnSelected() {
     const notices = useNoticeStore();

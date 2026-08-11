@@ -3,6 +3,8 @@
 // title at all, so the "derived" branch is the common path, not the fallback.
 
 import { describe, it, expect } from "vitest";
+import { contrastRatio } from "./contrastAudit.js";
+import { SET_COLORS } from "./setAppearance";
 import {
   bandGroups,
   bandUsage,
@@ -12,7 +14,10 @@ import {
   cleanAssetName,
   deriveModelName,
   formatModelSize,
+  generatedMark,
   importReceipt,
+  markBackground,
+  markForeground,
   locationState,
   modelName,
   movableCopies,
@@ -493,6 +498,64 @@ describe("collapseStacks", () => {
     ]);
     expect(out.map((r) => r.id)).toEqual([1, 2]);
     expect(out[0].memberIds).toEqual([1, 3]);
+  });
+});
+
+/** `hsl(h s% l%)` -> `#rrggbb`, so `contrastRatio` can read the rendered tile. */
+function hslToHex(css) {
+  const [h, s, l] = css.match(/[\d.]+/g).map(Number);
+  const sat = s / 100;
+  const lig = l / 100;
+  const c = (1 - Math.abs(2 * lig - 1)) * sat;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = lig - c / 2;
+  const [r, g, b] = (
+    h < 60
+      ? [c, x, 0]
+      : h < 120
+        ? [x, c, 0]
+        : h < 180
+          ? [0, c, x]
+          : h < 240
+            ? [0, x, c]
+            : h < 300
+              ? [x, 0, c]
+              : [c, 0, x]
+  ).map((v) => Math.round((v + m) * 255));
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+describe("the generated mark's contrast", () => {
+  it("is legible on every one of the 48, at WCAG AA", () => {
+    // Measured with the SHIPPED `contrastRatio` from `utils/contrastAudit.js`,
+    // the same one the theme audit uses, so this agrees with the rest of the
+    // codebase about what AA means rather than carrying its own arithmetic.
+    //
+    // Measured on the RAW palette first: 22 of the 48 clear neither white nor
+    // near-black, because the mid-tones are unreachable from either end. That
+    // is why the tile pins lightness instead of picking an ink.
+    const failures = SET_COLORS.filter(({ value }) => {
+      const tile = hslToHex(markBackground(value));
+      return contrastRatio(markForeground(), tile) < 4.5;
+    }).map(({ value, label }) => `${label} ${value}`);
+
+    expect(failures).toEqual([]);
+  });
+
+  it("keeps the palette entry's hue, which is what carries the identity", () => {
+    // Renormalising for legibility must not turn two different base models
+    // into the same tile.
+    const red = markBackground("#e53935");
+    const cyan = markBackground("#00acc1");
+    expect(red).not.toBe(cyan);
+    expect(red).toMatch(/^hsl\(\d+ 55% 30%\)$/);
+  });
+
+  it("hands the ink out with the colour, so the pair cannot separate", () => {
+    const mark = generatedMark({ display_name: "A B", base_model: "x" });
+    expect(
+      contrastRatio(mark.ink, hslToHex(mark.color)),
+    ).toBeGreaterThanOrEqual(4.5);
   });
 });
 

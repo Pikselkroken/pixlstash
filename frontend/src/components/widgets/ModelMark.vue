@@ -17,7 +17,7 @@
     <span
       v-else
       class="mmark-initials"
-      :style="{ backgroundColor: mark.color }"
+      :style="{ backgroundColor: mark.color, color: mark.ink }"
     >
       {{ mark.initials }}
     </span>
@@ -77,16 +77,19 @@ const mark = computed(() => generatedMark(props.row));
   display: block;
 }
 
-/* The initials carry their own colour from the frozen 48, so the contrast pair
-   is fixed rather than themed: a mark that inverted with the theme would be a
-   different mark for the same model. */
+/* The initials carry their own colour derived from the frozen 48, so the
+   contrast pair is fixed rather than themed: a mark that inverted with the
+   theme would be a different mark for the same model. Both halves are bound
+   inline because `generatedMark` hands them out together — the tile is
+   renormalised to a pinned lightness precisely so the ink can stay constant,
+   and splitting the pair across inline style and a stylesheet is what would
+   let one of them change without the other. */
 .mmark-initials {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
   height: 100%;
-  color: #fff;
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
   letter-spacing: 0.02em;
