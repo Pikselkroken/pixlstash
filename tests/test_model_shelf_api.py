@@ -38,6 +38,7 @@ import tempfile
 import threading
 import time
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -48,6 +49,7 @@ from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models.adapter_attachment import AdapterAttachment
 from pixlstash.routes import model_folders as model_folders_routes
+from pixlstash.routes.model_imports import sample_path_within
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.server import Server
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
@@ -1881,6 +1883,10 @@ def import_folders(shelf_env, tmp_path):
 def test_every_import_route_is_declared_local_owner_only():
     for method, path in (
         ("GET", "/api/v1/model-folders/{folder_id}/runs"),
+        (
+            "GET",
+            "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
+        ),
         ("POST", "/api/v1/model-imports"),
     ):
         declared = ROUTE_POLICIES.get((method, path))
@@ -1907,6 +1913,136 @@ def test_listing_runs_describes_them_without_importing_anything(
 def test_a_folder_that_is_catalogued_in_place_holds_no_runs(shelf_env, import_folders):
     """A `user` folder is a library of models, not a place runs are taken from."""
     r = shelf_env.owner.get(f"{API}/model-folders/{import_folders.destination_id}/runs")
+    assert r.status_code == 400, r.text
+
+
+# ── The sample route's containment (F6) ─────────────────────────────────────
+#
+# This is the one route on the shelf that serves file BYTES from a path the
+# caller helped name, so it is the one whose containment has to be proved rather
+# than reasoned about. Both directions: the positive control is here so a fix
+# that over-blocks is caught as its own regression.
+
+
+def _sample(env, folders, run_name, filename):
+    """Request one sample, percent-encoding both names."""
+    return env.owner.get(
+        f"{API}/model-folders/{folders.source_id}/runs"
+        f"/{quote(run_name, safe='')}/samples/{quote(filename, safe='')}"
+    )
+
+
+def test_the_sample_route_resolves_before_any_negative_is_trusted(
+    shelf_env, import_folders
+):
+    """A request to a path that does not route returns the same 404 a refusal
+    does, so every negative below is worthless unless the route is known to
+    exist. This is that proof."""
+    samples = import_folders.run_dir / "samples"
+    samples.mkdir(exist_ok=True)
+    (samples / "probe.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    r = _sample(shelf_env, import_folders, "Clementine", "probe.png")
+    assert r.status_code == 200, r.text
+
+
+def test_a_sample_inside_the_registered_root_is_served(shelf_env, import_folders):
+    """The positive control. Over-blocking is its own regression."""
+    samples = import_folders.run_dir / "samples"
+    samples.mkdir(exist_ok=True)
+    # A one-pixel PNG: real bytes, so the media type is not the only thing
+    # asserted about what comes back.
+    (samples / "sample_000000500_0.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    )
+
+    r = _sample(shelf_env, import_folders, "Clementine", "sample_000000500_0.png")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "image/png"
+    assert r.content.startswith(b"\x89PNG")
+
+
+def test_a_slash_traversal_never_reaches_the_handler_at_all(
+    shelf_env, import_folders, tmp_path
+):
+    """Refused, but **by routing, not by the containment** — and the difference
+    is worth writing down because it is what makes the obvious version of this
+    test worthless.
+
+    Starlette percent-DECODES the path before matching, so `..%2Fprivate.png`
+    becomes an extra path segment and no route matches; a literal `../` is
+    collapsed by the client even earlier. Either way `{filename}` is
+    structurally incapable of carrying a `/`. Measured: with
+    `resolve_path_within` deleted from the handler, both of these stayed green.
+
+    So this asserts the *outcome* — a slash traversal gets nothing — and the
+    test that actually exercises the containment is the backslash one below.
+    Kept because it is a real regression guard: switching either segment to a
+    `:path` converter would make these reachable overnight.
+    """
+    (import_folders.run_dir / "private.png").write_bytes(b"\x89PNG\r\n\x1a\nsecret")
+    outside = tmp_path / "outside"
+    (outside / "samples").mkdir(parents=True, exist_ok=True)
+    (outside / "samples" / "leak.png").write_bytes(b"\x89PNG\r\n\x1a\nleak")
+
+    out_of_run = _sample(shelf_env, import_folders, "Clementine", "../private.png")
+    assert out_of_run.status_code in (400, 404), out_of_run.text
+    assert b"secret" not in out_of_run.content
+
+    out_of_root = _sample(shelf_env, import_folders, "../outside", "leak.png")
+    assert out_of_root.status_code in (400, 404), out_of_root.text
+    assert b"leak" not in out_of_root.content
+
+
+def test_the_sample_join_refuses_a_name_that_climbs_out(tmp_path):
+    """The containment itself, asserted where it can actually be made to fail.
+
+    Not over HTTP, deliberately. `{filename}` cannot carry a `/` through
+    routing, so on POSIX the traversal is unreachable and an HTTP-level test
+    stays green with the guard deleted — measured, twice. On Windows a
+    backslash IS a separator and the same route IS reachable, which is why the
+    guard has to exist and why this asserts the join rather than the response.
+    """
+    run_dir = tmp_path / "Clementine"
+    (run_dir / "samples").mkdir(parents=True)
+    (run_dir / "samples" / "ok.png").write_bytes(b"\x89PNG")
+    (run_dir / "private.png").write_bytes(b"\x89PNG")
+
+    # Positive control: over-blocking is its own regression.
+    assert sample_path_within(str(run_dir), "ok.png") == str(
+        run_dir / "samples" / "ok.png"
+    )
+
+    for escape in ("../private.png", "..", "../../etc/passwd", "/etc/passwd"):
+        with pytest.raises(ValueError):
+            sample_path_within(str(run_dir), escape)
+
+
+def test_a_file_that_is_not_an_image_is_never_served_from_our_origin(
+    shelf_env, import_folders
+):
+    """An allowlist, not a guess. `samples/` is a directory on the owner's disk
+    and anything can be dropped into it; `mimetypes` would label this text/html
+    and serve it same-origin."""
+    samples = import_folders.run_dir / "samples"
+    samples.mkdir(exist_ok=True)
+    (samples / "note.html").write_text("<script>alert(1)</script>")
+
+    r = _sample(shelf_env, import_folders, "Clementine", "note.html")
+    assert r.status_code == 400, r.text
+    assert b"script" not in r.content
+
+
+def test_a_sample_that_is_not_there_is_a_404_and_not_a_500(shelf_env, import_folders):
+    r = _sample(shelf_env, import_folders, "Clementine", "nothing.png")
+    assert r.status_code == 404, r.text
+
+
+def test_only_a_source_folder_serves_samples(shelf_env, import_folders):
+    """Same gate as the listing: a folder catalogued in place is not taken from."""
+    r = shelf_env.owner.get(
+        f"{API}/model-folders/{import_folders.destination_id}"
+        f"/runs/Clementine/samples/a.png"
+    )
     assert r.status_code == 400, r.text
 
 

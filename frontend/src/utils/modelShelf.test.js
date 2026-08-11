@@ -11,6 +11,7 @@ import {
   cleanAssetName,
   deriveModelName,
   formatModelSize,
+  importReceipt,
   locationState,
   modelName,
   movableCopies,
@@ -358,6 +359,50 @@ describe("baseModelKey", () => {
       "",
     );
     expect(baseModelKey(undefined)).toBe("");
+  });
+});
+
+describe("importReceipt", () => {
+  it("reports the failures, which the server decides per file", () => {
+    expect(
+      importReceipt({
+        run_name: "Clementine",
+        files: [
+          { status: "imported" },
+          { status: "imported" },
+          { status: "failed" },
+        ],
+      }),
+    ).toBe(
+      "Imported 2 checkpoints from Clementine. 1 checkpoint could not be copied and were left in the run.",
+    );
+  });
+
+  it("never says the run was deleted when nothing landed", () => {
+    // The server unlinks last and only after each row is committed, so the two
+    // cannot both be true. Saying it anyway would tell the reader their run was
+    // destroyed for nothing.
+    expect(
+      importReceipt({
+        run_name: "Clementine",
+        deleted_source: true,
+        files: [{ status: "failed" }],
+      }),
+    ).toBe(
+      "Nothing was imported from Clementine. 1 checkpoint could not be copied and were left in the run.",
+    );
+  });
+
+  it("says the run is gone when it is", () => {
+    expect(
+      importReceipt({
+        run_name: "Clementine",
+        deleted_source: true,
+        files: [{ status: "imported" }],
+      }),
+    ).toBe(
+      "Imported 1 checkpoint from Clementine. The run's own files have been removed.",
+    );
   });
 });
 

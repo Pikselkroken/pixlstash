@@ -375,6 +375,43 @@ export function locationState(locations) {
 }
 
 /**
+ * Say what an ai-toolkit import produced, naming the failures rather than
+ * swallowing them.
+ *
+ * Per FILE, because the server decides per file: a run whose five steps landed
+ * and whose sixth did not is a normal outcome of an interrupted copy, and a
+ * receipt reporting only the five would read as a clean import.
+ *
+ * The source deletion is named only when something actually landed. The server
+ * unlinks last and only after each row is committed, so "nothing imported" and
+ * "the run is gone" cannot both be true — saying it anyway would tell the
+ * reader their run had been deleted for nothing.
+ *
+ * @param {Object} report - the body of `POST /model-imports`.
+ * @returns {string}
+ */
+export function importReceipt(report) {
+  const files = report?.files || [];
+  const landed = files.filter((f) => f.status === "imported").length;
+  const failed = files.filter((f) => f.status === "failed").length;
+  const count = (n) =>
+    `${n.toLocaleString()} ${n === 1 ? "checkpoint" : "checkpoints"}`;
+  const notes = [];
+  if (failed) {
+    notes.push(
+      `${count(failed)} could not be copied and were left in the run.`,
+    );
+  }
+  if (report?.deleted_source && landed) {
+    notes.push("The run's own files have been removed.");
+  }
+  const head = landed
+    ? `Imported ${count(landed)} from ${report.run_name}.`
+    : `Nothing was imported from ${report?.run_name || "that run"}.`;
+  return [head, ...notes].join(" ");
+}
+
+/**
  * The copies a move may actually pick up, and what they weigh.
  *
  * Three exclusions, each for a different reason:

@@ -118,6 +118,24 @@
           <ShelfShowPanel />
         </v-menu>
 
+        <!-- Shown only once an ai-toolkit output root is registered. Hidden
+             rather than disabled, unlike the selection bar's verbs: those are
+             about a selection the reader just made and owe an explanation, and
+             this is about a folder they have not set up, which the folders
+             dialog is the place to say. -->
+        <button
+          v-if="hasSourceFolder"
+          ref="importBtnRef"
+          class="bar-btn bar-btn--boxed"
+          :class="{ 'bar-btn--open': importOpen }"
+          type="button"
+          title="Import from ai-toolkit"
+          aria-label="Import from ai-toolkit"
+          @click="openImport"
+        >
+          <v-icon size="19">mdi-import</v-icon>
+        </button>
+
         <!-- No count badge: `bar-filter-badge` counts a deviation from a default
            the user set, and a folder count never returns to zero (the managed
            store always exists), so a permanent number 8px from the Show
@@ -381,6 +399,7 @@
       :destination-folder-id="movePreselected"
       @close="closeMove"
     />
+    <ModelImportDialog :open="importOpen" @close="closeImport" />
     <ModelFoldersDialog :open="foldersOpen" @close="closeFolders" />
 
     <ProgressOverlay
@@ -404,6 +423,7 @@ import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
+import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -598,6 +618,32 @@ function onGroupDrop(group, event) {
   if (!isModelFileDrag(event.dataTransfer) || !isDropTarget(group)) return;
   event.preventDefault();
   openMove(store.selectedRows, Number(group.folderId));
+}
+
+// ── Import from ai-toolkit (shelf plan F6) ──────────────────────────────────
+
+const importOpen = ref(false);
+const importBtnRef = ref(null);
+
+/** Whether any ai-toolkit output root is registered at all. */
+const hasSourceFolder = computed(() =>
+  foldersStore.folders.some((folder) => folder.kind === "source"),
+);
+
+function openImport() {
+  importOpen.value = true;
+}
+
+async function closeImport() {
+  importOpen.value = false;
+  await nextTick();
+  // The button can unmount under us: the import may have been the last run in
+  // the only source folder, and `delete_after_import` then empties it. Falling
+  // back to the shelf root beats dropping focus to <body>.
+  (importBtnRef.value?.isConnected
+    ? importBtnRef.value
+    : rootEl.value
+  )?.focus();
 }
 
 // Two controls open the same dialog, so which one gets focus back is a fact

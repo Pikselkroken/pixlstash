@@ -417,6 +417,13 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 walks a registered ai-toolkit output root and reads every run folder and config under it — the same authority as model-folders/{folder_id}/rescan and reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    (
+        "GET",
+        "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
+    ): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 reads and serves one image file from inside a registered ai-toolkit output root — narrower than the listing beside it, which already walks the whole root; both path segments are names joined and contained against the registered path, and the extension is allowlisted so nothing but an image can be served from our origin; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("POST", "/api/v1/model-imports"): RoutePolicy(
         _LOCAL,
         justification="§16.3 copies a run's files into a registered host folder and, when the source folder carries delete_after_import, unlinks them from the output root — the same filesystem authority as POST /model-moves; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",

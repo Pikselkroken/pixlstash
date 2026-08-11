@@ -1712,6 +1712,50 @@ that is about to be wrong; a veil that only *looks* disabled leaves every row
 clickable and in the tab order, which is worse than none. The toolbar stays
 live, because Show and Sort still answer correctly while files are in flight.
 
+#### Importing from ai-toolkit (F6)
+
+**The card grid is built on a promise the listing route makes**, and the promise
+is what must not be eroded: `GET /model-folders/{id}/runs` reads filenames and
+one `config.yaml` per run, and hashes, copies, moves and writes nothing. So the
+whole grid — names, steps, sizes, previews, what the config says the run trained
+against — is drawn for an entire output root before the user has committed to
+anything. Do not add a call to `ModelImportDialog` that breaks that.
+
+**One run at a time**, `role="radiogroup"` rather than a multi-select. The
+destination, the step selection and the receipt are all per-run, so ticking two
+would promise a batch `POST /model-imports` does not implement.
+
+**Picking a run ticks every checkpoint in it.** Importing part of a run is the
+exception, not the default: the steps land as one `adapter_stack` and the point
+of the stack is that the run stays together.
+
+**An unconfirmed cover is stated, never resolved silently.** ai-toolkit writes a
+bare final file when a run finishes, so a run without one is still training or
+was interrupted; the highest step is then the best available answer rather than
+a certain one, and the card says so. A run whose `config.yaml` could not be read
+stays importable and says that too — steps and samples come from filenames, so
+the config is decoration.
+
+**Previews are `<img src>`, not fetches**, so the browser's own caching,
+decoding and `loading="lazy"` do the work: a run carries up to 130 samples and
+only the visible cards should hit the network. The URL comes from
+`runSampleUrl`, which encodes both segments because they are **names**, not
+paths — the server joins each to a registered path and refuses what resolves
+outside.
+
+**`delete_after_import` is disclosed before the press, not in the receipt.** It
+is the one part of an import that cannot be undone, and it is a property of the
+*source folder* rather than a choice made in the dialog. `importReceipt` names
+the deletion only when something actually landed: the server unlinks last and
+only after each row is committed, so "nothing imported" and "the run is gone"
+cannot both be true, and saying it anyway would tell the reader their run was
+destroyed for nothing.
+
+**The toolbar button is hidden, not disabled, when no `source` folder is
+registered** — unlike the selection bar's verbs, which are about a selection the
+reader just made and therefore owe an explanation in a tooltip. This is about a
+folder they have not set up, which the folders dialog is the place to say.
+
 **Receipts are notices, not `useActionReceipt`.** That composable is built on
 `useOperationStore`, which is the vault-only operation log with undo keycaps —
 the exact machinery the shelf ruled out. Shelf outcomes go through

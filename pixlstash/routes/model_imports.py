@@ -31,17 +31,30 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_mover import SHELF_IO_LOCK, MoveRefused
 from pixlstash.services.run_importer import RunImporter
-from pixlstash.utils.aitoolkit_run import read_output_root
+from pixlstash.utils.aitoolkit_run import SAMPLES_DIRNAME, read_output_root
 from pixlstash.utils.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
 
 SOURCE_FOLDER_KIND = "source"
+
+# What a run's ``samples/`` directory may be served as. An allowlist rather than
+# ``mimetypes.guess_type``: the directory is on the owner's disk and anything
+# could have been dropped into it, and guessing would let an ``.html`` be served
+# from our own origin. ai-toolkit writes JPEG and PNG; WebP is here because a
+# run configured for it writes that instead.
+SAMPLE_MEDIA_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
 
 class RunSample(BaseModel):
@@ -171,6 +184,38 @@ class ImportResponse(BaseModel):
     files: list[ImportedFile] = Field(default_factory=list)
 
 
+def sample_path_within(run_dir: str, filename: str) -> str:
+    """Resolve one sample filename inside a run, refusing anything that escapes.
+
+    A named function rather than two lines inside the handler, because it is the
+    only place on the shelf where a caller-supplied name becomes a path whose
+    *bytes* are served — and because over HTTP it is nearly untestable. Both
+    route segments are single URL path segments and Starlette percent-decodes
+    before matching, so ``{filename}`` is structurally incapable of carrying a
+    ``/``: on POSIX there is no reachable traversal through the route at all.
+    On Windows, where a backslash is an ordinary URL character and a path
+    separator, there is. Exposing the join lets the refusal be asserted on every
+    platform instead of only on the one where an attacker could reach it.
+
+    Contained against the SAMPLES DIRECTORY, not against the run. A single
+    run-level join would let ``samples/../config.yaml`` through: it lands inside
+    the run, so a run-level check passes it, and it is a file this route has no
+    business serving.
+
+    Args:
+        run_dir: The run's directory, itself already contained within a
+            registered output root.
+        filename: The caller-supplied name, from the path.
+
+    Returns:
+        The resolved absolute path to the sample.
+
+    Raises:
+        ValueError: If the name resolves outside the run's ``samples/``.
+    """
+    return resolve_path_within(os.path.join(run_dir, SAMPLES_DIRNAME), filename)
+
+
 def _to_run_response(run) -> RunResponse:
     return RunResponse(
         name=run.name,
@@ -263,6 +308,58 @@ def create_router(server) -> APIRouter:
                 detail=f"Could not read {folder['path']}: {exc}",
             ) from exc
         return RunListResponse(runs=[_to_run_response(run) for run in runs])
+
+    @router.get(
+        "/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
+        summary="One preview image from a training run",
+        description=(
+            "Serves a sample ai-toolkit rendered during the run, so a step can "
+            "be judged before it is imported. Reads and changes nothing else — "
+            "the same promise the run listing makes.\n\n"
+            "**Both path segments are names, never paths.** The run name is "
+            "joined to the registered output root and the filename to that "
+            "run's `samples/` directory, and each join is contained: a segment "
+            "that resolves outside is refused rather than read. The caller "
+            "therefore cannot address a file outside a folder the owner "
+            "registered, which is what keeps this from being an arbitrary-file "
+            "reader."
+        ),
+        tags=["model_shelf"],
+        response_class=FileResponse,
+        responses={200: {"content": {"image/*": {}}}},
+    )
+    def get_run_sample(folder_id: int, run_name: str, filename: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        folder = _source_folder(folder_id)
+        try:
+            run_dir = resolve_path_within(folder["path"], run_name)
+            sample_path = sample_path_within(run_dir, filename)
+        except ValueError as exc:
+            logger.error(
+                "Refusing to serve sample %r of run %r under folder %s: it "
+                "resolves outside the registered output root (%s).",
+                filename,
+                run_name,
+                folder_id,
+                exc,
+            )
+            raise HTTPException(status_code=400, detail="No such sample.") from exc
+
+        media_type = SAMPLE_MEDIA_TYPES.get(os.path.splitext(sample_path)[1].lower())
+        if media_type is None:
+            # An allowlist, not a guess. `mimetypes` would happily label an
+            # `.html` dropped in `samples/` as text/html and serve it from our
+            # origin; the run only ever writes the three formats below.
+            logger.warning(
+                "Refusing to serve %s: %r is not one of the image formats a "
+                "run's samples directory holds.",
+                sample_path,
+                os.path.splitext(sample_path)[1],
+            )
+            raise HTTPException(status_code=400, detail="No such sample.")
+        if not os.path.isfile(sample_path):
+            raise HTTPException(status_code=404, detail="No such sample.")
+        return FileResponse(sample_path, media_type=media_type)
 
     @router.post(
         "/model-imports",
