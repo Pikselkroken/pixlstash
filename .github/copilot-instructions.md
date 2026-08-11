@@ -172,6 +172,42 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 - **Build frontend:** `npm run build` (in `frontend/`)
 - **Dev frontend:** `npm run dev` (in `frontend/`)
 
+## Never open a PR onto another PR
+
+**A PR's base must be a long-lived branch — `develop`, `main`, a release branch.
+Never another PR's branch.** Stacking reads as tidy and loses work.
+
+It lost work here on 2026-08-11. Three shelf PRs merged inside forty seconds:
+
+* **#873** had **#871**'s branch as its base. #871 merged to `develop`; #873 then
+  merged **into #871's branch**, not into `develop`. GitHub only auto-retargets a
+  PR when its base branch is *deleted*, and this one was not. The badge said
+  merged, the content was not in the product, and it was found by chance two
+  hours later — `grep -c withEmptyFolders frontend/src/utils/modelShelf.js`
+  returned **0** on `develop`.
+* **#872** merged at the head GitHub had recorded, which was one commit behind
+  what had just been pushed to it. The newer commit was simply left on the
+  branch. Same silent shape, different cause.
+
+Neither was recoverable by looking at the PR list, because both said MERGED.
+
+**If you need to add to an open PR, there are exactly two ways:**
+
+1. **Push the commits onto that PR's own branch.** This is almost always right.
+   The PR updates, its checks re-run, and there is one thing to merge.
+2. **Open a replacement PR carrying the old PR's full history, targeting the same
+   base the old one did** (usually `develop`), then close the old one. Use this
+   when the addition deserves its own review rather than riding along.
+
+Both keep a single merge into a long-lived branch. Neither creates a base that
+can be merged, deleted or retargeted out from under you.
+
+**Corollary — verify the merge, not the badge.** After a PR you care about is
+merged, confirm its content actually reached the target:
+`git merge-base --is-ancestor <head-at-merge> origin/develop`, or grep for a
+symbol the PR introduced. `MERGED` is a statement about a pull request, not about
+the branch you are going to build on next.
+
 ## Fixing a CI failure: update the existing PR, do not open another
 
 **One full gate run costs ~200 runner-minutes** (8 Linux shards, 4 Windows, e2e,
