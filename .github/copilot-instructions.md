@@ -167,10 +167,28 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 
 - **Install dependencies:** `pip install -e .`
 - **Run server:** `python -m pixlstash.app`
-- **Run tests:** `python -m pytest -s -vvv --fast-captions --force-cpu`
+- **Run tests:** `python -m pytest -s -vvv --fast-captions`
 - **Check formatting:** `ruff check pixlstash`
 - **Build frontend:** `npm run build` (in `frontend/`)
 - **Dev frontend:** `npm run dev` (in `frontend/`)
+
+### Do not pass `--force-cpu` locally
+
+**`--force-cpu` is a CI flag, not a local one.** The gate passes it in
+`PYTEST_FLAGS` (`.github/workflows/ci.yml`) because GitHub's runners have no
+GPU. A development box here does, and forcing CPU inference throws it away:
+every model in the suite runs on the CPU instead, for no coverage that the GPU
+path does not already give.
+
+Copying the CI invocation verbatim is the easy mistake, and this file used to
+invite it by listing the flag under **Run tests**.
+
+**Also do not run the whole suite in one local process.** The gate shards it
+eight ways for a reason (`--ci-shard N/8`), and a single serial `pytest tests/`
+does all eight shards' work. Run the files your change actually touches and let
+the sharded gate cover the rest. When a change is to something shared enough
+that "the files it touches" is most of the suite, shard it locally the same way
+CI does rather than waiting on one process.
 
 ## Never open a PR onto another PR
 
@@ -259,6 +277,38 @@ The corollary for anyone orchestrating parallel agents: per-agent instructions
 bound each agent's diff, and nothing bounds the *aggregate*. Counting the PRs
 across all in-flight lanes is the orchestrator's job, and it is the one that was
 not being done when the number reached 13.
+
+## Answering a review: reply and resolve, don't just push a fix
+
+**Addressing a review comment is three acts, not one: push the fix, reply on the
+thread, resolve the thread.** A fix pushed in silence is invisible as an answer.
+The reviewer is left with an open thread and a changed file, and has to
+reconstruct whether the two are related, which is the work they asked you to do.
+
+- **Reply on each thread**, naming the commit and what actually changed:
+  `gh api repos/OWNER/REPO/pulls/N/comments/<comment_id>/replies -f body=...`
+- **Then resolve it.** Only GraphQL can:
+  `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<id>"}) { thread { isResolved } } }'`
+  Thread ids come from `pullRequest(number: N) { reviewThreads(first: 20) { nodes { id isResolved path comments(first: 1) { nodes { databaseId body } } } } }`.
+- **Resolving without replying is worse than leaving it open**, because it reads
+  as answered. Never resolve a thread you did not act on.
+- **Disagreeing is a reply, not a silence.** If the comment is wrong, or the fix
+  is deliberately different from what it asked for, say so on the thread and
+  leave it for a human to resolve.
+- **Collapsed "suppressed comments" have no thread**, so there is nothing to
+  resolve and nothing tracking them. Pick them up in a top-level PR comment or
+  they are simply lost. A Copilot review hides them in a `<details>` block below
+  the per-file summary, which is easy to skim past.
+
+**Verify the fix is on the PR head before calling the review answered**, by
+grepping the *remote* branch for a symbol the fix introduces:
+`git grep -q '<symbol>' origin/<branch>`. Do not use `headRefOid` for this. As
+the corollary in "Never open a PR onto another PR" says of merges: for a merged
+PR that value *is* the merged commit, so comparing against it is a tautology
+that cannot fail. On 2026-08-11 two review fixes went missing behind exactly
+that, one to a merge that beat the push by 40 seconds, and one to a push made 14
+minutes after the merge and then "verified" with `headRefOid` and reported as
+landed.
 
 ## New test files must be gated in CI
 
