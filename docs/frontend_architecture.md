@@ -1453,6 +1453,18 @@ models is thirty-six headers. Under `Folder` the second level is spent on the
 F5's stacks nest inside a *row*, not inside a header, so they do not want a
 third level.
 
+**Grouped, filtered, faceted and sorted on `base_model_folded`; displayed as
+`base_model`.** `baseModelKey()` prefers the server's canonical label and falls
+back to the raw string, so `sdxl_base_v1-0`, `SDXL`, `sdxl base` and `stable
+diffusion xl` make one header, one facet and one filter match instead of four —
+while a base model the table has never heard of stays selectable in its own
+right rather than being swept into "not set". The row keeps showing the raw
+spelling, because that is what the file actually says.
+
+All four uses had to move together. A facet list built from folded values with a
+filter matching raw ones would offer a box that hides most of the rows it
+promises, which is the failure a test now pins.
+
 - **`Base model not set` sorts last, always, and is expanded by default.** It is
   the absence of a value rather than a value, so it never joins the alphabetical
   run and never swaps ends with the direction. That matters because it is not a

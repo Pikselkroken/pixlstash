@@ -231,6 +231,26 @@ export function withEmptyFolders(groups, folders) {
   return empties.length ? [...groups, ...empties].sort(compareGroups) : groups;
 }
 
+/**
+ * The base model a row should be GROUPED, FILTERED and FACETED by.
+ *
+ * `base_model_folded` when the server recognised the string, the raw one when
+ * it did not. Folding is what makes `sdxl_base_v1-0`, `SDXL`, `sdxl base` and
+ * `stable diffusion xl` one bucket instead of four; falling back to the raw
+ * value is what keeps a base model nobody has heard of selectable rather than
+ * swept into "not set".
+ *
+ * Note what this is NOT for: the row still DISPLAYS `base_model`, because the
+ * raw spelling is what the file actually says. Group by the fold, show the
+ * original.
+ *
+ * @param {Object} row - a row from `/adapters` or `/checkpoints`.
+ * @returns {string} the grouping key, or `""` when the row records nothing.
+ */
+export function baseModelKey(row) {
+  return row?.base_model_folded || row?.base_model || "";
+}
+
 /** What each folder layout is called, and the glyph that stands for it. */
 export const FOLDER_LAYOUT_LABELS = {
   drive: { label: "Drive, then folder", icon: "mdi-harddisk" },

@@ -11,6 +11,7 @@ import { onSessionReset } from "../utils/apiClient";
 import { useNoticeStore } from "./useNoticeStore";
 import { errorDetail } from "../utils/apiError";
 import {
+  baseModelKey,
   compareGroups,
   locationState,
   modelName,
@@ -78,7 +79,8 @@ const SORT_VALUE = {
   // The cover alone understates a six-step run by about six times, in the
   // column the shelf exists to answer.
   size: (row) => row.total_size ?? row.file_size ?? null,
-  base_model: (row) => row.base_model || null,
+  // Sorted by the folded value so the run is by base rather than by spelling.
+  base_model: (row) => baseModelKey(row) || null,
 };
 
 /**
@@ -316,7 +318,10 @@ function storedCollapsed() {
  */
 function groupsOf(row, axis) {
   if (axis === "base_model") {
-    const base = row.base_model || "";
+    // Grouped by the FOLDED value, so four spellings of one base make one
+    // header. The label is that canonical string: a header reading
+    // `sdxl_base_v1-0` over rows that say `SDXL` would be the fold leaking.
+    const base = baseModelKey(row);
     return base
       ? [{ key: base, label: base, labelKind: "name" }]
       : [
@@ -465,10 +470,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * a row the filter quietly drops.
    */
   const baseModelOptions = computed(() => {
+    // Faceted on the folded value too, or the filter offers four boxes that
+    // each tick a quarter of one base — and ticking "SDXL" would hide the rows
+    // whose file happens to spell it `sdxl base`.
     const named = [
-      ...new Set(rows.value.map((r) => r.base_model).filter(Boolean)),
+      ...new Set(rows.value.map(baseModelKey).filter(Boolean)),
     ].sort();
-    const hasUnset = rows.value.some((r) => !r.base_model);
+    const hasUnset = rows.value.some((r) => !baseModelKey(r));
     return hasUnset ? [...named, BASE_MODEL_UNASSIGNED] : named;
   });
 
@@ -485,7 +493,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           if (!kinds.includes(String(row.kind))) return false;
         }
         if (bases.length) {
-          const key = row.base_model || BASE_MODEL_UNASSIGNED;
+          // Matched against the same key the facet list was built from.
+          const key = baseModelKey(row) || BASE_MODEL_UNASSIGNED;
           if (!bases.includes(key)) return false;
         }
         return true;

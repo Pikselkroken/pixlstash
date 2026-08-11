@@ -755,3 +755,52 @@ describe("what a verb may reach", () => {
     expect([...store.selectedIds]).toEqual([1, 2]);
   });
 });
+
+describe("the folded base model", () => {
+  const folded = (id, raw, canonical) =>
+    adapter({ id, base_model: raw, base_model_folded: canonical });
+
+  it("groups four spellings of one base under one header", async () => {
+    const store = useModelShelfStore();
+    store.rows = [
+      folded(1, "sdxl_base_v1-0", "SDXL 1.0"),
+      folded(2, "SDXL", "SDXL 1.0"),
+      folded(3, "flux.1-dev", "FLUX.1 dev"),
+    ];
+    store.setView({ groupBy: "base_model" });
+
+    const labels = store.groups.map((g) => g.label);
+    expect(labels).toEqual(["FLUX.1 dev", "SDXL 1.0"]);
+  });
+
+  it("offers one facet per base, not one per spelling", () => {
+    const store = useModelShelfStore();
+    store.rows = [
+      folded(1, "sdxl_base_v1-0", "SDXL 1.0"),
+      folded(2, "stable diffusion xl", "SDXL 1.0"),
+    ];
+    expect(store.baseModelOptions).toEqual(["SDXL 1.0"]);
+  });
+
+  it("selects every spelling when its one facet is ticked", () => {
+    // The half that would break silently: a facet built from folded values and
+    // a filter matching raw ones would tick a box that hides most of its rows.
+    const store = useModelShelfStore();
+    store.rows = [
+      folded(1, "sdxl_base_v1-0", "SDXL 1.0"),
+      folded(2, "SDXL", "SDXL 1.0"),
+      folded(3, "flux.1-dev", "FLUX.1 dev"),
+    ];
+    store.setFilters({ baseModels: ["SDXL 1.0"] });
+    expect(store.visibleRows.map((r) => r.id)).toEqual([1, 2]);
+  });
+
+  it("keeps an unrecognised base model selectable in its own right", () => {
+    const store = useModelShelfStore();
+    store.rows = [folded(1, "my private base v3", null), folded(2, null, null)];
+    expect(store.baseModelOptions).toEqual([
+      "my private base v3",
+      "UNASSIGNED",
+    ]);
+  });
+});

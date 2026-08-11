@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import {
   bandGroups,
   bandUsage,
+  baseModelKey,
   withEmptyFolders,
   cleanAssetName,
   deriveModelName,
@@ -326,5 +327,35 @@ describe("withEmptyFolders", () => {
     expect(withEmptyFolders(groups, [{ id: 1, path: "/models/loras" }])).toBe(
       groups,
     );
+  });
+});
+
+describe("baseModelKey", () => {
+  it("prefers the folded label, so four spellings make one bucket", () => {
+    const rows = [
+      { base_model: "sdxl_base_v1-0", base_model_folded: "SDXL 1.0" },
+      { base_model: "SDXL", base_model_folded: "SDXL 1.0" },
+      { base_model: "stable diffusion xl", base_model_folded: "SDXL 1.0" },
+    ];
+    expect(new Set(rows.map(baseModelKey)).size).toBe(1);
+  });
+
+  it("falls back to the raw string the server did not recognise", () => {
+    // Not "not set": an unrecognised base model is a real value the owner can
+    // still group and filter by. Sweeping it into the unset bucket would hide
+    // every private or brand-new base.
+    expect(
+      baseModelKey({
+        base_model: "my private base v3",
+        base_model_folded: null,
+      }),
+    ).toBe("my private base v3");
+  });
+
+  it("reports nothing for a row that records nothing", () => {
+    expect(baseModelKey({ base_model: null, base_model_folded: null })).toBe(
+      "",
+    );
+    expect(baseModelKey(undefined)).toBe("");
   });
 });
