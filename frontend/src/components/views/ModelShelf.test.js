@@ -65,6 +65,7 @@ const globalOpts = {
       ShelfEditDialog: true,
       ShelfMoveDialog: true,
       ModelImportDialog: true,
+      ShelfStackProposalsDialog: true,
       ProgressOverlay: true,
       // The picker inside the selection bar, which the bar's own suite covers.
       // Left real it would read the shared entity lists on every mount here.

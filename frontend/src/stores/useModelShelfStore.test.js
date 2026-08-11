@@ -614,6 +614,64 @@ describe("the view is remembered", () => {
   });
 });
 
+describe("stacks are atomic", () => {
+  /** A three-step run plus one loose adapter. */
+  function shelfWithARun() {
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({ id: 1, stack_id: 7, stack_position: 0 }),
+      adapter({ id: 2, stack_id: 7, stack_position: 1, sha256: "b".repeat(64) }),
+      adapter({ id: 3, stack_id: 7, stack_position: 2, sha256: "c".repeat(64) }),
+      adapter({ id: 4, sha256: "d".repeat(64) }),
+    ];
+    return store;
+  }
+
+  it("draws one row for a run, not one per step", () => {
+    const store = shelfWithARun();
+    expect(store.visibleRows.map((r) => r.id)).toEqual([1, 4]);
+    expect(store.visibleRows[0].memberCount).toBe(3);
+  });
+
+  it("selects the whole run from one click", () => {
+    // `services/stack_membership`: a grouping mutation applies to EVERY member
+    // "so state can never go partial". Selecting the cover alone would let Move
+    // take one step of three and leave the rest.
+    const store = shelfWithARun();
+    store.selectFromClick(1, {}, [1, 4]);
+    expect([...store.selectedIds].sort()).toEqual([1, 2, 3]);
+  });
+
+  it("gives the verbs every member, not just the cover", () => {
+    const store = shelfWithARun();
+    store.selectFromClick(1, {}, [1, 4]);
+    expect([...store.selectedModelIds].sort()).toEqual([1, 2, 3]);
+    // ...while the bar still counts it as the one row the reader sees.
+    expect(store.selectedRows).toHaveLength(1);
+  });
+
+  it("toggles a run in and out as one unit", () => {
+    const store = shelfWithARun();
+    store.selectFromClick(1, { ctrl: true }, [1, 4]);
+    expect([...store.selectedIds].sort()).toEqual([1, 2, 3]);
+    store.selectFromClick(1, { ctrl: true }, [1, 4]);
+    expect([...store.selectedIds]).toEqual([]);
+  });
+
+  it("takes whole runs in a Shift range", () => {
+    const store = shelfWithARun();
+    store.selectFromClick(4, {}, [1, 4]);
+    store.selectFromClick(1, { shift: true }, [1, 4]);
+    expect([...store.selectedIds].sort()).toEqual([1, 2, 3, 4]);
+  });
+
+  it("selects every member with Select visible", () => {
+    const store = shelfWithARun();
+    store.selectVisible();
+    expect([...store.selectedIds].sort()).toEqual([1, 2, 3, 4]);
+  });
+});
+
 describe("the verbs", () => {
   beforeEach(() => {
     editModels.mockReset();

@@ -136,6 +136,22 @@
           <v-icon size="19">mdi-import</v-icon>
         </button>
 
+        <!-- Grouping is a sweep over the whole shelf rather than something done
+             to a selection, so it lives in the toolbar and not in the selection
+             bar. It opens a dry run; nothing is written until that is
+             confirmed. -->
+        <button
+          ref="stacksBtnRef"
+          class="bar-btn bar-btn--boxed"
+          :class="{ 'bar-btn--open': stacksOpen }"
+          type="button"
+          title="Group training runs"
+          aria-label="Group training runs"
+          @click="stacksOpen = true"
+        >
+          <v-icon size="19">mdi-layers-outline</v-icon>
+        </button>
+
         <!-- No count badge: `bar-filter-badge` counts a deviation from a default
            the user set, and a folder count never returns to zero (the managed
            store always exists), so a permanent number 8px from the Show
@@ -331,61 +347,113 @@
             <li v-if="!group.rows.length" class="shelf-empty-folder">
               {{ EMPTY_FOLDER_NOTE[group.emptyReason] }}
             </li>
-            <li
-              v-for="row in group.rows"
-              :key="row.rowKey"
-              class="ps-row shelf-row"
-              :class="{ 'shelf-row--selected': store.isSelected(row.id) }"
-              :title="rowTitle(row)"
-              role="option"
-              :aria-selected="store.isSelected(row.id)"
-              :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
-              :data-row-key="row.rowKey"
-              :draggable="canDrag(row)"
-              @click="pickRow(row, $event)"
-              @keydown="onRowKeydown(row, $event)"
-              @focus="focusedRowKey = row.rowKey"
-              @dragstart="onRowDragStart(row, $event)"
-              @dragend="dropTargetKey = ''"
-            >
-              <!-- Column 1 stays the reserved glyph slot. The selection shows
+            <!-- The `v-for` sits on a wrapping template, not on the row, so a
+                 stack's expanded members can be siblings of their cover inside
+                 the same iteration and still see `row`. -->
+            <template v-for="row in group.rows" :key="row.rowKey">
+              <li
+                class="ps-row shelf-row"
+                :class="{ 'shelf-row--selected': store.isSelected(row.id) }"
+                :title="rowTitle(row)"
+                role="option"
+                :aria-selected="store.isSelected(row.id)"
+                :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
+                :data-row-key="row.rowKey"
+                :draggable="canDrag(row)"
+                @click="pickRow(row, $event)"
+                @keydown="onRowKeydown(row, $event)"
+                @focus="focusedRowKey = row.rowKey"
+                @dragstart="onRowDragStart(row, $event)"
+                @dragend="dropTargetKey = ''"
+              >
+                <!-- Column 1 stays the reserved glyph slot. The selection shows
                    as the row's own wash and a tick here, not as a checkbox: a
                    checkbox is a second, contradictory way to select in a list
                    whose click already selects, and it was the shelf teaching a
                    dialect the rest of the app does not speak. -->
-              <span class="ps-row-glyph shelf-row-pick">
-                <v-icon v-if="store.isSelected(row.id)" size="16"
-                  >mdi-check</v-icon
-                >
-              </span>
-              <span class="shelf-row-kind">
-                <v-icon size="16">{{ KIND_ICON[row.file_kind] }}</v-icon>
-              </span>
-              <span class="shelf-row-label">
-                <span
-                  class="shelf-row-name"
-                  :class="{ 'shelf-row-name--derived': row.name.derived }"
-                  >{{ row.name.text
-                  }}<span v-if="row.name.derived" class="visually-hidden">
-                    (name taken from the filename)</span
-                  ></span
-                >
-                <span class="shelf-row-meta">
-                  <span>{{ kindLabel(row) }}</span>
-                  <span>{{ row.base_model || "Base model not set" }}</span>
-                  <span v-if="row.file_size" class="shelf-row-size">{{
-                    formatModelSize(row.file_size)
-                  }}</span>
+                <span class="ps-row-glyph shelf-row-pick">
+                  <v-icon v-if="store.isSelected(row.id)" size="16"
+                    >mdi-check</v-icon
+                  >
                 </span>
-              </span>
-              <span
-                class="shelf-row-loc"
-                :class="`shelf-row-loc--${row.locState}`"
-                :title="LOC_TITLE[row.locState]"
-              >
-                <v-icon size="16">{{ LOC_ICON[row.locState] }}</v-icon>
-              </span>
-            </li>
+                <span class="shelf-row-kind">
+                  <!-- Deck ticks behind the kind glyph say "this is more than one
+                     file" before the count is read, exactly as they do on a
+                     picture tile. Count-only, so the component reuses cleanly
+                     here even though a model has no thumbnail. -->
+                  <StackEdgeTicks
+                    v-if="row.memberCount > 1"
+                    :count="row.memberCount"
+                  />
+                  <v-icon size="16">{{ KIND_ICON[row.file_kind] }}</v-icon>
+                </span>
+                <span class="shelf-row-label">
+                  <span
+                    class="shelf-row-name"
+                    :class="{ 'shelf-row-name--derived': row.name.derived }"
+                    >{{ row.name.text
+                    }}<span v-if="row.name.derived" class="visually-hidden">
+                      (name taken from the filename)</span
+                    ></span
+                  >
+                  <span class="shelf-row-meta">
+                    <span>{{ kindLabel(row) }}</span>
+                    <span>{{ row.base_model || "Base model not set" }}</span>
+                    <span v-if="row.file_size" class="shelf-row-size">{{
+                      formatModelSize(row.file_size)
+                    }}</span>
+                  </span>
+                </span>
+                <!-- The badge is the disclosure: it carries `aria-expanded`, so
+                   the count and the control are one thing rather than a number
+                   beside a chevron. `.stop` on its own click keeps expanding a
+                   run from also selecting it. -->
+                <StackBadge
+                  v-if="row.memberCount > 1"
+                  :count="row.memberCount"
+                  :expanded="isStackOpen(row.stack_id)"
+                  :action-title="`${row.memberCount} steps in this run`"
+                  @activate="toggleStack(row.stack_id)"
+                />
+                <span
+                  class="shelf-row-loc"
+                  :class="`shelf-row-loc--${row.locState}`"
+                  :title="LOC_TITLE[row.locState]"
+                >
+                  <v-icon size="16">{{ LOC_ICON[row.locState] }}</v-icon>
+                </span>
+              </li>
+
+              <!-- The run's other steps, rendered as ROWS rather than through
+                 `StackExpansionStrip`: that component draws picture thumbnails
+                 for the dedup queue, and a model file has no thumbnail. A
+                 stack's members already ARE shelf rows, so they are drawn as
+                 shelf rows — indented, and not selectable on their own, because
+                 stacks are atomic here and a member cannot be acted on apart
+                 from its run. -->
+              <template v-if="row.memberCount > 1 && isStackOpen(row.stack_id)">
+                <li
+                  v-for="member in row.members.slice(1)"
+                  :key="`${row.rowKey}:${member.id}`"
+                  class="ps-row shelf-row shelf-row--member"
+                >
+                  <span class="ps-row-glyph"></span>
+                  <span class="shelf-row-kind">
+                    <v-icon size="14">mdi-subdirectory-arrow-right</v-icon>
+                  </span>
+                  <span class="shelf-row-label">
+                    <span class="shelf-row-name">{{
+                      memberLabel(member)
+                    }}</span>
+                    <span class="shelf-row-meta">
+                      <span v-if="member.file_size">{{
+                        formatModelSize(member.file_size)
+                      }}</span>
+                    </span>
+                  </span>
+                </li>
+              </template>
+            </template>
           </ul>
         </div>
       </template>
@@ -400,6 +468,7 @@
       @close="closeMove"
     />
     <ModelImportDialog :open="importOpen" @close="closeImport" />
+    <ShelfStackProposalsDialog :open="stacksOpen" @close="closeStacks" />
     <ModelFoldersDialog :open="foldersOpen" @close="closeFolders" />
 
     <ProgressOverlay
@@ -424,7 +493,10 @@ import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelImportDialog from "../panels/ModelImportDialog.vue";
+import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
+import StackBadge from "../widgets/StackBadge.vue";
+import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
@@ -438,6 +510,7 @@ import {
   GROUP_BY_LABELS,
   movableCopies,
   SORT_LABELS,
+  trainingStep,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
 
@@ -618,6 +691,45 @@ function onGroupDrop(group, event) {
   if (!isModelFileDrag(event.dataTransfer) || !isDropTarget(group)) return;
   event.preventDefault();
   openMove(store.selectedRows, Number(group.folderId));
+}
+
+// ── Stacks (shelf plan F5) ──────────────────────────────────────────────────
+//
+// Which runs are open is view state and nothing more: it is not persisted and
+// not shared, because an expansion is a glance rather than a preference.
+
+const openStacks = ref(new Set());
+const stacksOpen = ref(false);
+const stacksBtnRef = ref(null);
+
+async function closeStacks() {
+  stacksOpen.value = false;
+  await nextTick();
+  stacksBtnRef.value?.focus();
+}
+
+function isStackOpen(stackId) {
+  return openStacks.value.has(stackId);
+}
+
+/** A new Set, because Vue does not track `Set.add`. */
+function toggleStack(stackId) {
+  const next = new Set(openStacks.value);
+  if (next.has(stackId)) next.delete(stackId);
+  else next.add(stackId);
+  openStacks.value = next;
+}
+
+/**
+ * What one step of a run is called in the strip.
+ *
+ * The step, not the filename: every member of a run shares a name by
+ * construction, so repeating it six times says nothing and hides the one field
+ * that differs. A member with no step is the bare final the trainer wrote last.
+ */
+function memberLabel(member) {
+  const step = trainingStep(member.filename);
+  return step === null ? "Final" : `Step ${step.toLocaleString()}`;
 }
 
 // ── Import from ai-toolkit (shelf plan F6) ──────────────────────────────────
@@ -1205,6 +1317,20 @@ watch(
 
 .shelf-group-btn:hover {
   background: var(--hover-wash);
+}
+
+/* A run's other steps. Indented into the identity column so the deck reads as
+   belonging to the row above it, and quieter than a row because it is detail
+   rather than something to act on — the members are not selectable, stacks
+   being atomic here. */
+.shelf-row--member {
+  cursor: default;
+  color: rgb(var(--v-theme-on-surface-variant));
+}
+
+.shelf-row--member .shelf-row-name {
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-surface-variant));
 }
 
 /* The drop affordance, on the destination header only. An inset ring rather

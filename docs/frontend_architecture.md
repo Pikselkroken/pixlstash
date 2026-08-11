@@ -1712,6 +1712,56 @@ that is about to be wrong; a veil that only *looks* disabled leaves every row
 clickable and in the tab order, which is worse than none. The toolbar stays
 live, because Show and Sort still answer correctly while files are in flight.
 
+#### Stacks (F5)
+
+**A run is one row, and the fold happens client-side.** The list query returns
+every member with its `stack_id` / `stack_position`, so without `collapseStacks`
+a six-step run reads as six unrelated adapters — which is what the shelf did
+until F5. The **cover** is `stack_position` 0, already ordered by the backend
+(the bare final file if the run wrote one, else its highest step).
+
+**Folded LAST, after the filters.** The filters narrow individual models and the
+stack is built from what survived; folding first would let a stack whose cover
+matches drag hidden members back into view. A stack whose cover is filtered out
+collapses onto its lowest surviving position rather than vanishing, because a
+run half-hidden by a base-model filter is still a run.
+
+**The badge counts what is SHOWN, not the payload's `member_count`** — a badge
+reading 6 over a strip that opens to 2 would be describing rows the reader
+cannot reach.
+
+**Stacks are atomic, exactly as they are for pictures.**
+`services/stack_membership` applies a grouping mutation to *every* member "so
+state can never go partial", and the shelf follows it: clicking a collapsed row
+selects the whole run, Ctrl-click toggles it as a unit, a Shift range takes
+whole runs, and `selectedModelIds` — not `selectedRows` — is what the verbs
+write. Selecting the cover alone would let Move take one step of six and leave
+the rest, or Forget destroy a run's cover while its steps stayed on the shelf.
+`selectedRows` still counts one row per *shown* row, which is what the bar says.
+
+**`StackEdgeTicks` and `StackBadge` are reused; `StackExpansionStrip` is not.**
+The first two are count-only glyphs and fit unchanged. The strip draws picture
+thumbnails for the dedup queue, and a model file has no thumbnail — so a run's
+other steps render as ordinary shelf rows, indented and not individually
+selectable. They *are* shelf rows; drawing them as anything else would be a
+second row idiom. The badge carries `aria-expanded` and is the disclosure, so
+the count and the control are one thing rather than a number beside a chevron.
+Members are labelled by **step**, not filename: every member of a run shares a
+name by construction, so repeating it six times hides the one field that differs.
+
+**The dry run is a batch confirmation, and every group opens ticked.** Tier 1 is
+files differing solely by a training step — there is nothing for a person to
+weigh, so making the groups opt in one at a time would apply the tier-2 flow to
+the tier that does not need it. Each group states which file will represent it,
+because that is the one decision a reader might disagree with and it is not
+readable from a list of steps. Applying is one call per run, and a group refused
+in the meantime (409, something stacked its rows first) is counted rather than
+thrown — one stale group must not discard the others.
+
+**Tier 2 is absent from the UI because it is absent from the backend.** Prefix
+grouping (`JimmyCarr` beside `JimmyCarr2`) needs per-group adjudication with
+counter-evidence first; half an adjudication surface would be worse than none.
+
 #### Importing from ai-toolkit (F6)
 
 **The card grid is built on a promise the listing route makes**, and the promise

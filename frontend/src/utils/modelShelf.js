@@ -455,3 +455,106 @@ export function movableCopies(rows, foldersById = null) {
   }
   return { items, totalBytes };
 }
+
+/**
+ * Fold each stack's members into the one row that stands for them.
+ *
+ * A training run is many `model` rows and the list query returns all of them,
+ * so without this a six-step run reads as six unrelated adapters — which is the
+ * state the shelf shipped in until F5.
+ *
+ * The **cover** is `stack_position` 0, which the backend already ordered: the
+ * bare final file if the run wrote one, else its highest step. A stack whose
+ * cover is filtered out of view collapses onto its lowest surviving position
+ * rather than vanishing, because a run half-hidden by a base-model filter is
+ * still a run and dropping it would make the filter lie about what is on disk.
+ *
+ * `memberIds` is the whole point of the fold and not decoration: stacks are
+ * **atomic** here exactly as they are for pictures (`services/stack_membership`
+ * — "applied to EVERY member of its stack, so state can never go partial"), so
+ * selecting a collapsed row has to select the run, or Move would take the cover
+ * and leave five steps behind.
+ *
+ * @param {Array<Object>} rows - shown rows, already narrowed by the filters.
+ * @returns {Array<Object>} one row per unstacked model and per stack, each
+ *   stacked row carrying `memberIds`, `memberCount` and `members`.
+ */
+export function collapseStacks(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const byStack = new Map();
+  for (const row of list) {
+    if (row?.stack_id == null) continue;
+    const members = byStack.get(row.stack_id);
+    if (members) members.push(row);
+    else byStack.set(row.stack_id, [row]);
+  }
+
+  const emitted = new Set();
+  const out = [];
+  for (const row of list) {
+    if (row?.stack_id == null) {
+      out.push(row);
+      continue;
+    }
+    if (emitted.has(row.stack_id)) continue;
+    emitted.add(row.stack_id);
+    const members = [...byStack.get(row.stack_id)].sort(
+      (a, b) => (a.stack_position ?? 0) - (b.stack_position ?? 0),
+    );
+    const cover = members[0];
+    out.push({
+      ...cover,
+      members,
+      memberIds: members.map((m) => m.id),
+      // Counted from what is SHOWN, not from the payload's `member_count`: a
+      // filter can hide part of a run, and a badge reading 6 over a strip that
+      // opens to 4 would be describing rows the reader cannot reach.
+      memberCount: members.length,
+    });
+  }
+  return out;
+}
+
+/**
+ * Say how many runs were grouped, and how many were not.
+ *
+ * One call per group, so a partial outcome is real: a group whose rows were
+ * stacked between the dry run and the confirmation comes back 409 and is
+ * counted rather than throwing, or one stale group would discard the others.
+ *
+ * @param {number} grouped - runs collapsed into a stack.
+ * @param {number} failed - runs the server refused.
+ * @returns {string}
+ */
+export function stackReceipt(grouped, failed) {
+  const runs = (n) => `${n.toLocaleString()} ${n === 1 ? "run" : "runs"}`;
+  if (!grouped) {
+    return failed
+      ? `Nothing was grouped. ${runs(failed)} could not be, and the files are unchanged.`
+      : "Nothing to group.";
+  }
+  const note = failed
+    ? ` ${runs(failed)} could not be grouped; something changed them first.`
+    : "";
+  return `Grouped ${runs(grouped)}.${note}`;
+}
+
+/**
+ * The training step a filename records, or null for a bare final file.
+ *
+ * Mirrors `_step_of` in `pixlstash/services/stack_detector.py`, and reads the
+ * same trailing token {@link deriveModelName} strips — so a file is never
+ * labelled by a suffix the name derivation cannot also explain. `step00500` and
+ * `000000500` both give 500; `portrait mix v2` gives null, because `v2` is not
+ * training bookkeeping and the name keeps it.
+ *
+ * @param {string} filename
+ * @returns {number|null}
+ */
+export function trainingStep(filename) {
+  const tokens = cleanAssetName(filename).split(/\s+/).filter(Boolean);
+  const last = tokens[tokens.length - 1];
+  if (!last || !TRAINING_SUFFIX_RE.test(last)) return null;
+  const digits = last.replace(/\D/g, "");
+  return digits ? Number(digits) : null;
+}

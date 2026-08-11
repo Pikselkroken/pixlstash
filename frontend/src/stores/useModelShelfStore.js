@@ -13,6 +13,7 @@ import { useNoticeStore } from "./useNoticeStore";
 import { errorDetail } from "../utils/apiError";
 import {
   baseModelKey,
+  collapseStacks,
   compareGroups,
   locationState,
   modelName,
@@ -514,7 +515,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const visibleRows = computed(() => {
     const kinds = filters.adapterKinds;
     const bases = filters.baseModels;
-    return rows.value
+    const shown = rows.value
       .filter((row) => {
         // The type checkboxes narrow here as well as choosing what to fetch:
         // a block already fetched stays in `rows` so its options survive.
@@ -534,6 +535,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         name: modelName(row),
         locState: locationState(row.locations),
       }));
+    // Folded LAST, so the filters narrow individual models and the stack is
+    // then built from what survived. Folding first would let a stack whose
+    // cover matches drag hidden members back into view.
+    return collapseStacks(shown);
   });
 
   /**
@@ -716,6 +721,19 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   );
 
   /**
+   * Every selected model, stack members included.
+   *
+   * `selectedRows` is one row per *shown* row, so a collapsed stack appears
+   * once — right for counting and for what the bar says, wrong for what a verb
+   * writes. A verb must act on the whole run or a Forget would destroy a run's
+   * cover and leave its five steps on the shelf, which is precisely the partial
+   * state `services/stack_membership` exists to forbid.
+   */
+  const selectedModelIds = computed(() =>
+    selectedRows.value.flatMap((row) => row.memberIds ?? [row.id]),
+  );
+
+  /**
    * The model a Shift-range measures from: the last one picked deliberately.
    *
    * Held apart from the selection itself, exactly as `lastSelectedImageId` is
@@ -761,9 +779,32 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    *   falls back to selecting the one row, which is what a range with nothing
    *   to measure against means.
    */
+  /**
+   * Every model one clicked row stands for.
+   *
+   * A collapsed stack stands for its whole run, and stacks are **atomic** here
+   * exactly as they are for pictures: `services/stack_membership` applies a
+   * grouping mutation to every member "so state can never go partial". Selecting
+   * the cover alone would let Move take one step of six and leave the rest, and
+   * Forget destroy a run's cover while its steps stayed on the shelf.
+   */
+  function modelsBehind(id) {
+    const row = visibleRows.value.find((candidate) => candidate.id === id);
+    return row?.memberIds?.length ? row.memberIds : [id];
+  }
+
   function selectFromClick(id, { ctrl = false, shift = false } = {}, order) {
+    const behind = modelsBehind(id);
     if (ctrl) {
-      toggleSelected(id);
+      // Toggled as a unit: a run is in the selection or it is not.
+      const next = new Set(selectedIds.value);
+      const present = behind.every((member) => next.has(member));
+      for (const member of behind) {
+        if (present) next.delete(member);
+        else next.add(member);
+      }
+      selectedIds.value = next;
+      anchorId.value = id;
       return;
     }
     const sequence = Array.isArray(order) ? order : [];
@@ -773,16 +814,20 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       const [start, end] = from <= to ? [from, to] : [to, from];
       // The anchor stays where it was: dragging a range out and back with
       // repeated Shift+clicks has to measure from the same end each time.
-      selectedIds.value = new Set(sequence.slice(start, end + 1));
+      selectedIds.value = new Set(
+        sequence.slice(start, end + 1).flatMap(modelsBehind),
+      );
       return;
     }
-    selectedIds.value = new Set([id]);
+    selectedIds.value = new Set(behind);
     anchorId.value = id;
   }
 
   /** Select every model the current filters show, ungrouped duplicates and all. */
   function selectVisible() {
-    selectedIds.value = new Set(visibleRows.value.map((row) => row.id));
+    selectedIds.value = new Set(
+      visibleRows.value.flatMap((row) => row.memberIds ?? [row.id]),
+    );
     anchorId.value = visibleRows.value[0]?.id ?? null;
   }
 
@@ -820,7 +865,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   async function editSelected(changes) {
     const notices = useNoticeStore();
-    const ids = selectedRows.value.map((row) => row.id);
+    const ids = selectedModelIds.value;
     if (!ids.length) return false;
     try {
       const body = await editModels(ids, changes);
@@ -850,7 +895,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   async function forgetSelected() {
     const notices = useNoticeStore();
-    const ids = selectedRows.value.map((row) => row.id);
+    const ids = selectedModelIds.value;
     if (!ids.length) return false;
     try {
       const body = await forgetModels(ids);
@@ -1000,6 +1045,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     clearSelection,
     editSelected,
     forgetSelected,
+    selectedModelIds,
     setAttachment,
     rows,
     loading,
