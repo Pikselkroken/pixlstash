@@ -2751,16 +2751,48 @@ def test_forget_reads_its_gate_inside_the_write_transaction(shelf_env):
     `missing` back to `present` before the DELETE lands — and the model is
     forgotten anyway. Counting the reads that go OUTSIDE the transaction is the
     assertion, because the race itself cannot be scheduled reliably. Reported by
-    the CSO review of #869."""
+    the CSO review of #869.
+
+    **Counted per THREAD, and that is what makes the count mean anything.**
+    `hub.fetchall` is patched on the shared, module-scoped server, so every
+    caller in the process goes through it — including the background finders,
+    and `MissingCheckpointHashFinder` queries `model` on the hub in both
+    `progress()` and `find_task()`. A sweep landing inside the request window
+    put its SQL in this list and failed the test with a diagnostic pointing at
+    the forget, which had done nothing wrong. Measured: red once in four runs of
+    a loaded four-file combination.
+
+    The allowlist is the same one the N+1 guard above uses, and for the same
+    reason: Starlette serves a sync handler on its own threadpool, whose threads
+    are named "AnyIO worker thread", and nothing else in this process is. A
+    denylist of background worker names was tried twice there and lost twice.
+
+    Pinning to the TEST's thread id instead does not work and is worth recording
+    — it was tried here first. The handler is `def`, so FastAPI runs it in that
+    threadpool rather than on the caller, which means an ident match excludes
+    every read the request makes and turns this into a green assertion about
+    nothing. It was caught by moving the builtin gate out of the transaction and
+    watching the test stay green.
+
+    **This assertion is satisfied by an empty list, and that is intended**: a
+    correct `forget_models` makes NO `hub.fetchall` call at all, because every
+    read it needs happens on the transaction's own connection. So there is no
+    in-test way to prove the allowlist still matches — an added "we saw at least
+    one" check fails on correct code. Liveness is proved by the N+1 guard above,
+    which uses the same prefix and asserts an exact count, so a renamed
+    threadpool goes red there rather than silently emptying this."""
     alice = shelf_env.model_ids["alice.safetensors"]
     _set_states(shelf_env, alice, "missing")
 
     hub = shelf_env.server.hub
     original = hub.fetchall
     outside: list[str] = []
+    request_thread_prefix = "AnyIO worker thread"
 
     def counting(sql, params=()):
-        if "model" in sql:
+        if "model" in sql and threading.current_thread().name.startswith(
+            request_thread_prefix
+        ):
             outside.append(sql)
         return original(sql, params)
 

@@ -38,28 +38,59 @@ def poll_until_zero(
     )
 
 
-def wait_for_import_task(client, task_id, timeout_s=10, poll_interval=0.1):
+def wait_for_import_task(client, task_id, timeout_s=30, poll_interval=0.1):
+    """Poll ``GET /pictures/import/status`` until the task settles.
+
+    **30s, not 10s, and the number follows from what is actually being waited
+    on.** The import runs on a detached executor thread, but the write inside it
+    goes through ``vault.db.run_task``, which queues onto the *single* DB worker.
+    So this bounds "the DB queue drained far enough to run my write", not "the
+    import worked — and in a test that imports twenty-one pictures in a loop,
+    each iteration queues behind the tagging and embedding writes of the ones
+    before it. At 10s that was a wall-clock race the loaded Windows shards lost
+    (`test_server.py::test_semantic_search`, run 31481874866): a timeout there
+    said nothing about the import and everything about how busy the queue was.
+    30s matches ``wait_for_faces``, which waits on the same kind of queued work.
+
+    A genuinely hung import now takes 30s to report instead of 10s, which is why
+    the message below carries the last status and the elapsed time: a hang and a
+    slow queue must not read the same.
+    """
     start = time.time()
+    status = None
+    payload = None
     while time.time() - start < timeout_s:
         status_resp = client.get(
             f"{API_PREFIX}/pictures/import/status", params={"task_id": task_id}
         )
         assert status_resp.status_code == 200, f"Error: {status_resp.text}"
-        status_payload = status_resp.json()
-        status = status_payload.get("status")
+        payload = status_resp.json()
+        status = payload.get("status")
         if status in {"completed", "failed"}:
-            return status_payload
+            return payload
         time.sleep(poll_interval)
-    raise AssertionError(f"Import task did not complete in {timeout_s}s")
+    raise AssertionError(
+        f"Import task did not complete in {timeout_s}s "
+        f"(waited {time.time() - start:.1f}s, last status {status!r}, "
+        f"processed {(payload or {}).get('processed')!r} of "
+        f"{(payload or {}).get('total')!r})"
+    )
 
 
 def upload_pictures_and_wait(
     client,
     files,
-    timeout_s=10,
+    timeout_s=30,
     poll_interval=0.1,
     form_data=None,
 ):
+    """Upload and wait for the import to settle.
+
+    The default tracks :func:`wait_for_import_task`'s deliberately — this is the
+    wrapper almost every caller actually uses (including the loop in
+    `test_semantic_search` that flaked), so leaving it at 10 would have kept the
+    old bound in place everywhere while looking fixed.
+    """
     kwargs = {"files": files}
     if form_data:
         kwargs["data"] = form_data
