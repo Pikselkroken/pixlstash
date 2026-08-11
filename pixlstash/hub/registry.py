@@ -400,16 +400,19 @@ class LibraryRegistry:
         """Atomically register a legacy vault and its explicit migration intent.
 
         This is the sole registry path that may create ``pending`` identity
-        migration state. ``BEGIN IMMEDIATE`` makes the owner recheck, optional
-        registry insertion, and operation insertion one serialization point
-        across CLI and server processes.
+        migration state. The owner recheck, optional registry insertion, and
+        operation insertion are one serialization point across CLI and server
+        processes, because :meth:`~pixlstash.hub.db.HubDatabase.transaction`
+        opens with ``BEGIN IMMEDIATE``. This method used to issue that itself,
+        which was correct and is now redundant: the guarantee moved into
+        ``transaction()`` so that every caller gets it rather than the three
+        that remembered to ask.
         """
         cleaned = name.strip() or os.path.basename(resolved_path)
         fingerprint = read_vault_uuid(resolved_path)
         now = datetime.now(timezone.utc).isoformat()
         try:
             with self._hub.transaction() as conn:
-                conn.execute("BEGIN IMMEDIATE")
                 row = conn.execute(
                     f"SELECT {_LIBRARY_COLUMNS} FROM library WHERE path = ?",
                     (resolved_path,),

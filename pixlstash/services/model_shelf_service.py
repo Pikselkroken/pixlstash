@@ -499,6 +499,17 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
     # from `missing` back to `present` between the check and the DELETE — and
     # the model would be forgotten anyway. Small window, unrecoverable
     # consequence, on the one shelf operation with no undo behind it.
+    #
+    # Reading on `conn` closes that against threads in THIS process, because
+    # `HubDatabase._lock` is held for the whole block. It closed nothing against
+    # the `pixlstash.libraries` CLI until `transaction()` began issuing
+    # `BEGIN IMMEDIATE`: pysqlite defers `BEGIN` to the first DML, so these
+    # SELECTs ran in autocommit and took no lock at all in WAL. The claim above
+    # is only true because of that, which is why it is asserted over in
+    # `test_transaction_is_already_open_before_its_first_write` (the SELECTs are
+    # inside a transaction) and
+    # `test_another_process_cannot_write_between_a_gate_read_and_its_write` (that
+    # transaction holds the write lock), rather than here.
     with hub.transaction() as conn:
         known = {
             int(row[0])
