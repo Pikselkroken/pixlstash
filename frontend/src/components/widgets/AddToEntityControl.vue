@@ -1309,7 +1309,14 @@ defineExpose({
   transition:
     opacity var(--dur-1) var(--ease-standard),
     transform var(--dur-1) var(--ease-standard);
-  z-index: 6;
+  /* `--z-dropdown` (300), which is the token's own definition: "menus,
+     popovers, tooltips anchored to a control". It was a bare `6`, which is
+     BELOW `--z-sticky` (100) — so anywhere this menu opens over a sticky
+     header it rendered behind it. Found on the model shelf, where the picker
+     sits in the selection bar and the folder group headers are sticky; the bug
+     was in this shared component, so every caller with a sticky neighbour had
+     it. */
+  z-index: var(--z-dropdown);
 }
 
 /* Floating mode (opt-in, see the `floatMenu` prop): the node has been teleported
@@ -1558,7 +1565,10 @@ defineExpose({
   box-shadow: var(--elevation-3);
   font-size: var(--text-xs);
   line-height: 1.2;
-  z-index: 12;
+  /* Above the menu it belongs to, which just moved to `--z-dropdown`. Kept as
+     a relative expression rather than a second bare number so the two cannot
+     drift apart again. */
+  z-index: calc(var(--z-dropdown) + 1);
   pointer-events: none;
 }
 

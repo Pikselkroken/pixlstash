@@ -9,12 +9,15 @@
     tabindex="-1"
     aria-label="Model shelf"
     aria-describedby="shelf-help"
+    @keydown.escape="onShelfEscape"
   >
     <p id="shelf-help" class="visually-hidden">
       Every adapter and checkpoint PixlStash has found on this machine. Show
       chooses which kinds are listed and which base models. Sort chooses the
       order and whether the list is cut into groups. A name in a monospaced face
-      was taken from the filename, because nobody has named that file yet.
+      was taken from the filename, because nobody has named that file yet. A row
+      that stands for a training run says how many files it holds; Right and
+      Left open and close it. Escape clears the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -134,6 +137,22 @@
           @click="openImport"
         >
           <v-icon size="19">mdi-import</v-icon>
+        </button>
+
+        <!-- Grouping is a sweep over the whole shelf rather than something done
+             to a selection, so it lives in the toolbar and not in the selection
+             bar. It opens a dry run; nothing is written until that is
+             confirmed. -->
+        <button
+          ref="stacksBtnRef"
+          class="bar-btn bar-btn--boxed"
+          :class="{ 'bar-btn--open': stacksOpen }"
+          type="button"
+          title="Group training runs"
+          aria-label="Group training runs"
+          @click="stacksOpen = true"
+        >
+          <v-icon size="19">mdi-layers-outline</v-icon>
         </button>
 
         <!-- No count badge: `bar-filter-badge` counts a deviation from a default
@@ -331,61 +350,129 @@
             <li v-if="!group.rows.length" class="shelf-empty-folder">
               {{ EMPTY_FOLDER_NOTE[group.emptyReason] }}
             </li>
-            <li
-              v-for="row in group.rows"
-              :key="row.rowKey"
-              class="ps-row shelf-row"
-              :class="{ 'shelf-row--selected': store.isSelected(row.id) }"
-              :title="rowTitle(row)"
-              role="option"
-              :aria-selected="store.isSelected(row.id)"
-              :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
-              :data-row-key="row.rowKey"
-              :draggable="canDrag(row)"
-              @click="pickRow(row, $event)"
-              @keydown="onRowKeydown(row, $event)"
-              @focus="focusedRowKey = row.rowKey"
-              @dragstart="onRowDragStart(row, $event)"
-              @dragend="dropTargetKey = ''"
-            >
-              <!-- Column 1 stays the reserved glyph slot. The selection shows
+            <!-- The `v-for` sits on a wrapping template, not on the row, so a
+                 stack's expanded members can be siblings of their cover inside
+                 the same iteration and still see `row`. -->
+            <template v-for="row in group.rows" :key="row.rowKey">
+              <li
+                class="ps-row shelf-row"
+                :class="{ 'shelf-row--selected': store.isSelected(row.id) }"
+                :title="rowTitle(row)"
+                role="option"
+                :aria-label="rowLabel(row)"
+                :aria-selected="store.isSelected(row.id)"
+                :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
+                :data-row-key="row.rowKey"
+                :draggable="canDrag(row)"
+                @click="pickRow(row, $event)"
+                @keydown="onRowKeydown(row, $event)"
+                @focus="focusedRowKey = row.rowKey"
+                @dragstart="onRowDragStart(row, $event)"
+                @dragend="dropTargetKey = ''"
+              >
+                <!-- Column 1 stays the reserved glyph slot. The selection shows
                    as the row's own wash and a tick here, not as a checkbox: a
                    checkbox is a second, contradictory way to select in a list
                    whose click already selects, and it was the shelf teaching a
                    dialect the rest of the app does not speak. -->
-              <span class="ps-row-glyph shelf-row-pick">
-                <v-icon v-if="store.isSelected(row.id)" size="16"
-                  >mdi-check</v-icon
-                >
-              </span>
-              <span class="shelf-row-kind">
-                <v-icon size="16">{{ KIND_ICON[row.file_kind] }}</v-icon>
-              </span>
-              <span class="shelf-row-label">
-                <span
-                  class="shelf-row-name"
-                  :class="{ 'shelf-row-name--derived': row.name.derived }"
-                  >{{ row.name.text
-                  }}<span v-if="row.name.derived" class="visually-hidden">
-                    (name taken from the filename)</span
-                  ></span
-                >
-                <span class="shelf-row-meta">
-                  <span>{{ kindLabel(row) }}</span>
-                  <span>{{ row.base_model || "Base model not set" }}</span>
-                  <span v-if="row.file_size" class="shelf-row-size">{{
-                    formatModelSize(row.file_size)
-                  }}</span>
+                <span class="ps-row-glyph shelf-row-pick">
+                  <v-icon v-if="store.isSelected(row.id)" size="16"
+                    >mdi-check</v-icon
+                  >
                 </span>
-              </span>
-              <span
-                class="shelf-row-loc"
-                :class="`shelf-row-loc--${row.locState}`"
-                :title="LOC_TITLE[row.locState]"
-              >
-                <v-icon size="16">{{ LOC_ICON[row.locState] }}</v-icon>
-              </span>
-            </li>
+                <span class="shelf-row-kind">
+                  <!-- Deck ticks behind the kind glyph say "this is more than one
+                     file" before the count is read, exactly as they do on a
+                     picture tile. Count-only, so the component reuses cleanly
+                     here even though a model has no thumbnail. -->
+                  <StackEdgeTicks
+                    v-if="row.memberCount > 1"
+                    :count="row.memberCount"
+                  />
+                  <v-icon size="16">{{ KIND_ICON[row.file_kind] }}</v-icon>
+                </span>
+                <span class="shelf-row-label">
+                  <span
+                    class="shelf-row-name"
+                    :class="{ 'shelf-row-name--derived': row.name.derived }"
+                    >{{ row.name.text
+                    }}<span v-if="row.name.derived" class="visually-hidden">
+                      (name taken from the filename)</span
+                    ></span
+                  >
+                  <span class="shelf-row-meta">
+                    <span>{{ kindLabel(row) }}</span>
+                    <span>{{ row.base_model || "Base model not set" }}</span>
+                    <span v-if="row.file_size" class="shelf-row-size">{{
+                      formatModelSize(row.file_size)
+                    }}</span>
+                  </span>
+                </span>
+                <!-- A plain span, NOT `StackBadge`, and that is the whole point:
+                     `StackBadge` renders a real <button>, and a focusable control
+                     inside `role="option"` is unreachable to a listbox's own
+                     keyboard model — which is what the comment above this list
+                     already said and what the first version of this row broke.
+                     The row owns the disclosure instead: Right/Left expand and
+                     collapse, and clicking here toggles without focus ever
+                     landing on a nested control. -->
+                <span
+                  v-if="row.memberCount > 1"
+                  class="shelf-row-steps"
+                  aria-hidden="true"
+                  @click.stop="toggleStack(row.stack_id)"
+                >
+                  <v-icon
+                    size="14"
+                    class="shelf-row-steps-chevron"
+                    :class="{
+                      'shelf-row-steps-chevron--open': isStackOpen(
+                        row.stack_id,
+                      ),
+                    }"
+                    >mdi-chevron-right</v-icon
+                  >
+                  {{ row.memberCount }}
+                </span>
+                <span
+                  class="shelf-row-loc"
+                  :class="`shelf-row-loc--${row.locState}`"
+                  :title="LOC_TITLE[row.locState]"
+                >
+                  <v-icon size="16">{{ LOC_ICON[row.locState] }}</v-icon>
+                </span>
+              </li>
+
+              <!-- The run's other steps, rendered as ROWS rather than through
+                 `StackExpansionStrip`: that component draws picture thumbnails
+                 for the dedup queue, and a model file has no thumbnail. A
+                 stack's members already ARE shelf rows, so they are drawn as
+                 shelf rows — indented, and not selectable on their own, because
+                 stacks are atomic here and a member cannot be acted on apart
+                 from its run. -->
+              <template v-if="row.memberCount > 1 && isStackOpen(row.stack_id)">
+                <li
+                  v-for="member in row.members.slice(1)"
+                  :key="`${row.rowKey}:${member.id}`"
+                  class="ps-row shelf-row shelf-row--member"
+                >
+                  <span class="ps-row-glyph"></span>
+                  <span class="shelf-row-kind">
+                    <v-icon size="14">mdi-subdirectory-arrow-right</v-icon>
+                  </span>
+                  <span class="shelf-row-label">
+                    <span class="shelf-row-name">{{
+                      memberLabel(member)
+                    }}</span>
+                    <span class="shelf-row-meta">
+                      <span v-if="member.file_size">{{
+                        formatModelSize(member.file_size)
+                      }}</span>
+                    </span>
+                  </span>
+                </li>
+              </template>
+            </template>
           </ul>
         </div>
       </template>
@@ -400,6 +487,7 @@
       @close="closeMove"
     />
     <ModelImportDialog :open="importOpen" @close="closeImport" />
+    <ShelfStackProposalsDialog :open="stacksOpen" @close="closeStacks" />
     <ModelFoldersDialog :open="foldersOpen" @close="closeFolders" />
 
     <ProgressOverlay
@@ -424,7 +512,9 @@ import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelImportDialog from "../panels/ModelImportDialog.vue";
+import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
+import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
@@ -438,6 +528,7 @@ import {
   GROUP_BY_LABELS,
   movableCopies,
   SORT_LABELS,
+  trainingStep,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
 
@@ -618,6 +709,73 @@ function onGroupDrop(group, event) {
   if (!isModelFileDrag(event.dataTransfer) || !isDropTarget(group)) return;
   event.preventDefault();
   openMove(store.selectedRows, Number(group.folderId));
+}
+
+/**
+ * Escape clears the selection, from anywhere in the shelf.
+ *
+ * On the ROOT rather than on the row: a selection made by clicking leaves focus
+ * on the row, but a selection survives Tab to the toolbar, a dialog opening and
+ * closing, or a click on empty space — and "Escape clears the selection" has to
+ * mean that everywhere, not only while a row holds the roving tab stop.
+ *
+ * A dialog is checked for first. Vuetify's own overlays stop the key before it
+ * reaches here, but the shelf's `AppDialog`s and the entity picker are inside
+ * this subtree, and Escape inside one of those means "close me" — clearing the
+ * selection underneath at the same time would be a second, unasked-for effect.
+ */
+function onShelfEscape(event) {
+  if (
+    moveOpen.value ||
+    importOpen.value ||
+    stacksOpen.value ||
+    editVerb.value
+  ) {
+    return;
+  }
+  if (event.target?.closest?.(".ate, [role='dialog']")) return;
+  if (!store.selectedRows.length) return;
+  event.preventDefault();
+  store.clearSelection();
+}
+
+// ── Stacks (shelf plan F5) ──────────────────────────────────────────────────
+//
+// Which runs are open is view state and nothing more: it is not persisted and
+// not shared, because an expansion is a glance rather than a preference.
+
+const openStacks = ref(new Set());
+const stacksOpen = ref(false);
+const stacksBtnRef = ref(null);
+
+async function closeStacks() {
+  stacksOpen.value = false;
+  await nextTick();
+  stacksBtnRef.value?.focus();
+}
+
+function isStackOpen(stackId) {
+  return openStacks.value.has(stackId);
+}
+
+/** A new Set, because Vue does not track `Set.add`. */
+function toggleStack(stackId) {
+  const next = new Set(openStacks.value);
+  if (next.has(stackId)) next.delete(stackId);
+  else next.add(stackId);
+  openStacks.value = next;
+}
+
+/**
+ * What one step of a run is called in the strip.
+ *
+ * The step, not the filename: every member of a run shares a name by
+ * construction, so repeating it six times says nothing and hides the one field
+ * that differs. A member with no step is the bare final the trainer wrote last.
+ */
+function memberLabel(member) {
+  const step = trainingStep(member.filename);
+  return step === null ? "Final" : `Step ${step.toLocaleString()}`;
 }
 
 // ── Import from ai-toolkit (shelf plan F6) ──────────────────────────────────
@@ -815,6 +973,19 @@ function onRowKeydown(row, event) {
     nextTick(() => focusDrawnRow(next.key));
     return;
   }
+  // Right opens a run, Left closes it — the disclosure keys, on the row rather
+  // than on a control inside it. Ignored for a row that is not a stack, so they
+  // stay free for anything a single model might want later.
+  if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+    if (row.memberCount > 1) {
+      const open = isStackOpen(row.stack_id);
+      if (open !== (event.key === "ArrowRight")) {
+        event.preventDefault();
+        toggleStack(row.stack_id);
+      }
+    }
+    return;
+  }
   if (event.key === " " || event.key === "Enter") {
     event.preventDefault();
     store.selectFromClick(
@@ -824,10 +995,27 @@ function onRowKeydown(row, event) {
     );
     return;
   }
-  if (event.key === "Escape" && store.selectedRows.length) {
-    event.preventDefault();
-    store.clearSelection();
-  }
+  // Escape is NOT handled here. It is owned by the shelf root, so it works
+  // wherever focus happens to be — on a row, on the toolbar, or nowhere at all
+  // after a click — rather than only while a row holds the roving tab stop,
+  // which is what it used to mean and is not what a reader expects from
+  // "Escape clears the selection".
+}
+
+/**
+ * The row's accessible name.
+ *
+ * The step count and the open/closed state are drawn in an `aria-hidden` span,
+ * because the only non-hidden way to expose them inside `role="option"` would
+ * be a nested control — the thing this row must not have. So they are spoken
+ * here instead, and a reader hears "6 files, collapsed" rather than meeting a
+ * button that the listbox's arrow keys cannot reach.
+ */
+function rowLabel(row) {
+  const name = row.name.text;
+  if (!(row.memberCount > 1)) return name;
+  const state = isStackOpen(row.stack_id) ? "expanded" : "collapsed";
+  return `${name}, ${row.memberCount} files, ${state}`;
 }
 
 /**
@@ -1205,6 +1393,20 @@ watch(
 
 .shelf-group-btn:hover {
   background: var(--hover-wash);
+}
+
+/* A run's other steps. Indented into the identity column so the deck reads as
+   belonging to the row above it, and quieter than a row because it is detail
+   rather than something to act on — the members are not selectable, stacks
+   being atomic here. */
+.shelf-row--member {
+  cursor: default;
+  color: rgb(var(--v-theme-on-surface-variant));
+}
+
+.shelf-row--member .shelf-row-name {
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-surface-variant));
 }
 
 /* The drop affordance, on the destination header only. An inset ring rather

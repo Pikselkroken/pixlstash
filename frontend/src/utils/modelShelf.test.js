@@ -7,6 +7,7 @@ import {
   bandGroups,
   bandUsage,
   baseModelKey,
+  collapseStacks,
   withEmptyFolders,
   cleanAssetName,
   deriveModelName,
@@ -15,6 +16,8 @@ import {
   locationState,
   modelName,
   movableCopies,
+  stackReceipt,
+  trainingStep,
 } from "./modelShelf";
 
 describe("cleanAssetName", () => {
@@ -421,6 +424,105 @@ describe("importReceipt", () => {
     ).toBe(
       "Imported 1 checkpoint from Clementine. The run's own files have been removed.",
     );
+  });
+});
+
+describe("collapseStacks", () => {
+  function member(id, stackId, position, overrides = {}) {
+    return {
+      id,
+      stack_id: stackId,
+      stack_position: position,
+      filename: `Run_00000${position}00.safetensors`,
+      ...overrides,
+    };
+  }
+
+  it("folds a run into one row carrying its members", () => {
+    // Without this a six-step run reads as six unrelated adapters, which is
+    // what the shelf did until F5.
+    const out = collapseStacks([
+      member(1, 7, 0),
+      member(2, 7, 1),
+      member(3, 7, 2),
+      { id: 4, stack_id: null },
+    ]);
+    expect(out.map((r) => r.id)).toEqual([1, 4]);
+    expect(out[0].memberCount).toBe(3);
+    expect(out[0].memberIds).toEqual([1, 2, 3]);
+  });
+
+  it("keeps the cover's own fields on the folded row", () => {
+    const out = collapseStacks([
+      member(2, 7, 1, { display_name: "Step" }),
+      member(1, 7, 0, { display_name: "Cover" }),
+    ]);
+    expect(out[0].display_name).toBe("Cover");
+  });
+
+  it("folds onto the lowest surviving position when the cover is filtered out", () => {
+    // A run half-hidden by a base-model filter is still a run. Dropping it
+    // because position 0 is not in view would make the filter lie about what is
+    // on disk.
+    const out = collapseStacks([member(2, 7, 1), member(3, 7, 2)]);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe(2);
+    expect(out[0].memberCount).toBe(2);
+  });
+
+  it("counts what is SHOWN, not what the payload claims", () => {
+    // A badge reading 6 over a strip that opens to 2 would be describing rows
+    // the reader cannot reach.
+    const out = collapseStacks([
+      member(1, 7, 0, { member_count: 6 }),
+      member(2, 7, 1, { member_count: 6 }),
+    ]);
+    expect(out[0].memberCount).toBe(2);
+  });
+
+  it("leaves unstacked rows exactly as they were", () => {
+    const loose = { id: 9, stack_id: null, filename: "solo.safetensors" };
+    expect(collapseStacks([loose])[0]).toBe(loose);
+  });
+
+  it("keeps two different runs apart", () => {
+    const out = collapseStacks([
+      member(1, 7, 0),
+      member(2, 8, 0),
+      member(3, 7, 1),
+    ]);
+    expect(out.map((r) => r.id)).toEqual([1, 2]);
+    expect(out[0].memberIds).toEqual([1, 3]);
+  });
+});
+
+describe("stackReceipt", () => {
+  it("reports the runs that landed and the ones that did not", () => {
+    expect(stackReceipt(3, 0)).toBe("Grouped 3 runs.");
+    expect(stackReceipt(2, 1)).toBe(
+      "Grouped 2 runs. 1 run could not be grouped; something changed them first.",
+    );
+  });
+
+  it("says the files are unchanged when nothing was grouped", () => {
+    expect(stackReceipt(0, 2)).toBe(
+      "Nothing was grouped. 2 runs could not be, and the files are unchanged.",
+    );
+    expect(stackReceipt(0, 0)).toBe("Nothing to group.");
+  });
+});
+
+describe("trainingStep", () => {
+  it("reads the same suffix the name derivation strips", () => {
+    expect(trainingStep("JimmyCarr_000000500.safetensors")).toBe(500);
+    expect(trainingStep("ohwx_woman-step00004500.safetensors")).toBe(4500);
+  });
+
+  it("reports no step for a bare final, and for a version suffix", () => {
+    // `v2` is not training bookkeeping — `deriveModelName` keeps it, so this
+    // must not read it as a step.
+    expect(trainingStep("JimmyCarr.safetensors")).toBe(null);
+    expect(trainingStep("portrait_mix_v2.safetensors")).toBe(null);
   });
 });
 
