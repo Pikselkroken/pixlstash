@@ -148,7 +148,7 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_24_local_5_loopback():
+def test_host_capability_tier_split_is_25_local_5_loopback():
     """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
     hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 29 routes carry a
     locality tier = 24 local + 5 loopback.
@@ -207,7 +207,7 @@ def test_host_capability_tier_split_is_24_local_5_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 24, sorted(local)
+    assert len(local) == 25, sorted(local)
 
 
 # ===========================================================================

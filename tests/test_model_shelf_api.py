@@ -1961,46 +1961,30 @@ def test_a_sample_inside_the_registered_root_is_served(shelf_env, import_folders
     assert r.content.startswith(b"\x89PNG")
 
 
-def test_a_slash_traversal_never_reaches_the_handler_at_all(
-    shelf_env, import_folders, tmp_path
-):
-    """Refused, but **by routing, not by the containment** — and the difference
-    is worth writing down because it is what makes the obvious version of this
-    test worthless.
-
-    Starlette percent-DECODES the path before matching, so `..%2Fprivate.png`
-    becomes an extra path segment and no route matches; a literal `../` is
-    collapsed by the client even earlier. Either way `{filename}` is
-    structurally incapable of carrying a `/`. Measured: with
-    `resolve_path_within` deleted from the handler, both of these stayed green.
-
-    So this asserts the *outcome* — a slash traversal gets nothing — and the
-    test that actually exercises the containment is the backslash one below.
-    Kept because it is a real regression guard: switching either segment to a
-    `:path` converter would make these reachable overnight.
-    """
-    (import_folders.run_dir / "private.png").write_bytes(b"\x89PNG\r\n\x1a\nsecret")
-    outside = tmp_path / "outside"
-    (outside / "samples").mkdir(parents=True, exist_ok=True)
-    (outside / "samples" / "leak.png").write_bytes(b"\x89PNG\r\n\x1a\nleak")
-
-    out_of_run = _sample(shelf_env, import_folders, "Clementine", "../private.png")
-    assert out_of_run.status_code in (400, 404), out_of_run.text
-    assert b"secret" not in out_of_run.content
-
-    out_of_root = _sample(shelf_env, import_folders, "../outside", "leak.png")
-    assert out_of_root.status_code in (400, 404), out_of_root.text
-    assert b"leak" not in out_of_root.content
-
-
 def test_the_sample_join_refuses_a_name_that_climbs_out(tmp_path):
     """The containment itself, asserted where it can actually be made to fail.
 
-    Not over HTTP, deliberately. `{filename}` cannot carry a `/` through
-    routing, so on POSIX the traversal is unreachable and an HTTP-level test
-    stays green with the guard deleted — measured, twice. On Windows a
-    backslash IS a separator and the same route IS reachable, which is why the
-    guard has to exist and why this asserts the join rather than the response.
+    **Not over HTTP, and that is the finding rather than a shortcut.** Starlette
+    percent-decodes the path before matching, so `{filename}` is structurally
+    incapable of carrying a `/`: a literal `../` is collapsed by the client, and
+    `..%2F` becomes an extra path segment that matches no route. Three
+    measurements got this wrong before it was pinned down —
+
+      1. the plain-`../` version stayed green with `resolve_path_within` deleted;
+      2. so did the percent-encoded version;
+      3. and `tests/authz_guard.py::no_spa_fallback` then caught the reason on
+         CI: the request was not reaching the API at all, it was being answered
+         **200 by the SPA catch-all**. It passed locally only because a dev
+         checkout has no built frontend to fall back to.
+
+    So an HTTP-level traversal test here asserts nothing and was removed rather
+    than kept as reassurance. The guard is still real and still load-bearing on
+    **Windows**, where a backslash is both an ordinary URL character and a path
+    separator, and where four CI shards run — which is why this asserts the join
+    directly, and why it fails on every platform when the guard is removed.
+
+    If either path segment is ever changed to a `:path` converter, the HTTP
+    traversal becomes reachable everywhere and this file needs a test for it.
     """
     run_dir = tmp_path / "Clementine"
     (run_dir / "samples").mkdir(parents=True)
