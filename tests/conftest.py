@@ -6,6 +6,7 @@ import gc
 import json
 import math
 import os
+import tempfile
 import socket
 import statistics
 import sys
@@ -20,6 +21,7 @@ import pytest
 from _pytest.config.exceptions import UsageError
 from fastapi.testclient import TestClient
 from pixlstash.server import Server
+from pixlstash.services.builtin_models import BUILTIN_MODEL_DIR_ENV
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
 from pixlstash.tasks.tag_task import TagTask
@@ -390,6 +392,18 @@ def pytest_collection_modifyitems(config, items):
 
 def pytest_configure(config):
     """Set static attributes on Server from command line options."""
+    # Point the built-in model declaration at an empty folder for the whole
+    # session. `builtin_model_dir()` is machine-global by design — one download
+    # serves every library on the host — but that means a Server built on a temp
+    # config dir would otherwise declare rows about the DEVELOPER'S real home,
+    # so the shelf's contents would depend on which engines that machine happens
+    # to have downloaded. `test_workers_api` caught it as `assert 3 == 0` on a
+    # runner whose model cache was warm; every engine simply reads `missing`
+    # here, which is a state the suite can rely on.
+    os.environ.setdefault(
+        BUILTIN_MODEL_DIR_ENV,
+        os.path.join(tempfile.gettempdir(), "pixlstash-test-builtin-models"),
+    )
     # Pick a free port for the test session so Server instances don't collide
     # with the production app when it is already running on the default port.
     Server.DEFAULT_PORT = _find_free_port()

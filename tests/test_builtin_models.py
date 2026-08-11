@@ -156,3 +156,27 @@ def test_a_file_that_disappears_flips_its_row_to_missing(server_hub, tmp_path):
         (folder_id, "sa_0_4_vit_b_32_linear.pth"),
     )
     assert state["state"] == "missing"
+
+
+def test_the_checkpoint_hash_worker_never_picks_up_an_engine(server_hub, tmp_path):
+    """Engines carry no `sha256` by design — we know what they are without one —
+    so they match the finder's plain `sha256 IS NULL` like any unhashed
+    checkpoint. Without the exclusion this hands a 339 MB tagger and a pile of
+    ONNX to the hash worker to read, and writes a digest onto a row that never
+    wanted one."""
+    from pixlstash.tasks.missing_checkpoint_hash_finder import (
+        MissingCheckpointHashFinder,
+    )
+
+    for engine in BUILTIN_ENGINES:
+        target = tmp_path / engine.relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x" * 8)
+    declare_builtin_models(server_hub, str(tmp_path))
+
+    finder = MissingCheckpointHashFinder(server_hub)
+    total, pending = finder.progress()
+    assert (total, pending) == (0, 0), (
+        "declared engines were counted as checkpoints awaiting a hash"
+    )
+    assert finder.find_task() is None, "an engine was handed to the hash worker"

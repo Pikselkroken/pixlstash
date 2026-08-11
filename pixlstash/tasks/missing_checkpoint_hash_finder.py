@@ -19,6 +19,14 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
     In practice that is exactly the checkpoints: the schema's
     ``CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)`` forbids an unhashed
     adapter, and the scan hashes an ``unknown`` on sight because it is small.
+    **``engine`` rows are excluded from both queries.** They are declared by
+    ``services/builtin_models.py`` and carry no ``sha256`` by design — nothing
+    hashes PixlStash's own tagger, because we know what it is without one.
+    Without the exclusion they match ``sha256 IS NULL`` like any unhashed
+    checkpoint, and this finder would hand a 339 MB tagger and a pile of ONNX to
+    the hash worker to read, then write a digest onto a row that never wanted
+    one.
+
     The query is left as the plain ``sha256 IS NULL`` all the same, so it
     matches ``ix_model_hash_queue`` exactly and cannot silently strand a row.
 
@@ -77,6 +85,7 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
             "SUM(CASE WHEN m.sha256 IS NULL THEN 1 ELSE 0 END) AS pending "
             "FROM model m "
             "WHERE (m.sha256 IS NULL OR m.file_kind = 'checkpoint') "
+            "AND m.file_kind <> 'engine' "
             "AND EXISTS (SELECT 1 FROM model_file mf "
             "WHERE mf.model_id = m.id AND mf.state = 'present')"
         )
@@ -97,7 +106,8 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
             "FROM model m "
             "JOIN model_file mf ON mf.model_id = m.id "
             "JOIN model_folder f ON f.id = mf.model_folder_id "
-            "WHERE m.sha256 IS NULL AND mf.state = 'present' "
+            "WHERE m.sha256 IS NULL AND m.file_kind <> 'engine' "
+            "AND mf.state = 'present' "
             "GROUP BY m.id ORDER BY m.id LIMIT ?",
             (limit,),
         )

@@ -130,13 +130,28 @@ BUILTIN_ENGINES: tuple[BuiltinEngine, ...] = (
 )
 
 
+# Lets a test point the declaration at a temp folder. Without it a Server built
+# on a temp config dir still declares rows about the developer's REAL home, so
+# the shelf's contents depend on which engines that machine happens to have
+# downloaded — which is how `test_workers_api` came to assert `3 == 0` on a
+# runner whose model cache was warm.
+BUILTIN_MODEL_DIR_ENV = "PIXLSTASH_BUILTIN_MODEL_DIR"
+
+
 def builtin_model_dir() -> str:
     """Where PixlStash downloads its engines.
 
     The same expression `inference/engine.py` and `image_embedding_task.py`
     build for themselves, in one place so the declaration cannot point at a
     different folder than the downloaders fill.
+
+    Machine-global on purpose: one download serves every library and every
+    server instance on the host, exactly as the hub itself does.
     """
+    override = os.environ.get(BUILTIN_MODEL_DIR_ENV, "").strip()
+    if override:
+        return override
+
     from platformdirs import user_data_dir
 
     return os.path.join(user_data_dir("pixlstash"), "downloaded_models")
