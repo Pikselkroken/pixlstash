@@ -77,6 +77,31 @@
       @detach="onAttach($event, false)"
     />
 
+    <!-- An icon answers "which one is this?", so it is single-row by nature:
+         giving forty rows one mark would remove the only thing telling them
+         apart. Shown and disabled rather than hidden, like Rename. -->
+    <AppButton
+      size="sm"
+      variant="secondary"
+      icon-left="image-outline"
+      :disabled="store.selectedRows.length !== 1"
+      :title="iconTitle"
+      @click="emit('set-icon')"
+    >
+      Set icon
+    </AppButton>
+
+    <AppButton
+      v-if="withIcons.length"
+      size="sm"
+      variant="secondary"
+      icon-left="image-off-outline"
+      :title="clearIconTitle"
+      @click="emit('clear-icons')"
+    >
+      Clear icon
+    </AppButton>
+
     <!-- Move is the keyboard path to what a drag does. The shelf's definition
          of done requires every verb to be reachable without a pointer, and a
          drag is not; it is also where the move is stated in files, bytes and
@@ -135,6 +160,8 @@ const emit = defineEmits([
   "rename",
   "set-base-model",
   "set-kind",
+  "set-icon",
+  "clear-icons",
   "move",
   "forget",
 ]);
@@ -264,6 +291,23 @@ const moveTitle = computed(() => {
   return `Move ${n.toLocaleString()} ${n === 1 ? "file" : "files"} into another folder`;
 });
 
+/** The selected models that actually have an icon to clear. */
+const withIcons = computed(() =>
+  store.selectedRows.filter((row) => row.icon_sha256),
+);
+
+const iconTitle = computed(() =>
+  store.selectedRows.length === 1
+    ? "Give this model a mark of its own"
+    : "Select one model to give it an icon",
+);
+
+const clearIconTitle = computed(() =>
+  withIcons.value.length === 1
+    ? "Clear this model's icon"
+    : `Clear the icon on ${withIcons.value.length} models`,
+);
+
 function onAttach(payload, attach) {
   return store.setAttachment({ ...payload, attach });
 }
@@ -272,7 +316,7 @@ function clear() {
   store.clearSelection();
 }
 
-defineExpose({ forgettable, assignable, membership, movable });
+defineExpose({ forgettable, assignable, membership, movable, withIcons });
 </script>
 
 <style scoped>

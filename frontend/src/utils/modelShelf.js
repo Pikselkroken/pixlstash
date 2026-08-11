@@ -10,6 +10,8 @@
 //   * A missing value is still rendered. "Base model not set" occupies the same
 //     slot in the same type as a real value; a blank cell is the failure mode.
 
+import { SET_COLORS } from "./setAppearance";
+
 /** Trailing tokens that record where in a training run a file was saved.
  *
  * Mirrors `_TRAINING_SUFFIX_RE` in `pixlstash/utils/model_utils.py`. The
@@ -557,4 +559,59 @@ export function trainingStep(filename) {
   if (!last || !TRAINING_SUFFIX_RE.test(last)) return null;
   const digits = last.replace(/\D/g, "");
   return digits ? Number(digits) : null;
+}
+
+/**
+ * A stable 32-bit hash of a string. FNV-1a, which is small and has no
+ * dependencies; nothing here is security-sensitive, only stable.
+ */
+function hash32(text) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash;
+}
+
+/** Up to two initials for a mark, from whatever the row is actually called. */
+function initialsOf(text) {
+  const words = String(text || "")
+    .split(/[\s_\-.]+/)
+    .filter(Boolean);
+  if (!words.length) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
+
+/**
+ * The mark a model wears when it has no icon.
+ *
+ * **Unset is never blank.** A checkpoint never has a sample — PixlStash
+ * registers it in place and generates nothing for it — and 37% of real adapters
+ * carry no title, base model or trigger either, so an empty identity slot is
+ * the common case rather than the edge one.
+ *
+ * **Computed at render from a hash, and deliberately NOT the rule characters
+ * use.** `character_color` takes the *first unused* colour from this same list,
+ * which needs a bounded set and a moment of assignment. Models are unbounded
+ * and have no such moment, and a mark that shifted when a neighbour was deleted
+ * would be worse than no mark — so this is a pure function of the row. The two
+ * must not be unified, however similar the palettes look.
+ *
+ * **Keyed on the FOLDED base model**, so every spelling of FLUX.2 lands on one
+ * colour instead of scattering across the palette — which is the whole reason
+ * the folding table exists. A row recording no base model hashes on the empty
+ * string and so shares one colour with every other unset row: correct, because
+ * they genuinely are one group, and the shelf already treats "not set" as a
+ * value rather than an absence.
+ *
+ * @param {Object} row - a shelf row.
+ * @returns {{color: string, initials: string}}
+ */
+export function generatedMark(row) {
+  const key = baseModelKey(row);
+  const color = SET_COLORS[hash32(key) % SET_COLORS.length].value;
+  const name = modelName(row);
+  return { color, initials: initialsOf(name.text) };
 }

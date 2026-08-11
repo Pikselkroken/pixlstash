@@ -14,6 +14,8 @@ const listCheckpoints = vi.fn();
 const editModels = vi.fn();
 const forgetModels = vi.fn();
 const setAdapterAttachments = vi.fn();
+const setModelIcon = vi.fn();
+const clearModelIcons = vi.fn();
 
 vi.mock("../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
@@ -22,6 +24,12 @@ vi.mock("../api/modelShelf", () => ({
   editModels: (...args) => editModels(...args),
   forgetModels: (...args) => forgetModels(...args),
   setAdapterAttachments: (...args) => setAdapterAttachments(...args),
+}));
+
+vi.mock("../api/modelIcons", () => ({
+  setModelIcon: (...args) => setModelIcon(...args),
+  clearModelIcons: (...args) => clearModelIcons(...args),
+  modelIconUrl: (sha) => `/api/v1/model-icons/${sha}`,
 }));
 
 import {
@@ -885,6 +893,59 @@ describe("Assign", () => {
     expect(notice.text).toBe(
       "Assigned 1 model to Alice. 1 model could not be written.",
     );
+  });
+});
+
+describe("the icon verb", () => {
+  beforeEach(() => {
+    setModelIcon.mockReset().mockResolvedValue({ icon_sha256: "a".repeat(64) });
+    clearModelIcons.mockReset().mockResolvedValue({ cleared: [] });
+    listAdapters.mockResolvedValue([]);
+    listCheckpoints.mockResolvedValue([]);
+  });
+
+  it("sets the icon on the one selected model", async () => {
+    const store = useModelShelfStore();
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    const file = new Blob(["x"], { type: "image/png" });
+
+    expect(await store.setIconOnSelected(file)).toBe(true);
+    expect(setModelIcon).toHaveBeenCalledWith(1, file);
+  });
+
+  it("does nothing without a file, rather than posting an empty body", async () => {
+    const store = useModelShelfStore();
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    expect(await store.setIconOnSelected(null)).toBe(false);
+    expect(setModelIcon).not.toHaveBeenCalled();
+  });
+
+  it("reports what the clear changed, not what was sent", async () => {
+    // A selection of two where one had an icon is "1 model", not "2".
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({ id: 1, icon_sha256: "a".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ];
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+    clearModelIcons.mockResolvedValue({ cleared: [1] });
+
+    await store.clearIconsOnSelected();
+    expect(clearModelIcons).toHaveBeenCalledWith([1, 2]);
+    expect(useNoticeStore().notices.at(-1).text).toBe(
+      "Cleared the icon on 1 model.",
+    );
+  });
+
+  it("says so plainly when none of them had one", async () => {
+    const store = useModelShelfStore();
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    await store.clearIconsOnSelected();
+    expect(useNoticeStore().notices.at(-1).text).toContain("None of those");
   });
 });
 

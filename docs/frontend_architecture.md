@@ -1712,6 +1712,50 @@ that is about to be wrong; a veil that only *looks* disabled leaves every row
 clickable and in the tab order, which is worse than none. The toolbar stays
 live, because Show and Sort still answer correctly while files are in flight.
 
+#### The icon verb, on the shelf
+
+**Unset is never blank.** The identity column used to be a bare kind glyph, so
+every checkpoint row and the 37% of adapters carrying no title rendered
+identically — the blank column the icon verb exists to fill. `ModelMark` draws
+the row's icon if it has one, else a generated mark.
+
+**The mark is a pure function of the row**, and deliberately not
+`character_color`'s rule. Characters take the *first unused* colour, which needs
+a bounded set and a moment of assignment; models are unbounded and have neither,
+and a mark that shifted when a neighbour was deleted would be worse than no
+mark. So the colour is `SET_COLORS[hash(foldedBaseModel) % 48]` and the initials
+come from the same name chain the row's label uses. **The two rules must not be
+unified**, however similar the palettes look.
+
+Keyed on the **folded** base model, so every spelling of FLUX.2 lands on one
+colour instead of scattering across the palette — which is what the folding
+table is for. A row recording no base model hashes on the empty string and
+shares one colour with every other unset row: correct, because they are one
+group, and the shelf already treats "not set" as a value rather than an absence.
+
+The mark is `aria-hidden`: the row's accessible name already says which model it
+is, and a mark announcing "FL" would be the same fact twice, less usefully.
+
+**Set is single-row, clear is bulk.** An icon answers "which one is this?", so
+giving forty rows one mark would remove the only thing telling them apart — Set
+icon is gated to a selection of one, shown-and-disabled like Rename. Clear
+appears only when something in the selection has one. Setting or clearing a
+single row prompts for nothing (both are reconstructable by doing them again); a
+**bulk** clear is not and confirms, the same test the bulk base-model overwrite
+falls on.
+
+**One upload path.** The picker is a real `<input type="file">` — the platform's
+own chooser, keyboard-accessible for free — and the client posts the bytes. That
+is what makes "pick a library picture" a *copy* rather than a reference into the
+vault, which is the constraint the hub/vault split imposes.
+
+**The sample/icon view toggle is NOT built, and cannot be yet.** The ruling
+defines two fallback chains (sample → icon → mark, and icon → mark), but the
+shelf's payload carries **no sample field at all** — not on `ModelResponse`, not
+on the `model` table. Both settings would therefore render identically, so the
+toggle would be a control that does nothing. It needs a sample source on the
+shelf row first.
+
 #### Stacks (F5)
 
 **A run is one row, and the fold happens client-side.** The list query returns
