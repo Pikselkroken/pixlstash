@@ -49,6 +49,49 @@
       Set kind
     </AppButton>
 
+    <!-- Assign, the fifth verb, as two pickers rather than a button: it names
+         an entity, and the shelf uses the same picker the grid does so the
+         search, the tri-state and the keyboard model are learned once. Both are
+         host-driven — the rows already carry their `attachments`, so nothing is
+         fetched, and the writes are the store's because the route replaces one
+         adapter's whole set. -->
+    <AddToEntityControl
+      type="character"
+      label="Assign to person"
+      :subject-ids="assignableIds"
+      :membership="membership.character"
+      :disabled="!assignable.length"
+      :title="assignTitle"
+      @attach="onAttach($event, true)"
+      @detach="onAttach($event, false)"
+    />
+
+    <AddToEntityControl
+      type="set"
+      label="Assign to set"
+      :subject-ids="assignableIds"
+      :membership="membership.set"
+      :disabled="!assignable.length"
+      :title="assignTitle"
+      @attach="onAttach($event, true)"
+      @detach="onAttach($event, false)"
+    />
+
+    <!-- Move is the keyboard path to what a drag does. The shelf's definition
+         of done requires every verb to be reachable without a pointer, and a
+         drag is not; it is also where the move is stated in files, bytes and
+         rename-versus-copy before a 438 GB operation starts. -->
+    <AppButton
+      size="sm"
+      variant="secondary"
+      icon-left="folder-move-outline"
+      :disabled="!movable.length || moves.busy"
+      :title="moveTitle"
+      @click="emit('move')"
+    >
+      Move
+    </AppButton>
+
     <!-- Forget is gated on the rows' STATE, not on how many are selected: it is
          offered only when every selected model has already lost its files.
          Disabled with the reason in the tooltip rather than hidden, or the
@@ -74,19 +117,31 @@
 // place instead of half here and half there, and it is what lets this component
 // be mounted in a test with nothing but a store.
 //
-// Assign is deliberately absent for now. It is the fifth verb and its route
-// already exists, but its control is the `AddToEntityControl` rewrite that
-// decision 6 of the nine puts after #759 — a combobox/listbox shell, not a
-// button. It arrives with that rewrite rather than as a fourth dialog here.
+// Assign is the exception, and only because it is not a button: it is the
+// shared `AddToEntityControl`, which owns its own menu and emits the entity it
+// was pointed at. Handing that emit up unchanged and back down again would buy
+// nothing, so this one calls the store directly.
 
 import { computed } from "vue";
 
+import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import AppButton from "../widgets/AppButton.vue";
+import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
+import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { movableCopies } from "../../utils/modelShelf";
 
-const emit = defineEmits(["rename", "set-base-model", "set-kind", "forget"]);
+const emit = defineEmits([
+  "rename",
+  "set-base-model",
+  "set-kind",
+  "move",
+  "forget",
+]);
 
 const store = useModelShelfStore();
+const folders = useModelFoldersStore();
+const moves = useModelMovesStore();
 
 const countLabel = computed(() => {
   const n = store.selectedRows.length;
@@ -124,11 +179,100 @@ const forgetTitle = computed(() => {
   return `Forget the ${forgettable.value.length} whose files are gone`;
 });
 
+/**
+ * The selected models an entity can actually be attached to.
+ *
+ * Two gates, and they are different refusals. A CHECKPOINT is refused on
+ * meaning: "this character uses this LoRA" is not a thing you say about a base
+ * model, and the route 400s. A row with no `sha256` is refused on addressing:
+ * the attachment table is keyed by the interop hash and a 24 GB file the hash
+ * worker has not reached yet has none, so there is nothing to write against —
+ * it becomes assignable on its own once the hash lands.
+ *
+ * Gated the same way Forget is, and for the same reason: the verb acts on the
+ * subset it can act on, and the tooltip says how many that is. Passing the
+ * whole selection instead would compute the tri-state across rows that can
+ * never be attached, so a fully-assigned person would still read as partial.
+ */
+const assignable = computed(() =>
+  store.selectedRows.filter(
+    (row) => row.file_kind !== "checkpoint" && row.sha256,
+  ),
+);
+
+const assignableIds = computed(() => assignable.value.map((row) => row.id));
+
+/**
+ * `entity id -> Set of model ids`, per entity type, straight off the rows.
+ *
+ * The picker's own readers ask which PICTURES are in each entity, which is not
+ * a question that has an answer here. Supplying this map is what switches it
+ * into host-driven mode, and it costs no request: `attachments` come back on
+ * the list, so the answer is already in hand before the menu opens.
+ */
+const membership = computed(() => {
+  const byType = { character: {}, set: {} };
+  for (const row of assignable.value) {
+    for (const att of row.attachments ?? []) {
+      const bucket = byType[att.entity_type];
+      // A type the server adds later is skipped rather than crashing the bar.
+      if (!bucket) continue;
+      const key = String(att.entity_id);
+      (bucket[key] ??= new Set()).add(String(row.id));
+    }
+  }
+  return byType;
+});
+
+const assignTitle = computed(() => {
+  const total = store.selectedRows.length;
+  if (!assignable.value.length) {
+    return total
+      ? "Checkpoints cannot be assigned, and an unhashed file has no hash to assign by"
+      : undefined;
+  }
+  if (assignable.value.length === total) return undefined;
+  return `Applies to the ${assignable.value.length} of ${total} that can be assigned`;
+});
+
+/** `model_folder.id` to the folder row, for `movableCopies`' folder rules. */
+const foldersById = computed(
+  () => new Map(folders.folders.map((folder) => [Number(folder.id), folder])),
+);
+
+/**
+ * The copies in the selection a move could pick up.
+ *
+ * Gated per COPY and not per model, so a model with one file on an unplugged
+ * NAS and another on this disk IS movable — its present copy is. What the
+ * button acts on and what the tooltip counts are the same list, and the view
+ * recomputes it for the dialog rather than this being handed up, because a drop
+ * onto a folder header has to reach the same list without a selection.
+ */
+const movable = computed(
+  () => movableCopies(store.selectedRows, foldersById.value).items,
+);
+
+const moveTitle = computed(() => {
+  if (moves.busy) return "A move is already running. One at a time, one disk.";
+  if (!movable.value.length) {
+    return "Only files that are actually on this machine can be moved";
+  }
+  // Counted in COPIES, which is what moves, and named as files rather than
+  // models so the number cannot be read against the selection count beside it.
+  const n = movable.value.length;
+  return `Move ${n.toLocaleString()} ${n === 1 ? "file" : "files"} into another folder`;
+});
+
+function onAttach(payload, attach) {
+  return store.setAttachment({ ...payload, attach });
+}
+
 function clear() {
   store.clearSelection();
 }
 
-defineExpose({ forgettable });
+defineExpose({ forgettable, assignable, membership, movable });
 </script>
 
 <style scoped>

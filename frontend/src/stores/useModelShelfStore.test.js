@@ -13,6 +13,7 @@ const listCheckpoints = vi.fn();
 
 const editModels = vi.fn();
 const forgetModels = vi.fn();
+const setAdapterAttachments = vi.fn();
 
 vi.mock("../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
@@ -20,9 +21,11 @@ vi.mock("../api/modelShelf", () => ({
   listCheckpoints: (...args) => listCheckpoints(...args),
   editModels: (...args) => editModels(...args),
   forgetModels: (...args) => forgetModels(...args),
+  setAdapterAttachments: (...args) => setAdapterAttachments(...args),
 }));
 
 import {
+  assignReceipt,
   editReceipt,
   forgetReceipt,
   useModelShelfStore,
@@ -665,6 +668,139 @@ describe("the verbs", () => {
   });
 });
 
+describe("Assign", () => {
+  beforeEach(() => {
+    setAdapterAttachments.mockReset().mockResolvedValue({ attachments: [] });
+    listAdapters.mockResolvedValue([]);
+    listCheckpoints.mockResolvedValue([]);
+  });
+
+  it("sends the union, so attaching one entity keeps the others", async () => {
+    // The load-bearing assertion of the whole verb. `PUT .../attachments`
+    // REPLACES the set, so a write of just the new entity silently detaches
+    // every character already using the model — a data loss with no undo behind
+    // it and no error to notice.
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({ id: 1, attachments: [{ entity_type: "set", entity_id: 9 }] }),
+    ];
+    store.toggleSelected(1);
+
+    await store.setAttachment({
+      entityType: "character",
+      entityId: 4,
+      entityName: "Alice",
+      subjectIds: ["1"],
+    });
+
+    expect(setAdapterAttachments).toHaveBeenCalledWith("a".repeat(64), [
+      { entity_type: "set", entity_id: 9 },
+      { entity_type: "character", entity_id: 4 },
+    ]);
+  });
+
+  it("detaches by omission and leaves the rest standing", async () => {
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({
+        id: 1,
+        attachments: [
+          { entity_type: "character", entity_id: 4 },
+          { entity_type: "set", entity_id: 9 },
+        ],
+      }),
+    ];
+    store.toggleSelected(1);
+
+    await store.setAttachment({
+      entityType: "character",
+      entityId: 4,
+      subjectIds: ["1"],
+      attach: false,
+    });
+
+    expect(setAdapterAttachments).toHaveBeenCalledWith("a".repeat(64), [
+      { entity_type: "set", entity_id: 9 },
+    ]);
+  });
+
+  it("never duplicates an entity already attached", async () => {
+    // Partial resolves UP in the picker, so a row that is already attached can
+    // be re-sent as part of a wider gesture.
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({
+        id: 1,
+        attachments: [{ entity_type: "character", entity_id: 4 }],
+      }),
+    ];
+    store.toggleSelected(1);
+
+    await store.setAttachment({
+      entityType: "character",
+      entityId: 4,
+      subjectIds: ["1"],
+    });
+
+    expect(setAdapterAttachments).toHaveBeenCalledWith("a".repeat(64), [
+      { entity_type: "character", entity_id: 4 },
+    ]);
+  });
+
+  it("writes only rows still selected and still addressable", async () => {
+    // The picker emits the ids it was handed when the menu opened. A row
+    // deselected since then, or one with no hash to address, is dropped here
+    // rather than sent as a request the server has to refuse.
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({ id: 1 }),
+      adapter({ id: 2, sha256: null }),
+      adapter({ id: 3, sha256: "c".repeat(64) }),
+    ];
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+
+    await store.setAttachment({
+      entityType: "set",
+      entityId: 7,
+      subjectIds: ["1", "2", "3"],
+    });
+
+    expect(setAdapterAttachments).toHaveBeenCalledTimes(1);
+    expect(setAdapterAttachments.mock.calls[0][0]).toBe("a".repeat(64));
+  });
+
+  it("reports the ones that landed when some of the N calls fail", async () => {
+    // N calls means a partial failure is an outcome, not an error: reporting
+    // only the failure would send the reader back to re-run the verb on rows
+    // that already have it.
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({ id: 1 }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ];
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+    setAdapterAttachments
+      .mockResolvedValueOnce({ attachments: [] })
+      .mockRejectedValueOnce(new Error("gone"));
+
+    expect(
+      await store.setAttachment({
+        entityType: "character",
+        entityId: 4,
+        entityName: "Alice",
+        subjectIds: ["1", "2"],
+      }),
+    ).toBe(true);
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("success");
+    expect(notice.text).toBe(
+      "Assigned 1 model to Alice. 1 model could not be written.",
+    );
+  });
+});
+
 describe("the receipts", () => {
   it("names the columns it wrote, because there is no undo to inspect", () => {
     expect(editReceipt(12, { base_model: "FLUX.2" })).toBe(
@@ -690,6 +826,19 @@ describe("the receipts", () => {
       "Nothing was forgotten. 1 model still has a copy and was kept.",
     );
     expect(forgetReceipt(0, 0)).toBe("Nothing to forget.");
+  });
+
+  it("names the entity Assign wrote to, not its type", () => {
+    // "Assigned to a character" is not checkable against what the reader meant.
+    expect(assignReceipt(3, 0, "Alice", true)).toBe(
+      "Assigned 3 models to Alice.",
+    );
+    expect(assignReceipt(1, 0, "Winter shoot", false)).toBe(
+      "Removed 1 model from Winter shoot.",
+    );
+    expect(assignReceipt(0, 2, "Alice", true)).toBe(
+      "Nothing was assigned. 2 models could not be written.",
+    );
   });
 
   it("keeps 'already gone' apart from 'still has a copy'", () => {

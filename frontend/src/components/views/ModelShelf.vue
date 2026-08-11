@@ -118,6 +118,24 @@
           <ShelfShowPanel />
         </v-menu>
 
+        <!-- Shown only once an ai-toolkit output root is registered. Hidden
+             rather than disabled, unlike the selection bar's verbs: those are
+             about a selection the reader just made and owe an explanation, and
+             this is about a folder they have not set up, which the folders
+             dialog is the place to say. -->
+        <button
+          v-if="hasSourceFolder"
+          ref="importBtnRef"
+          class="bar-btn bar-btn--boxed"
+          :class="{ 'bar-btn--open': importOpen }"
+          type="button"
+          title="Import from ai-toolkit"
+          aria-label="Import from ai-toolkit"
+          @click="openImport"
+        >
+          <v-icon size="19">mdi-import</v-icon>
+        </button>
+
         <!-- No count badge: `bar-filter-badge` counts a deviation from a default
            the user set, and a folder count never returns to zero (the managed
            store always exists), so a permanent number 8px from the Show
@@ -140,10 +158,20 @@
       @rename="editVerb = 'rename'"
       @set-base-model="editVerb = 'base-model'"
       @set-kind="editVerb = 'kind'"
+      @move="openMove(store.selectedRows)"
       @forget="confirmForget"
     />
 
-    <div class="shelf-body">
+    <!-- `inert` while a move runs, not merely dimmed. A move repoints
+         `model_file` rows under the list, so a verb pressed mid-move acts on a
+         location that is about to be wrong. A veil that only looks disabled
+         leaves every row clickable and every one of them in the tab order,
+         which is worse than no veil at all. The toolbar stays live: Show and
+         Sort still answer correctly while files are in flight. -->
+    <div class="shelf-body" :inert="moves.running || undefined">
+      <!-- The visible half of the same statement. `inert` on the wrapper is
+           what actually stops the interaction; this is what says so. -->
+      <div v-if="moves.running" class="shelf-dim" aria-hidden="true"></div>
       <p v-if="store.loading" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
         {{ store.error }}
@@ -236,12 +264,23 @@
                (§5.1). A heading as well as a button, so a screen reader can
                jump group to group by heading. -->
           <h3 v-if="grouped" class="shelf-group-heading">
+            <!-- A folder header is also the drop target for a drag, which is
+                 why the drag handlers sit on the button and not on a wrapper:
+                 the button already spans the header's full width, and a second
+                 element would put a dead strip between the two. `dragover`
+                 does NOT carry `.prevent` — calling preventDefault() is what
+                 ACCEPTS a drop, so it happens inside the handler and only for
+                 a payload this target takes (#757). -->
             <button
               class="ps-row shelf-group-btn"
+              :class="{ 'shelf-group-btn--drop': dropTargetKey === group.key }"
               type="button"
               :aria-expanded="!store.isCollapsed(group.key)"
               :aria-label="`${group.label}, ${modelCount(group.rows.length)}`"
               @click="store.toggleGroup(group.key)"
+              @dragover="onGroupDragOver(group, $event)"
+              @dragleave="onGroupDragLeave(group)"
+              @drop="onGroupDrop(group, $event)"
             >
               <span
                 class="ps-row-glyph shelf-group-chevron"
@@ -302,9 +341,12 @@
               :aria-selected="store.isSelected(row.id)"
               :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
               :data-row-key="row.rowKey"
+              :draggable="canDrag(row)"
               @click="pickRow(row, $event)"
               @keydown="onRowKeydown(row, $event)"
               @focus="focusedRowKey = row.rowKey"
+              @dragstart="onRowDragStart(row, $event)"
+              @dragend="dropTargetKey = ''"
             >
               <!-- Column 1 stays the reserved glyph slot. The selection shows
                    as the row's own wash and a tick here, not as a checkbox: a
@@ -350,7 +392,26 @@
     </div>
 
     <ShelfEditDialog :verb="editVerb" @close="editVerb = ''" />
+    <ShelfMoveDialog
+      :open="moveOpen"
+      :items="moveItems"
+      :total-bytes="moveBytes"
+      :destination-folder-id="movePreselected"
+      @close="closeMove"
+    />
+    <ModelImportDialog :open="importOpen" @close="closeImport" />
     <ModelFoldersDialog :open="foldersOpen" @close="closeFolders" />
+
+    <ProgressOverlay
+      :visible="moves.running"
+      :status="moves.running ? 'running' : 'idle'"
+      :message="moveProgressMessage"
+      :percent="moves.percent"
+      :count="moves.done"
+      :total="moves.total"
+      :abort-label="moves.cancelRequested ? null : 'Stop'"
+      @abort="moves.cancel()"
+    />
   </div>
 </template>
 
@@ -360,22 +421,29 @@ import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
+import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
+import ModelImportDialog from "../panels/ModelImportDialog.vue";
+import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
+import { useModelMovesStore } from "../../stores/useModelMovesStore";
+import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
   bandGroups,
   bandUsage,
   withEmptyFolders,
   formatModelSize,
   GROUP_BY_LABELS,
+  movableCopies,
   SORT_LABELS,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
 
 const store = useModelShelfStore();
 const foldersStore = useModelFoldersStore();
+const moves = useModelMovesStore();
 const rootEl = ref(null);
 const showMenuOpen = ref(false);
 const sortMenuOpen = ref(false);
@@ -410,6 +478,172 @@ async function confirmForget() {
     danger: true,
   });
   if (ok) await store.forgetSelected();
+}
+
+// ── Move (shelf plan F4) ─────────────────────────────────────────────────────
+//
+// Two ways in, one dialog: the selection bar's Move button and a drag onto a
+// folder header. Both resolve to the same list of COPIES, because
+// `model_file`'s key is `(folder_id, relpath)` and a model catalogued in three
+// folders offers three of them.
+//
+// A drop does NOT move on release. It opens the dialog with the destination
+// already chosen, so a 438 GB copy across a USB drive is never one slip of the
+// pointer away from starting — and there is no undo behind a move to make that
+// recoverable.
+
+const moveOpen = ref(false);
+const moveItems = ref([]);
+const moveBytes = ref(0);
+/** The group header the pointer is currently over, for the drop affordance. */
+const dropTargetKey = ref("");
+const moveInvoker = shallowRef(null);
+
+/** `model_folder.id` to the folder row, for `movableCopies`' folder rules. */
+const foldersById = computed(
+  () =>
+    new Map(foldersStore.folders.map((folder) => [Number(folder.id), folder])),
+);
+
+const moveProgressMessage = computed(() =>
+  moves.cancelRequested
+    ? "Stopping after the file in flight…"
+    : "Moving model files…",
+);
+
+/**
+ * Open the move dialog for a set of rows.
+ *
+ * @param {Array<Object>} rows - shelf rows.
+ * @param {number|null} [destinationFolderId] - preselected, when a drop chose
+ *   it. The dialog seeds the managed store otherwise.
+ */
+function openMove(rows, destinationFolderId = null) {
+  const { items, totalBytes } = movableCopies(rows, foldersById.value);
+  if (!items.length) return;
+  moveInvoker.value =
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+  moveItems.value = destinationFolderId
+    ? // A file already in the folder it was dropped on is dropped from the
+      // batch here rather than sent for the server to skip: the dialog states
+      // the move in numbers, and counting files that will not move would make
+      // that statement wrong.
+      items.filter((item) => item.folder_id !== destinationFolderId)
+    : items;
+  moveBytes.value = totalBytes;
+  movePreselected.value = destinationFolderId;
+  moveOpen.value = moveItems.value.length > 0;
+}
+
+/** The destination a drop chose, or null when the bar's button opened this. */
+const movePreselected = ref(null);
+
+async function closeMove() {
+  const returnTo = moveInvoker.value;
+  moveOpen.value = false;
+  moveInvoker.value = null;
+  await nextTick();
+  (returnTo?.isConnected ? returnTo : rootEl.value)?.focus();
+}
+
+/**
+ * Whether a row may start a drag.
+ *
+ * Only rows with a copy actually on this machine: dragging one whose file is
+ * `missing` or on an unplugged drive would offer a gesture that can only end in
+ * a refusal, and the pointer would say it works the whole way.
+ */
+function canDrag(row) {
+  return row.locState === "present" && !moves.busy;
+}
+
+/**
+ * Start a drag of the selection, selecting the dragged row if it is not in it.
+ *
+ * The same rule a file manager uses, and the same one the grid uses: dragging a
+ * row that is not selected drags THAT row and makes it the selection, while
+ * dragging one that is drags the whole selection untouched.
+ */
+function onRowDragStart(row, event) {
+  if (!canDrag(row)) {
+    event.preventDefault();
+    return;
+  }
+  if (!store.isSelected(row.id)) {
+    store.selectFromClick(row.id, {}, orderedRowIds.value);
+  }
+  const { items } = movableCopies(store.selectedRows, foldersById.value);
+  if (!items.length) {
+    event.preventDefault();
+    return;
+  }
+  event.dataTransfer.effectAllowed = "move";
+  setInternalDragPayload(event.dataTransfer, { type: "model-files", items });
+}
+
+/** True when this group is a folder a move may be sent to. */
+function isDropTarget(group) {
+  if (!Number.isInteger(group?.folderId)) return false;
+  const folder = foldersById.value.get(Number(group.folderId));
+  // Same two exclusions the dialog's destination list applies, checked here as
+  // well so the pointer never suggests a drop the dialog would then refuse.
+  return Boolean(
+    folder && folder.kind !== "source" && folder.movable !== "external",
+  );
+}
+
+/**
+ * Accept the drag, or leave it refused.
+ *
+ * `preventDefault()` is what ACCEPTS a drop, so it is called inside the handler
+ * and only for a payload this target takes — never as a `.prevent` modifier on
+ * the template, which would accept everything including a picture drag from the
+ * grid (#757, one payload kind later).
+ */
+function onGroupDragOver(group, event) {
+  if (!isModelFileDrag(event.dataTransfer) || !isDropTarget(group)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+  dropTargetKey.value = group.key;
+}
+
+function onGroupDragLeave(group) {
+  if (dropTargetKey.value === group.key) dropTargetKey.value = "";
+}
+
+function onGroupDrop(group, event) {
+  dropTargetKey.value = "";
+  if (!isModelFileDrag(event.dataTransfer) || !isDropTarget(group)) return;
+  event.preventDefault();
+  openMove(store.selectedRows, Number(group.folderId));
+}
+
+// ── Import from ai-toolkit (shelf plan F6) ──────────────────────────────────
+
+const importOpen = ref(false);
+const importBtnRef = ref(null);
+
+/** Whether any ai-toolkit output root is registered at all. */
+const hasSourceFolder = computed(() =>
+  foldersStore.folders.some((folder) => folder.kind === "source"),
+);
+
+function openImport() {
+  importOpen.value = true;
+}
+
+async function closeImport() {
+  importOpen.value = false;
+  await nextTick();
+  // The button can unmount under us: the import may have been the last run in
+  // the only source folder, and `delete_after_import` then empties it. Falling
+  // back to the shelf root beats dropping focus to <body>.
+  (importBtnRef.value?.isConnected
+    ? importBtnRef.value
+    : rootEl.value
+  )?.focus();
 }
 
 // Two controls open the same dialog, so which one gets focus back is a fact
@@ -735,6 +969,12 @@ onMounted(() => {
   // Unawaited already means it does not hold up the shelf.
   foldersStore.refreshDevices();
   foldersStore.refresh();
+  // A move is machine-wide and outlives this component, so one may already be
+  // running: started before a reload, or from another tab. Adopting it is what
+  // puts the progress back rather than leaving the list live over files that
+  // are moving under it. Only a `running` job is adopted — a finished one
+  // belongs to a receipt that has already been shown.
+  moves.adopt();
 });
 
 // A credential change (logout, login, share token, restore) empties the store,
@@ -797,6 +1037,7 @@ watch(
 }
 
 .shelf-body {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -964,6 +1205,28 @@ watch(
 
 .shelf-group-btn:hover {
   background: var(--hover-wash);
+}
+
+/* The drop affordance, on the destination header only. An inset ring rather
+   than a border: the header is sticky and on a grid, so a border would shift
+   its columns by a pixel at the moment the reader is aiming at it. */
+.shelf-group-btn--drop {
+  background: rgba(var(--v-theme-primary), 0.12);
+  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-primary), 0.65);
+}
+
+/* Paired with `inert` on `.shelf-body`, which is what actually stops the
+   interaction. Inside the body rather than over the whole view, so the toolbar
+   stays undimmed as well as live: Show and Sort still answer correctly while
+   files are in flight, and a veil over them would say otherwise. */
+.shelf-dim {
+  position: absolute;
+  inset: 0;
+  background: rgba(var(--v-theme-background), 0.55);
+  /* Above the sticky group headers, which is the whole point: a header left
+     bright over a dimmed list reads as the one thing still usable. */
+  z-index: calc(var(--z-sticky) + 1);
+  pointer-events: none;
 }
 
 /* One icon rotated, not two swapped: a swap cannot animate. --dur-2 is the

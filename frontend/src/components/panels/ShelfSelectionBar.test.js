@@ -5,14 +5,26 @@
 // matters: it means "we could not look" (an unplugged drive), so treating it as
 // a deletion would wipe the curation for a whole disk on one press.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
 import ShelfSelectionBar from "./ShelfSelectionBar.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
-const globalOpts = { global: { stubs: { "v-icon": true } } };
+// `AddToEntityControl` is stubbed rather than mounted: it reads the shared
+// entity lists on mount, and what this file has to assert about it is the props
+// the bar hands it, which a stub records exactly.
+const globalOpts = {
+  global: { stubs: { "v-icon": true, AddToEntityControl: true } },
+};
+
+/** The Assign picker for one entity type, as the bar configured it. */
+function picker(wrapper, type) {
+  return wrapper
+    .findAllComponents({ name: "AddToEntityControl" })
+    .find((c) => c.props("type") === type);
+}
 
 function row(id, state, overrides = {}) {
   return {
@@ -105,6 +117,88 @@ describe("the selection bar", () => {
     await verb(wrapper, "Forget").trigger("click");
     expect(wrapper.emitted("set-base-model")).toHaveLength(1);
     expect(wrapper.emitted("forget")).toHaveLength(1);
+  });
+
+  it("hands Assign the rows it can address, not the whole selection", async () => {
+    // A checkpoint 400s on the attachment route and an unhashed row has no hash
+    // to be addressed by. Handing them in anyway would compute the tri-state
+    // across rows that can never be attached, so a person every adapter is
+    // already assigned to would still read as partial.
+    selectRows([
+      row(1, "present"),
+      row(2, "present", { file_kind: "checkpoint" }),
+      row(3, "present", { sha256: null }),
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(picker(wrapper, "character").props("subjectIds")).toEqual([1]);
+    expect(picker(wrapper, "character").attributes("title")).toContain(
+      "the 1 of 3",
+    );
+  });
+
+  it("refuses Assign when nothing in the selection can take one", async () => {
+    selectRows([row(1, "present", { file_kind: "checkpoint" })]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(picker(wrapper, "set").props("disabled")).toBe(true);
+  });
+
+  it("builds the membership map off the rows, so nothing is fetched", async () => {
+    // `attachments` come back on the list. Supplying the map is also what
+    // switches the picker out of its picture readers, which cannot answer
+    // "which of these ADAPTERS is in this set" at all.
+    selectRows([
+      row(1, "present", {
+        attachments: [
+          { entity_type: "character", entity_id: 4 },
+          { entity_type: "set", entity_id: 9 },
+        ],
+      }),
+      row(2, "present", {
+        attachments: [{ entity_type: "character", entity_id: 4 }],
+      }),
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    const byCharacter = picker(wrapper, "character").props("membership");
+    expect(byCharacter["4"]).toEqual(new Set(["1", "2"]));
+    expect(picker(wrapper, "set").props("membership")["9"]).toEqual(
+      new Set(["1"]),
+    );
+    // Empty and not null: an object with no keys still means "the host owns
+    // this", and null would send the picker back to reading picture membership.
+    expect(picker(wrapper, "set").props("membership")["4"]).toBeUndefined();
+  });
+
+  it("passes an empty map rather than null when nothing is attached", async () => {
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(picker(wrapper, "character").props("membership")).toEqual({});
+  });
+
+  it("turns the picker's attach and detach into one store call each", async () => {
+    const store = selectRows([row(1, "present")]);
+    const setAttachment = vi.fn();
+    store.setAttachment = setAttachment;
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+
+    picker(wrapper, "character").vm.$emit("attach", {
+      entityType: "character",
+      entityId: 4,
+      entityName: "Alice",
+      subjectIds: ["1"],
+    });
+    picker(wrapper, "set").vm.$emit("detach", {
+      entityType: "set",
+      entityId: 9,
+      subjectIds: ["1"],
+    });
+    await wrapper.vm.$nextTick();
+
+    expect(setAttachment.mock.calls[0][0].attach).toBe(true);
+    expect(setAttachment.mock.calls[1][0]).toMatchObject({
+      entityType: "set",
+      entityId: 9,
+      attach: false,
+    });
   });
 
   it("clears the selection without touching the rows", async () => {

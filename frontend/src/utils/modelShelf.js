@@ -373,3 +373,85 @@ export function locationState(locations) {
   if (list.some((loc) => loc?.state === "unreachable")) return "unreachable";
   return "missing";
 }
+
+/**
+ * Say what an ai-toolkit import produced, naming the failures rather than
+ * swallowing them.
+ *
+ * Per FILE, because the server decides per file: a run whose five steps landed
+ * and whose sixth did not is a normal outcome of an interrupted copy, and a
+ * receipt reporting only the five would read as a clean import.
+ *
+ * The source deletion is named only when something actually landed. The server
+ * unlinks last and only after each row is committed, so "nothing imported" and
+ * "the run is gone" cannot both be true — saying it anyway would tell the
+ * reader their run had been deleted for nothing.
+ *
+ * @param {Object} report - the body of `POST /model-imports`.
+ * @returns {string}
+ */
+export function importReceipt(report) {
+  const files = report?.files || [];
+  const landed = files.filter((f) => f.status === "imported").length;
+  const failed = files.filter((f) => f.status === "failed").length;
+  const count = (n) =>
+    `${n.toLocaleString()} ${n === 1 ? "checkpoint" : "checkpoints"}`;
+  const notes = [];
+  if (failed) {
+    // The verb agrees with the count. `moveReceipt` had this same bug and it
+    // was fixed there; writing it again a few hundred lines later is why the
+    // singular case is now asserted in both receipts' tests.
+    notes.push(
+      `${count(failed)} could not be copied and ${failed === 1 ? "was" : "were"} left in the run.`,
+    );
+  }
+  if (report?.deleted_source && landed) {
+    notes.push("The run's own files have been removed.");
+  }
+  const head = landed
+    ? `Imported ${count(landed)} from ${report.run_name}.`
+    : `Nothing was imported from ${report?.run_name || "that run"}.`;
+  return [head, ...notes].join(" ");
+}
+
+/**
+ * The copies a move may actually pick up, and what they weigh.
+ *
+ * Three exclusions, each for a different reason:
+ *
+ * - **Not `present`.** There is no file to move. `missing` says the folder was
+ *   readable and the file was not in it; `unreachable` says we could not look.
+ *   Sending either would be asking the server to copy bytes nobody has seen.
+ * - **PixlStash's own folder.** Those files are ours, declared rather than
+ *   scanned, and every engine loader looks for them at a fixed path — moving
+ *   one out breaks the tagger and re-downloads it on the next run.
+ * - **An `external` folder.** The HuggingFace cache and insightface's store are
+ *   shared with other software. Taking a file out of one is not ours to do.
+ *
+ * Per COPY and not per model: `model_file`'s primary key is
+ * `(folder_id, relpath)`, so a model registered in three folders offers three
+ * copies and the caller moves the ones it named. That is also why the size is
+ * summed off the row rather than off the copy — the hub records one
+ * `file_size` per model, and every copy of it is that size.
+ *
+ * @param {Array<Object>} rows - shelf rows, each with `locations`.
+ * @param {Map<number, Object>|null} foldersById - `model_folder.id` to the
+ *   folder row, for the two folder-level exclusions. Omitted, only the
+ *   `present` rule applies.
+ * @returns {{items: Array<{folder_id: number, relpath: string}>, totalBytes: number}}
+ */
+export function movableCopies(rows, foldersById = null) {
+  const items = [];
+  let totalBytes = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    for (const loc of row?.locations || []) {
+      if (loc?.state !== "present") continue;
+      const folder = foldersById?.get(Number(loc.folder_id));
+      if (folder?.owner === "pixlstash") continue;
+      if (folder?.movable === "external") continue;
+      items.push({ folder_id: loc.folder_id, relpath: loc.relpath });
+      totalBytes += Number(row.file_size) || 0;
+    }
+  }
+  return { items, totalBytes };
+}

@@ -11,8 +11,10 @@ import {
   cleanAssetName,
   deriveModelName,
   formatModelSize,
+  importReceipt,
   locationState,
   modelName,
+  movableCopies,
 } from "./modelShelf";
 
 describe("cleanAssetName", () => {
@@ -357,5 +359,138 @@ describe("baseModelKey", () => {
       "",
     );
     expect(baseModelKey(undefined)).toBe("");
+  });
+});
+
+describe("importReceipt", () => {
+  it("reports the failures, which the server decides per file", () => {
+    expect(
+      importReceipt({
+        run_name: "Clementine",
+        files: [
+          { status: "imported" },
+          { status: "imported" },
+          { status: "failed" },
+        ],
+      }),
+    ).toBe(
+      "Imported 2 checkpoints from Clementine. 1 checkpoint could not be copied and was left in the run.",
+    );
+  });
+
+  it("never says the run was deleted when nothing landed", () => {
+    // The server unlinks last and only after each row is committed, so the two
+    // cannot both be true. Saying it anyway would tell the reader their run was
+    // destroyed for nothing.
+    expect(
+      importReceipt({
+        run_name: "Clementine",
+        deleted_source: true,
+        files: [{ status: "failed" }],
+      }),
+    ).toBe(
+      "Nothing was imported from Clementine. 1 checkpoint could not be copied and was left in the run.",
+    );
+  });
+
+  it("agrees its verb with the count, in both directions", () => {
+    // Written twice and got wrong twice: `moveReceipt` had this exact bug, it
+    // was fixed there, and then this function repeated it a few hundred lines
+    // later. Both numbers are asserted so the next copy cannot.
+    expect(
+      importReceipt({
+        run_name: "R",
+        files: [{ status: "failed" }],
+      }),
+    ).toContain("1 checkpoint could not be copied and was left in the run.");
+    expect(
+      importReceipt({
+        run_name: "R",
+        files: [{ status: "failed" }, { status: "failed" }],
+      }),
+    ).toContain("2 checkpoints could not be copied and were left in the run.");
+  });
+
+  it("says the run is gone when it is", () => {
+    expect(
+      importReceipt({
+        run_name: "Clementine",
+        deleted_source: true,
+        files: [{ status: "imported" }],
+      }),
+    ).toBe(
+      "Imported 1 checkpoint from Clementine. The run's own files have been removed.",
+    );
+  });
+});
+
+describe("movableCopies", () => {
+  const folders = new Map([
+    [1, { id: 1, kind: "user", movable: "per_item" }],
+    [2, { id: 2, kind: "foreign", owner: "pixlstash", movable: "root_only" }],
+    [3, { id: 3, kind: "foreign", movable: "external" }],
+  ]);
+
+  function locRow(locations, fileSize = 100) {
+    return { file_size: fileSize, locations };
+  }
+
+  it("takes only the copies that are actually on this machine", () => {
+    // `missing` says the folder was readable and the file was not in it;
+    // `unreachable` says we could not look. Sending either would ask the server
+    // to copy bytes nobody has seen.
+    const { items } = movableCopies([
+      locRow([
+        { folder_id: 1, relpath: "a.st", state: "present" },
+        { folder_id: 1, relpath: "b.st", state: "missing" },
+        { folder_id: 1, relpath: "c.st", state: "unreachable" },
+      ]),
+    ]);
+    expect(items).toEqual([{ folder_id: 1, relpath: "a.st" }]);
+  });
+
+  it("is per COPY, so one model in two folders offers two", () => {
+    // `model_file`'s key is `(folder_id, relpath)`, and the size is summed off
+    // the model because the hub records one `file_size` for every copy of it.
+    const { items, totalBytes } = movableCopies(
+      [
+        locRow(
+          [
+            { folder_id: 1, relpath: "a.st", state: "present" },
+            { folder_id: 1, relpath: "dup/a.st", state: "present" },
+          ],
+          500,
+        ),
+      ],
+      folders,
+    );
+    expect(items).toHaveLength(2);
+    expect(totalBytes).toBe(1000);
+  });
+
+  it("leaves PixlStash's own engines where they are", () => {
+    // Declared rather than scanned, and every engine loader looks for them at a
+    // fixed path: moving one out breaks the tagger and re-downloads it.
+    const { items } = movableCopies(
+      [locRow([{ folder_id: 2, relpath: "tagger.onnx", state: "present" }])],
+      folders,
+    );
+    expect(items).toEqual([]);
+  });
+
+  it("leaves a folder shared with other software alone", () => {
+    // The HuggingFace cache and insightface's store are not ours to take from.
+    const { items } = movableCopies(
+      [locRow([{ folder_id: 3, relpath: "m.st", state: "present" }])],
+      folders,
+    );
+    expect(items).toEqual([]);
+  });
+
+  it("applies only the present rule when no folder map is given", () => {
+    const { items } = movableCopies([
+      locRow([{ folder_id: 2, relpath: "tagger.onnx", state: "present" }]),
+    ]);
+    expect(items).toHaveLength(1);
   });
 });

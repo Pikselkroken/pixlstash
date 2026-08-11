@@ -49,6 +49,12 @@ const globalOpts = {
       // this suite's business.
       ModelFoldersDialog: true,
       ShelfEditDialog: true,
+      ShelfMoveDialog: true,
+      ModelImportDialog: true,
+      ProgressOverlay: true,
+      // The picker inside the selection bar, which the bar's own suite covers.
+      // Left real it would read the shared entity lists on every mount here.
+      AddToEntityControl: true,
     },
   },
 };
@@ -937,5 +943,148 @@ describe("a registered folder holding no models", () => {
     const note = wrapper.find(".shelf-empty-folder");
     expect(note.attributes("role")).toBeUndefined();
     expect(note.attributes("tabindex")).toBeUndefined();
+  });
+});
+
+describe("dragging models onto a folder", () => {
+  const FOLDERS = [
+    { id: 1, path: "/models/loras", kind: "user", movable: "per_item" },
+    { id: 2, path: "/models/store", kind: "managed", movable: "root_only" },
+    { id: 3, path: "/runs", kind: "source", movable: "per_item" },
+  ];
+
+  /** A DataTransfer stand-in: jsdom's drag events carry none. */
+  function transfer(types = []) {
+    return {
+      types,
+      setData: vi.fn(function (type) {
+        this.types = [...this.types, type];
+      }),
+      effectAllowed: "",
+      dropEffect: "",
+    };
+  }
+
+  async function shelfWithFolders(rows) {
+    listModelFolders.mockResolvedValue(FOLDERS);
+    const wrapper = await mountShelf(rows);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  }
+
+  function present(folderId, path) {
+    return [
+      {
+        state: "present",
+        folder_id: folderId,
+        folder_path: path,
+        relpath: "a",
+      },
+    ];
+  }
+
+  function headerFor(wrapper, label) {
+    return wrapper
+      .findAll(".shelf-group-btn")
+      .find((b) => b.text().includes(label));
+  }
+
+  it("marks its payload so no other drop target can claim it", async () => {
+    // A model dropped on a set or character row has no meaning at all, and
+    // `types` is the only thing readable during dragover — so the marker key is
+    // what refuses it, before the pointer suggests the drop would work (#757).
+    const wrapper = await shelfWithFolders([
+      adapter({ locations: present(1, "/models/loras") }),
+    ]);
+    const dt = transfer();
+    await wrapper.find(".shelf-row").trigger("dragstart", { dataTransfer: dt });
+    expect(dt.types).toContain("application/x-pixlstash-model-files");
+    expect(dt.types).not.toContain("application/x-pixlstash-pictures");
+  });
+
+  it("refuses to drag a row whose file is not on this machine", async () => {
+    // The gesture could only ever end in a refusal, and the pointer would say
+    // it works the whole way there.
+    const wrapper = await shelfWithFolders([
+      adapter({
+        locations: [
+          {
+            state: "missing",
+            folder_id: 1,
+            folder_path: "/models/loras",
+            relpath: "a",
+          },
+        ],
+      }),
+    ]);
+    expect(wrapper.find(".shelf-row").attributes("draggable")).toBe("false");
+  });
+
+  it("accepts the drag on a folder it may write to, and only there", async () => {
+    // preventDefault() is what ACCEPTS a drop, so it is called inside the
+    // handler for the payloads this target takes — never as a `.prevent`
+    // modifier, which would accept a picture drag from the grid too.
+    const wrapper = await shelfWithFolders([
+      adapter({ locations: present(1, "/models/loras") }),
+    ]);
+    const dt = transfer(["application/x-pixlstash-model-files"]);
+
+    const accepted = { preventDefault: vi.fn(), dataTransfer: dt };
+    headerFor(wrapper, "/models/store").element.dispatchEvent(
+      Object.assign(new Event("dragover", { cancelable: true }), accepted),
+    );
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-group-btn--drop").exists()).toBe(true);
+  });
+
+  it("refuses a source folder, which is taken from and never written into", async () => {
+    // `ModelMover.plan` refuses it too. Checking here as well is what stops the
+    // pointer promising a drop the dialog would then have to take back.
+    const wrapper = await shelfWithFolders([
+      adapter({ locations: present(1, "/models/loras") }),
+    ]);
+    const event = Object.assign(new Event("dragover", { cancelable: true }), {
+      dataTransfer: transfer(["application/x-pixlstash-model-files"]),
+    });
+    headerFor(wrapper, "/runs").element.dispatchEvent(event);
+    await wrapper.vm.$nextTick();
+    expect(event.defaultPrevented).toBe(false);
+    expect(wrapper.find(".shelf-group-btn--drop").exists()).toBe(false);
+  });
+
+  it("refuses a payload it does not recognise", async () => {
+    const wrapper = await shelfWithFolders([
+      adapter({ locations: present(1, "/models/loras") }),
+    ]);
+    const event = Object.assign(new Event("dragover", { cancelable: true }), {
+      dataTransfer: transfer(["application/x-pixlstash-pictures"]),
+    });
+    headerFor(wrapper, "/models/store").element.dispatchEvent(event);
+    await wrapper.vm.$nextTick();
+    // Not prevented, so the browser's own "no drop here" cursor stands.
+    expect(event.defaultPrevented).toBe(false);
+    expect(wrapper.find(".shelf-group-btn--drop").exists()).toBe(false);
+  });
+
+  it("opens the dialog on drop rather than moving on release", async () => {
+    // There is no undo behind a move, so a 438 GB copy across a USB drive must
+    // never be one slip of the pointer away from starting.
+    const wrapper = await shelfWithFolders([
+      adapter({ locations: present(1, "/models/loras") }),
+    ]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    const dt = transfer(["application/x-pixlstash-model-files"]);
+    await headerFor(wrapper, "/models/store").trigger("drop", {
+      dataTransfer: dt,
+    });
+
+    const dialog = wrapper.findComponent({ name: "ShelfMoveDialog" });
+    expect(dialog.props("open")).toBe(true);
+    expect(dialog.props("destinationFolderId")).toBe(2);
+    expect(dialog.props("items")).toEqual([{ folder_id: 1, relpath: "a" }]);
   });
 });

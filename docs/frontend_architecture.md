@@ -1588,7 +1588,53 @@ page.
 
 **`ShelfSelectionBar.vue` emits; `ModelShelf.vue` acts.** Every button is an
 emit, so both confirmations live in one place instead of half in the bar and
-half in the view, and the bar mounts in a test with nothing but a store.
+half in the view, and the bar mounts in a test with nothing but a store. Assign
+is the one exception, and only because it is not a button: it is the shared
+`AddToEntityControl`, which owns its own menu and emits the entity it was
+pointed at, so relaying that up and calling back down would buy nothing.
+
+**Assign reuses the grid's picker rather than a shelf-local one.** Two
+instances, `type="character"` and `type="set"`, so the search, the tri-state and
+the keyboard model are learned once. Three things make a picture picker work for
+adapters:
+
+- **`subjectIds` is a generic id list**, not `pictureIds`. The shelf passes hub
+  `model.id` values.
+- **`membership` is supplied by the host**, which is the single switch into
+  host-driven mode. The picker's own readers ask which *pictures* are in each
+  entity, a question with no answer here; `attachments` already come back on the
+  list payload, so the bar builds `entity id -> Set of model ids` off the rows
+  it drew and **nothing is fetched**. An empty `{}` still switches the mode on —
+  only `null` sends the picker back to reading picture membership.
+- **The writes are the store's.** `PUT /adapters/{sha256}/attachments`
+  **replaces** one adapter's whole set, so Assign is N calls with the union
+  computed in `setAttachment`. Writing just the new entity would silently detach
+  every other character already using the model, with no undo behind it and no
+  error to notice. The rows are re-read from `selectedRows` rather than trusted
+  from the payload, because the picker emits the ids it was handed when the menu
+  opened and the selection may have moved since.
+
+Partial resolves **up**, the picker's existing rule: a half-attached row adds
+the rest and never detaches, so the only way to detach is to click a row that is
+fully attached.
+
+**Assign is gated by what can be addressed**, the same shape as Forget and for
+the same reason, but on two different refusals. A **checkpoint** is refused on
+meaning — "this character uses this LoRA" is not something you say about a base
+model, and the route 400s. A row with **no `sha256`** is refused on addressing:
+the attachment table is keyed by the interop hash, and a 24 GB file the hash
+worker has not reached has none, so it becomes assignable on its own once the
+hash lands. Only the assignable subset is handed to the picker; passing the
+whole selection would compute the tri-state across rows that can never be
+attached, so a person every adapter was already assigned to would still read as
+partial. The tooltip says how many of how many.
+
+**No confirmation on Assign**, though the shelf has no undo. An assignment is
+fully reconstructable from what is on screen, so a prompt would cost a click on
+every use and prevent nothing. `assignReceipt` is the record, and because Assign
+is N calls a partial failure is a real outcome rather than an error: it reports
+what landed first, or the reader re-runs the verb on the rows that already have
+it.
 
 **Three verbs, one dialog.** `ShelfEditDialog.vue` carries Rename, Set base
 model and Set kind because all three write one curated column and differ only in
@@ -1615,6 +1661,100 @@ be one press from losing its curation. The bar disables with the reason in the
 tooltip rather than hiding the verb, and a mixed selection stays enabled with
 the count it will actually take, because the server forgets what it can and
 reports the rest.
+
+#### Moving files (F4)
+
+**`useModelMovesStore` owns the job, not the dialog.** The same reason folder
+scans are a store: a move outlives whatever started it. The owner drags 400
+files onto another drive and navigates away, and the server keeps copying
+either way — so the progress has to survive the component, and `adopt()` on
+mount picks up a job already running (from another tab, or from before a
+reload). Only a `running` job is adopted; a `finished` one belongs to a receipt
+that has already been shown, and re-reporting it on every mount is how a
+completed move announces itself forever.
+
+**One job, machine-wide**, which is the server's rule and not a convenience:
+two concurrent moves would race for the same free space that both of them
+checked before either started. `busy` is what every entry point tests first.
+
+**Progress is counted in ITEMS, never bytes.** `bytes_to_copy` is *zero* for a
+same-drive move, because those are renames — a byte-based bar would sit at 0%
+through the entire fastest case and then jump.
+
+**Two ways in, one dialog, and a drop does not move on release.** The selection
+bar's Move button and a drag onto a folder header both resolve to the same list
+of copies and both open `ShelfMoveDialog`, which states the move in files, bytes
+and rename-versus-copy before anything starts. There is no undo behind a move,
+so a 438 GB copy across a USB drive must never be one slip of the pointer away.
+A drop seeds the destination it was aimed at; the select still lets it be
+corrected.
+
+**`movableCopies` is the single gate**, per COPY rather than per model, because
+`model_file`'s key is `(folder_id, relpath)` and a model catalogued in three
+folders offers three of them. It drops three things: a copy that is not
+`present` (there are no bytes to move — `missing` is a fact, `unreachable` is
+the absence of one, and neither has a file to read), a copy in PixlStash's own
+folder (declared rather than scanned, and every engine loader looks for them at
+a fixed path), and a copy in an `external` folder (the HuggingFace cache and
+insightface's store are shared with other software).
+
+**The drag carries its own MIME marker.** `MODEL_FILE_DRAG_MIME` joins the
+picture and face markers in `utils/media.js`, and for the same reason: only
+`types` is readable during `dragover`, so the key is the only thing that can
+discriminate before the drop has happened. A model dropped on a sidebar set row
+has no meaning, and this is what refuses it. `dragover` carries **no**
+`.prevent` modifier — calling `preventDefault()` is what *accepts* a drop, so it
+happens inside the handler and only for a payload the target takes (#757).
+
+**The list is `inert` while a move runs, not merely dimmed.** A move repoints
+`model_file` rows underneath it, so a verb pressed mid-move acts on a location
+that is about to be wrong; a veil that only *looks* disabled leaves every row
+clickable and in the tab order, which is worse than none. The toolbar stays
+live, because Show and Sort still answer correctly while files are in flight.
+
+#### Importing from ai-toolkit (F6)
+
+**The card grid is built on a promise the listing route makes**, and the promise
+is what must not be eroded: `GET /model-folders/{id}/runs` reads filenames and
+one `config.yaml` per run, and hashes, copies, moves and writes nothing. So the
+whole grid — names, steps, sizes, previews, what the config says the run trained
+against — is drawn for an entire output root before the user has committed to
+anything. Do not add a call to `ModelImportDialog` that breaks that.
+
+**One run at a time**, `role="radiogroup"` rather than a multi-select. The
+destination, the step selection and the receipt are all per-run, so ticking two
+would promise a batch `POST /model-imports` does not implement.
+
+**Picking a run ticks every checkpoint in it.** Importing part of a run is the
+exception, not the default: the steps land as one `adapter_stack` and the point
+of the stack is that the run stays together.
+
+**An unconfirmed cover is stated, never resolved silently.** ai-toolkit writes a
+bare final file when a run finishes, so a run without one is still training or
+was interrupted; the highest step is then the best available answer rather than
+a certain one, and the card says so. A run whose `config.yaml` could not be read
+stays importable and says that too — steps and samples come from filenames, so
+the config is decoration.
+
+**Previews are `<img src>`, not fetches**, so the browser's own caching,
+decoding and `loading="lazy"` do the work: a run carries up to 130 samples and
+only the visible cards should hit the network. The URL comes from
+`runSampleUrl`, which encodes both segments because they are **names**, not
+paths — the server joins each to a registered path and refuses what resolves
+outside.
+
+**`delete_after_import` is disclosed before the press, not in the receipt.** It
+is the one part of an import that cannot be undone, and it is a property of the
+*source folder* rather than a choice made in the dialog. `importReceipt` names
+the deletion only when something actually landed: the server unlinks last and
+only after each row is committed, so "nothing imported" and "the run is gone"
+cannot both be true, and saying it anyway would tell the reader their run was
+destroyed for nothing.
+
+**The toolbar button is hidden, not disabled, when no `source` folder is
+registered** — unlike the selection bar's verbs, which are about a selection the
+reader just made and therefore owe an explanation in a tooltip. This is about a
+folder they have not set up, which the folders dialog is the place to say.
 
 **Receipts are notices, not `useActionReceipt`.** That composable is built on
 `useOperationStore`, which is the vault-only operation log with undo keycaps —
