@@ -20,7 +20,12 @@ from pixlstash.services.builtin_models import (
     declared_paths,
     unclaimed_files,
 )
+from pixlstash.services.builtin_caches import (
+    declare_huggingface_cache,
+    declare_insightface_packs,
+)
 from pixlstash.utils.adapter_header import FILE_ENGINE
+from pixlstash.utils.insightface_model_utils import KNOWN_MODEL_PACKS
 
 
 @pytest.fixture
@@ -207,3 +212,143 @@ def test_the_checkpoint_hash_worker_never_picks_up_an_engine(server_hub, tmp_pat
         "declared engines were counted as checkpoints awaiting a hash"
     )
     assert finder.find_task() is None, "an engine was handed to the hash worker"
+
+
+# --- The other two roots: InsightFace packs and the HuggingFace cache ---------
+#
+# Same writer, same folder protection, different way of learning what is there.
+# They live in this file rather than one of their own because `server_hub` is
+# exactly the environment they need, and a warm module beats a new one.
+
+
+def test_insightface_declares_what_is_on_disk_and_what_we_know_about(
+    server_hub, tmp_path
+):
+    """The union, not either half. Listing only the known packs would hide the
+    `antelopev2` a real machine has; listing only what is on disk would drop a
+    pack we provision that has not downloaded yet."""
+    (tmp_path / "antelopev2").mkdir()
+    (tmp_path / "antelopev2" / "det.onnx").write_bytes(b"x" * 64)
+
+    folder_id = declare_insightface_packs(server_hub, str(tmp_path))
+    assert folder_id is not None
+
+    rows = {
+        row["display_name"]: row
+        for row in server_hub.fetchall(
+            "SELECT m.display_name, m.kind, m.file_size, mf.state "
+            "FROM model m JOIN model_file mf ON mf.model_id = m.id "
+            "WHERE mf.model_folder_id = ?",
+            (folder_id,),
+        )
+    }
+    # On disk but not in KNOWN_MODEL_PACKS: still declared, still visible.
+    assert rows["InsightFace antelopev2"]["state"] == "present"
+    assert rows["InsightFace antelopev2"]["file_size"] == 64
+    assert rows["InsightFace antelopev2"]["kind"] == "face"
+    # Known but not downloaded: `missing` is a state, not a warning.
+    for pack in KNOWN_MODEL_PACKS:
+        assert rows[f"InsightFace {pack}"]["state"] == "missing"
+
+
+def test_the_zip_insightface_downloaded_a_pack_from_is_not_a_pack(server_hub, tmp_path):
+    """`buffalo_l.zip` sits beside `buffalo_l/` and is the tool's leftover. It
+    gets no row, the same judgement `TOOLING_DIRS` makes about `.cache`."""
+    (tmp_path / "buffalo_s").mkdir()
+    (tmp_path / "buffalo_s.zip").write_bytes(b"pk" * 8)
+
+    folder_id = declare_insightface_packs(server_hub, str(tmp_path))
+    names = {
+        row["display_name"]
+        for row in server_hub.fetchall(
+            "SELECT m.display_name FROM model m "
+            "JOIN model_file mf ON mf.model_id = m.id "
+            "WHERE mf.model_folder_id = ?",
+            (folder_id,),
+        )
+    }
+    assert "InsightFace buffalo_s" in names
+    assert not any(name.endswith(".zip") for name in names)
+
+
+def test_a_machine_that_has_never_run_face_detection_declares_nothing(
+    server_hub, tmp_path
+):
+    """InsightFace creates the directory on its first download, so an absent one
+    is a normal machine and must not raise on the start-up path."""
+    assert declare_insightface_packs(server_hub, str(tmp_path / "nope")) is None
+
+
+def test_the_huggingface_cache_is_declared_per_repo_not_per_file(
+    server_hub, tmp_path, monkeypatch
+):
+    """The cache is content-addressed: a per-file listing shows the same weights
+    once per revision. `repo_id` is the unit a person recognises and
+    `size_on_disk` is the number they came for, both read from the cache's own
+    index rather than by walking 116 GB."""
+
+    class _Repo:
+        def __init__(self, repo_id, repo_type, path, size):
+            self.repo_id = repo_id
+            self.repo_type = repo_type
+            self.repo_path = path
+            self.size_on_disk = size
+
+    class _Info:
+        repos = (
+            _Repo(
+                "Qwen/Qwen3-VL-4B-Instruct", "model", "models--Qwen--Qwen3-VL", 8_889
+            ),
+            _Repo(
+                "laion/CLIP-ViT-H-14", "model", "models--laion--CLIP-ViT-H-14", 3_940
+            ),
+        )
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "scan_cache_dir", lambda _path: _Info())
+
+    folder_id = declare_huggingface_cache(server_hub, str(tmp_path))
+    assert folder_id is not None
+
+    rows = {
+        row["display_name"]: row
+        for row in server_hub.fetchall(
+            "SELECT m.display_name, m.file_size, mf.relpath, mf.state "
+            "FROM model m JOIN model_file mf ON mf.model_id = m.id "
+            "WHERE mf.model_folder_id = ?",
+            (folder_id,),
+        )
+    }
+    assert set(rows) == {"Qwen/Qwen3-VL-4B-Instruct", "laion/CLIP-ViT-H-14"}
+    assert rows["Qwen/Qwen3-VL-4B-Instruct"]["file_size"] == 8_889
+    # Identity inside the folder is the repo's directory, not the display name.
+    assert rows["Qwen/Qwen3-VL-4B-Instruct"]["relpath"] == "models--Qwen--Qwen3-VL"
+
+
+def test_an_unreadable_huggingface_cache_does_not_fail_start_up(
+    server_hub, tmp_path, monkeypatch
+):
+    """`CacheNotFound` on a machine that has downloaded nothing is the usual
+    case, and start-up must survive it."""
+    import huggingface_hub
+
+    def _boom(_path):
+        raise OSError("no cache here")
+
+    monkeypatch.setattr(huggingface_hub, "scan_cache_dir", _boom)
+    assert declare_huggingface_cache(server_hub, str(tmp_path)) is None
+
+
+def test_both_extra_roots_are_owned_so_the_scanner_skips_them(server_hub, tmp_path):
+    """`owner` is the marker the folder scanner reads. Without it the walk would
+    read 116 GB of HuggingFace blobs and sweep every ONNX pack to `missing`."""
+    (tmp_path / "buffalo_l").mkdir()
+    folder_id = declare_insightface_packs(server_hub, str(tmp_path))
+
+    folder = server_hub.fetchone(
+        "SELECT owner, kind, movable FROM model_folder WHERE id = ?", (folder_id,)
+    )
+    assert folder["owner"] == BUILTIN_OWNER
+    assert folder["kind"] == "foreign"
+    assert folder["movable"] == "root_only"

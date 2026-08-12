@@ -89,6 +89,34 @@ class BuiltinEngine:
         return (self.relpath, *self.companions)
 
 
+@dataclass(frozen=True)
+class DeclaredEntry:
+    """One row to write, with its existence already resolved.
+
+    The writer below takes these rather than reaching for the disk itself, so
+    the caller decides what "present" and "how big" mean for its own root. That
+    matters because the three roots answer those questions in three different
+    ways: an engine is one `stat` of one file, an InsightFace pack is the sum of
+    a directory, and a HuggingFace repo is a number its own cache index already
+    holds. Only the writing is common, so only the writing is shared.
+
+    Attributes:
+        relpath: Location within the folder — `model_file`'s own identity.
+        display_name: What the shelf calls it.
+        role: Stored in ``model.kind``; see :class:`BuiltinEngine.role`.
+        size: Bytes, or None when it could not be read. None never overwrites a
+            size already recorded.
+        present: Whether it is on disk now. False writes ``missing``, which is a
+            normal state here and not a warning.
+    """
+
+    relpath: str
+    display_name: str
+    role: str
+    size: Optional[int]
+    present: bool
+
+
 # Mirrors `pixlstash_tagger.PIXLSTASH_TAGGER_FILENAME` /
 # `..._META_FILENAME`, `wd14.WD14_CSV_FILE`, and
 # `ImageEmbeddingTask.AESTHETIC_MODELS`. Pinned by tests/test_builtin_models.py.
@@ -244,6 +272,51 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
     Returns:
         The ``model_folder.id``, or ``None`` if the row could not be written.
     """
+    entries = []
+    for engine in BUILTIN_ENGINES:
+        absolute = os.path.join(folder_path, engine.relpath)
+        # One `stat` rather than `isfile` then `getsize`. The pair is a race
+        # on the one directory the downloaders are actively writing into: a
+        # file that arrives or is replaced between the two calls makes
+        # `getsize` raise `OSError` on a path `isfile` just confirmed, and
+        # that would abort the declaration for every engine after it.
+        try:
+            size = os.stat(absolute).st_size
+            present = True
+        except OSError:
+            size = None
+            present = False
+        entries.append(
+            DeclaredEntry(
+                relpath=engine.relpath,
+                display_name=engine.display_name,
+                role=engine.role,
+                size=size,
+                present=present,
+            )
+        )
+    return declare_folder(hub, folder_path, entries)
+
+
+def declare_folder(hub, folder_path: str, entries) -> Optional[int]:
+    """Upsert one PixlStash-owned folder and a row per declared entry.
+
+    Shared by all three roots PixlStash owns: the engines it downloads, the
+    InsightFace packs, and the HuggingFace cache. The caller resolves what is
+    there; this writes it.
+
+    Idempotent, and the declaration is the authority — a second call restates
+    every field rather than merging, because unlike a scanned row there is no
+    owner curation here to preserve.
+
+    Args:
+        hub: The open hub database.
+        folder_path: The root being declared.
+        entries: The :class:`DeclaredEntry` rows to write under it.
+
+    Returns:
+        The ``model_folder.id``, or ``None`` if the row could not be written.
+    """
     now = _utcnow()
     with hub.transaction() as conn:
         conn.execute(
@@ -271,20 +344,9 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
             return None
         folder_id = int(row[0])
 
-        for engine in BUILTIN_ENGINES:
-            absolute = os.path.join(folder_path, engine.relpath)
-            # One `stat` rather than `isfile` then `getsize`. The pair is a race
-            # on the one directory the downloaders are actively writing into: a
-            # file that arrives or is replaced between the two calls makes
-            # `getsize` raise `OSError` on a path `isfile` just confirmed, and
-            # that would abort the declaration for every engine after it.
-            try:
-                size = os.stat(absolute).st_size
-                present = True
-            except OSError:
-                size = None
-                present = False
-            state = "present" if present else "missing"
+        for entry in entries:
+            size = entry.size
+            state = "present" if entry.present else "missing"
             # An engine that has not been downloaded yet is NOT an error and not
             # a warning: the ViT-L/14 scorer is fetched only for the CLIP model
             # that needs it, so "declared and absent" is the normal state for
@@ -297,7 +359,7 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
             existing = conn.execute(
                 "SELECT model_id FROM model_file "
                 "WHERE model_folder_id = ? AND relpath = ?",
-                (folder_id, engine.relpath),
+                (folder_id, entry.relpath),
             ).fetchone()
             if existing is None:
                 cursor = conn.execute(
@@ -305,9 +367,9 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
                     "provenance, file_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         FILE_ENGINE,
-                        engine.role,
-                        engine.display_name,
-                        os.path.basename(engine.relpath),
+                        entry.role,
+                        entry.display_name,
+                        os.path.basename(entry.relpath),
                         BUILTIN_PROVENANCE,
                         size,
                         now,
@@ -317,7 +379,7 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
                 conn.execute(
                     "INSERT INTO model_file (model_id, model_folder_id, relpath, "
                     "state, seen_at) VALUES (?, ?, ?, ?, ?)",
-                    (model_id, folder_id, engine.relpath, state, now),
+                    (model_id, folder_id, entry.relpath, state, now),
                 )
                 continue
 
@@ -328,12 +390,12 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
             conn.execute(
                 "UPDATE model SET file_kind = ?, kind = ?, display_name = ?, "
                 "file_size = COALESCE(?, file_size) WHERE id = ?",
-                (FILE_ENGINE, engine.role, engine.display_name, size, model_id),
+                (FILE_ENGINE, entry.role, entry.display_name, size, model_id),
             )
             conn.execute(
                 "UPDATE model_file SET state = ?, seen_at = ? "
                 "WHERE model_folder_id = ? AND relpath = ?",
-                (state, now, folder_id, engine.relpath),
+                (state, now, folder_id, entry.relpath),
             )
         conn.execute(
             "UPDATE model_folder SET last_checked = ? WHERE id = ?", (now, folder_id)
