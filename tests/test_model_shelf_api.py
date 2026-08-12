@@ -31,6 +31,7 @@ the refused token is live.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -55,7 +56,7 @@ from pixlstash.server import Server
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.services.model_mover import SHELF_IO_LOCK
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
-from tests.test_model_folder_scanner import write_adapter
+from tests.test_model_folder_scanner import write_adapter, write_checkpoint
 
 API = "/api/v1"
 
@@ -3792,3 +3793,57 @@ def test_the_picker_lists_model_files_only_when_it_is_asked_to(shelf_env, loose_
     assert [entry["name"] for entry in entries] == ["sub", "loose.safetensors"]
     assert entries[1]["is_file"] is True
     assert entries[0]["is_dir"] is True
+
+
+def test_the_copy_is_hashed_on_its_way_in_and_never_read_again(
+    shelf_env, loose_file, monkeypatch
+):
+    """One read of the bytes, not two.
+
+    The copy is hashed as it is written and the written file is read back once
+    to verify it, so the digest is already known and proven when the row is
+    registered. A scanner that hashed again would read a gigabyte a third time
+    with the caller still waiting on the response. Asserted by counting, because
+    the wrong version is *correct* — only slower — and would never fail an
+    assertion about the row.
+    """
+    from pixlstash.services import model_folder_scanner
+
+    rehashed = []
+    monkeypatch.setattr(
+        model_folder_scanner,
+        "sha256_file",
+        lambda path: rehashed.append(path) or "0" * 64,
+    )
+
+    r = shelf_env.owner.post(
+        f"{API}/model-files", json={"path": str(loose_file.source)}
+    )
+    assert r.status_code == 200, r.text
+    assert rehashed == [], (
+        "the file was read again to compute a digest the copy already had"
+    )
+
+    expected = hashlib.sha256(loose_file.source.read_bytes()).hexdigest()
+    row = shelf_env.server.hub.fetchone(
+        "SELECT sha256 FROM model WHERE id = ?", (r.json()["model_id"],)
+    )
+    assert row["sha256"] == expected, "the row does not name the bytes on disk"
+
+
+def test_a_checkpoint_added_this_way_keeps_the_digest_rather_than_deferring_it(
+    shelf_env, loose_file, tmp_path
+):
+    """A scan leaves a checkpoint unhashed because reading 24 GB is the cost it
+    exists to defer. Here the bytes went through a hash on their way in, so the
+    read is already paid for and deferring would only schedule a second one."""
+    source = tmp_path / "downloads" / "big.safetensors"
+    write_checkpoint(source)
+
+    r = shelf_env.owner.post(f"{API}/model-files", json={"path": str(source)})
+    assert r.status_code == 200, r.text
+    row = shelf_env.server.hub.fetchone(
+        "SELECT file_kind, sha256 FROM model WHERE id = ?", (r.json()["model_id"],)
+    )
+    assert row["file_kind"] == "checkpoint"
+    assert row["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()

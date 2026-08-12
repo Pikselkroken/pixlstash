@@ -284,8 +284,12 @@ def create_router(server) -> APIRouter:
                 )
                 raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+            # The digest goes with it: `copy_and_digest` hashed these bytes on
+            # the way in and `file_digest` proved the copy matches, so the
+            # scanner reading the whole file a third time would only add to the
+            # wait before the row appears.
             model_id = ModelFolderScanner(server.hub).register_file(
-                folder["id"], target, relpath
+                folder["id"], target, relpath, sha256=written
             )
             if model_id is None:
                 # The header would not parse, so the scanner would not have

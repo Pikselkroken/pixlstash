@@ -1458,8 +1458,19 @@ the shelf when the call returns and the owner never has to rescan.
   `ModelFolderScanner.register_file` runs the same `_describe` → `_write_batch`
   path a walk uses, so an added file and a scanned one are one kind of row —
   same header parse, same `ON CONFLICT(sha256)` join onto a model the shelf
-  already knows, same deferred hash for a 24 GB checkpoint. It sweeps nothing: a
-  walk marks every row it did not see `missing`, and this looks at one name.
+  already knows. It sweeps nothing: a walk marks every row it did not see
+  `missing`, and this looks at one name.
+- **The bytes are hashed once, on the way in.** `copy_and_digest` digests them
+  as it writes and `file_digest` reads the copy back to prove it matches, so the
+  digest is known *and verified* by the time the row is written;
+  `register_file(…, sha256=…)` passes it to `_describe` rather than letting the
+  scanner read the whole file a third time with the caller still waiting. A walk
+  has no such digest — it found a file it knows nothing about — and passes
+  `None`, which is the path that hashes. One consequence is deliberate: a
+  **checkpoint** added this way keeps its digest instead of the NULL a scan
+  leaves for `MissingCheckpointHashFinder`. That finder exists so nobody reads
+  24 GB just to hash it; here the read has already been paid for, and deferring
+  anyway would schedule a second one for nothing.
   A file whose header will not parse is **not** left in the store: the copy is
   discarded and the call is a 400, because the scanner would not have registered
   it either and a file the shelf never lists is not what "added" means.
