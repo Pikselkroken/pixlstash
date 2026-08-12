@@ -4374,11 +4374,14 @@ defineExpose({
               { active: isAllPicturesRowActive },
             ]"
           >
-            <div
+            <button
+              type="button"
               :class="[
                 'sidebar-collapsed-item',
                 { active: isAllPicturesRowActive },
               ]"
+              :aria-current="isAllPicturesRowActive ? 'page' : undefined"
+              aria-label="All Pictures"
               title="All Pictures"
               @click="selectCharacter(ALL_PICTURES_ID, 'All Pictures')"
               @contextmenu.prevent.stop="
@@ -4386,7 +4389,7 @@ defineExpose({
               "
             >
               <v-icon>mdi-image-multiple</v-icon>
-            </div>
+            </button>
           </div>
           <div
             v-if="sidebarPrimaryTab !== 'folders'"
@@ -4886,7 +4889,8 @@ defineExpose({
           <div
             :class="['sidebar-collapsed-row', { active: isDuplicatesView }]"
           >
-            <div
+            <button
+              type="button"
               :class="[
                 'sidebar-collapsed-item',
                 {
@@ -4894,7 +4898,9 @@ defineExpose({
                   'sidebar-collapsed-item--unavailable': isReadOnly,
                 },
               ]"
+              :aria-current="isDuplicatesView ? 'page' : undefined"
               :aria-disabled="isReadOnly || undefined"
+              aria-label="Duplicates"
               :title="isReadOnly ? READ_ONLY_DEDUP_HINT : 'Duplicates'"
               @click="isReadOnly || emit('select-duplicates', {})"
             >
@@ -4904,7 +4910,7 @@ defineExpose({
                 class="sidebar-collapsed-dedup-badge"
                 title="There are duplicates to review"
               ></span>
-            </div>
+            </button>
           </div>
 
           <!-- Scrap Heap at bottom of dock. The flex spacer above it fills most
@@ -4922,7 +4928,8 @@ defineExpose({
               },
             ]"
           >
-            <div
+            <button
+              type="button"
               :class="[
                 'sidebar-collapsed-item',
                 'sidebar-collapsed-item--scrapheap',
@@ -4932,6 +4939,13 @@ defineExpose({
                       SCRAPHEAP_PICTURES_ID && selectionOwnsHighlight,
                 },
               ]"
+              :aria-current="
+                selectionStore.selectedCharacter === SCRAPHEAP_PICTURES_ID &&
+                selectionOwnsHighlight
+                  ? 'page'
+                  : undefined
+              "
+              aria-label="Scrapheap"
               title="Scrapheap"
               @click="selectCharacter(SCRAPHEAP_PICTURES_ID, 'Scrapheap')"
               @contextmenu.prevent.stop="
@@ -4939,7 +4953,7 @@ defineExpose({
               "
             >
               <v-icon>mdi-trash-can-outline</v-icon>
-            </div>
+            </button>
           </div>
         </div>
       </template>
@@ -5294,11 +5308,16 @@ defineExpose({
           <!-- ══ GLOBAL tab content ══ -->
           <template v-if="projectViewMode === 'global'">
             <div v-if="!scopedResourceType" class="sidebar-all-pictures-row">
-              <div
+              <!-- A destination is a real <button>: keyboard reach and
+                   Enter/Space activation come for free, and `aria-current`
+                   is what tells a screen reader which one you are in. -->
+              <button
+                type="button"
                 :class="[
                   'sidebar-list-item',
                   { active: isAllPicturesRowActive },
                 ]"
+                :aria-current="isAllPicturesRowActive ? 'page' : undefined"
                 @click="selectCharacter(ALL_PICTURES_ID, allPicturesRowLabel)"
                 @contextmenu.prevent="
                   openSidebarCtxMenu('all-pictures', null, $event)
@@ -5313,7 +5332,7 @@ defineExpose({
                 <span class="sidebar-list-count">{{
                   categoryCounts[ALL_PICTURES_ID] ?? ""
                 }}</span>
-              </div>
+              </button>
             </div>
 
             <!-- Duplicates earns a sidebar row because it is the one thing
@@ -5321,7 +5340,11 @@ defineExpose({
                  works, which is what a destination is for. Stacked and
                  unstacked stay a filter. -->
             <div class="sidebar-all-pictures-row">
-              <div
+              <!-- `aria-disabled`, not `disabled`: a read-only session must
+                   still be able to focus the row and read the title that
+                   explains why it is inert. The click guard stays. -->
+              <button
+                type="button"
                 :class="[
                   'sidebar-list-item',
                   {
@@ -5329,6 +5352,7 @@ defineExpose({
                     'sidebar-list-item--unavailable': isReadOnly,
                   },
                 ]"
+                :aria-current="isDuplicatesView ? 'page' : undefined"
                 :aria-disabled="isReadOnly || undefined"
                 :title="isReadOnly ? READ_ONLY_DEDUP_HINT : undefined"
                 @click="isReadOnly || emit('select-duplicates', {})"
@@ -5354,11 +5378,12 @@ defineExpose({
                   class="sidebar-dedup-dot"
                   title="There are duplicates to review"
                 ></span>
-              </div>
+              </button>
             </div>
 
             <div v-if="!isReadOnly" class="sidebar-all-pictures-row">
-              <div
+              <button
+                type="button"
                 :class="[
                   'sidebar-list-item',
                   {
@@ -5367,6 +5392,12 @@ defineExpose({
                         SCRAPHEAP_PICTURES_ID && selectionOwnsHighlight,
                   },
                 ]"
+                :aria-current="
+                  selectionStore.selectedCharacter === SCRAPHEAP_PICTURES_ID &&
+                  selectionOwnsHighlight
+                    ? 'page'
+                    : undefined
+                "
                 @click="selectCharacter(SCRAPHEAP_PICTURES_ID, 'Scrapheap')"
                 @contextmenu.prevent="
                   openSidebarCtxMenu('scrapheap', null, $event)
@@ -5384,7 +5415,7 @@ defineExpose({
                 <span class="sidebar-list-count">{{
                   categoryCounts[SCRAPHEAP_PICTURES_ID] ?? ""
                 }}</span>
-              </div>
+              </button>
             </div>
 
             <div class="sidebar-section-divider" />
