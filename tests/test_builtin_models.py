@@ -423,3 +423,76 @@ def test_the_sweep_does_not_touch_a_declared_engine_that_is_simply_absent(
         (folder_id, "sa_0_4_vit_b_32_linear.pth"),
     )
     assert row["state"] == "present"
+
+
+def test_the_huggingface_cache_is_fixed_not_merely_root_only(
+    server_hub, tmp_path, monkeypatch
+):
+    """`root_only` says a folder relocates as a whole. That is true of our own
+    downloads and of the InsightFace packs; it is false of the HuggingFace cache,
+    whose location is `HF_HOME` read at import by a library shared with every
+    other tool on the machine. "Moving" it is a restart and a re-download, so the
+    column says `fixed` and the UI can offer an explanation instead of a verb."""
+    import huggingface_hub
+
+    class _Repo:
+        repo_id = "org/thing"
+        repo_type = "model"
+        repo_path = "models--org--thing"
+        size_on_disk = 10
+        revisions = frozenset()
+
+    monkeypatch.setattr(
+        huggingface_hub,
+        "scan_cache_dir",
+        lambda _p: type("_I", (), {"repos": (_Repo(),)})(),
+    )
+    folder_id = declare_huggingface_cache(server_hub, str(tmp_path))
+    row = server_hub.fetchone(
+        "SELECT movable FROM model_folder WHERE id = ?", (folder_id,)
+    )
+    assert row["movable"] == "fixed"
+
+
+def test_a_fixed_folder_refuses_a_per_item_move_the_same_as_root_only(tmp_path):
+    """The pair is the point: both values forbid a per-item move out, so keying
+    the guard on one of them would leave the other open."""
+    from pixlstash.hub.db import HubDatabase
+    from pixlstash.services.model_mover import ModelMover, MoveRefused
+
+    source = tmp_path / "cache"
+    source.mkdir()
+    (source / "models--org--thing").mkdir()
+    destination = tmp_path / "loras"
+    destination.mkdir()
+
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model_folder (id, path, kind, owner, movable, "
+                "created_at) VALUES (1, ?, 'foreign', 'pixlstash', 'fixed', "
+                "'2026-08-12T00:00:00Z')",
+                (str(source),),
+            )
+            conn.execute(
+                "INSERT INTO model_folder (id, path, kind, movable, created_at) "
+                "VALUES (2, ?, 'user', 'per_item', '2026-08-12T00:00:00Z')",
+                (str(destination),),
+            )
+            cursor = conn.execute(
+                "INSERT INTO model (file_kind, kind, display_name, filename, "
+                "provenance, file_size, created_at) VALUES ('engine', 'other', "
+                "'org/thing', 'models--org--thing', 'builtin', 10, "
+                "'2026-08-12T00:00:00Z')"
+            )
+            conn.execute(
+                "INSERT INTO model_file (model_id, model_folder_id, relpath, "
+                "state, seen_at) VALUES (?, 1, 'models--org--thing', 'present', "
+                "'2026-08-12T00:00:00Z')",
+                (int(cursor.lastrowid),),
+            )
+        with pytest.raises(MoveRefused):
+            ModelMover(hub).plan([(1, "models--org--thing")], 2)
+    finally:
+        hub.close()

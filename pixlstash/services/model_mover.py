@@ -478,7 +478,13 @@ class ModelMover:
         # control is `HF_HOME`, read at import: a restart and a re-download, not
         # a move. The same applies to an InsightFace pack and to PixlStash's own
         # engines, and it is why all three roots are declared `root_only`.
-        if row["folder_movable"] == "root_only" and not relocating:
+        # Both values, and the pair is the point. `root_only` says the folder
+        # relocates as a whole; `fixed` says it cannot relocate at all because
+        # another tool owns where it lives. Neither permits a per-item move out,
+        # so keying on one of them would have left the other open — which is
+        # exactly how a rename of this vocabulary could silently drop the
+        # protection.
+        if row["folder_movable"] in ("root_only", "fixed") and not relocating:
             raise MoveRefused(
                 f"{relpath!r} is inside a folder that moves as a whole, not one "
                 "file at a time, so nothing was moved. PixlStash's own model "
