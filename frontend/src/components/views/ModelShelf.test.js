@@ -141,10 +141,11 @@ describe("a row with nothing in its header", () => {
     ]);
     const row = wrapper.find(".shelf-row");
     expect(row.find(".shelf-row-name").text()).toContain("Foxglove Char");
-    // Every slot on the metadata line renders something: the kind is derived
-    // from `file_kind` and is the guaranteed anchor when all else is null.
-    const slots = row.findAll(".shelf-row-meta > span").map((s) => s.text());
-    expect(slots).toEqual(["LoRA", "Base model not set", "342.1 MB"]);
+    // Every column renders something: the kind is derived from `file_kind` and
+    // is the guaranteed anchor when all else is null, and an absent base model
+    // says so in words rather than leaving a cell that reads as a gap.
+    const cells = row.findAll(".shelf-col").map((s) => textOf(s));
+    expect(cells).toEqual(["LoRA", "Not set", "—Not assigned", "342.1 MB"]);
   });
 
   it("marks the derived name by type, not by fading it", async () => {
@@ -174,9 +175,9 @@ describe("file kinds", () => {
     const wrapper = await mountShelf([
       adapter({ file_kind: "unknown", kind: null, display_name: "aurora" }),
     ]);
-    const meta = textOf(wrapper.find(".shelf-row-meta"));
-    expect(meta).toContain("Unclassified");
-    expect(meta).not.toContain("Checkpoint");
+    const kind = textOf(wrapper.find(".shelf-row .shelf-col"));
+    expect(kind).toContain("Unclassified");
+    expect(kind).not.toContain("Checkpoint");
   });
 
   it("names a checkpoint as one, having no algorithm to name", async () => {
@@ -184,7 +185,9 @@ describe("file kinds", () => {
       [],
       [adapter({ file_kind: "checkpoint", kind: null })],
     );
-    expect(textOf(wrapper.find(".shelf-row-meta"))).toContain("Checkpoint");
+    expect(textOf(wrapper.find(".shelf-row .shelf-col"))).toContain(
+      "Checkpoint",
+    );
   });
 });
 
@@ -515,12 +518,15 @@ describe("selecting rows", () => {
     expect([...store.selectedIds].sort()).toEqual([1, 2, 3]);
   });
 
-  it("is a multi-select listbox, and says which rows are selected", async () => {
+  it("is a multi-select treegrid, and says which rows are selected", async () => {
     // The role is what tells a screen reader this list is selectable at all;
-    // it replaced the per-row checkbox that used to carry that meaning.
+    // it replaced the per-row checkbox that used to carry that meaning. A
+    // treegrid rather than a listbox since the rows became columns (#891):
+    // only a grid can carry a `columnheader`, and only a TREEgrid has the
+    // Right/Left disclosure this list already implemented.
     const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
     const list = wrapper.find("ul.shelf-list");
-    expect(list.attributes("role")).toBe("listbox");
+    expect(list.attributes("role")).toBe("treegrid");
     expect(list.attributes("aria-multiselectable")).toBe("true");
 
     await rowAt(wrapper, 0).trigger("click");
@@ -969,8 +975,12 @@ describe("a registered folder holding no models", () => {
     useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
     await wrapper.vm.$nextTick();
 
+    // A row, because a grid takes nothing else — but never a SELECTABLE one:
+    // no `aria-selected` and no tab stop, since there is no model here to act
+    // on. Its one cell spans the width rather than pretending to have columns.
     const note = wrapper.find(".shelf-empty-folder");
-    expect(note.attributes("role")).toBeUndefined();
+    expect(note.attributes("role")).toBe("row");
+    expect(note.attributes("aria-selected")).toBeUndefined();
     expect(note.attributes("tabindex")).toBeUndefined();
   });
 });
@@ -1157,44 +1167,101 @@ describe("a run's disclosure", () => {
     ];
   }
 
-  it("puts no focusable control inside the option", async () => {
-    // The defect the review of #881 found, and the one this list's own comment
-    // already warned about: a <button> inside `role="option"` is unreachable to
-    // a listbox's keyboard model. The count is drawn, but it is not a control.
+  it("keeps the count a drawn figure and not a second control", async () => {
+    // The defect the review of #881 found. A grid row would now TOLERATE a
+    // control, unlike the listbox option this used to be — but the row is
+    // still the disclosure, and a focusable second way to open the same run is
+    // the dialect this list stopped speaking.
     const wrapper = await mountShelf(run());
-    const option = wrapper.find('[role="option"]');
-    expect(option.exists()).toBe(true);
+    const row = wrapper.find(".shelf-row");
+    expect(row.exists()).toBe(true);
     // Anything FOCUSABLE, not just the obvious tags: a `<span role="button"
-    // tabindex="0">` is exactly as unreachable inside an option, and a
+    // tabindex="0">` is exactly as much of a second control, and a
     // tag-name-only assertion let that mutant through when this was checked.
+    // `[tabindex]` is on the row itself, so the search is for descendants.
     expect(
-      option.findAll(
+      row.findAll(
         'button, a[href], input, select, textarea, [tabindex], [role="button"]',
       ),
     ).toHaveLength(0);
-    expect(option.find(".shelf-row-steps").exists()).toBe(true);
+    expect(row.find(".shelf-row-steps").exists()).toBe(true);
   });
 
   it("opens and closes from the row with Right and Left", async () => {
     const wrapper = await mountShelf(run());
-    const option = wrapper.find('[role="option"]');
+    const row = wrapper.find(".shelf-row");
     expect(wrapper.findAll(".shelf-row--member")).toHaveLength(0);
 
-    await option.trigger("keydown", { key: "ArrowRight" });
+    await row.trigger("keydown", { key: "ArrowRight" });
     expect(wrapper.findAll(".shelf-row--member")).toHaveLength(1);
 
-    await option.trigger("keydown", { key: "ArrowLeft" });
+    await row.trigger("keydown", { key: "ArrowLeft" });
     expect(wrapper.findAll(".shelf-row--member")).toHaveLength(0);
   });
 
-  it("speaks the count and the state, since the span is aria-hidden", async () => {
+  it("says the count in a cell and the state in aria-expanded", async () => {
+    // What the row's hand-built `aria-label` used to do. A grid cell can
+    // simply hold the figure, so the count is drawn text a reader reaches
+    // rather than a string assembled for it, and the open/closed half is the
+    // attribute the treegrid role already defines for exactly this.
     const wrapper = await mountShelf(run());
-    const option = wrapper.find('[role="option"]');
-    expect(option.attributes("aria-label")).toContain("2 files");
-    expect(option.attributes("aria-label")).toContain("collapsed");
+    const row = wrapper.find(".shelf-row");
+    expect(textOf(row.find(".shelf-row-steps"))).toContain("2");
+    expect(row.attributes("aria-expanded")).toBe("false");
+    expect(row.attributes("aria-level")).toBe("1");
 
-    await option.trigger("keydown", { key: "ArrowRight" });
-    expect(option.attributes("aria-label")).toContain("expanded");
+    await row.trigger("keydown", { key: "ArrowRight" });
+    expect(row.attributes("aria-expanded")).toBe("true");
+    // The run's other steps are child rows, and say so: the DOM draws them as
+    // siblings, so the level is the only thing carrying the nesting.
+    expect(wrapper.find(".shelf-row--member").attributes("aria-level")).toBe(
+      "2",
+    );
+  });
+
+  it("heads the columns once, and on every grid a reader may land in", async () => {
+    // The point of #891: a `columnheader` heads the grid it is in and nothing
+    // else, and grouping makes one grid per group — so every group carries the
+    // row, and all but the first carry it visually-hidden so the eye sees one
+    // header line rather than one per folder.
+    const wrapper = await mountShelf([
+      adapter({
+        id: 1,
+        locations: [
+          { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
+        ],
+      }),
+      adapter({
+        id: 2,
+        sha256: "c".repeat(64),
+        locations: [
+          { state: "present", folder_id: 2, folder_path: "/b", relpath: "y" },
+        ],
+      }),
+    ]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
+    await wrapper.vm.$nextTick();
+
+    const heads = wrapper.findAll(".shelf-head-row");
+    expect(heads).toHaveLength(2);
+    expect(heads[0].classes()).not.toContain("visually-hidden");
+    expect(heads[1].classes()).toContain("visually-hidden");
+    // The five the design names, plus the two glyph columns and the status
+    // column, which are headed for a reader only — a grid row owes a cell per
+    // column, and an unnamed one is a column a reader cannot be told about.
+    for (const head of heads) {
+      const names = head.findAll('[role="columnheader"]').map((c) => c.text());
+      expect(names).toEqual([
+        "Selected",
+        "Icon",
+        "Name",
+        "Kind",
+        "Base",
+        "Assigned to",
+        "Size",
+        "Status",
+      ]);
+    }
   });
 });
 
