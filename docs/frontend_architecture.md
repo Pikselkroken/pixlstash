@@ -1615,6 +1615,39 @@ collapse a folder of the same name.
 
 #### The verbs (the selection bar, F3)
 
+**Everything that changes a file lives on the row or in the selection bar,
+never in the toolbar** (#896). The toolbar is where the view is switched, so a
+mutating control beside `Sort` and `Show` would be one stray click from a
+different question. The four toolbar buttons are audited against that rule and
+all four hold: `Show` and `Sort` write only view state; `Model folders` and
+`Import from ai-toolkit` open a dialog and write nothing on the press, and the
+import is confirmed against a listing of the runs it found. `Group training
+runs` is the same shape — it opens the dry run, and the applying half is behind
+the dialog's own confirmation. Import and detection stay in the toolbar because
+neither has a selection to act on: their subject is a source folder full of
+files the shelf does not list yet, so there is no row and no selection to hang
+them off.
+
+**The bar states the count AND what the selection weighs**, `40 models selected
+· 12.4 GB`, in the `·` separator the grid's own `SelectionBar` uses. The size is
+what makes a bulk verb reviewable before it runs: "Forget these 40" says nothing
+about what is being reclaimed. It is summed off each row's `members` rather than
+the payload's `total_size`, for the reason `collapseStacks` counts what is
+*shown* — a filter can hide part of a run, and a figure covering rows the reader
+cannot reach would not describe the selection they made. When nothing in the
+selection has a recorded size (an unhashed shelf) the figure is **dropped**
+rather than shown as `0 B`, which would claim the selection is empty.
+
+**`Stack these` is the manual half of grouping**, beside the toolbar's sweep
+rather than instead of it. Detection proposes only files differing by a training
+step, so a run it cannot read as one had no way to be said at all. The bar
+checks every gate `services/stack_detector.apply_stack` enforces — two or more
+models, adapters only, none already stacked, each with a `present` copy, and one
+folder holding all of them — so the button is never offered where it could only
+come back refused, and the failing gate is the tooltip. It is a confirmation and
+not a second dry run: the reader assembled the group themselves and is looking
+at it. The prompt exists because nothing unstacks a model run afterwards.
+
 **Selection is by MODEL, not by rendered row.** Under folder grouping one model
 is drawn once per folder holding a copy of it, and the verbs write the model, so
 a per-row selection would let the same file be half selected and ask the reader
