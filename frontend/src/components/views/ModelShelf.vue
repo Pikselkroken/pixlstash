@@ -469,6 +469,25 @@
                       (name taken from the filename)</span
                     ></span
                   >
+                  <!-- The step, on any row that is not a stack cover.
+                       `deriveModelName` strips the trailing step from the
+                       filename on the stated grounds that "the step is parsed
+                       into its own field" — and that field was never rendered
+                       anywhere except inside an expanded stack. So two
+                       checkpoints of one run that the stack detector did not
+                       fold both read `clementine-zib-3b`, with nothing on the
+                       row telling them apart: exactly the outcome stripping it
+                       was meant to prevent.
+
+                       Not on a cover: a stack stands for many steps and naming
+                       one of them would be a lie. The cover carries its member
+                       count instead, which is the next element along. -->
+                  <span
+                    v-if="stepLabel(row)"
+                    class="shelf-row-at-step"
+                    :title="`Saved at training step ${row.training_step.toLocaleString()}`"
+                    >{{ stepLabel(row) }}</span
+                  >
                   <!-- Beside the name rather than in a column of its own: the
                        count belongs to the run's identity, and only stacked
                        rows carry one, so a track for it would be empty on
@@ -936,8 +955,25 @@ function toggleStack(stackId) {
  * that differs. A member with no step is the bare final the trainer wrote last.
  */
 function memberLabel(member) {
-  const step = trainingStep(member.filename);
+  // `training_step` from the API when the row carries one, and the filename
+  // only as the fallback it always was. The column is what the scanner parsed;
+  // re-deriving it here made the shelf's answer depend on which of two parsers
+  // ran, and they are only equal by convention.
+  const step =
+    member.training_step ?? trainingStep(member.filename ?? "") ?? null;
   return step === null ? "Final" : `Step ${step.toLocaleString()}`;
+}
+
+/**
+ * The step to show beside a row's name, or "" when there is none to show.
+ *
+ * Empty for a stack cover: it stands for every step in the run, so naming one
+ * would be false. The cover shows its member count instead.
+ */
+function stepLabel(row) {
+  if (row.memberCount > 1) return "";
+  const step = row.training_step;
+  return typeof step === "number" ? `Step ${step.toLocaleString()}` : "";
 }
 
 // ── Import from ai-toolkit (shelf plan F6) ──────────────────────────────────
@@ -1827,6 +1863,22 @@ watch(
    mono face to file paths, and a filename-derived name is one — so this says
    what the string is rather than demoting it. Rank is never opacity (§5.1),
    and 37% of rows faded would be a column of ghosts. */
+/* Quiet beside the name, in the same slot the stack count uses: it qualifies
+   the identity rather than being part of it. Tabular figures so a column of
+   steps lines up when several members of a run sit together. */
+.shelf-row-at-step {
+  flex: none;
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  /* The same ink as `.shelf-row-steps` directly below, because they are
+     siblings in the same slot: both quiet qualifiers on the name rather than
+     part of it. Colour lives in the Vuetify themes, not in design-tokens.css,
+     which holds fixed scales only. 0.7 and not the 0.6 that #836 measured as
+     failing contrast. */
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
 .shelf-row-name--derived {
   font-family: var(--font-mono);
   font-weight: var(--weight-regular);

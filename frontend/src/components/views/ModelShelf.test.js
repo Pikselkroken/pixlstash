@@ -1335,3 +1335,56 @@ describe("Escape", () => {
     expect(store.selectedRows).toHaveLength(1);
   });
 });
+
+describe("the training step", () => {
+  it("shows the step on a row whose name had it stripped", async () => {
+    // `deriveModelName` drops the trailing step on the stated grounds that it
+    // "is parsed into its own field" — and nothing rendered that field outside
+    // an expanded stack, so two checkpoints of one run read identically.
+    const wrapper = await mountShelf([
+      adapter({
+        id: 601,
+        display_name: null,
+        filename: "clementine-zib-3b_000002500.safetensors",
+        training_step: 2500,
+      }),
+    ]);
+    const text = wrapper.text();
+    // `cleanAssetName` turns separators into spaces, so the derived name is
+    // spaced — the point is that the step is no longer lost from it.
+    expect(text).toContain("clementine zib 3b");
+    expect(text).toContain("Step 2,500");
+  });
+
+  it("says nothing when the file records no step", async () => {
+    // A hand-made adapter has no step, and "Step —" would invent one.
+    const wrapper = await mountShelf([
+      adapter({ id: 602, display_name: "Portrait mix", training_step: null }),
+    ]);
+    expect(wrapper.text()).not.toContain("Step");
+  });
+
+  it("never puts a single step on a stack cover", async () => {
+    // A cover stands for every step in the run, so naming one would be false.
+    // The member count is what belongs there.
+    // Two rows sharing a stack fold into one cover; a lone row with a
+    // `stack_id` is not a cover and correctly keeps its own step.
+    const wrapper = await mountShelf([
+      adapter({
+        id: 603,
+        display_name: null,
+        filename: "clementine-zib-3b_000002500.safetensors",
+        training_step: 2500,
+        stack_id: 7,
+      }),
+      adapter({
+        id: 604,
+        display_name: null,
+        filename: "clementine-zib-3b_000005000.safetensors",
+        training_step: 5000,
+        stack_id: 7,
+      }),
+    ]);
+    expect(wrapper.text()).not.toContain("Step 2,500");
+  });
+});
