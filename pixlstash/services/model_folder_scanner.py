@@ -263,6 +263,46 @@ class ModelFolderScanner:
                 folder_id=folder_id, path=path, state=STATE_MISSING, skipped=True
             )
 
+    def register_file(
+        self, folder_id: int, abs_path: str, relpath: str
+    ) -> Optional[int]:
+        """Register one file that has just been put into a registered folder.
+
+        The single-file half of :meth:`scan_folder`, for the file ``POST
+        /model-files`` has itself copied in: the row is written by the same
+        ``_describe`` → ``_write_batch`` path a walk uses, so an added file and a
+        scanned one are one kind of row rather than two dialects of it — same
+        header parse, same ``ON CONFLICT(sha256)`` join onto an existing model,
+        same deferred hash for a checkpoint.
+
+        **It sweeps nothing.** A walk marks every row it did not see ``missing``;
+        this looks at one name and touches no other row, which is what makes it
+        safe to call on a folder holding 1,800 files nobody just walked.
+
+        Args:
+            folder_id: The registered folder the file now sits in.
+            abs_path: The file itself, already inside that folder.
+            relpath: Its path relative to the folder root — the ``model_file``
+                key, so the caller's containment decides it.
+
+        Returns:
+            The ``model.id`` the file landed on, or ``None`` when it could not be
+            stated, parsed or hashed. ``_describe`` has logged why; the file is
+            left unregistered rather than recorded wrong.
+        """
+        result = FolderScanResult(
+            folder_id=folder_id, path=abs_path, state=STATE_PRESENT
+        )
+        record = self._describe(abs_path, relpath, {}, result)
+        if record is None:
+            return None
+        self._write_batch(folder_id, [record], _utcnow())
+        row = self._hub.fetchone(
+            "SELECT model_id FROM model_file WHERE model_folder_id = ? AND relpath = ?",
+            (folder_id, relpath),
+        )
+        return int(row["model_id"]) if row is not None else None
+
     def _folder_exists(self, folder_id: int) -> bool:
         return (
             self._hub.fetchone("SELECT 1 FROM model_folder WHERE id = ?", (folder_id,))

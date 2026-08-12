@@ -3557,3 +3557,238 @@ def test_clearing_leaves_the_stored_file_for_the_rows_still_using_it(shelf_env):
     assert _model_row(shelf_env, bob)["icon_sha256"] == digest
 
     shelf_env.owner.post(f"{API}/models/icons/clear", json={"ids": [bob]})
+
+
+# ===========================================================================
+# Add file (F6's remainder) — the loose-file path onto the shelf
+# ===========================================================================
+#
+# The one shelf route that takes a host path in its body, because the file it
+# adds is by definition in a folder nobody registered. Both authz directions are
+# asserted below, and so is the ruling that makes it a *copy*: the owner's own
+# file is not ours to unlink.
+
+_ADD_FILE_ROUTE = (
+    "POST",
+    f"{API}/model-files",
+    {"json": {"path": "/nowhere.safetensors"}},
+)
+
+
+@pytest.fixture
+def loose_file(shelf_env, tmp_path):
+    """A managed store to add into, and one adapter sitting outside every folder."""
+    store = tmp_path / "managed"
+    store.mkdir()
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    source = downloads / "loose.safetensors"
+    write_adapter(source, name="Loose LoRA")
+
+    with shelf_env.server.hub.transaction() as conn:
+        store_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, owner, movable, created_at) "
+                "VALUES (?, 'managed', 'pixlstash', 'root_only', "
+                "'2026-08-12T00:00:00Z')",
+                (str(store),),
+            ).lastrowid
+        )
+    return SimpleNamespace(store=store, store_id=store_id, source=source)
+
+
+def test_the_add_file_route_is_declared_local_owner_only():
+    declared = ROUTE_POLICIES.get(("POST", "/api/v1/model-files"))
+    assert declared is not None, (
+        "(POST, /api/v1/model-files) has no ROUTE_POLICIES entry"
+    )
+    assert declared.policy is AccessPolicy.LOCAL_OWNER_ONLY, (
+        f"POST /model-files declares {declared.policy}, not LOCAL_OWNER_ONLY"
+    )
+    assert declared.justification, "POST /model-files is on the tier with no reason"
+
+
+def test_a_loose_file_lands_in_the_managed_store_and_is_listed_without_a_rescan(
+    shelf_env, loose_file
+):
+    """The whole of F6's `Add file`: one call, and the row is there.
+
+    No `destination_folder_id`, so this also pins the ruled default — the managed
+    store — rather than the caller having to name it.
+    """
+    r = shelf_env.owner.post(
+        f"{API}/model-files", json={"path": str(loose_file.source)}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["filename"] == "loose.safetensors"
+    assert body["folder_id"] == loose_file.store_id
+
+    assert (loose_file.store / "loose.safetensors").exists()
+    # A copy: the owner's own file is not ours to unlink.
+    assert loose_file.source.exists()
+    # And no rescan: the row is on the shelf as the call returns.
+    listed = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    assert "loose.safetensors" in _names(listed)
+
+
+def test_a_file_already_inside_a_registered_folder_is_refused_not_duplicated(
+    shelf_env, loose_file
+):
+    """A second copy under the same name, forever, is not what the owner meant."""
+    inside = loose_file.store / "already-there.safetensors"
+    write_adapter(inside)
+
+    r = shelf_env.owner.post(f"{API}/model-files", json={"path": str(inside)})
+    assert r.status_code == 409, r.text
+    assert "Rescan" in r.text
+    assert sorted(p.name for p in loose_file.store.iterdir()) == [
+        "already-there.safetensors"
+    ]
+
+
+def test_a_file_that_is_not_a_model_is_refused_before_anything_is_copied(
+    shelf_env, loose_file, tmp_path
+):
+    notes = tmp_path / "downloads" / "notes.txt"
+    notes.write_text("not a model")
+    r = shelf_env.owner.post(f"{API}/model-files", json={"path": str(notes)})
+    assert r.status_code == 400, r.text
+    assert list(loose_file.store.iterdir()) == []
+
+    r = shelf_env.owner.post(
+        f"{API}/model-files", json={"path": str(tmp_path / "nope.safetensors")}
+    )
+    assert r.status_code == 404, r.text
+    assert list(loose_file.store.iterdir()) == []
+
+
+def test_adding_the_same_name_twice_is_refused_rather_than_overwritten(
+    shelf_env, loose_file, tmp_path
+):
+    """Nothing on the shelf overwrites bytes it did not write, this included."""
+    assert (
+        shelf_env.owner.post(
+            f"{API}/model-files", json={"path": str(loose_file.source)}
+        ).status_code
+        == 200
+    )
+    second = tmp_path / "elsewhere"
+    second.mkdir()
+    twin = second / "loose.safetensors"
+    write_adapter(twin, name="A different LoRA", pad=3)
+
+    r = shelf_env.owner.post(f"{API}/model-files", json={"path": str(twin)})
+    assert r.status_code == 409, r.text
+    assert (
+        loose_file.store / "loose.safetensors"
+    ).stat().st_size == loose_file.source.stat().st_size, (
+        "the second file was written over the first"
+    )
+
+
+def test_a_source_folder_is_never_a_destination_for_a_loose_file(
+    shelf_env, loose_file, tmp_path
+):
+    output_root = tmp_path / "aitk-output"
+    output_root.mkdir()
+    with shelf_env.server.hub.transaction() as conn:
+        source_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, owner, movable, created_at) "
+                "VALUES (?, 'source', 'ai-toolkit', 'external', "
+                "'2026-08-12T00:00:00Z')",
+                (str(output_root),),
+            ).lastrowid
+        )
+    r = shelf_env.owner.post(
+        f"{API}/model-files",
+        json={"path": str(loose_file.source), "destination_folder_id": source_id},
+    )
+    assert r.status_code == 400, r.text
+    assert list(output_root.iterdir()) == []
+
+
+def test_add_file_takes_the_same_job_slot_as_a_move_and_an_import(
+    shelf_env, loose_file
+):
+    """One shelf I/O slot machine-wide: two writers would race for the filename."""
+    assert SHELF_IO_LOCK.acquire(blocking=False), "the slot was left held"
+    try:
+        r = shelf_env.owner.post(
+            f"{API}/model-files", json={"path": str(loose_file.source)}
+        )
+        assert r.status_code == 409, r.text
+        assert "already running" in r.text
+        assert list(loose_file.store.iterdir()) == []
+    finally:
+        SHELF_IO_LOCK.release()
+
+    # Positive control: with the slot free, the same add is accepted.
+    assert (
+        shelf_env.owner.post(
+            f"{API}/model-files", json={"path": str(loose_file.source)}
+        ).status_code
+        == 200
+    )
+
+
+def test_add_file_refuses_every_share_token(shelf_env):
+    method, path, kwargs = _ADD_FILE_ROUTE
+    for description, restriction in (
+        ("add-file scoped probe", {"resource_type": "character", "resource_id": 1}),
+        ("add-file unscoped probe", {}),
+    ):
+        token = _mint(shelf_env.owner, description, **restriction)
+        client = _bearer(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"{description} is dead; the refusal below would prove nothing"
+        )
+        assert_real_route(shelf_env.server.api, method, path)
+        r = client.request(method, path, **kwargs)
+        assert r.status_code == 403, (
+            f"{description} reached {method} {path}: {r.status_code} {r.text}"
+        )
+
+
+def test_add_file_is_reachable_locally_and_refused_remotely(shelf_env):
+    """Both directions of the locality half: over-blocking is its own regression."""
+    method, path, kwargs = _ADD_FILE_ROUTE
+    for headers in ({}, _xff("192.168.1.9"), _xff("100.64.0.5")):
+        r = shelf_env.owner.request(method, path, headers=headers, **kwargs)
+        assert "restricted to local" not in r.text, (
+            f"{method} {path} from {headers or 'loopback'} was refused as "
+            f"non-local: {r.status_code} {r.text}"
+        )
+
+    r = shelf_env.owner.request(method, path, headers=_xff("8.8.8.8"), **kwargs)
+    assert r.status_code == 403, f"{method} {path}: {r.status_code} {r.text}"
+    assert "allow_remote_host_ops" in r.text
+
+
+def test_the_picker_lists_model_files_only_when_it_is_asked_to(shelf_env, loose_file):
+    """`Add file` needs files in the listing; every other picker needs them out.
+
+    Both directions, because the flag is opt-in for a reason: a folder of 1,800
+    adapters would bury its subfolders in them for a caller choosing a directory.
+    """
+    downloads = loose_file.source.parent
+    (downloads / "notes.txt").write_text("not a model")
+    (downloads / "sub").mkdir()
+
+    plain = shelf_env.owner.get(
+        f"{API}/filesystem/browse", params={"path": str(downloads)}
+    )
+    assert plain.status_code == 200, plain.text
+    assert [entry["name"] for entry in plain.json()["entries"]] == ["sub"]
+
+    picker = shelf_env.owner.get(
+        f"{API}/filesystem/browse",
+        params={"path": str(downloads), "include_model_files": True},
+    )
+    assert picker.status_code == 200, picker.text
+    entries = picker.json()["entries"]
+    # Directories first, then the model file — and never the .txt beside it.
+    assert [entry["name"] for entry in entries] == ["sub", "loose.safetensors"]
+    assert entries[1]["is_file"] is True
+    assert entries[0]["is_dir"] is True

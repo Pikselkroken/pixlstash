@@ -505,6 +505,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/login                                                                 | auth            | Check Registration                                         |
 | POST   | /api/v1/login                                                                 | auth            | Login                                                      |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                     |
+| POST   | /api/v1/model-files                                                           | model_shelf     | Add one model file to the shelf                            |
 | GET    | /api/v1/model-folders                                                         | model_shelf     | List registered model folders                              |
 | POST   | /api/v1/model-folders                                                         | model_shelf     | Register a model folder                                    |
 | GET    | /api/v1/model-folders/devices                                                 | model_shelf     | Capacity of the drives the model folders sit on            |
@@ -1423,6 +1424,46 @@ bootstrapped). It is the default destination for a drop or an ai-toolkit import.
   present folder across possibly-offline drives. The store is therefore designed
   as a single directory and must not become several.
 
+### `Add file`: one loose model onto the shelf (shelf plan F6)
+
+`POST /api/v1/model-files`
+([`routes/model_files.py`](../pixlstash/routes/model_files.py)) is the path for a
+single adapter or checkpoint that is **not** part of a training run and does not
+deserve a registered folder of its own — the file downloaded into `~/Downloads`
+an hour ago. It copies that file into a folder the shelf catalogues (the managed
+store above, unless another is named) and registers it there, so the row is on
+the shelf when the call returns and the owner never has to rescan.
+
+- **A copy, never a move.** The source is the owner's own file in a directory
+  PixlStash did not create, so nothing here unlinks it. `delete_after_import`
+  exists precisely because removing a source is a decision, and it is one made
+  about a *registered* folder rather than about an arbitrary path. The ordering
+  is therefore the mover's with its last step removed: **copy → verify by
+  SHA-256 → register the row and commit.** Every interruption leaves either
+  nothing or an unregistered file in the store, never a row naming a file that
+  is not there — and it takes the same machine-wide `SHELF_IO_LOCK` slot as a
+  move and an import, so two writers cannot race for one destination filename.
+- **It is the one shelf route that takes a host path in its body**, which the
+  import block beside it deliberately does not (a run is *named*, and the server
+  joins the name to a registered root). That cannot be avoided here: the whole
+  point is a file in a folder nobody registered. So the containment is on the
+  **write** — `resolve_path_within(destination.path, basename)`, which also
+  refuses a symlink standing at the destination name — and the read is bounded
+  instead: a regular file, `MODEL_SUFFIX`, and refused outright when it already
+  sits inside a registered folder, because copying it would put a second copy of
+  a catalogued file into the store forever and a rescan is what the owner wants.
+  It is `LOCAL_OWNER_ONLY` for both halves at once (§16.3): it takes a path like
+  `POST /model-folders` and writes files like `POST /model-moves`.
+- **Registration reuses the scanner, not a second dialect of it.**
+  `ModelFolderScanner.register_file` runs the same `_describe` → `_write_batch`
+  path a walk uses, so an added file and a scanned one are one kind of row —
+  same header parse, same `ON CONFLICT(sha256)` join onto a model the shelf
+  already knows, same deferred hash for a 24 GB checkpoint. It sweeps nothing: a
+  walk marks every row it did not see `missing`, and this looks at one name.
+  A file whose header will not parse is **not** left in the store: the copy is
+  discarded and the call is a 400, because the scanner would not have registered
+  it either and a file the shelf never lists is not what "added" means.
+
 ### Hub and library identity
 
 `hub.db` sits beside `server-config.json`, outside every image library. It owns
@@ -1904,6 +1945,8 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
     Consequences: the resolved path is what the blocklist sees, what is compared against the current store path, and what is registered in `model_folder.path`, so the store is recorded where it really lands rather than by the name it was reached through. `payload.path` is validated **first**, before `realpath`, because `realpath` makes a relative path absolute against the server's cwd and would otherwise turn the "must be absolute" refusal into an acceptance. Owner trust is unchanged and no path outside the blocklist became harder to use — pinned in both directions by `tests/test_model_shelf_api.py::test_a_symlink_into_a_system_directory_is_refused_not_followed` (a link into `/usr` refused; a link to an ordinary directory still relocates).
 
     **Scope of that guarantee (do not over-read it).** Loopback enforcement inherits the pre-existing proxy caveat in CSO Condition 2 below, shared with the other four loopback routes: a reverse proxy that sets no `X-Forwarded-For`, or passes an inbound one through, can make a remote caller resolve to loopback. So the correct claim is that safety depends on the flag being off **or** the proxy being configured correctly — *not* that it stops depending on the flag entirely. Container port-mapping is **not** a bypass (Docker bridge / slirp present `172.17.x` / `10.0.2.x`, which are not loopback).
+
+  - **Updated 2026-08-12 (shelf plan F6's remainder, `Add file`) — the locality total is now `31 = 26 local + 5 loopback`.** `POST /api/v1/model-files` copies one loose model file from anywhere on this machine into a registered folder — the managed store unless another is named — and registers it, so a single adapter that belongs to no training run reaches the shelf without a folder being registered for it. It is the **second** route on this tier for both reasons at once (the relocate above is the first): it takes a caller-supplied host path like `POST /model-folders` and writes a file into a registered folder like `POST /model-moves`. It is also the first shelf route that takes a host path in its **body**, which the import block deliberately does not — and that cannot be avoided here, because the file is by definition somewhere nobody registered. So the containment moves to the write (`resolve_path_within` against the destination folder, which also refuses a symlink standing at the destination name) and the read is bounded instead: one regular `MODEL_SUFFIX` file, refused outright when it already lies inside a registered folder, since a second copy of a catalogued file is not what the owner meant and a rescan is. It never unlinks anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_26_local_5_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 

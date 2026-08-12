@@ -462,6 +462,16 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 copies a run's files into a registered host folder and, when the source folder carries delete_after_import, unlinks them from the output root — the same filesystem authority as POST /model-moves; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # ── model_files.py (shelf plan F6, `Add file`; §16.3 host-capability) ──
+    # The one shelf route that READS a caller-supplied host path — the loose
+    # file it copies is by definition in a folder nobody registered — and it
+    # writes into a registered folder. Both halves are already on this tier
+    # (POST /model-folders takes a path, POST /model-moves writes files), so it
+    # is on it for both. It never unlinks: the source is the owner's own file.
+    ("POST", "/api/v1/model-files"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 takes a caller-supplied host path, copies that file into a registered host folder and registers it — the POST /model-folders path-taking class carrying the file writing of POST /model-moves, minus the unlink; the read is bounded to one regular .safetensors file and the write is contained against the destination folder; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
         _LOCAL,

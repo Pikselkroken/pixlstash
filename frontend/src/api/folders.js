@@ -98,12 +98,22 @@ export async function detectSidecars(path) {
  * @param {string|null} [path] - omit or pass null for the default root.
  * @param {Object} [options]
  * @param {boolean} [options.showHidden=false] - include dot-entries.
+ * @param {boolean} [options.includeModelFiles=false] - also list model files,
+ *   for the shelf's `Add file` picker. Off for every other caller, which is
+ *   choosing a directory and would only have its subfolders buried.
  * @returns {Promise<Object>} the response body: `entries` and the resolved
  *   `path` (which may differ from the requested one).
  */
-export async function browseFilesystem(path, { showHidden = false } = {}) {
+export async function browseFilesystem(
+  path,
+  { showHidden = false, includeModelFiles = false } = {},
+) {
   return unwrap(apiClient.get("/filesystem/browse", {
-    params: { path: path ?? undefined, show_hidden: showHidden },
+    params: {
+      path: path ?? undefined,
+      show_hidden: showHidden,
+      include_model_files: includeModelFiles,
+    },
   }));
 }
 
