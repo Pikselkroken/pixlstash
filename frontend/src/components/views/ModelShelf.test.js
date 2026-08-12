@@ -12,10 +12,17 @@ import { setActivePinia, createPinia } from "pinia";
 
 const listAdapters = vi.fn();
 const listCheckpoints = vi.fn();
+// The engines block is the same route with `file_kind=engine`, and a different
+// result set. Its own double, or every `listAdapters.mockResolvedValue` here
+// would answer it with adapter rows and the shelf would render each one twice.
+const listEngines = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
-  listAdapters: (...args) => listAdapters(...args),
+  listAdapters: (...args) =>
+    args[0]?.fileKind === "engine"
+      ? listEngines(...args)
+      : listAdapters(...args),
   listCheckpoints: (...args) => listCheckpoints(...args),
 }));
 
@@ -94,6 +101,7 @@ function adapter(overrides = {}) {
 async function mountShelf(rows, checkpoints = []) {
   listAdapters.mockResolvedValue(rows);
   listCheckpoints.mockResolvedValue(checkpoints);
+  listEngines.mockResolvedValue([]);
   const wrapper = mount(ModelShelf, globalOpts);
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
@@ -110,6 +118,7 @@ beforeEach(() => {
   window.localStorage.clear();
   listAdapters.mockReset();
   listCheckpoints.mockReset();
+  listEngines.mockReset().mockResolvedValue([]);
   listModelFolderDevices.mockReset();
   listModelFolderDevices.mockResolvedValue([]);
   listModelFolders.mockReset();
@@ -1113,7 +1122,12 @@ describe("a run's disclosure", () => {
   function run() {
     return [
       adapter({ id: 1, stack_id: 7, stack_position: 0 }),
-      adapter({ id: 2, stack_id: 7, stack_position: 1, sha256: "b".repeat(64) }),
+      adapter({
+        id: 2,
+        stack_id: 7,
+        stack_position: 1,
+        sha256: "b".repeat(64),
+      }),
     ];
   }
 
@@ -1195,9 +1209,7 @@ describe("the icon verb", () => {
     // is going to refuse.
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const input = wrapper.find('input[type="file"]');
-    expect(input.attributes("accept")).toBe(
-      "image/png,image/jpeg,image/webp",
-    );
+    expect(input.attributes("accept")).toBe("image/png,image/jpeg,image/webp");
   });
 });
 

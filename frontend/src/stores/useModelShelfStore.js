@@ -234,6 +234,10 @@ function defaultView() {
  * `unclassified` is off because a file we could not identify is not something
  * to put in front of someone who came to find a LoRA; it is a first-class
  * state with its own checkbox, never folded into either other bucket.
+ * `engines` is on for the opposite reason: they are the answer to "where did
+ * my disk go", and on a measured machine they are 118 GB against the adapters'
+ * few — invisible by default is how they came to be missing from the shelf for
+ * three releases while the architecture note claimed they were on it.
  * `adapterKinds: []` means *every* kind, not *no* kind — an empty multi-select
  * is unconstrained, the standard convention, and the only reading under which
  * a fresh install shows anything.
@@ -244,6 +248,7 @@ function defaultFilters() {
     adapterKinds: [],
     checkpoints: true,
     unclassified: false,
+    engines: true,
     baseModels: [],
   };
 }
@@ -281,7 +286,7 @@ function storedFilters() {
   const parsed = readStored(FILTERS_KEY);
   if (!parsed) return null;
   const filters = defaultFilters();
-  for (const key of ["adapters", "checkpoints", "unclassified"]) {
+  for (const key of ["adapters", "checkpoints", "unclassified", "engines"]) {
     if (typeof parsed[key] === "boolean") filters[key] = parsed[key];
   }
   for (const key of ["adapterKinds", "baseModels"]) {
@@ -383,12 +388,13 @@ function groupsOf(row, axis) {
 }
 
 /** The three top-level type checkboxes, each one request and one row bucket. */
-const BLOCKS = ["adapters", "checkpoints", "unclassified"];
+const BLOCKS = ["adapters", "checkpoints", "unclassified", "engines"];
 
 /** Which block a row came from, so a fetch only replaces what it asked for. */
 function blockOf(row) {
   if (row.file_kind === "checkpoint") return "checkpoints";
   if (row.file_kind === "unknown") return "unclassified";
+  if (row.file_kind === "engine") return "engines";
   return "adapters";
 }
 
@@ -458,6 +464,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       if (filters.unclassified) {
         requests.push(listAdapters({ fileKind: "unknown" }));
       }
+      // The engines block: PixlStash's own taggers and scorers, the
+      // InsightFace packs and every HuggingFace repo in the cache. Same
+      // route, same shape, one more `file_kind`.
+      if (filters.engines) requests.push(listAdapters({ fileKind: "engine" }));
       const results = await Promise.all(requests);
       if (startedAt !== epoch) return;
       const refreshed = new Set(BLOCKS.filter((block) => filters[block]));

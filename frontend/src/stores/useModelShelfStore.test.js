@@ -10,6 +10,11 @@ import { setActivePinia, createPinia } from "pinia";
 
 const listAdapters = vi.fn();
 const listCheckpoints = vi.fn();
+// `/adapters?file_kind=engine` is the same route and a different result set, so
+// it gets its own double. Without the split every `listAdapters.mockResolvedValue`
+// below would answer the engines request with adapter rows too, and the store
+// would look like it had duplicated the shelf.
+const listEngines = vi.fn();
 
 const editModels = vi.fn();
 const forgetModels = vi.fn();
@@ -19,7 +24,10 @@ const clearModelIcons = vi.fn();
 
 vi.mock("../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
-  listAdapters: (...args) => listAdapters(...args),
+  listAdapters: (...args) =>
+    args[0]?.fileKind === "engine"
+      ? listEngines(...args)
+      : listAdapters(...args),
   listCheckpoints: (...args) => listCheckpoints(...args),
   editModels: (...args) => editModels(...args),
   forgetModels: (...args) => forgetModels(...args),
@@ -62,6 +70,7 @@ beforeEach(() => {
   window.localStorage.clear();
   listAdapters.mockReset().mockResolvedValue([]);
   listCheckpoints.mockReset().mockResolvedValue([]);
+  listEngines.mockReset().mockResolvedValue([]);
 });
 
 describe("defaults", () => {
@@ -75,6 +84,40 @@ describe("defaults", () => {
     expect(listAdapters).toHaveBeenCalledWith();
     expect(listCheckpoints).toHaveBeenCalledTimes(1);
     expect(store.activeCount).toBe(0);
+  });
+
+  it("asks for the engines, because nothing else on the shelf shows them", async () => {
+    // The regression this pins: the backend has answered `file_kind=engine`
+    // since #876 and the shelf never asked, so PixlStash's own taggers, the
+    // InsightFace packs and 116 GB of HuggingFace cache were invisible while
+    // the architecture note said they were listed.
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    expect(listEngines).toHaveBeenCalledWith({ fileKind: "engine" });
+  });
+
+  it("stops asking when the box is unticked", async () => {
+    // Over-fetching is its own regression: the block is opt-out, not forced.
+    const store = useModelShelfStore();
+    await store.setFilters({ engines: false }, { refetch: true });
+    expect(listEngines).not.toHaveBeenCalled();
+  });
+
+  it("keeps engine rows in their own bucket, so an adapter refetch cannot drop them", async () => {
+    // `blockOf` decides what a refetch replaces. An engine landing in the
+    // adapters bucket would be wiped by the next adapters-only fetch.
+    listEngines.mockResolvedValue([
+      adapter({
+        id: 900,
+        file_kind: "engine",
+        kind: "tagger",
+        display_name: "WD14 ConvNeXt tagger v3",
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.setFilters({ checkpoints: false }, { refetch: true });
+    expect(store.rows.some((r) => r.id === 900)).toBe(true);
   });
 
   it("asks the adapters block for the unclassified files", async () => {
