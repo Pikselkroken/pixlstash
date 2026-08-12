@@ -1044,6 +1044,99 @@ Named follow-ups (recorded, not yet done):
    space, so a pinch centroid drives `wheelZoom`/`snapTo` unchanged — the
    composable is pinch-ready; only the gesture recognition is missing.
 
+## 7. Theming and Styling
+
+> This heading was missing from the body until 2026-08-12, so the table of
+> contents' `#7-theming-and-styling` link had nothing to land on. Sections 6 and
+> 8 were adjacent and everything below read as part of "Utility Modules".
+
+### The design system is upstream of this document
+
+**PixlStash has a published design system, and it is the source for anything
+visual: <https://claude.ai/design/p/ac544c9e-b278-4439-be75-e442fca29d41>.**
+New UI is built against it, not against whatever the nearest component happens
+to do.
+
+It is readable and writable from a session through the **`DesignSync`** tool
+(`list_files`, `get_file`; `finalize_plan` then `write_files` to publish). It is
+not a picture of the product: it holds the tokens, the React component
+primitives, the foundation guideline cards, and a UI kit of real app surfaces.
+
+| Path | What it is |
+|---|---|
+| `styles.css` | Entry point. Imports the four token partials and nothing else |
+| `tokens/colors.css` | Every colour token plus the semantic aliases |
+| `tokens/typography.css` | Families, the type ramp, weights, leading, tracking |
+| `tokens/spacing.css` | Spacing, radius, elevation, motion, layout fixtures |
+| `tokens/fonts.css` | `@font-face` for Tiny5 |
+| `components/core/`, `components/forms/` | The reusable primitives, each with a `.d.ts` and a `.prompt.md` |
+| `guidelines/` | Foundation specimen cards, plus `visual-language.md` mirrored from this repo |
+| `ui_kits/app/` | Real app surfaces: `index`, `toolbar-menus`, `dedup-stacks`, `folder-browser`, `folder-editor`, `character-editor`, `dialogs`, `stats-sidebar`, `review-sessions`, `undo-redo`, `model-shelf` |
+
+**Which direction wins, when they disagree.** The design system's own readme
+states it: *"The token values here mirror `docs/design/design-tokens.css` in the
+repo — that file is the law. If this project and the repo disagree, the repo
+wins; fix the drift here."* So the repo is authoritative for **token values**,
+and the design system is authoritative for **how a surface is composed**, meaning what
+a shelf row, a triage queue or a folder header is made of. Both directions have
+drifted in practice, so check rather than assume: on 2026-08-11 the readme's
+prose named an accent of `#b0732b` and an olive of `#8ea604` while `main.js` and
+`tokens/colors.css` both shipped `#c47a1e` and `#567309`. The prose was stale;
+the tokens were not.
+
+### Building a new surface
+
+1. **Look in `ui_kits/app/` first.** If the surface exists there, it is the
+   spec, so read it before writing a component, and prefer its structure to a
+   fresh invention. `dedup-stacks.html` is the reference for two-tier detection
+   and per-group adjudication; `toolbar-menus.html` is the reference for the
+   `.tbm` popover shell, and the model shelf's `Show` / `Group by` / `Sort`
+   panels are that same shell rather than new components.
+2. **Reuse the DS controls.** The readme is blunt about it: *"Do not hand-roll a
+   checkbox, toggle, segmented control, button, tag, input, or star rating."*
+   Bespoke re-implementations drift from the tokens (wrong olive, wrong radius,
+   wrong hover) and are the thing the system exists to prevent. If a control is
+   genuinely missing, add it to `components/` with its `.d.ts` and `.prompt.md`
+   so the next surface reuses it.
+3. **Design dark-first.** The app defaults to dark and `:root` in
+   `tokens/colors.css` *is* the dark palette; light is `[data-theme="light"]`.
+4. **Never hardcode** a hex, a shadow, an off-ramp font size, or an off-grid
+   space. Four radii and a pill. Headings are 600, never 700. Text is never pure
+   `#ffffff` or `#000000`. `--text` is warm, and `--accent-on` (`#f7f1ea`) is
+   the label colour on any deep brand or status fill.
+
+### Publishing a card back to the design system
+
+A card is a self-contained HTML file whose **first line** is a `@dsCard` marker;
+the Design System pane builds its index from that, so no separate registration
+is needed:
+
+```html
+<!-- @dsCard group="UI Kits · App" viewport="1240x1720" name="Model Shelf" subtitle="…" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PixlStash — Model Shelf</title>
+<link rel="stylesheet" href="../../styles.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7/css/materialdesignicons.min.css">
+```
+
+Two conventions that are not guessable and will be wrong if you assume them:
+
+- **Every card ships a `.light.html` twin**, and the twin needs *both*
+  `data-theme="light"` on `<html>` **and** an inline `<style>` restating the
+  light palette on bare `:root`. The reason is written in
+  `folder-editor.light.html`: *"force light palette in gallery thumbnail
+  (thumbnailer skips `[data-theme]`)"*. Derive the twin from the dark file
+  mechanically rather than maintaining two files, or they drift.
+- **The card's `name` gets a `— Light` suffix**; everything else is identical.
+
+Verify before publishing that every `var(--…)` the card references actually
+exists in the three token files, and that none is from the deprecated alias list
+at the bottom of `spacing.css` / `typography.css`. An undefined `var()` renders
+as nothing and reads as a styling bug.
+
 ### Vuetify custom themes
 
 Two themes are registered in `main.js`: `pixlStashLight` and `pixlStashDark`. Both share the same token names but different values.

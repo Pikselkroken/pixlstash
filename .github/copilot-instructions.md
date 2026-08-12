@@ -1,26 +1,74 @@
 # Copilot and Claude Instructions for PixlStash
 
-## Never edit the shared checkout
+## The repository layout: peer checkouts, no privileged one
 
-Several agent sessions run against this repository at once. They collide: a
-session that starts work on `develop` can find itself on someone else's branch
-mid-task, holding someone else's uncommitted files, with its own branch renamed
-out from under it. Nothing warns you, and the first symptom is usually a commit
-that picks up the wrong files.
+Several agent sessions run against this repository at once, and they used to
+collide: a session that started work on `develop` could find itself on someone
+else's branch mid-task, holding someone else's uncommitted files, with its own
+branch renamed out from under it. Nothing warned you, and the first symptom was
+usually a commit that picked up the wrong files.
 
-**Any session that will edit a file starts with `EnterWorktree`.** Then set the
-real base, because the tool branches from `origin/main` by default:
+`~/Projects/pixlstash` is therefore **a container, not a checkout**:
 
 ```
+~/Projects/pixlstash/
+  .bare/         the git dir
+  .git           one line: gitdir: ./.bare
+  develop/       a worktree pinned to develop, never anything else
+  main/          a worktree pinned to main
+  worktrees/     one per session
+```
+
+**The layout is what enforces this, not the rule.** Git refuses to have one
+branch checked out in two worktrees, so once `develop/` holds `develop` no
+session can take it away, and no session can silently retarget it. That is a
+mechanical guarantee where the previous "never edit the shared checkout"
+instruction was a remembered one, and remembered ones are what failed.
+
+`develop/` and `main/` are **test rigs**. They are kept current and are never
+edited or branched off in place. All work happens in `worktrees/`.
+
+### Starting work
+
+`EnterWorktree` creates under `<repo>/.claude/worktrees/`, which is not
+configurable, so a session started in `develop/` would put its worktree inside
+the test rig. Create it as a peer instead and enter it by path:
+
+```
+git worktree add ~/Projects/pixlstash/worktrees/<name>
+# then: EnterWorktree with path: ~/Projects/pixlstash/worktrees/<name>
 git fetch origin && git checkout -B <branch> origin/<base>
+ln -s ~/Projects/pixlstash/develop/frontend/node_modules frontend/node_modules
 ```
 
-Commit and push from the worktree, open the PR, then `ExitWorktree` with
-`remove`. Never `git add`, `git commit`, or `git checkout` in the shared
-checkout, and never stage a file you did not write in this session: stage by
-name, not `git add -A`.
+Set the base explicitly: the default is `origin/main` and feature work is
+almost always based on `develop`. The `node_modules` symlink is what makes the
+worktree actually runnable: without it `npm run dev` and `vitest` both fail on
+a fresh worktree, which is most of why worktrees were awkward to test in.
+
+**The hub and the vault live outside the repo** (platformdirs user data dir), so
+every checkout runs against the same library you already have configured. That
+is why any worktree is testable at all. Do not "fix" it into per-checkout data.
+
+Commit and push from the worktree, open the PR, then remove the worktree when it
+merges. Never stage a file you did not write in this session: stage by name, not
+`git add -A`.
 
 Sessions that only read (questions, reviewing pushed code) can stay put.
+
+### Say where the work can be tested
+
+A session that changes behaviour ends by stating the path and the commands,
+because the person testing is not in your worktree and cannot guess it:
+
+```
+Test at: ~/Projects/pixlstash/worktrees/<name>   (branch <branch>, based on <base>)
+  backend:  cd ~/Projects/pixlstash/worktrees/<name> && python -m pixlstash.app
+  frontend: cd ~/Projects/pixlstash/worktrees/<name>/frontend && npm run dev
+```
+
+If the work is already merged, say `develop/` instead and say to pull. "It's on
+the branch" is not a test path.
 
 ## Patch Reliability Policy
 
@@ -71,6 +119,16 @@ Scope, once you are reading by section:
    shadow, or `em`/`px` font-size outside the ramp. A genuinely new value is a design
    decision: route it to the `lead-designer` skill, do not inline a one-off. Anything
    that changes a flow, a state, or what a control does also goes past the `ui-ux-expert`.
+
+   **And read the design system before you build the surface.** It is a
+   published Claude Design project,
+   <https://claude.ai/design/p/ac544c9e-b278-4439-be75-e442fca29d41>, readable
+   through the `DesignSync` tool. `/docs/design/` tells you what the *values*
+   are; the design system tells you what the *surface* is made of, and
+   `ui_kits/app/` already holds real specs for the app's screens. Building a
+   screen that exists there without reading it is how a surface gets invented
+   twice and disagrees with itself. Full contract in
+   `docs/frontend_architecture.md` §7.
 
 Task classification rules:
 - If the task involves UI, components, state management, routing, or client-side logic → treat it as a frontend task **and apply the design manual (item 4)**.
