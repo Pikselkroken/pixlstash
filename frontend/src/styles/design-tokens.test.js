@@ -55,12 +55,32 @@ const opacity = Number(
   tokens.match(/--opacity-text-secondary:\s*([\d.]+);/)?.[1],
 );
 
-// Split main.js at the dark theme's first colour so each half yields its own
-// palette; the two themes reuse the same key names.
-const darkAt = mainJs.indexOf('sidebar: "#23282f"');
+/**
+ * Slice one Vuetify theme out of main.js by its declaration, so each half
+ * yields its own palette (the two themes reuse the same key names).
+ *
+ * Keyed on the theme's NAME, never on one of its colours: keying on a hex
+ * would break the moment the palette it is meant to police changes — the
+ * Camp B migration edits exactly those values — and the guard would then fail
+ * for the wrong reason. Both failure modes throw and say what moved, so a
+ * rename can never degrade into a silently wrong comparison.
+ */
+function themeBlock(name) {
+  const start = mainJs.indexOf(`const ${name} = {`);
+  if (start === -1) {
+    throw new Error(
+      `theme '${name}' not found in main.js — renamed or moved? This guard ` +
+        `must be repointed at the live themes, not deleted.`,
+    );
+  }
+  const end = mainJs.indexOf("\n};", start);
+  if (end === -1) throw new Error(`theme '${name}' block is unterminated`);
+  return mainJs.slice(start, end);
+}
+
 const themes = {
-  light: mainJs.slice(0, darkAt),
-  dark: mainJs.slice(darkAt),
+  light: themeBlock("pixlStashLight"),
+  dark: themeBlock("pixlStashDark"),
 };
 
 describe("--opacity-text-secondary", () => {
