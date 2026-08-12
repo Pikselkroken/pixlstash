@@ -344,26 +344,71 @@
             </button>
           </h3>
 
-          <!-- `role="listbox"` with `aria-multiselectable`, which is what the
-               rows became when the checkbox left: a list you select from with
-               click, Ctrl+click and Shift+click IS a multi-select listbox, and
-               the role is what tells a screen reader that. It is legitimate
-               here and was not in `ModelFoldersDialog` for the same reason in
-               reverse — these rows hold no interactive controls, and a control
-               inside `role="option"` is unreachable. -->
+          <!-- `role="treegrid"`, which is what the rows became once they got
+               columns. A listbox cannot carry a `columnheader`, so nothing
+               named what the figures in a row meant (#891); a treegrid can,
+               and its keyboard model is already the one this list implements —
+               Up/Down walk rows, Right/Left open and close a run, and
+               `aria-multiselectable` + `aria-selected` still say what is
+               picked. A run's other steps are CHILD rows, which is the "tree"
+               half: they carry `aria-level="2"` because the DOM draws them as
+               siblings of their cover rather than nesting them.
+
+               A grid also lifts the old ban on controls inside a row — that
+               was a listbox rule. Nothing here takes advantage of it yet, and
+               `.shelf-row-steps` deliberately stays a span. -->
           <ul
             v-if="!grouped || !store.isCollapsed(group.key)"
             class="shelf-list"
-            role="listbox"
+            role="treegrid"
             aria-multiselectable="true"
             :aria-label="grouped ? group.label : 'Models'"
           >
-            <!-- Not a `role="option"`: there is nothing here to select. A
-                 registered folder with no models says which of the two states
-                 it is in, because "we have not looked yet" is the owner's to
-                 act on and "we looked and it is empty" is not. -->
-            <li v-if="!group.rows.length" class="shelf-empty-folder">
-              {{ EMPTY_FOLDER_NOTE[group.emptyReason] }}
+            <!-- The header row. One per grid, because columnheaders only name
+                 the columns of the grid they are in and grouping makes one
+                 grid per group; drawn ONCE, because a strip of column names
+                 under every folder header is noise rather than information.
+                 The other groups keep theirs `visually-hidden`, so the names
+                 are still on every grid for a reader while the eye sees the
+                 single line the design shows.
+
+                 The two glyph columns are headed too — a grid row must have a
+                 cell for every column — with names only a reader gets. -->
+            <li
+              class="ps-row shelf-head-row"
+              :class="{ 'visually-hidden': group.key !== headGroupKey }"
+              role="row"
+            >
+              <span role="columnheader" class="shelf-head-cell">
+                <span class="visually-hidden">Selected</span>
+              </span>
+              <span role="columnheader" class="shelf-head-cell">
+                <span class="visually-hidden">Icon</span>
+              </span>
+              <span role="columnheader" class="shelf-head-cell">Name</span>
+              <span role="columnheader" class="shelf-head-cell">Kind</span>
+              <span role="columnheader" class="shelf-head-cell">Base</span>
+              <span role="columnheader" class="shelf-head-cell"
+                >Assigned to</span
+              >
+              <span
+                role="columnheader"
+                class="shelf-head-cell shelf-head-cell--size"
+                >Size</span
+              >
+              <span role="columnheader" class="shelf-head-cell">
+                <span class="visually-hidden">Status</span>
+              </span>
+            </li>
+            <!-- A row with one spanning cell, because a grid takes nothing but
+                 rows: not selectable, because there is nothing here to select.
+                 A registered folder with no models says which of the two
+                 states it is in, because "we have not looked yet" is the
+                 owner's to act on and "we looked and it is empty" is not. -->
+            <li v-if="!group.rows.length" role="row" class="shelf-empty-folder">
+              <span role="gridcell" :aria-colspan="COLUMN_COUNT">
+                {{ EMPTY_FOLDER_NOTE[group.emptyReason] }}
+              </span>
             </li>
             <!-- The `v-for` sits on a wrapping template, not on the row, so a
                  stack's expanded members can be siblings of their cover inside
@@ -373,8 +418,11 @@
                 class="ps-row shelf-row"
                 :class="{ 'shelf-row--selected': store.isSelected(row.id) }"
                 :title="rowTitle(row)"
-                role="option"
-                :aria-label="rowLabel(row)"
+                role="row"
+                aria-level="1"
+                :aria-expanded="
+                  row.memberCount > 1 ? isStackOpen(row.stack_id) : undefined
+                "
                 :aria-selected="store.isSelected(row.id)"
                 :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
                 :data-row-key="row.rowKey"
@@ -390,13 +438,13 @@
                    checkbox is a second, contradictory way to select in a list
                    whose click already selects, and it was the shelf teaching a
                    dialect the rest of the app does not speak. -->
-                <span class="ps-row-glyph shelf-row-pick">
+                <span role="gridcell" class="ps-row-glyph shelf-row-pick">
                   <v-icon v-if="store.isSelected(row.id)" size="16"
                     >mdi-check</v-icon
                   >
                 </span>
-                <span class="shelf-row-kind">
-                  <!-- Deck ticks behind the kind glyph say "this is more than one
+                <span role="gridcell" class="shelf-row-ident">
+                  <!-- Deck ticks behind the mark say "this is more than one
                      file" before the count is read, exactly as they do on a
                      picture tile. Count-only, so the component reuses cleanly
                      here even though a model has no thumbnail. -->
@@ -408,11 +456,11 @@
                        generated mark. Never the bare kind glyph on its own —
                        every checkpoint row and 37% of adapter rows would then
                        be visually identical, which is the blank column the
-                       icon verb exists to fill. The kind is still said on the
-                       metadata line below, so nothing is lost by the swap. -->
+                       icon verb exists to fill. The kind now has a column of
+                       its own, so nothing is lost by the swap. -->
                   <ModelMark :row="row" />
                 </span>
-                <span class="shelf-row-label">
+                <span role="gridcell" class="shelf-row-label">
                   <span
                     class="shelf-row-name"
                     :class="{ 'shelf-row-name--derived': row.name.derived }"
@@ -421,41 +469,71 @@
                       (name taken from the filename)</span
                     ></span
                   >
-                  <span class="shelf-row-meta">
-                    <span>{{ kindLabel(row) }}</span>
-                    <span>{{ row.base_model || "Base model not set" }}</span>
-                    <span v-if="row.file_size" class="shelf-row-size">{{
-                      formatModelSize(row.file_size)
-                    }}</span>
+                  <!-- Beside the name rather than in a column of its own: the
+                       count belongs to the run's identity, and only stacked
+                       rows carry one, so a track for it would be empty on
+                       nearly every row.
+
+                       A plain span, NOT `StackBadge`, which renders a real
+                       <button>. The grid role would now permit one, but the
+                       row is still the disclosure — Right/Left expand and
+                       collapse — and a second, focusable way to do the same
+                       thing is the dialect this list stopped speaking. No
+                       longer `aria-hidden`: the count is a fact about the row
+                       and a grid cell can simply say it, which is what the
+                       row's hand-built `aria-label` used to do instead. -->
+                  <span
+                    v-if="row.memberCount > 1"
+                    class="shelf-row-steps"
+                    @click.stop="toggleStack(row.stack_id)"
+                  >
+                    <v-icon
+                      size="14"
+                      class="shelf-row-steps-chevron"
+                      :class="{
+                        'shelf-row-steps-chevron--open': isStackOpen(
+                          row.stack_id,
+                        ),
+                      }"
+                      >mdi-chevron-right</v-icon
+                    >
+                    {{ row.memberCount }}
                   </span>
                 </span>
-                <!-- A plain span, NOT `StackBadge`, and that is the whole point:
-                     `StackBadge` renders a real <button>, and a focusable control
-                     inside `role="option"` is unreachable to a listbox's own
-                     keyboard model — which is what the comment above this list
-                     already said and what the first version of this row broke.
-                     The row owns the disclosure instead: Right/Left expand and
-                     collapse, and clicking here toggles without focus ever
-                     landing on a nested control. -->
-                <span
-                  v-if="row.memberCount > 1"
-                  class="shelf-row-steps"
-                  aria-hidden="true"
-                  @click.stop="toggleStack(row.stack_id)"
-                >
-                  <v-icon
-                    size="14"
-                    class="shelf-row-steps-chevron"
-                    :class="{
-                      'shelf-row-steps-chevron--open': isStackOpen(
-                        row.stack_id,
-                      ),
-                    }"
-                    >mdi-chevron-right</v-icon
-                  >
-                  {{ row.memberCount }}
+                <span role="gridcell" class="shelf-col">{{
+                  kindLabel(row)
+                }}</span>
+                <!-- Base is a COLUMN, not a phrase on a metadata line: it is
+                     the field a reader scans a shelf for, and it can only be
+                     scanned if it aligns. The header names it, so the empty
+                     case is "Not set" rather than the sentence the meta line
+                     had to carry. -->
+                <span role="gridcell" class="shelf-col">
+                  <span v-if="row.base_model">{{ row.base_model }}</span>
+                  <span v-else class="shelf-col-none">Not set</span>
                 </span>
+                <!-- The column exists here; the marks that belong in it are
+                     #892. Until then it states the fact `row.attachments`
+                     already carries — how many characters and sets a model is
+                     assigned to — rather than sitting blank under a header
+                     that promises something. `attachments` holds ids and no
+                     names, so naming the entities is not available without the
+                     lookup that issue owns. -->
+                <span role="gridcell" class="shelf-col shelf-col--assigned">
+                  <template v-if="attachedCount(row)">
+                    {{ attachedCount(row)
+                    }}<span class="visually-hidden"> assigned</span>
+                  </template>
+                  <template v-else>
+                    <span aria-hidden="true">—</span>
+                    <span class="visually-hidden">Not assigned</span>
+                  </template>
+                </span>
+                <span role="gridcell" class="shelf-col shelf-col--size">{{
+                  row.file_size ? formatModelSize(row.file_size) : ""
+                }}</span>
                 <span
+                  role="gridcell"
                   class="shelf-row-loc"
                   :class="`shelf-row-loc--${row.locState}`"
                   :title="LOC_TITLE[row.locState]"
@@ -476,21 +554,29 @@
                   v-for="member in row.members.slice(1)"
                   :key="`${row.rowKey}:${member.id}`"
                   class="ps-row shelf-row shelf-row--member"
+                  role="row"
+                  aria-level="2"
                 >
-                  <span class="ps-row-glyph"></span>
-                  <span class="shelf-row-kind">
+                  <span role="gridcell" class="ps-row-glyph"></span>
+                  <span role="gridcell" class="shelf-row-ident">
                     <v-icon size="14">mdi-subdirectory-arrow-right</v-icon>
                   </span>
-                  <span class="shelf-row-label">
+                  <span role="gridcell" class="shelf-row-label">
                     <span class="shelf-row-name">{{
                       memberLabel(member)
                     }}</span>
-                    <span class="shelf-row-meta">
-                      <span v-if="member.file_size">{{
-                        formatModelSize(member.file_size)
-                      }}</span>
-                    </span>
                   </span>
+                  <!-- A step of a run has no kind, base or assignment of its
+                       own — those are the run's, one row up — but a grid row
+                       still owes a cell per column, and an empty one is the
+                       honest way to say "same as the run". -->
+                  <span role="gridcell" class="shelf-col"></span>
+                  <span role="gridcell" class="shelf-col"></span>
+                  <span role="gridcell" class="shelf-col"></span>
+                  <span role="gridcell" class="shelf-col shelf-col--size">{{
+                    member.file_size ? formatModelSize(member.file_size) : ""
+                  }}</span>
+                  <span role="gridcell" class="shelf-row-loc"></span>
                 </li>
               </template>
             </template>
@@ -1079,20 +1165,22 @@ function onRowKeydown(row, event) {
 }
 
 /**
- * The row's accessible name.
+ * How many characters and sets a model is assigned to.
  *
- * The step count and the open/closed state are drawn in an `aria-hidden` span,
- * because the only non-hidden way to expose them inside `role="option"` would
- * be a nested control — the thing this row must not have. So they are spoken
- * here instead, and a reader hears "6 files, collapsed" rather than meeting a
- * button that the listbox's arrow keys cannot reach.
+ * The count only, because `attachments` carries `entity_type` and `entity_id`
+ * and no names: saying WHICH ones needs the character and set stores, which is
+ * what #892 brings when it replaces this cell with marks.
  */
-function rowLabel(row) {
-  const name = row.name.text;
-  if (!(row.memberCount > 1)) return name;
-  const state = isStackOpen(row.stack_id) ? "expanded" : "collapsed";
-  return `${name}, ${row.memberCount} files, ${state}`;
+function attachedCount(row) {
+  return (row.attachments ?? []).length;
 }
+
+/**
+ * Cells per row, so the header row, the rows and the empty-folder row's
+ * `aria-colspan` cannot drift apart. A grid where one row has a different cell
+ * count is a grid a reader is lied to about.
+ */
+const COLUMN_COUNT = 8;
 
 /**
  * What an empty folder group says, per reason.
@@ -1166,6 +1254,22 @@ const countLabel = computed(() => {
 
 /** True while the list is cut into groups, i.e. headers are drawn. */
 const grouped = computed(() => store.view.groupBy !== "none");
+
+/**
+ * The one group whose column-header row is drawn rather than only announced.
+ *
+ * The first group that has rows and is not collapsed: a header names columns,
+ * and columns the reader cannot see are not worth a line. Every other group
+ * still carries its own copy `visually-hidden`, because a `columnheader` heads
+ * the grid it is in and nothing else — grouping makes one grid per group.
+ */
+const headGroupKey = computed(
+  () =>
+    shownGroups.value.find(
+      (group) =>
+        group.rows.length && (!grouped.value || !store.isCollapsed(group.key)),
+    )?.key ?? "",
+);
 
 const activeSort = computed(
   () => SORT_LABELS[store.view.sortKey] || SORT_LABELS.added_at,
@@ -1525,7 +1629,7 @@ watch(
   width: var(--entity-thumb);
   display: inline-flex;
   align-items: center;
-  /* 0.7 on the canvas colour, the same secondary weight `.shelf-row-meta`
+  /* 0.7 on the canvas colour, the same secondary weight `.shelf-col`
      carries and a defined theme key — `on-surface-variant` is Vuetify's and is
      not in this app's palettes. */
   color: rgba(var(--v-theme-on-background), 0.7);
@@ -1570,18 +1674,42 @@ watch(
    (SideBar.global.css, visual-language.md §5.1) via `.ps-row`; only the
    columns and the vertical rhythm are the shelf's own. Column 1 stays
    reserved and empty: grouping fills it, and a column that appears later
-   would move every label sideways. */
-.shelf-row {
+   would move every label sideways.
+
+   The four data columns are FIXED widths, not `auto`. Grouping makes one grid
+   per group, so `auto` tracks would be measured against that group's contents
+   alone and the columns would step sideways from one folder to the next —
+   which is the alignment the whole change is for. The three figures are the
+   resolved design's own (ui_kits/app/model-shelf.html, row anatomy);
+   `Assigned to` has no width there because that design carries assignment as
+   a ring on the identity mark instead, so it is stated in the mark's own
+   token — two marks wide is what a fanned pair needs (#892). */
+.shelf {
+  --shelf-col-kind: 64px;
+  --shelf-col-base: 84px;
+  --shelf-col-assigned: calc(var(--entity-thumb) * 2);
+  --shelf-col-size: 74px;
+}
+
+.shelf-row,
+.shelf-head-row {
   display: grid;
   grid-template-columns:
     var(--gutter-glyph)
     var(--entity-thumb)
     minmax(0, 1fr)
-    auto;
+    var(--shelf-col-kind)
+    var(--shelf-col-base)
+    var(--shelf-col-assigned)
+    var(--shelf-col-size)
+    var(--gutter-glyph);
   align-items: center;
   gap: var(--space-2);
   padding-top: var(--space-2);
   padding-bottom: var(--space-2);
+}
+
+.shelf-row {
   transition: background var(--dur-1) var(--ease-standard);
   /* Native windowing: the browser skips layout and paint for rows outside the
      viewport, which is what 1,800 rows need and is two lines rather than a
@@ -1595,7 +1723,63 @@ watch(
   background: var(--hover-wash);
 }
 
-.shelf-row-kind {
+/* One hairline, which is what makes this read as a head rather than as a first
+   row. It does not double up with the group header's: that one is a sticky band
+   ABOVE this, a row's height away, not at the same boundary. Not sticky itself
+   — the folder header is the shelf's one sticky level, and a second needs the
+   stacking arithmetic no token knows (see the group-header block above). */
+.shelf-head-row {
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+/* Rank is case, size and tracking, never opacity — the same treatment the
+   group label carries, so a column name reads as one rank above the figures
+   under it without being drawn darker than them. */
+.shelf-head-cell {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-on-background), 0.7);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-head-cell--size {
+  text-align: right;
+}
+
+/* The figures the header names. 0.7, not 0.6: at 12px the lower alpha measures
+   4.07:1 on the light canvas and misses the 4.5:1 floor. */
+.shelf-col {
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-background), 0.7);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-col--assigned {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.shelf-col--size {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* An absent value, said in words rather than left blank: a blank cell reads as
+   a rendering gap, and "which of these has no base model" is a question the
+   column exists to answer. Italic, because rank here is style and not another
+   step down in contrast. */
+.shelf-col-none {
+  font-style: italic;
+}
+
+.shelf-row-ident {
   display: inline-flex;
   justify-content: center;
   color: rgba(var(--v-theme-on-background), 0.7);
@@ -1604,7 +1788,31 @@ watch(
 .shelf-row-label {
   min-width: 0;
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The run's step count, riding with the name. `flex: none` so it is the name
+   that ellipsises when the column is tight and never the count, which is two
+   characters and the reason the row is stacked. */
+.shelf-row-steps {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* One icon rotated, not two swapped, the same as the group chevron — the class
+   was already bound here and had nothing to do. */
+.shelf-row-steps-chevron {
+  transition: transform var(--dur-2) var(--ease-standard);
+}
+
+.shelf-row-steps-chevron--open {
+  transform: rotate(90deg);
 }
 
 .shelf-row-name {
@@ -1624,27 +1832,12 @@ watch(
   font-weight: var(--weight-regular);
 }
 
-.shelf-row-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-xs);
-  /* 0.7, not 0.6: at 12px the lower alpha measures 4.07:1 on the light canvas
-     and misses the 4.5:1 floor. */
-  color: rgba(var(--v-theme-on-background), 0.7);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.shelf-row-size {
-  font-variant-numeric: tabular-nums;
-}
-
+/* No `margin-left` any more: the status glyph is a column of its own now, and
+   a margin inside a `--gutter-glyph` track would leave the icon 4px to sit in
+   and push it out of its own cell. The grid's gap is what separates it. */
 .shelf-row-loc {
   display: inline-flex;
   width: var(--gutter-glyph);
-  margin-left: var(--space-3);
 }
 
 .shelf-row-loc--present {
