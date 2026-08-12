@@ -199,3 +199,48 @@ export const SET_COLORS = [
   { value: "#a1887f", label: "Warm Brown" },
   { value: "#76ff03", label: "Electric Green" },
 ];
+
+/**
+ * The palette entry after `lastValue`, skipping anything in `used`.
+ * `lastValue` absent from the palette starts the scan at the head.
+ */
+function nextFromPalette(palette, lastValue, used) {
+  const start = palette.indexOf(lastValue) + 1;
+  for (let offset = 0; offset < palette.length; offset++) {
+    const candidate = palette[(start + offset) % palette.length];
+    if (!used.has(candidate)) return candidate;
+  }
+  return palette[start % palette.length];
+}
+
+/**
+ * Default icon and colour for a new set (#457).
+ *
+ * Rotates on from the most recently created set rather than always offering
+ * the head of the palette: picking the first *unused* entry handed out
+ * `mdi-camera` / red again every time a set was made in a fresh project, or
+ * whenever the user replaced an earlier default with a hand-picked icon.
+ *
+ * @param {Array<Object>} allSets - every set; only the newest one is read, so
+ *   the rotation continues across projects.
+ * @param {Array<Object>} [siblingSets=allSets] - the sets the new one will sit
+ *   beside; their icons and colours are skipped so siblings stay distinct.
+ * @returns {{set_icon: string, set_color: string}}
+ */
+export function nextSetAppearance(allSets, siblingSets = allSets) {
+  const icons = SET_ICONS.map((ic) => ic.value);
+  const colors = SET_COLORS.map((c) => c.value);
+  const newestFirst = [...allSets].sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+  return {
+    set_icon: nextFromPalette(
+      icons,
+      newestFirst.map((s) => s.set_icon).find((v) => icons.includes(v)),
+      new Set(siblingSets.map((s) => s.set_icon)),
+    ),
+    set_color: nextFromPalette(
+      colors,
+      newestFirst.map((s) => s.set_color).find((v) => colors.includes(v)),
+      new Set(siblingSets.map((s) => s.set_color)),
+    ),
+  };
+}
