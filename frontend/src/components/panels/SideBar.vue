@@ -63,10 +63,10 @@ import {
   withEntityProjectIds,
 } from "../../utils/projectMembership.js";
 import {
-  SET_ICONS,
   SET_COLORS,
   SET_ICON_CATEGORIES,
   ICON_CARDS,
+  nextSetAppearance,
 } from "../../utils/setAppearance.js";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
@@ -1129,30 +1129,17 @@ function createSet() {
   const defaultProjectId =
     projectViewMode.value === "project" ? selectedProjectId.value : null;
 
-  // Pick an icon and color not already in use by sibling sets.
+  // Rotate on from the newest set, skipping what the siblings already use.
   const siblingScope =
     defaultProjectId !== null
       ? nonReferenceSets.value.filter((s) =>
           entityBelongsToProject(s, defaultProjectId),
         )
       : nonReferenceSets.value;
-  const usedIcons = new Set(
-    siblingScope.map((s) => s.set_icon).filter(Boolean),
-  );
-  const usedColors = new Set(
-    siblingScope.map((s) => s.set_color).filter(Boolean),
-  );
-  const autoIcon =
-    SET_ICONS.find((i) => !usedIcons.has(i.value))?.value ??
-    SET_ICONS[siblingScope.length % SET_ICONS.length].value;
-  const autoColor =
-    SET_COLORS.find((c) => !usedColors.has(c.value))?.value ??
-    SET_COLORS[siblingScope.length % SET_COLORS.length].value;
 
   setEditorSet.value = {
     ...(defaultProjectId !== null ? { project_id: defaultProjectId } : {}),
-    set_icon: autoIcon,
-    set_color: autoColor,
+    ...nextSetAppearance(nonReferenceSets.value, siblingScope),
   };
   setEditorOpen.value = true;
 }
