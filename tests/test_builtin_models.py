@@ -352,3 +352,74 @@ def test_both_extra_roots_are_owned_so_the_scanner_skips_them(server_hub, tmp_pa
     assert folder["owner"] == BUILTIN_OWNER
     assert folder["kind"] == "foreign"
     assert folder["movable"] == "root_only"
+
+
+def test_a_repo_deleted_from_the_cache_stops_claiming_its_bytes(
+    server_hub, tmp_path, monkeypatch
+):
+    """The sweep these folders have nowhere else to get.
+
+    The scanner marks what it did not see `missing` on every walk, and it skips
+    these folders because they carry an `owner`. So a repo that leaves the
+    HuggingFace index — `huggingface-cli delete-cache` — would otherwise keep a
+    `present` row claiming 32 GB that is not on the disk, which is exactly the
+    number `present_bytes` reports on the folder list.
+    """
+    import huggingface_hub
+
+    class _Repo:
+        def __init__(self, repo_id, path, size):
+            self.repo_id = repo_id
+            self.repo_type = "model"
+            self.repo_path = path
+            self.size_on_disk = size
+
+    def _cache(repos):
+        return type("_Info", (), {"repos": repos})()
+
+    both = [
+        _Repo("org/keep", "models--org--keep", 100),
+        _Repo("org/drop", "models--org--drop", 32_000),
+    ]
+    # `monkeypatch`, not assignment: a bare write here outlives the test and
+    # every later one in the shard would get this stub instead of the library.
+    monkeypatch.setattr(huggingface_hub, "scan_cache_dir", lambda _p: _cache(both))
+    folder_id = declare_huggingface_cache(server_hub, str(tmp_path))
+
+    def _state(name):
+        row = server_hub.fetchone(
+            "SELECT mf.state FROM model_file mf JOIN model m ON m.id = mf.model_id "
+            "WHERE mf.model_folder_id = ? AND m.display_name = ?",
+            (folder_id, name),
+        )
+        return None if row is None else row["state"]
+
+    assert _state("org/drop") == "present"
+
+    # The owner deletes one from the cache; the next declaration must notice.
+    monkeypatch.setattr(huggingface_hub, "scan_cache_dir", lambda _p: _cache(both[:1]))
+    declare_huggingface_cache(server_hub, str(tmp_path))
+
+    assert _state("org/drop") == "missing", (
+        "a repo that left the cache still claims its bytes are on the disk"
+    )
+    # The positive control: the survivor is untouched, so the sweep is not just
+    # marking everything missing.
+    assert _state("org/keep") == "present"
+
+
+def test_the_sweep_does_not_touch_a_declared_engine_that_is_simply_absent(
+    server_hub, tmp_path
+):
+    """`missing` for a declared engine is decided by the existence check, not by
+    the sweep: the built-in entry set is fixed and always names every row, so a
+    re-declaration must leave a present engine present."""
+    (tmp_path / "sa_0_4_vit_b_32_linear.pth").write_bytes(b"z" * 8)
+    folder_id = declare_builtin_models(server_hub, str(tmp_path))
+    declare_builtin_models(server_hub, str(tmp_path))
+
+    row = server_hub.fetchone(
+        "SELECT state FROM model_file WHERE model_folder_id = ? AND relpath = ?",
+        (folder_id, "sa_0_4_vit_b_32_linear.pth"),
+    )
+    assert row["state"] == "present"

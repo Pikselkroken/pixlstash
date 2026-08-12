@@ -1359,6 +1359,17 @@ displayed one. The fourth block (`filters.engines`, on by default) is what makes
 that sentence true. A row's block comes from `blockOf`, so engines refetch and
 are replaced independently of the other three.
 
+**A declaration sweeps what it no longer names**, and these folders have nowhere
+else to get that. The scanner marks anything it did not see on a walk `missing`,
+and it skips these precisely because they carry an `owner` — so without a sweep
+in `declare_folder` a row here could never stop being `present`. It is a no-op
+for the built-in engines, whose entry set is a fixed tuple naming every row; it
+exists for the discovered roots, where `huggingface-cli delete-cache` drops a
+repo out of the index and a deleted pack drops out of the listing. The row left
+behind would otherwise claim its bytes forever, inflating the `present_bytes`
+the folder list reports. Predicate is `seen_at <` the run's own stamp, not `!=`,
+so a concurrent declaration cannot have its rows swept by this one.
+
 **Each root is declared independently at start-up**, so one unreadable root
 cannot cost the shelf the other two, and every failure is logged and swallowed:
 a machine that has never run face detection has no InsightFace directory, and one

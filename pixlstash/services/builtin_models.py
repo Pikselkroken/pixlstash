@@ -397,6 +397,28 @@ def declare_folder(hub, folder_path: str, entries) -> Optional[int]:
                 "WHERE model_folder_id = ? AND relpath = ?",
                 (state, now, folder_id, entry.relpath),
             )
+        # The sweep, and these folders have nowhere else to get one. The folder
+        # scanner does this pass for every folder it walks — anything it did not
+        # see this run goes `missing` — and it skips these precisely because
+        # they carry an `owner`, so without this a row here could never stop
+        # being `present`.
+        #
+        # It is a no-op for the built-in engines, whose entry set is a fixed
+        # tuple and always names every row. It exists for the DISCOVERED roots:
+        # `huggingface-cli delete-cache` drops a repo out of the index and
+        # deleting an InsightFace pack drops it out of the listing, and the row
+        # left behind would otherwise claim its bytes are still on the disk
+        # forever — inflating the very `present_bytes` figure the folder list
+        # reports.
+        #
+        # `seen_at <` the run's own stamp rather than `!=`, the same predicate
+        # the scanner uses, so a concurrent declaration that stamped a later
+        # time cannot have its rows swept by this one.
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' "
+            "WHERE model_folder_id = ? AND seen_at < ? AND state <> 'missing'",
+            (folder_id, now),
+        )
         conn.execute(
             "UPDATE model_folder SET last_checked = ? WHERE id = ?", (now, folder_id)
         )
