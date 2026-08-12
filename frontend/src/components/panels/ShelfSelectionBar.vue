@@ -338,11 +338,12 @@ const moveTitle = computed(() => {
 });
 
 /**
- * Whether the selection could become one training run.
+ * Why this selection cannot become one training run, or `""` when it can.
  *
- * The manual counterpart to the toolbar's detection sweep, which proposes only
- * files differing by a training step: a run the detector cannot name is
- * otherwise ungroupable, and there is no other way to say "these are one run".
+ * Stack is the manual counterpart to the toolbar's detection sweep, which
+ * proposes only files differing by a training step: a run the detector cannot
+ * name is otherwise ungroupable, and there is no other way to say "these are
+ * one run".
  *
  * Every gate the route enforces (`services/stack_detector.apply_stack`) is
  * checked here, so the button is never offered where it could only come back
@@ -350,41 +351,54 @@ const moveTitle = computed(() => {
  * with a copy actually present, and ONE folder holding all of them — a run is
  * files that sit together, and stacking across folders would invent one and put
  * its members on two drives.
+ *
+ * The gate and its sentence are ONE computed rather than a boolean beside a
+ * message that has to be kept in step with it. Written as two, the tooltip
+ * named the shared-folder rule for every refusal the boolean made after the
+ * cheap checks — so a selection blocked by an unplugged drive was told its files
+ * were in different folders, which is a different fact and sends the reader to
+ * fix the wrong thing.
  */
-const stackable = computed(() => {
+const stackRefusal = computed(() => {
   const rows = store.selectedRows;
-  if (rows.length < 2) return false;
-  let shared = null;
-  for (const row of rows) {
-    if (row.file_kind !== "adapter" || row.stack_id != null) return false;
-    const here = (row.locations || [])
-      .filter((loc) => loc.state === "present")
-      .map((loc) => Number(loc.folder_id));
-    if (!here.length) return false;
-    shared =
-      shared === null
-        ? new Set(here)
-        : new Set(here.filter((id) => shared.has(id)));
-    if (!shared.size) return false;
-  }
-  return true;
-});
-
-const stackTitle = computed(() => {
-  const rows = store.selectedRows;
-  if (rows.length < 2)
+  if (rows.length < 2) {
     return "Select the files of one training run to group them";
+  }
   if (rows.some((row) => row.stack_id != null)) {
     return "Something here is already part of a run";
   }
   if (rows.some((row) => row.file_kind !== "adapter")) {
     return "Only adapters are training runs";
   }
-  if (!stackable.value) {
-    return "A run is files that sit together: they must all be present in one folder";
+  let shared = null;
+  for (const row of rows) {
+    const here = (row.locations || [])
+      .filter((loc) => loc.state === "present")
+      .map((loc) => Number(loc.folder_id));
+    // Its own refusal, and not the folder one: `missing` and `unreachable` mean
+    // there is no file here to group, which the reader fixes by plugging a
+    // drive in rather than by moving anything.
+    if (!here.length) {
+      return "Only files that are actually on this machine can be grouped";
+    }
+    shared =
+      shared === null
+        ? new Set(here)
+        : new Set(here.filter((id) => shared.has(id)));
+    if (!shared.size) {
+      return "A run is files that sit together, so they must all be in one folder";
+    }
   }
-  return `Group these ${rows.length.toLocaleString()} files into one run`;
+  return "";
 });
+
+const stackable = computed(() => !stackRefusal.value);
+
+const stackTitle = computed(
+  () =>
+    stackRefusal.value ||
+    `Group these ${store.selectedRows.length.toLocaleString()} files into one run`,
+);
 
 /** The selected models that actually have an icon to clear. */
 const withIcons = computed(() =>

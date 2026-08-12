@@ -255,6 +255,18 @@ describe("the selection bar", () => {
     expect(stack.attributes("title")).toContain("one folder");
   });
 
+  it("names the missing file, not the folders, when a copy is not there", async () => {
+    // The two refusals are different repairs. An unplugged drive is fixed by
+    // plugging it in; being told the files are in different folders would send
+    // the reader to move something instead, and they are in one folder.
+    selectRows([row(1, "present"), row(2, "unreachable")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    const stack = verb(wrapper, "Stack these");
+    expect(stack.attributes("disabled")).toBeDefined();
+    expect(stack.attributes("title")).toContain("on this machine");
+    expect(stack.attributes("title")).not.toContain("folder");
+  });
+
   it("refuses Stack on one model, a checkpoint, or a row already in a run", async () => {
     const store = selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
