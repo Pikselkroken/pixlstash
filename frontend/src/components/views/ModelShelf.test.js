@@ -1050,6 +1050,32 @@ describe("dragging models onto a folder", () => {
     expect(wrapper.find(".shelf-row").attributes("draggable")).toBe("false");
   });
 
+  it("never offers the drag on an engine, whatever its location says", async () => {
+    // The HuggingFace cache is `blobs/` under content hashes with `snapshots/`
+    // symlinking names onto them, shared with every other HF tool, and an
+    // engine row's relpath there is a whole repo directory. A drag that looks
+    // like it works on 116 GB of someone else's bookkeeping must not be
+    // offered; the server refuses it too, and this is the half that stops the
+    // gesture starting.
+    const wrapper = await mountShelf([
+      adapter({
+        id: 700,
+        file_kind: "engine",
+        kind: "captioner",
+        display_name: "fancyfeast/llama-joycaption",
+        locations: [
+          {
+            state: "present",
+            folder_id: 9,
+            folder_path: "/home/g/.cache/huggingface/hub",
+            relpath: "models--fancyfeast--llama-joycaption",
+          },
+        ],
+      }),
+    ]);
+    expect(wrapper.find(".shelf-row").attributes("draggable")).toBe("false");
+  });
+
   it("accepts the drag on a folder it may write to, and only there", async () => {
     // preventDefault() is what ACCEPTS a drop, so it is called inside the
     // handler for the payloads this target takes — never as a `.prevent`

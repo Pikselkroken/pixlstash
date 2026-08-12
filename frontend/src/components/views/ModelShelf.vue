@@ -667,9 +667,19 @@ async function closeMove() {
  * Only rows with a copy actually on this machine: dragging one whose file is
  * `missing` or on an unplugged drive would offer a gesture that can only end in
  * a refusal, and the pointer would say it works the whole way.
+ *
+ * Engines are excluded for a harder reason than a refusal. They live in the
+ * three roots PixlStash declares `root_only` — its own downloads, the
+ * InsightFace packs, and the HuggingFace cache — and the cache is a symlink
+ * store shared with every other HF tool, where a row's path is a whole repo
+ * directory. The server refuses the move, and this stops the gesture being
+ * offered at all: a drag that looks like it works on 116 GB of somebody else's
+ * bookkeeping is not a thing to find out about at the drop.
  */
 function canDrag(row) {
-  return row.locState === "present" && !moves.busy;
+  return (
+    row.locState === "present" && row.file_kind !== "engine" && !moves.busy
+  );
 }
 
 /**
