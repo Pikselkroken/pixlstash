@@ -804,6 +804,71 @@ def test_all_routes_declare_access_policy(built_app):
 
 
 # ---------------------------------------------------------------------------
+# Guardrail: READ_BLOCKED_GET_PATHS is derived from, not remembered alongside,
+# the registry's owner-class GET routes (issue #831)
+# ---------------------------------------------------------------------------
+
+
+def test_locality_tier_gets_are_read_blocked_in_the_middleware():
+    """Every GET on the §16.3 locality tier must appear in ``READ_BLOCKED_GET_PATHS``.
+
+    The middleware's "READ tokens may not write" rule says nothing about a GET,
+    so for a GET the only thing that refuses a share token *before* routing is
+    this hand-maintained frozenset. On the locality tier (``LOCAL_OWNER_ONLY`` /
+    ``LOOPBACK_OWNER_ONLY``) the routes take or read a caller-supplied host path,
+    so a missing entry is a host-filesystem leak: ``GET /filesystem/browse``
+    without its entry hands a token scoped to a single character a full listing
+    of the server's disk.
+
+    Derived from ``ROUTE_POLICIES`` rather than hand-listed, so adding a GET to
+    the tier without the entry fails the build instead of relying on someone
+    remembering. The reverse direction is checked too, one class wider (the set
+    legitimately also covers a few ``OWNER_ONLY`` config GETs): an entry that
+    names no declared owner-class GET is a typo or a route since removed or
+    loosened, and a typo'd path silently protects nothing.
+
+    The gate's own ``_enforce_unscoped_owner`` is the live enforcement for these
+    routes and refuses the same tokens (pinned by
+    ``tests/test_authz_gate_step3.py::test_local_owner_only_get_refused_at_the_gate``);
+    the frozenset is the pre-routing layer that also survives an
+    ``AUTHZ_GATE_ENFORCING = False`` rollback, which is why it still earns its
+    keep rather than being deleted in favour of the single chokepoint.
+    """
+    from pixlstash.auth import READ_BLOCKED_GET_PATHS
+    from pixlstash.authz.gate import OWNER_CLASS_POLICIES
+    from pixlstash.authz.policy import AccessPolicy
+    from pixlstash.authz.registry import ROUTE_POLICIES
+
+    locality = {AccessPolicy.LOCAL_OWNER_ONLY, AccessPolicy.LOOPBACK_OWNER_ONLY}
+    locality_gets = {
+        path
+        for (method, path), route_policy in ROUTE_POLICIES.items()
+        if method == "GET" and route_policy.policy in locality
+    }
+    owner_class_gets = {
+        path
+        for (method, path), route_policy in ROUTE_POLICIES.items()
+        if method == "GET" and route_policy.policy in OWNER_CLASS_POLICIES
+    }
+
+    missing = sorted(locality_gets - READ_BLOCKED_GET_PATHS)
+    assert not missing, (
+        "§16.3 locality-tier GET route(s) are not in "
+        "pixlstash.auth.READ_BLOCKED_GET_PATHS, so a resource-scoped READ share "
+        "token reaches a host-path route before routing. Add each path to that "
+        "frozenset:\n" + "\n".join(f"  GET {p}" for p in missing)
+    )
+
+    stale = sorted(READ_BLOCKED_GET_PATHS - owner_class_gets)
+    assert not stale, (
+        "READ_BLOCKED_GET_PATHS entr(y/ies) do not name a GET route declared "
+        "OWNER_ONLY/LOCAL_OWNER_ONLY/LOOPBACK_OWNER_ONLY in the authz registry — "
+        "a typo, a removed route, or a route deliberately loosened. Fix the path "
+        "or drop the entry:\n" + "\n".join(f"  {p}" for p in stale)
+    )
+
+
+# ---------------------------------------------------------------------------
 # Guardrail: the written coverage matrix matches the registry, row for row
 # ---------------------------------------------------------------------------
 

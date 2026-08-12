@@ -33,6 +33,7 @@ import pytest
 from fastapi import APIRouter, Depends, FastAPI
 from starlette.testclient import TestClient
 
+from pixlstash import auth
 from pixlstash.authz.gate import AUTHZ_GATE_ENFORCING, AuthzGate
 from pixlstash.authz.policy import AccessPolicy, RoutePolicy
 from pixlstash.server import Server
@@ -44,6 +45,9 @@ API = "/api/v1"
 # positive assertion vacuous. See tests/authz_guard.py.
 pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 _LOCALITY_403 = "restricted to local"  # substring of the LOCAL_OWNER_ONLY 403 detail
+# The gate's owner-check 403 (AuthService.require_unscoped_owner). Distinct from
+# the middleware's "Token is read-only", which is the point of asserting on it.
+_OWNER_REQUIRED_403 = "Owner-level (full, unscoped) access required"
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +250,51 @@ def test_local_owner_only_remote_cookie_regression():
             assert not _is_locality_403(r), (
                 "enforcing LOCAL_OWNER_ONLY must NOT locality-403 a LOCAL owner "
                 f"cookie; got {r.status_code}: {r.text}"
+            )
+
+
+def test_local_owner_only_get_refused_at_the_gate(monkeypatch):
+    """#831: the GATE, not the middleware's path list, must refuse a READ token
+    on a locality-tier GET.
+
+    Both current locality-tier GETs sit in ``READ_BLOCKED_GET_PATHS``, so the
+    middleware answers a share token before routing and the gate's
+    ``_enforce_unscoped_owner`` on the ``LOCAL_OWNER_ONLY`` branch never runs —
+    correct, load-bearing, and completely unobservable, which is why deleting it
+    left the whole suite green. Emptying that frozenset is exactly the shape of a
+    new locality GET added without its entry: the token now reaches the gate, and
+    the gate must still refuse it.
+
+    The 403 detail is asserted, not just the status: ``Owner-level (full,
+    unscoped) access required`` comes from the gate's
+    ``AuthService.require_unscoped_owner`` delegation, whereas the middleware's
+    refusal reads ``Token is read-only``. Matching the former proves the denial
+    came from the gate and not from the layer we just removed.
+
+    Both token shapes are checked — a resource-scoped share token and an unscoped
+    READ token — because ``require_unscoped_owner`` refuses both, and the
+    positive direction (a local owner cookie still browses) guards against
+    over-blocking.
+    """
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    with _owner_env() as env:
+        with _enforcing(env["server"]):
+            for label in ("scoped_read", "unscoped_read"):
+                r = env["anon"].get(
+                    f"{API}/filesystem/browse", headers=_bearer(env[label])
+                )
+                assert r.status_code == 403 and _OWNER_REQUIRED_403 in r.text, (
+                    "the gate must refuse a READ token on a LOCAL_OWNER_ONLY GET "
+                    f"with no READ_BLOCKED_GET_PATHS entry ({label}); got "
+                    f"{r.status_code}: {r.text}"
+                )
+
+            # POSITIVE: a local owner cookie still browses — over-blocking the
+            # owner is its own regression.
+            r = env["owner"].get(f"{API}/filesystem/browse")
+            assert r.status_code == 200, (
+                "the local owner must still reach GET /filesystem/browse; got "
+                f"{r.status_code}: {r.text}"
             )
 
 
