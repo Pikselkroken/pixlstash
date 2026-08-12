@@ -396,10 +396,15 @@ def create_router(server) -> APIRouter:
         return {int(row["model_folder_id"]): int(row["n"]) for row in rows}
 
     def _to_response(
-        row: dict, file_count: int = 0, present_bytes: int = 0
+        row: dict,
+        file_count: int = 0,
+        present_bytes: int = 0,
+        scan: Optional[tuple[Optional[str], Optional[str]]] = None,
     ) -> ModelFolderResponse:
         delete_after_import = row["delete_after_import"]
-        scan_status, scan_error = _scan_state(int(row["id"]))
+        scan_status, scan_error = (
+            scan if scan is not None else _scan_state(int(row["id"]))
+        )
         return ModelFolderResponse(
             id=int(row["id"]),
             path=row["path"],
@@ -430,18 +435,26 @@ def create_router(server) -> APIRouter:
     )
     def list_model_folders(request: Request):
         server.auth.ensure_secure_when_required(request)
-        counts = _file_counts()
-        present_bytes = _present_bytes_by_folder()
         rows = server.hub.fetchall(
             "SELECT id, path, kind, owner, movable, host_path, delete_after_import, "
             "last_checked, created_at FROM model_folder ORDER BY id"
         )
+        # Scan state before the aggregates, never after. A scan's task flips to
+        # completed only once it has written its rows, so reading the counts
+        # first lets a scan that finishes in between be reported as completed
+        # with the count from before it wrote — an empty folder that just
+        # succeeded. This way round the stale pairing is "still running" with a
+        # full count, which the next poll corrects.
+        scans = {int(row["id"]): _scan_state(int(row["id"])) for row in rows}
+        counts = _file_counts()
+        present_bytes = _present_bytes_by_folder()
         return ModelFolderListResponse(
             folders=[
                 _to_response(
                     dict(row),
                     counts.get(int(row["id"]), 0),
                     present_bytes.get(int(row["id"]), 0),
+                    scans[int(row["id"])],
                 )
                 for row in rows
             ]
