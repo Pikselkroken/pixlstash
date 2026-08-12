@@ -2477,6 +2477,16 @@ const isAllPicturesRowActive = computed(() => {
   return true;
 });
 
+// One source for the Scrapheap highlight. The expanded row and the docked rail
+// each need it twice (the `active` class and `aria-current`), and four copies of
+// the same expression is four chances for the styling and the screen-reader
+// state to drift apart.
+const isScrapheapRowActive = computed(
+  () =>
+    selectionStore.selectedCharacter === SCRAPHEAP_PICTURES_ID &&
+    selectionOwnsHighlight.value,
+);
+
 const allPicturesRowLabel = computed(() => {
   if (projectViewMode.value === "global") return "All Pictures";
   return "Project Pictures";
@@ -4933,18 +4943,9 @@ defineExpose({
               :class="[
                 'sidebar-collapsed-item',
                 'sidebar-collapsed-item--scrapheap',
-                {
-                  active:
-                    selectionStore.selectedCharacter ===
-                      SCRAPHEAP_PICTURES_ID && selectionOwnsHighlight,
-                },
+                { active: isScrapheapRowActive },
               ]"
-              :aria-current="
-                selectionStore.selectedCharacter === SCRAPHEAP_PICTURES_ID &&
-                selectionOwnsHighlight
-                  ? 'page'
-                  : undefined
-              "
+              :aria-current="isScrapheapRowActive ? 'page' : undefined"
               aria-label="Scrapheap"
               title="Scrapheap"
               @click="selectCharacter(SCRAPHEAP_PICTURES_ID, 'Scrapheap')"
@@ -5384,20 +5385,8 @@ defineExpose({
             <div v-if="!isReadOnly" class="sidebar-all-pictures-row">
               <button
                 type="button"
-                :class="[
-                  'sidebar-list-item',
-                  {
-                    active:
-                      selectionStore.selectedCharacter ===
-                        SCRAPHEAP_PICTURES_ID && selectionOwnsHighlight,
-                  },
-                ]"
-                :aria-current="
-                  selectionStore.selectedCharacter === SCRAPHEAP_PICTURES_ID &&
-                  selectionOwnsHighlight
-                    ? 'page'
-                    : undefined
-                "
+                :class="['sidebar-list-item', { active: isScrapheapRowActive }]"
+                :aria-current="isScrapheapRowActive ? 'page' : undefined"
                 @click="selectCharacter(SCRAPHEAP_PICTURES_ID, 'Scrapheap')"
                 @contextmenu.prevent="
                   openSidebarCtxMenu('scrapheap', null, $event)
