@@ -70,6 +70,50 @@ Test at: ~/Projects/pixlstash/worktrees/<name>   (branch <branch>, based on <bas
 If the work is already merged, say `develop/` instead and say to pull. "It's on
 the branch" is not a test path.
 
+### Say what to test, not only where — the `## Test this` section
+
+**A path is not a handoff.** The session that wrote the change is the only party
+that knows which screen it lands on, what number should appear, and which of its
+own steps it is least sure about. Ending at "test at `<path>`" leaves the person
+testing to reverse-engineer all three from a diff, and the honest answer they
+give back is *"I don't know what to test."* That happened, and it is the failure
+this section exists to stop.
+
+**Every PR that changes behaviour carries a `## Test this` section in its body.**
+The PR body rather than a chat message or a `docs/` file: it is where a tester
+already is, it survives the session, and it updates when the work does. A PR
+without one is not finished, the same way a PR with a red gate is not finished.
+
+It has five parts, and the last two are the ones that get skipped:
+
+1. **Where.** Worktree path, branch, base, and both run commands — the block
+   above. Plus any step that has to happen first: *"restart the backend, the
+   declaration runs at start-up"* is the difference between a working feature
+   and a bug report.
+2. **What to look at**, as numbered checks against a named screen or control.
+   "Model folders dialog, toolbar folder icon", not "the folders UI".
+3. **The expected values, concretely.** `116.3 GB`, `26 rows`, `no size at all
+   rather than 0 B` — read off this machine and written down. A tester cannot
+   confirm a number nobody stated, and a wrong number is invisible next to a
+   vague one.
+4. **What "wrong" looks like**, per check. State the failure, not only the pass:
+   *"wrong if a locked row offers scan or forget"*. This is what lets someone
+   who does not know the design spot a regression rather than assume the screen
+   is meant to look like that.
+5. **What you could not test yourself**, named and separated. Cold-boot cost,
+   whether a list of 26 rows is pleasant, anything needing hardware or a
+   judgement call. This is the part that is actually being handed off — the rest
+   is verification. Hiding it inside the checks above buries the only items that
+   genuinely require a human.
+
+**Order the checks by risk, and say which one matters.** If a change opens a
+path that could destroy data, that check goes near the top, says so, and tells
+the tester to stop rather than complete the gesture: *"the drag must never
+start; if the row picks up, say so and do not drop it."*
+
+**Automated coverage is not a test-this item.** If a suite already proves it,
+say that in a line and spend the human's attention on what the suite cannot see.
+
 ## Patch Reliability Policy
 
 - **Read before you edit.** Read enough surrounding context (at least 50 lines before and after the target) to understand structure, logic, and dependencies before generating a patch. If placement is ambiguous, read more until it is certain.
