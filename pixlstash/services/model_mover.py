@@ -335,6 +335,7 @@ class ModelMover:
         destination_folder_id: int,
         *,
         flatten: bool = True,
+        relocating: bool = False,
     ) -> MovePlan:
         """Resolve and check a batch without writing anything.
 
@@ -355,6 +356,16 @@ class ModelMover:
                 outright (a collision that no "move them separately" can
                 resolve, because there is no such verb) or, with one such file,
                 silently drop the subdirectory.
+            relocating: True only for a whole-folder relocation, which is the
+                one legitimate way files leave a ``root_only`` folder — the
+                folder is going with them. It is a separate flag from
+                ``flatten`` on purpose: ``flatten`` is about the shape of the
+                destination path, this is about authority, and welding the two
+                together would mean any future caller wanting a tree copy
+                silently inherited the right to empty the HuggingFace cache.
+                ``POST /model-folders/{id}/relocate`` is the only caller, and it
+                has already refused every folder whose ``kind`` is not
+                ``managed`` before it gets here.
 
         Returns:
             The validated :class:`MovePlan`.
@@ -390,6 +401,7 @@ class ModelMover:
                 destination_folder_id,
                 destination_path,
                 flatten=flatten,
+                relocating=relocating,
             )
             if move is None:
                 skipped.append(
@@ -437,6 +449,7 @@ class ModelMover:
         destination_path: str,
         *,
         flatten: bool,
+        relocating: bool = False,
     ) -> Optional[PlannedMove]:
         row = self._hub.fetchone(
             "SELECT mf.model_id, mf.state, m.sha256, m.file_size, f.path AS "
@@ -465,7 +478,7 @@ class ModelMover:
         # control is `HF_HOME`, read at import: a restart and a re-download, not
         # a move. The same applies to an InsightFace pack and to PixlStash's own
         # engines, and it is why all three roots are declared `root_only`.
-        if row["folder_movable"] == "root_only":
+        if row["folder_movable"] == "root_only" and not relocating:
             raise MoveRefused(
                 f"{relpath!r} is inside a folder that moves as a whole, not one "
                 "file at a time, so nothing was moved. PixlStash's own model "

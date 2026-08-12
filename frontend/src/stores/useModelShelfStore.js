@@ -387,7 +387,7 @@ function groupsOf(row, axis) {
   }));
 }
 
-/** The three top-level type checkboxes, each one request and one row bucket. */
+/** The four top-level type checkboxes, each one request and one row bucket. */
 const BLOCKS = ["adapters", "checkpoints", "unclassified", "engines"];
 
 /** Which block a row came from, so a fetch only replaces what it asked for. */
