@@ -38,7 +38,9 @@ const globalOpts = {
         template: "<div><slot name='activator' :props='{}' /></div>",
       },
       // The dialog shell teleports; its chrome is AppDialog's own contract.
-      AppDialog: { template: "<div><slot name='header-right' /><slot /></div>" },
+      AppDialog: {
+        template: "<div><slot name='header-right' /><slot /></div>",
+      },
       FolderBrowser: true,
     },
   },
@@ -56,6 +58,7 @@ function folder(overrides = {}) {
     last_checked: null,
     created_at: "2026-08-01T10:00:00",
     file_count: 91,
+    present_bytes: 0,
     ...overrides,
   };
 }
@@ -70,7 +73,10 @@ const MANAGED = folder({
 
 async function open(rows, { canManage = true, inDocker = false } = {}) {
   listModelFolders.mockResolvedValue(rows);
-  const wrapper = mount(ModelFoldersDialog, { props: { open: true }, ...globalOpts });
+  const wrapper = mount(ModelFoldersDialog, {
+    props: { open: true },
+    ...globalOpts,
+  });
   const libraries = useLibrariesStore();
   libraries.canManage = canManage;
   libraries.inDocker = inDocker;
@@ -110,7 +116,11 @@ describe("the managed store", () => {
   it("keeps every row's action column at the same width", async () => {
     // A slot that collapsed on one row would slide every other row's buttons
     // sideways. Absent actions are hidden, never unrendered.
-    const wrapper = await open([folder(), MANAGED, folder({ id: 3, kind: "foreign" })]);
+    const wrapper = await open([
+      folder(),
+      MANAGED,
+      folder({ id: 3, kind: "foreign" }),
+    ]);
     const counts = wrapper
       .findAll(".mf-row__actions")
       .map((group) => group.findAll("button").length);
@@ -195,5 +205,29 @@ describe("Docker", () => {
       .findAll("button")
       .find((b) => b.text().includes("Add folder"));
     expect(add.attributes("aria-disabled")).toBe("true");
+  });
+});
+
+describe("how much disk the folder is using", () => {
+  it("shows the size beside the count, because a count alone understates a cache", async () => {
+    // The case this exists for: few rows, enormous folder. "26 models" reads as
+    // small until the 116 GB is next to it.
+    const wrapper = await open([
+      folder({
+        path: "/home/g/.cache/huggingface/hub",
+        kind: "foreign",
+        owner: "pixlstash",
+        file_count: 26,
+        present_bytes: 116.3 * 1024 ** 3,
+      }),
+    ]);
+    expect(wrapper.text()).toContain("116.3 GB");
+  });
+
+  it("omits the size at zero rather than claiming 0 B", async () => {
+    // A folder with nothing `present` has no measurement, and "0 B" would read
+    // as one. The managed store on a fresh install is exactly this.
+    const wrapper = await open([folder({ file_count: 0, present_bytes: 0 })]);
+    expect(wrapper.text()).not.toContain("0 B");
   });
 });

@@ -56,6 +56,12 @@ from pixlstash.services.library_switch_service import LibrarySwitchService
 from pixlstash.services.library_generation_coordinator import (
     LibraryGenerationCoordinator,
 )
+from pixlstash.services.builtin_caches import (
+    declare_huggingface_cache,
+    declare_insightface_packs,
+    huggingface_cache_dir,
+    insightface_models_dir,
+)
 from pixlstash.services.builtin_models import (
     builtin_model_dir,
     declare_builtin_models,
@@ -471,6 +477,24 @@ class Server(
                 "own engines will not be listed on the shelf this session.",
                 exc,
             )
+        # The other two roots models land in. Same deal as above and same
+        # failure policy: each is declared independently so one unreadable root
+        # cannot cost the shelf the other two.
+        for label, resolve, declare in (
+            ("InsightFace packs", insightface_models_dir, declare_insightface_packs),
+            ("HuggingFace cache", huggingface_cache_dir, declare_huggingface_cache),
+        ):
+            try:
+                folder_path = resolve()
+                if folder_path:
+                    declare(self.hub, folder_path)
+            except (sqlite3.Error, OSError) as exc:
+                logger.error(
+                    "Could not declare the %s (%s); it will not be listed on "
+                    "the shelf this session.",
+                    label,
+                    exc,
+                )
         if self._hub_bootstrap.migrated:
             logger.info(
                 "First run after the hub/vault split: identity now lives in %s",

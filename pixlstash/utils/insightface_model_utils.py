@@ -64,6 +64,19 @@ _download_failures: dict[str, float] = {}
 _download_failures_lock = threading.Lock()
 
 
+def insightface_root() -> str:
+    """Where InsightFace keeps its packs.
+
+    A reader for the module constant, so the shelf's declaration
+    (:mod:`pixlstash.services.builtin_caches`) can name the same directory this
+    module downloads into without restating the path or reaching for a private.
+
+    Returns:
+        The absolute InsightFace root.
+    """
+    return _INSIGHTFACE_ROOT
+
+
 def validate_model_pack(model_pack: str) -> str:
     """Return *model_pack* if it is a known pack, else raise (fail-closed).
 

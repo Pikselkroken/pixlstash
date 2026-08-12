@@ -15,10 +15,7 @@
       >
         Add folder
       </AppButton>
-      <HelpTip
-        :reason="addReason"
-        label="Why adding a folder is unavailable"
-      />
+      <HelpTip :reason="addReason" label="Why adding a folder is unavailable" />
     </template>
 
     <p class="mf-intro">
@@ -45,7 +42,9 @@
         :aria-busy="isScanning(folder) ? 'true' : undefined"
       >
         <span class="mf-row__glyph">
-          <v-icon size="16">{{ KIND_ICON[folder.kind] || KIND_ICON.user }}</v-icon>
+          <v-icon size="16">{{
+            KIND_ICON[folder.kind] || KIND_ICON.user
+          }}</v-icon>
         </span>
 
         <span class="mf-row__body">
@@ -80,6 +79,14 @@
 
           <span class="mf-row__meta">
             <span>{{ countLabel(folder.file_count) }}</span>
+            <!-- Size sits beside the count because the count alone is
+                 misleading on the folders PixlStash declares: the HuggingFace
+                 cache is a handful of repos and 116 GB, and "26 models" reads
+                 as small. Omitted at zero rather than shown as "0 B", which
+                 would claim a measurement on a folder that has none. -->
+            <span v-if="folder.present_bytes > 0">{{
+              formatModelSize(folder.present_bytes)
+            }}</span>
             <span :title="folder.last_checked || ''">{{
               scannedLabel(folder)
             }}</span>
@@ -88,10 +95,7 @@
           <!-- Visible, in the row, never a tooltip: it explains why this row
                has no forget control, and an explanation for a missing control
                has to sit where the missing control would be. -->
-          <span
-            v-if="folder.kind === MANAGED_KIND"
-            class="mf-row__note"
-          >
+          <span v-if="folder.kind === MANAGED_KIND" class="mf-row__note">
             PixlStash keeps its own models here, so this folder stays.
           </span>
         </span>
@@ -199,6 +203,7 @@ import {
   useModelFoldersStore,
 } from "../../stores/useModelFoldersStore";
 import { relativeDate } from "../../utils/snapshots";
+import { formatModelSize } from "../../utils/modelShelf";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -239,6 +244,10 @@ const KIND_ICON = {
   managed: "mdi-folder-home-outline",
   user: "mdi-folder-outline",
   source: "mdi-folder-cog-outline",
+  // The only kind the owner can neither scan nor forget, so it is the only one
+  // that gets the lock. `managed` is not locked — it holds no association to
+  // dissolve, but it is scannable and relocatable, which is why it keeps the
+  // home glyph rather than joining this one.
   foreign: "mdi-folder-lock-outline",
 };
 
@@ -265,7 +274,9 @@ const addReason = computed(
 
 /** `user` and `source` rows only; `managed` and `foreign` are PixlStash's own. */
 const hasOwnFolders = computed(() =>
-  store.folders.some((folder) => folder.kind === "user" || folder.kind === "source"),
+  store.folders.some(
+    (folder) => folder.kind === "user" || folder.kind === "source",
+  ),
 );
 
 function isScanning(folder) {

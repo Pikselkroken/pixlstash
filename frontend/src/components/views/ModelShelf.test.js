@@ -12,10 +12,17 @@ import { setActivePinia, createPinia } from "pinia";
 
 const listAdapters = vi.fn();
 const listCheckpoints = vi.fn();
+// The engines block is the same route with `file_kind=engine`, and a different
+// result set. Its own double, or every `listAdapters.mockResolvedValue` here
+// would answer it with adapter rows and the shelf would render each one twice.
+const listEngines = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
-  listAdapters: (...args) => listAdapters(...args),
+  listAdapters: (...args) =>
+    args[0]?.fileKind === "engine"
+      ? listEngines(...args)
+      : listAdapters(...args),
   listCheckpoints: (...args) => listCheckpoints(...args),
 }));
 
@@ -94,6 +101,7 @@ function adapter(overrides = {}) {
 async function mountShelf(rows, checkpoints = []) {
   listAdapters.mockResolvedValue(rows);
   listCheckpoints.mockResolvedValue(checkpoints);
+  listEngines.mockResolvedValue([]);
   const wrapper = mount(ModelShelf, globalOpts);
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
@@ -110,6 +118,7 @@ beforeEach(() => {
   window.localStorage.clear();
   listAdapters.mockReset();
   listCheckpoints.mockReset();
+  listEngines.mockReset().mockResolvedValue([]);
   listModelFolderDevices.mockReset();
   listModelFolderDevices.mockResolvedValue([]);
   listModelFolders.mockReset();
@@ -1041,6 +1050,32 @@ describe("dragging models onto a folder", () => {
     expect(wrapper.find(".shelf-row").attributes("draggable")).toBe("false");
   });
 
+  it("never offers the drag on an engine, whatever its location says", async () => {
+    // The HuggingFace cache is `blobs/` under content hashes with `snapshots/`
+    // symlinking names onto them, shared with every other HF tool, and an
+    // engine row's relpath there is a whole repo directory. A drag that looks
+    // like it works on 116 GB of someone else's bookkeeping must not be
+    // offered; the server refuses it too, and this is the half that stops the
+    // gesture starting.
+    const wrapper = await mountShelf([
+      adapter({
+        id: 700,
+        file_kind: "engine",
+        kind: "captioner",
+        display_name: "fancyfeast/llama-joycaption",
+        locations: [
+          {
+            state: "present",
+            folder_id: 9,
+            folder_path: "/home/g/.cache/huggingface/hub",
+            relpath: "models--fancyfeast--llama-joycaption",
+          },
+        ],
+      }),
+    ]);
+    expect(wrapper.find(".shelf-row").attributes("draggable")).toBe("false");
+  });
+
   it("accepts the drag on a folder it may write to, and only there", async () => {
     // preventDefault() is what ACCEPTS a drop, so it is called inside the
     // handler for the payloads this target takes — never as a `.prevent`
@@ -1113,7 +1148,12 @@ describe("a run's disclosure", () => {
   function run() {
     return [
       adapter({ id: 1, stack_id: 7, stack_position: 0 }),
-      adapter({ id: 2, stack_id: 7, stack_position: 1, sha256: "b".repeat(64) }),
+      adapter({
+        id: 2,
+        stack_id: 7,
+        stack_position: 1,
+        sha256: "b".repeat(64),
+      }),
     ];
   }
 
@@ -1195,9 +1235,7 @@ describe("the icon verb", () => {
     // is going to refuse.
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const input = wrapper.find('input[type="file"]');
-    expect(input.attributes("accept")).toBe(
-      "image/png,image/jpeg,image/webp",
-    );
+    expect(input.attributes("accept")).toBe("image/png,image/jpeg,image/webp");
   });
 });
 

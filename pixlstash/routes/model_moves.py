@@ -597,10 +597,17 @@ def create_router(server) -> APIRouter:
             # collide, refusing the relocation permanently with advice ("move
             # them separately") naming a verb the shelf does not have, and with
             # only one such file it would silently drop the subdirectory.
+            # ``relocating=True``: the store is ``root_only``, which refuses a
+            # per-item move out of it, and a relocation is the one case where
+            # that is not what is happening — the folder is going with the
+            # files. The route above has already refused every folder whose
+            # ``kind`` is not ``managed``, so this cannot reach the engines,
+            # the InsightFace packs or the HuggingFace cache.
             plan = mover.plan(
                 [(folder_id, relpath) for relpath in relpaths],
                 destination_id,
                 flatten=False,
+                relocating=True,
             )
         except MoveRefused as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

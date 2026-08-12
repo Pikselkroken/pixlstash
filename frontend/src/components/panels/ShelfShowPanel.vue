@@ -29,9 +29,12 @@
           :checked="filters.adapters"
           :indeterminate="adaptersIndeterminate"
           @change="
-            store.setFilters({ adapters: $event.target.checked }, {
-              refetch: true,
-            })
+            store.setFilters(
+              { adapters: $event.target.checked },
+              {
+                refetch: true,
+              },
+            )
           "
         />
         Adapters
@@ -61,9 +64,12 @@
           type="checkbox"
           :checked="filters.checkpoints"
           @change="
-            store.setFilters({ checkpoints: $event.target.checked }, {
-              refetch: true,
-            })
+            store.setFilters(
+              { checkpoints: $event.target.checked },
+              {
+                refetch: true,
+              },
+            )
           "
         />
         Checkpoints
@@ -79,12 +85,38 @@
           type="checkbox"
           :checked="filters.unclassified"
           @change="
-            store.setFilters({ unclassified: $event.target.checked }, {
-              refetch: true,
-            })
+            store.setFilters(
+              { unclassified: $event.target.checked },
+              {
+                refetch: true,
+              },
+            )
           "
         />
         Unclassified
+      </label>
+      <!-- Engines: PixlStash's own taggers and scorers, the InsightFace packs
+           and the HuggingFace cache. On by default, unlike Unclassified — they
+           are the answer to "where did my disk go", and off by default is
+           exactly how they stayed invisible while the architecture note said
+           they were on the shelf. -->
+      <label
+        class="tbm-check"
+        title="Models PixlStash and its tools downloaded: taggers, scorers, face packs and the HuggingFace cache"
+      >
+        <input
+          type="checkbox"
+          :checked="filters.engines"
+          @change="
+            store.setFilters(
+              { engines: $event.target.checked },
+              {
+                refetch: true,
+              },
+            )
+          "
+        />
+        Engines
       </label>
     </div>
 
@@ -135,9 +167,7 @@ const adaptersIndeterminate = computed(
 
 function toggleKind(kind, checked) {
   const current = filters.adapterKinds;
-  const next = checked
-    ? [...current, kind]
-    : current.filter((k) => k !== kind);
+  const next = checked ? [...current, kind] : current.filter((k) => k !== kind);
   store.setFilters({ adapterKinds: next });
 }
 

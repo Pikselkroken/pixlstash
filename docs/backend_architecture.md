@@ -1303,6 +1303,78 @@ doctrine — detection proposes, it never applies, so nothing here deletes.
 at the top level and inside every subdirectory it fills; that is the tool's, and
 reporting it would train the reader to ignore the list.
 
+### The other two roots: InsightFace packs and the HuggingFace cache
+
+**The built-in folder was never the only place models land, and the other two
+were invisible.** InsightFace keeps face packs under `~/.insightface/models`;
+everything fetched through `huggingface_hub` goes to the HuggingFace cache. On a
+measured machine that is 0.9 GB and 116 GB against the built-in folder's 1.1 GB —
+so the shelf was showing the smallest of the three and the owner had no way to
+see where the disk had gone. `services/builtin_caches.py` declares both.
+
+**Declared, never scanned, for the reason above and one more.** The scanner
+yields only `.safetensors`: InsightFace holds ONNX and would list as *empty*,
+and the HuggingFace cache is content-addressed, with its 37 `.safetensors` behind
+`snapshots/` symlinks onto hashed blobs. A walk would read 116 GB to learn what
+the cache's own index already knows. Both therefore carry `owner`, which is the
+marker the scanner reads to skip a folder.
+
+**Discovered rather than restated, which inverts `builtin_models`.** That module
+declares filenames because it *chose* those downloads, and duplicating two
+strings beats importing onnxruntime at start-up. Neither reason survives here:
+the contents are whatever the owner and the tools put there, so a fixed list
+would be a guess that goes stale. InsightFace is one `listdir`; HuggingFace is
+`scan_cache_dir()`, which reads the cache's bookkeeping and measured **0.01 s
+against 116 GB and 26 repos**. Start-up cost is not the reason to avoid either.
+
+**InsightFace declares the union of what is on disk and what we provision.**
+Only `KNOWN_MODEL_PACKS` would hide the `antelopev2` and `buffalo_s` a real
+machine has; only what is on disk would drop a pack we provision that has not
+downloaded yet. Both, and an absent known pack lands `missing` — the same state
+as the ViT-L/14 scorer, and no more of a warning. The `.zip` InsightFace
+downloaded a pack from sits beside it and gets no row, the same judgement
+`TOOLING_DIRS` makes about `.cache`.
+
+**HuggingFace declares a repo, not a file.** A per-file listing would show the
+same weights once per revision and mean nothing; `repo_id` is the unit a person
+recognises and `size_on_disk` the number they came for.
+
+**`provenance` stays `builtin` on every row here.** It is a claim about how the
+row was *written* — declared by PixlStash's registration rather than scanned out
+of a folder the owner assembled — and not a claim that PixlStash chose the
+model. It did not choose most of them. `external` would say the row came from a
+scan, which is the one thing that never happens to these folders.
+
+**The shared writer is `declare_folder`.** All three roots resolve their own
+entries — an engine is one `stat`, a pack is a directory sum, a repo is a number
+from an index — and hand `DeclaredEntry` rows to one writer. Only the writing was
+ever common, so only the writing is shared.
+
+**The shelf had to be taught to ask.** `GET /adapters` defaults to
+`file_kind=adapter`, and the frontend's `Show` panel had exactly three blocks —
+adapters, checkpoints, unclassified — none of which requested `engine`. So the
+backend had answered `file_kind=engine` since #876, this document claimed the
+engines were "on the shelf for completeness", and nothing on the shelf had ever
+displayed one. The fourth block (`filters.engines`, on by default) is what makes
+that sentence true. A row's block comes from `blockOf`, so engines refetch and
+are replaced independently of the other three.
+
+**A declaration sweeps what it no longer names**, and these folders have nowhere
+else to get that. The scanner marks anything it did not see on a walk `missing`,
+and it skips these precisely because they carry an `owner` — so without a sweep
+in `declare_folder` a row here could never stop being `present`. It is a no-op
+for the built-in engines, whose entry set is a fixed tuple naming every row; it
+exists for the discovered roots, where `huggingface-cli delete-cache` drops a
+repo out of the index and a deleted pack drops out of the listing. The row left
+behind would otherwise claim its bytes forever, inflating the `present_bytes`
+the folder list reports. Predicate is `seen_at <` the run's own stamp, not `!=`,
+so a concurrent declaration cannot have its rows swept by this one.
+
+**Each root is declared independently at start-up**, so one unreadable root
+cannot cost the shelf the other two, and every failure is logged and swallowed:
+a machine that has never run face detection has no InsightFace directory, and one
+that has downloaded nothing through the library has no cache. Both are normal.
+
 ### The managed model store (shelf plan B7)
 
 **Exactly one `model_folder` row with `kind='managed'` always exists.** It is

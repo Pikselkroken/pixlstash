@@ -335,6 +335,7 @@ class ModelMover:
         destination_folder_id: int,
         *,
         flatten: bool = True,
+        relocating: bool = False,
     ) -> MovePlan:
         """Resolve and check a batch without writing anything.
 
@@ -355,6 +356,16 @@ class ModelMover:
                 outright (a collision that no "move them separately" can
                 resolve, because there is no such verb) or, with one such file,
                 silently drop the subdirectory.
+            relocating: True only for a whole-folder relocation, which is the
+                one legitimate way files leave a ``root_only`` folder — the
+                folder is going with them. It is a separate flag from
+                ``flatten`` on purpose: ``flatten`` is about the shape of the
+                destination path, this is about authority, and welding the two
+                together would mean any future caller wanting a tree copy
+                silently inherited the right to empty the HuggingFace cache.
+                ``POST /model-folders/{id}/relocate`` is the only caller, and it
+                has already refused every folder whose ``kind`` is not
+                ``managed`` before it gets here.
 
         Returns:
             The validated :class:`MovePlan`.
@@ -390,6 +401,7 @@ class ModelMover:
                 destination_folder_id,
                 destination_path,
                 flatten=flatten,
+                relocating=relocating,
             )
             if move is None:
                 skipped.append(
@@ -437,10 +449,11 @@ class ModelMover:
         destination_path: str,
         *,
         flatten: bool,
+        relocating: bool = False,
     ) -> Optional[PlannedMove]:
         row = self._hub.fetchone(
             "SELECT mf.model_id, mf.state, m.sha256, m.file_size, f.path AS "
-            "folder_path FROM model_file mf "
+            "folder_path, f.movable AS folder_movable FROM model_file mf "
             "JOIN model m ON m.id = mf.model_id "
             "JOIN model_folder f ON f.id = mf.model_folder_id "
             "WHERE mf.model_folder_id = ? AND mf.relpath = ?",
@@ -450,6 +463,31 @@ class ModelMover:
             raise MoveRefused(
                 f"No registered copy at {relpath!r} in folder {folder_id}.",
                 status_code=404,
+            )
+        # `root_only` means the folder relocates as a whole and its contents are
+        # NOT individually movable, so a per-item move out of one is refused
+        # here — at the single point every move funnels through — rather than by
+        # each caller remembering to ask.
+        #
+        # The HuggingFace cache is why this is a containment site and not a
+        # tidiness rule. It is not a folder of files: it is `blobs/` under content
+        # hashes with `snapshots/` symlinking names onto them, it is shared with
+        # every other HF tool on the machine, and a row's relpath there is a
+        # whole repo DIRECTORY. Moving one does not relocate a model, it breaks
+        # HuggingFace's bookkeeping for ComfyUI and everything else too. Its real
+        # control is `HF_HOME`, read at import: a restart and a re-download, not
+        # a move. The same applies to an InsightFace pack and to PixlStash's own
+        # engines, and it is why all three roots are declared `root_only`.
+        if row["folder_movable"] == "root_only" and not relocating:
+            raise MoveRefused(
+                f"{relpath!r} is inside a folder that moves as a whole, not one "
+                "file at a time, so nothing was moved. PixlStash's own model "
+                "folders, the InsightFace packs and the HuggingFace cache are "
+                "all listed so you can see what they cost on disk, not to be "
+                "rearranged: the cache in particular is a symlink store shared "
+                "with your other tools, and moving a file out of it corrupts it "
+                "for all of them rather than relocating anything.",
+                status_code=409,
             )
         if folder_id == destination_folder_id:
             # Not an error: the shelf lets a user drop a mixed selection onto a

@@ -839,3 +839,80 @@ def test_cancel_stops_the_queue_and_rolls_nothing_back(hub, tmp_path, cross_devi
         (source_id, "c.safetensors"),
     }
     assert_no_dangling_rows(hub)
+
+
+def test_a_root_only_folder_refuses_a_per_item_move(tmp_path):
+    """The containment site for the HuggingFace cache.
+
+    That cache is `blobs/` under content hashes with `snapshots/` symlinking
+    names onto them, it is shared with every other HF tool on the machine, and a
+    declared row's relpath there is a whole repo directory. Moving one out does
+    not relocate a model, it breaks HuggingFace's bookkeeping for ComfyUI too.
+    `root_only` is the column that already says "this relocates as a whole", so
+    the refusal is keyed on it and covers PixlStash's own engines and the
+    InsightFace packs by the same stroke.
+    """
+    from pixlstash.hub.db import HubDatabase
+    from pixlstash.services.model_mover import ModelMover, MoveRefused
+
+    source = tmp_path / "hf-cache"
+    source.mkdir()
+    (source / "models--org--thing").mkdir()
+    destination = tmp_path / "loras"
+    destination.mkdir()
+
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model_folder (id, path, kind, owner, movable, "
+                "created_at) VALUES (1, ?, 'foreign', 'pixlstash', 'root_only', "
+                "'2026-08-12T00:00:00Z')",
+                (str(source),),
+            )
+            conn.execute(
+                "INSERT INTO model_folder (id, path, kind, movable, created_at) "
+                "VALUES (2, ?, 'user', 'per_item', '2026-08-12T00:00:00Z')",
+                (str(destination),),
+            )
+            cursor = conn.execute(
+                "INSERT INTO model (file_kind, kind, display_name, filename, "
+                "provenance, file_size, created_at) VALUES ('engine', 'model', "
+                "'org/thing', 'models--org--thing', 'builtin', 10, "
+                "'2026-08-12T00:00:00Z')"
+            )
+            conn.execute(
+                "INSERT INTO model_file (model_id, model_folder_id, relpath, "
+                "state, seen_at) VALUES (?, 1, 'models--org--thing', 'present', "
+                "'2026-08-12T00:00:00Z')",
+                (int(cursor.lastrowid),),
+            )
+
+        mover = ModelMover(hub)
+        with pytest.raises(MoveRefused) as refused:
+            mover.plan([(1, "models--org--thing")], 2)
+        assert "moves as a whole" in str(refused.value)
+
+        # The positive control: over-blocking is its own regression, so a
+        # per_item folder must still move out in the same environment.
+        (destination / "a.safetensors").write_bytes(b"x" * 10)
+        with hub.transaction() as conn:
+            # `sha256` is not optional on an adapter: the hub's CHECK is what
+            # makes a tombstone re-linkable by content.
+            cursor = conn.execute(
+                "INSERT INTO model (file_kind, kind, sha256, display_name, "
+                "filename, provenance, file_size, created_at) VALUES "
+                "('adapter', 'lora', ?, 'A', 'a.safetensors', 'external', 10, "
+                "'2026-08-12T00:00:00Z')",
+                ("b" * 64,),
+            )
+            conn.execute(
+                "INSERT INTO model_file (model_id, model_folder_id, relpath, "
+                "state, seen_at) VALUES (?, 2, 'a.safetensors', 'present', "
+                "'2026-08-12T00:00:00Z')",
+                (int(cursor.lastrowid),),
+            )
+        plan = mover.plan([(2, "a.safetensors")], 1)
+        assert len(plan.moves) == 1, "a per_item source was wrongly refused"
+    finally:
+        hub.close()

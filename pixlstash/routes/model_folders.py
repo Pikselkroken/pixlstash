@@ -177,6 +177,17 @@ class ModelFolderResponse(BaseModel):
             "grouped query for the whole list, never one per folder."
         ),
     )
+    present_bytes: int = Field(
+        default=0,
+        description=(
+            "Bytes registered under this folder whose copies are `present`, in "
+            "the same grouped query the capacity meter uses. `missing` and "
+            "`unreachable` copies are excluded: one names bytes that are no "
+            "longer there and the other bytes we could not look at, and "
+            "counting either would report space the drive does not agree is in "
+            "use. Zero is therefore a real answer, not an unknown one."
+        ),
+    )
     scan_status: Optional[str] = Field(
         default=None,
         description=(
@@ -384,7 +395,9 @@ def create_router(server) -> APIRouter:
         )
         return {int(row["model_folder_id"]): int(row["n"]) for row in rows}
 
-    def _to_response(row: dict, file_count: int = 0) -> ModelFolderResponse:
+    def _to_response(
+        row: dict, file_count: int = 0, present_bytes: int = 0
+    ) -> ModelFolderResponse:
         delete_after_import = row["delete_after_import"]
         scan_status, scan_error = _scan_state(int(row["id"]))
         return ModelFolderResponse(
@@ -400,6 +413,7 @@ def create_router(server) -> APIRouter:
             last_checked=row["last_checked"],
             created_at=row["created_at"],
             file_count=file_count,
+            present_bytes=present_bytes,
             scan_status=scan_status,
             scan_error=scan_error,
         )
@@ -417,13 +431,19 @@ def create_router(server) -> APIRouter:
     def list_model_folders(request: Request):
         server.auth.ensure_secure_when_required(request)
         counts = _file_counts()
+        present_bytes = _present_bytes_by_folder()
         rows = server.hub.fetchall(
             "SELECT id, path, kind, owner, movable, host_path, delete_after_import, "
             "last_checked, created_at FROM model_folder ORDER BY id"
         )
         return ModelFolderListResponse(
             folders=[
-                _to_response(dict(row), counts.get(int(row["id"]), 0)) for row in rows
+                _to_response(
+                    dict(row),
+                    counts.get(int(row["id"]), 0),
+                    present_bytes.get(int(row["id"]), 0),
+                )
+                for row in rows
             ]
         )
 
