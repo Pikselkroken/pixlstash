@@ -41,7 +41,7 @@
   margin-left: auto;
   padding-left: 16px;
   font-size: 11px;
-  opacity: 0.62;
+  opacity: var(--opacity-text-secondary);
 }
 
 .ctx-sep {

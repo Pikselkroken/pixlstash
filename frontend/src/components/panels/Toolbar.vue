@@ -1298,7 +1298,7 @@ const gbCollapseAllStacksDisabled = computed(
 
 .bar-btn-prefix {
   font-size: var(--text-sm);
-  opacity: 0.6;
+  opacity: var(--opacity-text-secondary);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -1520,7 +1520,7 @@ const gbCollapseAllStacksDisabled = computed(
 .gb-size-value {
   align-self: flex-end;
   font-size: var(--text-sm);
-  opacity: 0.6;
+  opacity: var(--opacity-text-secondary);
   white-space: nowrap;
 }
 
