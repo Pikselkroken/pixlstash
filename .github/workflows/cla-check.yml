@@ -4,16 +4,37 @@ permissions:
   contents: read
   pull-requests: read
 
+# pull_request_target, NOT pull_request. Under `pull_request` the workflow that
+# judges a fork PR is the fork's own copy of this file, so a contributor could
+# add themselves to exemptLogins (or replace the script with a no-op) in the
+# same PR and the edited version would report success. `pull_request_target`
+# always runs the base branch's copy. That is only safe because this job never
+# checks out or executes PR code -- it reads the API and nothing else -- and the
+# permissions above keep the token read-only. Do not add a checkout step here.
+#
+# It also makes the check actually run on outside contributions: `pull_request`
+# runs from a first-time contributor are held pending maintainer approval, which
+# left the gate silent on exactly the PRs it exists for.
 on:
-  pull_request:
-    types: [opened, edited, synchronize, reopened]
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+      # labeled/unlabeled so the `cla-signed` escape hatch re-runs the check.
+      # Without them the label never clears a red result, and with
+      # enforce_admins on main that is a merge deadlock.
+      - labeled
+      - unlabeled
+      - ready_for_review
 
 jobs:
   cla-check:
     runs-on: ubuntu-latest
     steps:
       - name: Enforce CLA acknowledgment for backend changes
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const pr = context.payload.pull_request;
@@ -23,7 +44,11 @@ jobs:
             }
 
             // Maintainer exemption: skip CLA gate for trusted owner account(s).
-            // NOTE: GitHub Actions gives us the PR author login, not a verified email.
+            // NOTE: GitHub Actions gives us the PR author login, not a verified
+            // email, and this is the login of whoever OPENED the pr -- a PR
+            // opened by an exempt maintainer carrying a third party's commits
+            // is exempted too. Accepted: the maintainer is trusted not to
+            // launder someone else's copyright through their own account.
             const exemptLogins = new Set(["lindkvis"]);
             const prAuthor = String(pr.user?.login || "").toLowerCase();
             if (exemptLogins.has(prAuthor)) {
@@ -41,9 +66,14 @@ jobs:
               }
             );
 
-            const touchesBackend = files.some((f) =>
-              String(f.filename || "").startsWith("pixlstash/")
-            );
+            // listFiles caps at 3000 files and truncates silently, so a huge PR
+            // could hide its pixlstash/ entries past the window. Treat a
+            // maxed-out list as backend-touching rather than reading the
+            // truncation as "no backend files".
+            const truncated = files.length >= 3000;
+            const touchesBackend =
+              truncated ||
+              files.some((f) => String(f.filename || "").startsWith("pixlstash/"));
 
             if (!touchesBackend) {
               core.info("PR does not touch pixlstash/**; CLA check not required.");
@@ -56,15 +86,23 @@ jobs:
               return;
             }
 
+            // Allowlist a TICKED box on its own line, rather than denylisting
+            // the unticked one. The previous denylist knew only about `-` and
+            // `*`, so `+ [ ]`, `1. [ ]` and `> - [ ]` -- all of which GitHub
+            // renders as a visibly UNCHECKED box -- passed, as did the sentence
+            // inside an HTML comment, which renders as nothing at all. Requiring
+            // the ticked form is closed by construction: there is no list of
+            // markdown spellings to keep up with.
+            const ACK =
+              /^\s*(?:[-*+]|\d+[.)])\s*\[[xX]\]\s*I have read and agree to the CLA in `pixlstash\/CLA\.md`\.\s*$/;
             const body = String(pr.body || "");
-            const hasAck =
-              /-\s*\[(x|X)\]\s*I have read and agree to the CLA in `pixlstash\/CLA\.md`\./.test(body) ||
-              /I have read and agree to the CLA in `pixlstash\/CLA\.md`\./.test(body);
+            const hasAck = body.split(/\r?\n/).some((line) => ACK.test(line));
 
             if (!hasAck) {
               core.setFailed(
                 "This PR modifies pixlstash/** and requires CLA acknowledgment. " +
-                "Add this line to the PR description: '- [x] I have read and agree to the CLA in `pixlstash/CLA.md`.' " +
+                "Tick the box in the PR description so the line reads exactly: " +
+                "'- [x] I have read and agree to the CLA in `pixlstash/CLA.md`.' " +
                 "(Maintainers may alternatively apply the 'cla-signed' label.)"
               );
               return;

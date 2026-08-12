@@ -15,8 +15,7 @@
 This is what PixlStash looks like. Not a mood board, a spec. Every value here is a
 token you can build against, and every rule has a reason. Follow it and the product
 reads as one considered thing on every screen. Ignore it and you get the drift this
-document exists to stop (see `drift-audit-2026-06.md` for what that drift looks like
-in numbers).
+document exists to stop.
 
 Owner: lead designer. Anything that changes *behaviour* (a flow, a state, what a
 control does) is agreed with the UI/UX expert first. Anything that changes *values*
@@ -615,9 +614,13 @@ These get skipped and that is exactly why a UI looks cheap.
   `opacity: var(--opacity-text-secondary)` or
   `rgba(var(--v-theme-on-surface), var(--opacity-text-secondary))` — but measure
   on the sidebar, not on `surface`, or you will pass a test the user fails.
-  This is a *legibility* floor, not a ranking device: rank is still size, weight
-  and tracking, never opacity (§5.1). A glyph, chevron or icon button is not text
-  — it is a non-text UI component with a 3:1 floor (§7) and may stay quieter.
+  This is a *legibility* floor, not a ranking device: rank is still weight,
+  color and space, never opacity (§3). A glyph, chevron or icon button is not
+  text — it is a non-text UI component with a 3:1 floor (§4, "Contrast") and may
+  stay quieter. The ratios above are measured against the *live* themes in
+  `frontend/src/main.js`, not against §4's superseded contrast tables, and
+  `frontend/src/styles/design-tokens.test.js` recomputes them on every CI run —
+  so the Camp B palette migration cannot invalidate this rule quietly.
 - **Pending (busy):** a control that is working is disabled, but it is *not* the
   disabled state. "Not allowed" may fade out of the reading order; "working" is
   the only thing telling the user their click landed, so it has to stay legible.
@@ -850,5 +853,5 @@ exposes it. From now on a raw z-index in new code is drift.
 4. Hand the frontend exact values, not adjectives. "`--space-5` padding, `--radius-md`,
    `--elevation-2`," not "a bit more room and rounder corners."
 
-See `drift-audit-2026-06.md` for the current gap between this spec and the codebase,
-and the order to close it in.
+See `design-system-handoff.md` §9 for findings that are measured and decided but not
+yet implemented.

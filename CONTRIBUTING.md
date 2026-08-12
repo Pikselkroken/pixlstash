@@ -55,7 +55,17 @@ description:
 
 - [x] I have read and agree to the CLA in `pixlstash/CLA.md`.
 
+The pull request template already carries that line with an empty box. Tick it;
+the automated check wants that exact line with an `x` in it, so edit the box
+rather than rewriting the sentence.
+
 If your PR only affects files outside `pixlstash/**`, no CLA is required.
+
+**Maintainers:** if a contributor agreed somewhere the check cannot read (a PR
+comment, an email), apply the **`cla-signed`** label to the PR. The check
+honours the label and re-runs when it is applied, so that one click is the whole
+acceptance step. The label records that a human read the agreement; it is not a
+way to agree on a contributor's behalf.
 
 The CLA lets you retain full copyright and confirms that backend contributions do
 not prevent the maintainer from creating commercial plugins and extensions as

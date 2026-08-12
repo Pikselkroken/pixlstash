@@ -515,7 +515,7 @@ Two endpoints, both under the API prefix:
 | Endpoint | Used by | Purpose |
 |----------|---------|---------|
 | `GET /api/v1/ws/updates` | [App.vue](../frontend/src/App.vue) | Vault-wide events (pictures, tags, characters, plugin progress) |
-| `GET /api/v1/ws/comfyui?clientId=…` | [ComfyUiRunner.vue](../frontend/src/components/ComfyUiRunner.vue) | ComfyUI workflow execution stream |
+| `GET /api/v1/ws/comfyui?clientId=…` | [ComfyUiRunner.vue](../frontend/src/components/io/ComfyUiRunner.vue) | ComfyUI workflow execution stream |
 
 ### Lifecycle (`/ws/updates`)
 
@@ -596,7 +596,7 @@ Each browser **tab** generates one opaque id (`crypto.randomUUID()`), persisted 
 
 The backend's `OriginClientMiddleware` captures the header into `request.state.origin_client_id` (and a contextvar). Mutating handlers thread it into the event `data` dict so `_broadcast_ws_event` echoes it back as `origin_client_id`, letting the originating tab suppress the reload for its own optimistic op.
 
-**Security:** `X-Client-Id` is attacker-controllable and is used **only** for echo-matching — **never** for authorization or scoping. It is length-capped and not logged at INFO. The WS stream stays owner-only. See the security sign-off in [docs/reviews/feature-slick-grid-updates.md](reviews/feature-slick-grid-updates.md).
+**Security:** `X-Client-Id` is attacker-controllable and is used **only** for echo-matching — **never** for authorization or scoping. It is length-capped and not logged at INFO. The WS stream stays owner-only. Signed off by the CSO when the origin-aware envelope shipped (PR #468).
 
 ### 8.2 Frontend decision rule
 
@@ -796,7 +796,7 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
 **But the graph is still untrusted input, and the contract reflects that** (review finding R3, CWE-829). It is authored by whoever made the image file; replaying it executes it on the owner's ComfyUI, bounded only by their installed node packs. The owner is the trust anchor, so the two sides split the job:
 
 - **Server side.** `run_recipe` returns **400** when `preflight.checked` is false and the body carries no `allow_unchecked: true`. The refusal is enforced on the server, not only in the dialog — a UI-only gate is not a gate. `allow_unchecked` is accepted as `allow_unchecked` or `allowUnchecked`, matching the existing `client_id`/`clientId` pair, and an accepted override is logged with the node classes that ran.
-- **Client side.** The SPA must render `node_classes` before the run button is usable, must send `allow_unchecked` **only** for a run the user explicitly acknowledged (never as a constant, never when `preflight.checked` is true), and must surface `source_is_imported` as a warning rather than a gate. See the `RemixDialog.vue` consent section in `frontend_architecture.md` for why the gate is deliberately narrow: an acknowledgement in front of a common state becomes a reflex and stops protecting the rare one.
+- **Client side.** The SPA must render `node_classes` before the run button is usable, must send `allow_unchecked` **only** for a run the user explicitly acknowledged (never as a constant, never when `preflight.checked` is true), and must surface `source_is_imported` as information rather than a gate (it is the Source row in the disclosure; it was a banner until 2026-08-06, which fired on the common watched-folder case). See the `RemixDialog.vue` consent section in `frontend_architecture.md` for why the gate is deliberately narrow: an acknowledgement in front of a common state becomes a reflex and stops protecting the rare one.
 
 **Seed ranges differ between the routes** — 32-bit for the template paths, 64-bit for replay (the shipped Flux2 Klein template's own `noise_seed` exceeds 2³²). The dialog caps its input at `Number.MAX_SAFE_INTEGER` regardless, because above 2⁵³ a JavaScript number cannot carry the value the user typed.
 

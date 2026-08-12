@@ -109,6 +109,14 @@
         margin: 0;
       }
 
+      /* The one upgrade step that is not "download and restart". It is shown
+         statically because the changelog panel that carries the same warning as
+         1.9.0's lead note only renders when ?v= tells us the old version; when
+         that panel does render, the static copy is hidden as a duplicate. */
+      .upgrade-notice {
+        margin: 0 0 24px;
+      }
+
       .whatsnew-banner {
         display: grid;
         grid-template-columns: minmax(280px, 1fr) minmax(340px, 1.25fr);
@@ -388,22 +396,31 @@
         <div id="changes-since-list"></div>
       </div>
 
+      <div id="upgrade-notice" class="method-warning upgrade-notice">
+        ⚠️ <strong>Coming from 1.8.0 or earlier?</strong> Updating clears every
+        API token, as it did in 1.8.1. Create replacements from Settings, share
+        your links again with their new values, and enter your public URL and
+        ComfyUI URL again. If you already updated to 1.8.1 or later this has
+        happened and your current tokens are left alone.
+      </div>
+
       <a class="whatsnew-banner" href="whatsnew.html">
         <div>
-          <span class="whatsnew-kicker">New in 1.8</span>
+          <span class="whatsnew-kicker">New in 1.9</span>
           <h2 class="whatsnew-title">
             Explore what changed before you upgrade
           </h2>
           <p class="whatsnew-copy">
-            Try the new justified grid layout, background imports, Scrapheap delete and auto-empty, the
-            Agreement chart.
+            Undo and redo across your library, the new Duplicates view, Keep
+            cover only for clearing out stacks, characters and sets in several
+            projects at once, and a new Privacy pane.
           </p>
           <span class="whatsnew-cta">Open the What's New page →</span>
         </div>
         <div class="whatsnew-media">
           <img
-            src="assets/ScreenshotsJustified.jpg"
-            alt="PixlStash 1.8: the justified grid layout"
+            src="assets/ScreenshotDuplicates.jpg"
+            alt="PixlStash 1.9: the Duplicates view grouping likely copies for review"
           />
         </div>
       </a>
@@ -838,6 +855,9 @@
           })
           .join("");
         document.getElementById("changes-since").style.display = "block";
+        // The rendered entries carry each version's own lead note, including the
+        // token-clearing warning, so the static callout above would repeat it.
+        document.getElementById("upgrade-notice").style.display = "none";
       }
 
       function fetchText(url) {

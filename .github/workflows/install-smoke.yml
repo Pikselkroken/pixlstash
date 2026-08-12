@@ -39,7 +39,7 @@ jobs:
           # The floor the README and the release plan both promise. A dependency
           # that quietly requires 3.11+ is invisible on the version everyone
           # develops against, and only surfaces as a user's failed install.
-          - { name: ubuntu / py3.10 (floor), os: ubuntu-latest, python: '3.10' }
+          - { name: ubuntu / py3.11 (floor), os: ubuntu-latest, python: '3.11' }
 
     steps:
       # Actions are pinned by commit SHA, not tag: a tag is mutable, so a
