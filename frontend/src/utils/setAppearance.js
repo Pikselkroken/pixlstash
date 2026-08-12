@@ -200,6 +200,9 @@ export const SET_COLORS = [
   { value: "#76ff03", label: "Electric Green" },
 ];
 
+const ICON_VALUES = SET_ICONS.map((ic) => ic.value);
+const COLOR_VALUES = SET_COLORS.map((c) => c.value);
+
 /**
  * The palette entry after `lastValue`, skipping anything in `used`.
  * `lastValue` absent from the palette starts the scan at the head.
@@ -221,25 +224,39 @@ function nextFromPalette(palette, lastValue, used) {
  * `mdi-camera` / red again every time a set was made in a fresh project, or
  * whenever the user replaced an earlier default with a hand-picked icon.
  *
- * @param {Array<Object>} allSets - every set; only the newest one is read, so
- *   the rotation continues across projects.
+ * @param {Array<Object>} allSets - every set; scanned once for the highest-id
+ *   set carrying a palette icon, and the same for a colour, so the rotation
+ *   continues across projects. Sets holding neither (reference sets, the card
+ *   stack) are passed over.
  * @param {Array<Object>} [siblingSets=allSets] - the sets the new one will sit
  *   beside; their icons and colours are skipped so siblings stay distinct.
  * @returns {{set_icon: string, set_color: string}}
  */
 export function nextSetAppearance(allSets, siblingSets = allSets) {
-  const icons = SET_ICONS.map((ic) => ic.value);
-  const colors = SET_COLORS.map((c) => c.value);
-  const newestFirst = [...allSets].sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+  let lastIcon;
+  let lastIconId = -Infinity;
+  let lastColor;
+  let lastColorId = -Infinity;
+  for (const set of allSets) {
+    const id = set.id ?? 0;
+    if (id >= lastIconId && ICON_VALUES.includes(set.set_icon)) {
+      lastIcon = set.set_icon;
+      lastIconId = id;
+    }
+    if (id >= lastColorId && COLOR_VALUES.includes(set.set_color)) {
+      lastColor = set.set_color;
+      lastColorId = id;
+    }
+  }
   return {
     set_icon: nextFromPalette(
-      icons,
-      newestFirst.map((s) => s.set_icon).find((v) => icons.includes(v)),
+      ICON_VALUES,
+      lastIcon,
       new Set(siblingSets.map((s) => s.set_icon)),
     ),
     set_color: nextFromPalette(
-      colors,
-      newestFirst.map((s) => s.set_color).find((v) => colors.includes(v)),
+      COLOR_VALUES,
+      lastColor,
       new Set(siblingSets.map((s) => s.set_color)),
     ),
   };
