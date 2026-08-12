@@ -43,6 +43,7 @@ from pixlstash.services.builtin_models import (
     DeclaredEntry,
     declare_folder,
 )
+from pixlstash.services.model_features import feature_for_repo
 from pixlstash.utils.insightface_model_utils import (
     KNOWN_MODEL_PACKS,
     insightface_root,
@@ -240,7 +241,9 @@ def declare_huggingface_cache(hub, folder_path: str) -> Optional[int]:
             # it is called inside this folder. `repo_id` is the display name.
             relpath=os.path.basename(str(repo.repo_path)),
             display_name=repo.repo_id,
-            role=repo.repo_type,
+            # The feature it powers, not `repo_type` — which is `model` for all
+            # 26 repos on a real machine and therefore says nothing.
+            role=feature_for_repo(repo),
             size=int(repo.size_on_disk),
             present=True,
         )
