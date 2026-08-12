@@ -654,7 +654,7 @@ const canRestore = computed(
 
 .restore-picker-date {
   font-size: var(--text-xs);
-  opacity: 0.6;
+  opacity: var(--opacity-text-secondary);
   white-space: nowrap;
 }
 
@@ -673,7 +673,7 @@ const canRestore = computed(
 
 .restore-preview-cp-date {
   font-size: var(--text-xs);
-  opacity: 0.6;
+  opacity: var(--opacity-text-secondary);
   margin-left: var(--space-3);
   white-space: nowrap;
 }
@@ -799,7 +799,7 @@ const canRestore = computed(
 .restore-empty {
   padding: var(--space-5) 0;
   font-size: var(--text-sm);
-  opacity: 0.6;
+  opacity: var(--opacity-text-secondary);
   text-align: center;
 }
 

@@ -151,6 +151,29 @@
   --opacity-disabled: 0.38;
 
   /* ---------------------------------------------------------------------------
+     SECONDARY TEXT OPACITY — the one legal fade for copy that is still meant to
+     be READ: a timestamp, a count, a hint, a reason. WCAG AA floor is 4.5:1
+     (1.4.3), and the canvas that decides it is the SIDEBAR, not the grid.
+     Measured on the theme pairs in `frontend/src/main.js`
+     (`on-surface` / `sidebar-text` over `background` / `surface` / `sidebar`):
+
+       0.6   light 4.22 / 4.30 / 4.01   dark 5.66 / 5.30 / 4.48   FAILS both themes
+       0.65  light 4.94 / 5.04 / 4.64   dark 6.40 / 5.95 / 5.00   passes, no headroom
+       0.7   light 5.80 / 5.94 / 5.41   dark 7.20 / 6.65 / 5.55   passes with headroom
+
+     0.6 is the value the codebase kept copying — 37 sites, and it fails on both
+     sidebars. Use the token, never a raw number, in either form:
+     `opacity: var(--opacity-text-secondary)` or
+     `rgba(var(--v-theme-on-surface), var(--opacity-text-secondary))`.
+
+     Text ONLY. A glyph, chevron or icon button is a non-text UI component with a
+     3:1 floor (§7) and may stay quieter; a disabled control uses
+     `--opacity-disabled` and is exempt (WCAG 1.4.3). And a fade is never how
+     RANK is expressed — that is size, weight and tracking (§5.1). See #836.
+     --------------------------------------------------------------------------- */
+  --opacity-text-secondary: 0.7;
+
+  /* ---------------------------------------------------------------------------
      COMPONENT DIMENSIONS — a small set of fixed component sizes that are neither
      spacing gaps nor radii, but recur across the UI and were drifting as raw
      one-offs (15px vs 7px badges; 34 / 40 / 48 / 56px action bars). Snap to these.

@@ -405,7 +405,7 @@ const { pending: createFolderLoading, run: createFolder } =
 
 .browse-entry-reason {
   font-size: var(--text-2xs);
-  opacity: 0.6;
+  opacity: var(--opacity-text-secondary);
   font-style: italic;
   flex-shrink: 0;
 }

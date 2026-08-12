@@ -606,6 +606,18 @@ These get skipped and that is exactly why a UI looks cheap.
 - **Disabled:** drop to `--opacity-disabled` (0.38) of the token, never a
   different grey. The fade is legal here and only here: WCAG 1.4.3 exempts an
   inactive control, so a disabled label may sit below the contrast floor.
+- **Secondary text:** a timestamp, a count, a hint, a reason — copy that is still
+  meant to be *read* — fades to `--opacity-text-secondary` (0.7) and to nothing
+  else. Never a raw number: the repo copied `0.6` into 37 places and it fails AA
+  in **both** themes, because the canvas that decides it is the **sidebar**, not
+  the grid — 4.01:1 light and 4.48:1 dark, against the 4.5:1 floor (#836). At 0.7
+  the worst pair is 5.41:1. Either form is fine —
+  `opacity: var(--opacity-text-secondary)` or
+  `rgba(var(--v-theme-on-surface), var(--opacity-text-secondary))` — but measure
+  on the sidebar, not on `surface`, or you will pass a test the user fails.
+  This is a *legibility* floor, not a ranking device: rank is still size, weight
+  and tracking, never opacity (§5.1). A glyph, chevron or icon button is not text
+  — it is a non-text UI component with a 3:1 floor (§7) and may stay quieter.
 - **Pending (busy):** a control that is working is disabled, but it is *not* the
   disabled state. "Not allowed" may fade out of the reading order; "working" is
   the only thing telling the user their click landed, so it has to stay legible.
