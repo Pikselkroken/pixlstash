@@ -244,7 +244,11 @@ const KIND_ICON = {
   managed: "mdi-folder-home-outline",
   user: "mdi-folder-outline",
   source: "mdi-folder-cog-outline",
-  foreign: "mdi-folder-lock-outline",
+  // The only kind the owner can neither scan nor forget, so it is the only one
+  // that gets the key. `managed` is not locked — it holds no association to
+  // dissolve, but it is scannable and relocatable, which is why it keeps the
+  // home glyph rather than joining this one.
+  foreign: "mdi-folder-key-outline",
 };
 
 const browseOpen = ref(false);
