@@ -421,16 +421,11 @@ def declare_folder(
                     (state, now, folder_id, entry.relpath),
                 )
 
-            # Both branches, and restated wholesale for the same reason `kind`
-            # is: a capability the declaration no longer claims must go, or a
-            # model that stopped serving a feature would still be listed under
-            # it. Two rows at most, so a diff would be more code than the
-            # rewrite it saves.
-            conn.execute("DELETE FROM model_capability WHERE model_id = ?", (model_id,))
-            conn.executemany(
-                "INSERT INTO model_capability (model_id, capability) VALUES (?, ?)",
-                [(model_id, capability) for capability in entry.declared_capabilities],
-            )
+            # DIAGNOSTIC (to be reverted): the capability write is disabled to
+            # split the Windows shard-4 SIGSEGV between the new table's DDL and
+            # this write. Two capability tests fail on the Linux shards while
+            # this is in; the signal wanted is backend-windows shard 4.
+            _ = model_id
         # The sweep, and these folders have nowhere else to get one. The folder
         # scanner does this pass for every folder it walks — anything it did not
         # see this run goes `missing` — and it skips these precisely because
