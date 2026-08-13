@@ -545,7 +545,9 @@
                       }"
                       size="14"
                       title="Rename (F2)"
-                      aria-hidden="true"
+                      role="button"
+                      tabindex="-1"
+                      aria-label="Rename (F2)"
                       @click.stop="startRename(row)"
                       >mdi-pencil-outline</v-icon
                     >
