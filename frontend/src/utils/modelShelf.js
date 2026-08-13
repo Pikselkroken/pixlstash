@@ -568,7 +568,9 @@ export function locationState(locations) {
  *
  * @param {Array<Object>} rows - shelf rows, each with `locations`.
  * @returns {Array<{folderId: number, path: string, count: number}>} sorted by
- *   path, so the banner reads the same on every render.
+ *   path, so the banner reads the same on every render — under the shelf's one
+ *   collation, numeric and case-insensitive, so `/mnt/2` precedes `/mnt/10`
+ *   here as it does in every other list on the screen.
  */
 export function offlineFolders(rows) {
   const byFolder = new Map();
@@ -598,7 +600,12 @@ export function offlineFolders(rows) {
   return [...byFolder.values()]
     .filter((folder) => folder.offline && folder.count)
     .map(({ folderId, path, count }) => ({ folderId, path, count }))
-    .sort((a, b) => a.path.localeCompare(b.path));
+    .sort((a, b) =>
+      a.path.localeCompare(b.path, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }),
+    );
 }
 
 /**
@@ -910,6 +917,28 @@ export function generatedMark(row) {
  */
 const ASSIGNMENT_FAN_MAX = 3;
 
+/**
+ * `id -> row` for an entity list, built once per list rather than once per row.
+ *
+ * `assignmentMarks` is called from a `v-for` over the whole shelf, so rebuilding
+ * the maps inside it made the column cost rows x entities — 1,800 rows against a
+ * few hundred characters, on every render. Keyed on the ARRAY, which the entity
+ * store replaces wholesale on every refresh (`lists.value = { ...lists.value }`)
+ * and never mutates in place, so a new list is a new key and the cache cannot go
+ * stale. A `WeakMap` because the entry should die with the list it indexes.
+ */
+const ID_INDEX = new WeakMap();
+
+function indexById(list) {
+  if (!Array.isArray(list)) return new Map();
+  let index = ID_INDEX.get(list);
+  if (!index) {
+    index = new Map(list.map((row) => [String(row.id), row]));
+    ID_INDEX.set(list, index);
+  }
+  return index;
+}
+
 /** Which entity list answers an attachment's `entity_type`. */
 const ATTACHMENT_KIND = {
   character: {
@@ -954,8 +983,8 @@ export function assignmentMarks(
   { characters = [], sets = [] } = {},
 ) {
   const byId = {
-    characters: new Map((characters || []).map((row) => [String(row.id), row])),
-    sets: new Map((sets || []).map((row) => [String(row.id), row])),
+    characters: indexById(characters),
+    sets: indexById(sets),
   };
   const marks = (attachments ?? []).map((att) => {
     const type = att.entity_type === "character" ? "character" : "set";

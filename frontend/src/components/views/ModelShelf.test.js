@@ -1476,10 +1476,21 @@ describe("a run's disclosure", () => {
     // tag-name-only assertion let that mutant through when this was checked.
     // `[tabindex]` is on the row itself, so the search is for descendants.
     expect(
-      row.findAll(
-        'button, a[href], input, select, textarea, [tabindex], [role="button"]',
-      ),
+      row
+        .findAll(
+          'button, a[href], input, select, textarea, [tabindex], [role="button"]',
+        )
+        // The rename pencil is the one exception, and it is a different ACTION
+        // rather than a second way into the run: voice control ("click Rename")
+        // and the AT element list both need a named target, so it carries a
+        // role and a label (#914 review). It is exempt from the count above and
+        // held to the rule that actually matters on the next line.
+        .filter((el) => !el.classes().includes("shelf-name-pencil")),
     ).toHaveLength(0);
+    // ...which is that it is not a TAB STOP. `tabindex="-1"` is what keeps the
+    // keyboard path F2 on the row rather than a stop per row across 1,800 of
+    // them, and it is the assertion the exemption above would otherwise drop.
+    expect(row.find(".shelf-name-pencil").attributes("tabindex")).toBe("-1");
     expect(row.find(".shelf-row-steps").exists()).toBe(true);
   });
 
