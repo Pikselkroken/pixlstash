@@ -21,6 +21,7 @@ import {
   locationState,
   modelName,
   movableCopies,
+  offlineFolders,
   stackReceipt,
   trainingStep,
 } from "./modelShelf";
@@ -125,6 +126,76 @@ describe("locationState", () => {
   it("reports no copies at all as its own state", () => {
     expect(locationState([])).toBe("forgotten");
     expect(locationState(undefined)).toBe("forgotten");
+  });
+});
+
+describe("offlineFolders", () => {
+  const at = (folderId, state, folderPath = `/mnt/${folderId}`) => ({
+    folder_id: folderId,
+    folder_path: folderPath,
+    relpath: "a.safetensors",
+    state,
+  });
+
+  it("names a wholly unreachable folder and counts its rows", () => {
+    expect(
+      offlineFolders([
+        { id: 1, locations: [at(7, "unreachable", "/mnt/usb")] },
+        { id: 2, locations: [at(7, "unreachable", "/mnt/usb")] },
+      ]),
+    ).toEqual([{ folderId: 7, path: "/mnt/usb", count: 2 }]);
+  });
+
+  it("is silent about a folder that was readable", () => {
+    // One `present` copy means the drive IS plugged in, and one `missing` copy
+    // means the folder WAS read — a different fact, and not one to fold into
+    // "offline". Either disqualifies the whole folder.
+    expect(
+      offlineFolders([
+        { id: 1, locations: [at(7, "unreachable")] },
+        { id: 2, locations: [at(7, "present")] },
+      ]),
+    ).toEqual([]);
+    expect(
+      offlineFolders([
+        { id: 1, locations: [at(7, "unreachable")] },
+        { id: 2, locations: [at(7, "missing")] },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("counts a row once however many copies of it a folder holds", () => {
+    const twice = {
+      id: 1,
+      locations: [
+        at(7, "unreachable"),
+        { ...at(7, "unreachable"), relpath: "b" },
+      ],
+    };
+    expect(offlineFolders([twice])[0].count).toBe(1);
+  });
+
+  it("leaves a row alone whose other folder is fine", () => {
+    // The offline folder is still named — the copy on it genuinely cannot be
+    // read — but the row is usable, which is the reader's actual question and
+    // the reason this is a mount-level statement rather than a row-level one.
+    const rows = [
+      { id: 1, locations: [at(7, "unreachable"), at(8, "present")] },
+    ];
+    expect(offlineFolders(rows)).toEqual([
+      { folderId: 7, path: "/mnt/7", count: 1 },
+    ]);
+  });
+
+  it("orders by path, so the banner reads the same every render", () => {
+    const rows = [
+      { id: 1, locations: [at(9, "unreachable", "/mnt/zed")] },
+      { id: 2, locations: [at(8, "unreachable", "/mnt/alpha")] },
+    ];
+    expect(offlineFolders(rows).map((f) => f.path)).toEqual([
+      "/mnt/alpha",
+      "/mnt/zed",
+    ]);
   });
 });
 

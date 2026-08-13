@@ -18,6 +18,7 @@ import {
   compareGroups,
   locationState,
   modelName,
+  offlineFolders,
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
 
@@ -406,6 +407,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const collapsed = ref(storedCollapsed());
   /** Every row fetched so far, across blocks. Not the shown set. */
   const rows = ref([]);
+  /** Model ids the last scan added, for the `New` badge. Never persisted. */
+  const newIds = ref(new Set());
   const loading = ref(false);
   const error = ref("");
   /** True once a fetch has completed, so "empty" and "not asked yet" differ. */
@@ -452,9 +455,20 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * checkboxes each refetch, so a slower earlier request could otherwise land
    * last and show adapters only while Checkpoints is ticked. Same shape as
    * `useLibrariesStore.refresh`.
+   *
+   * `markNew` is what a SCAN passes: the ids this fetch brought back that the
+   * last one did not are what the scan added, and the rows wear a `New` badge
+   * until the next fetch clears it. Diffed against the previous ids rather than
+   * read off a timestamp, because "new" here means "this appeared while you
+   * were looking", which is a fact about the two payloads and not about
+   * `added_at` — a folder re-registered after a Forget hands back rows whose
+   * `added_at` is months old and which are nonetheless new to this shelf.
+   *
+   * @param {{markNew?: boolean}} [options]
    */
-  async function fetchRows() {
+  async function fetchRows({ markNew = false } = {}) {
     const startedAt = (epoch += 1);
+    const before = new Set(rows.value.map((row) => row.id));
     loading.value = true;
     error.value = "";
     try {
@@ -475,6 +489,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         ...rows.value.filter((row) => !refreshed.has(blockOf(row))),
         ...results.flat(),
       ];
+      // Cleared on every ordinary fetch, so the badge is exactly "what the scan
+      // you just ran added" and never a stale mark from one three refreshes ago.
+      newIds.value = markNew
+        ? new Set(
+            rows.value.map((row) => row.id).filter((id) => !before.has(id)),
+          )
+        : new Set();
       loaded.value = true;
       pruneSelection();
     } catch (err) {
@@ -545,11 +566,19 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         ...row,
         name: modelName(row),
         locState: locationState(row.locations),
+        isNew: newIds.value.has(row.id),
       }));
     // Folded LAST, so the filters narrow individual models and the stack is
     // then built from what survived. Folding first would let a stack whose
     // cover matches drag hidden members back into view.
-    return collapseStacks(shown);
+    //
+    // A stack is `New` when ANY member is: a scan that adds a seventh step to
+    // a six-step run leaves the cover untouched, and a run that grew is what
+    // the badge is for. The fold takes the cover's own fields, so this is the
+    // one that has to be recomputed across the members.
+    return collapseStacks(shown).map((row) =>
+      row.members ? { ...row, isNew: row.members.some((m) => m.isNew) } : row,
+    );
   });
 
   /**
@@ -624,6 +653,17 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     }
     return [...byKey.values()].sort(compareGroups);
   });
+
+  /**
+   * The folders that are wholly out of reach — an unplugged drive, usually.
+   *
+   * Derived from `rows` and NOT from `visibleRows`, because it is a fact about
+   * the disk rather than about the current `Show` selection: a filter that
+   * hides the one present copy in a folder must not promote that folder to
+   * "offline", and the banner's count must not shrink when the reader narrows
+   * the list.
+   */
+  const offlineMounts = computed(() => offlineFolders(rows.value));
 
   /**
    * How many rows the list actually draws.
@@ -1089,6 +1129,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   function resetForSession() {
     epoch += 1;
     rows.value = [];
+    newIds.value = new Set();
     selectedIds.value = new Set();
     anchorId.value = null;
     loaded.value = false;
@@ -1146,6 +1187,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     baseModelOptions,
     visibleRows,
     groups,
+    offlineMounts,
     renderedCount,
     activeCount,
     nothingSelected,
