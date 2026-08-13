@@ -197,9 +197,127 @@ describe("a row with nothing in its header", () => {
     ]);
     const names = wrapper.findAll(".shelf-row-name");
     expect(names[0].classes()).toContain("shelf-row-name--derived");
-    expect(names[1].classes()).not.toContain("shelf-row-name--derived");
-    // ...and the mark is announced, because a font swap is silent.
-    expect(names[0].text()).toContain("name taken from the filename");
+    expect(names[1].classes()).toContain("shelf-row-name--named");
+    // ...and the mark is a WORD, because a font swap is silent to a screen
+    // reader and invisible in greyscale.
+    const rows = wrapper.findAll(".shelf-row");
+    expect(rows[0].find(".shelf-name-tag").text()).toBe("derived");
+    expect(rows[1].find(".shelf-name-tag").exists()).toBe(false);
+  });
+});
+
+describe("the four naming states", () => {
+  /** One row per state, in the order the design lists them. */
+  async function mountStates() {
+    return mountShelf([
+      adapter({ id: 1, display_name: "Clementine" }),
+      adapter({ id: 2, display_name: null, filename: null }),
+      adapter({ id: 3, display_name: null, filename: "Foxglove_Char.st" }),
+      // Nothing survives the strip, so the shown string IS the filename.
+      adapter({ id: 4, display_name: null, filename: "000002750.st" }),
+    ]);
+  }
+
+  it("draws each of them differently", async () => {
+    const rows = (await mountStates()).findAll(".shelf-row");
+    const stateClass = (row) =>
+      row
+        .find(".shelf-row-name")
+        .classes()
+        .find((c) => c.startsWith("shelf-row-name--"));
+    expect(rows.map(stateClass)).toEqual([
+      "shelf-row-name--named",
+      "shelf-row-name--needs-a-name",
+      "shelf-row-name--derived",
+      "shelf-row-name--from-file",
+    ]);
+  });
+
+  it("tells derived from the file's own name without opening anything", async () => {
+    const rows = (await mountStates()).findAll(".shelf-row");
+    // The two "nobody named this" states are different news, and the words are
+    // what carry it: the accent on the from-file tag is a hint on top.
+    expect(rows[2].find(".shelf-name-tag").text()).toBe("derived");
+    expect(rows[3].find(".shelf-name-tag").text()).toBe("from filename");
+    expect(rows[3].find(".shelf-name-tag").classes()).toContain(
+      "shelf-name-tag--from-file",
+    );
+  });
+
+  it("shows an unnamed model an empty field, not inert text", async () => {
+    const rows = (await mountStates()).findAll(".shelf-row");
+    // The row that most needs naming used to read `no name in file`, which
+    // looks like a name and invites nothing. It is a prompt with a persistent
+    // pencil now (#897).
+    expect(rows[1].find(".shelf-row-name").text()).toBe("Name this model");
+    expect(rows[1].find(".shelf-name-pencil").classes()).toContain(
+      "shelf-name-pencil--persistent",
+    );
+    expect(rows[0].find(".shelf-name-pencil").classes()).not.toContain(
+      "shelf-name-pencil--persistent",
+    );
+  });
+});
+
+describe("renaming a row in place", () => {
+  it("opens the field on F2 and commits it on Enter", async () => {
+    // F2 and not a tab stop per row: the affordance has to be reachable by
+    // keyboard, and the shelf's dialect is that the ROW is the control.
+    const wrapper = await mountShelf([adapter({ id: 7, display_name: null })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "F2" });
+    const field = wrapper.find(".shelf-row-rename");
+    expect(field.exists()).toBe(true);
+    // Seeded EMPTY on a derived row: the derived string is a guess, and
+    // pre-filling it would turn one Enter into somebody having chosen it.
+    expect(field.element.value).toBe("");
+
+    await field.setValue("Cyanwood");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(edit).toHaveBeenCalledWith([7], { display_name: "Cyanwood" });
+    expect(wrapper.find(".shelf-row-rename").exists()).toBe(false);
+  });
+
+  it("writes nothing on Escape", async () => {
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "F2" });
+    await wrapper.find(".shelf-row-rename").setValue("Nope");
+    await wrapper
+      .find(".shelf-row-rename")
+      .trigger("keydown", { key: "Escape" });
+    expect(edit).not.toHaveBeenCalled();
+    expect(wrapper.find(".shelf-row-rename").exists()).toBe(false);
+  });
+
+  it("keeps the field's keys off the list underneath", async () => {
+    // Arrow walks the rows, Space picks and Escape clears the selection, so a
+    // name could not be typed with any of them still live under the field.
+    const wrapper = await mountShelf([adapter({ id: 7 }), adapter({ id: 8 })]);
+    const store = useModelShelfStore();
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "F2" });
+    await wrapper.find(".shelf-row-rename").trigger("keydown", { key: " " });
+    expect(store.selectedRows).toHaveLength(0);
+  });
+
+  it("renames every member of a run, because they share one name", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1, stack_id: 5, display_name: null, training_step: 250 }),
+      adapter({ id: 2, stack_id: 5, display_name: null, training_step: 500 }),
+    ]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "F2" });
+    await wrapper.find(".shelf-row-rename").setValue("Cyanwood");
+    await wrapper
+      .find(".shelf-row-rename")
+      .trigger("keydown", { key: "Enter" });
+    expect(edit).toHaveBeenCalledWith([1, 2], { display_name: "Cyanwood" });
   });
 });
 

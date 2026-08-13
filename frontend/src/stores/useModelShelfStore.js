@@ -915,8 +915,21 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * @returns {Promise<boolean>} true when the write landed.
    */
   async function editSelected(changes) {
+    return editModelIds(selectedModelIds.value, changes);
+  }
+
+  /**
+   * The same write, against ids the caller names rather than the selection.
+   *
+   * The row's inline rename needs it: naming a model is a gesture on ONE row
+   * and must not disturb, or depend on, whatever is selected elsewhere.
+   *
+   * @param {number[]} ids - model ids. A stack cover passes its members.
+   * @param {Object} changes - as {@link editSelected}.
+   * @returns {Promise<boolean>} true when the write landed.
+   */
+  async function editModelIds(ids, changes) {
     const notices = useNoticeStore();
-    const ids = selectedModelIds.value;
     if (!ids.length) return false;
     try {
       const body = await editModels(ids, changes);
@@ -1078,7 +1091,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       await fetchRows();
       notices.push({
         level: "success",
-        text: `Set the icon on ${row.name.text}.`,
+        // A row in the `needs-a-name` state has no name to say, by design —
+        // its `text` is empty so the shelf can draw it as a field. The receipt
+        // still has to name something the reader can recognise.
+        text: `Set the icon on ${row.name.text || row.filename || "the model"}.`,
       });
       return true;
     } catch (err) {
@@ -1173,6 +1189,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     selectVisible,
     clearSelection,
     editSelected,
+    editModelIds,
     forgetSelected,
     setIconOnSelected,
     clearIconsOnSelected,

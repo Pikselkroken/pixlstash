@@ -57,24 +57,36 @@ export function deriveModelName(filename) {
 }
 
 /**
- * Resolve what a row is called, and whether anybody chose it.
+ * Resolve what a row is called, and WHO decided it.
  *
- * The chain is: the name the user gave, else one derived from the filename,
- * else the filename itself. `derived` is what the row uses to mark the name as
- * a fact about the file rather than a title someone wrote.
+ * The chain is: the name the user gave, else a readable one we made from the
+ * filename, else the filename itself, else nothing. `state` is the whole point
+ * — the row draws each of the four differently, because "somebody named this"
+ * and "we guessed" and "there is nothing here to read" are three different
+ * things to a reader deciding what to fix, and the shelf used to render all of
+ * them as one string.
+ *
+ * The last state returns an EMPTY string on purpose. A row with no filename
+ * used to read `no name in file`, which looks like a name, sorts like a name
+ * and reads as inert — so the one row that most needs naming was the one that
+ * least invited it. The row renders the empty case as a field.
  *
  * @param {Object} model - a row from `/adapters` or `/checkpoints`.
- * @returns {{text: string, derived: boolean}}
+ * @returns {{text: string, state: "named"|"derived"|"from-file"|"needs-a-name"}}
  */
 export function modelName(model) {
   const given = String(model?.display_name || "").trim();
-  if (given) return { text: given, derived: false };
+  if (given) return { text: given, state: "named" };
   const filename = String(model?.filename || "").trim();
   const derived = deriveModelName(filename);
-  if (derived) return { text: derived, derived: true };
+  // A real readable name, and OURS: `deriveModelName` rewrote the file's own
+  // string, so nothing on disk says this. It must not be mistaken for a title.
+  if (derived) return { text: derived, state: "derived" };
   // Nothing survived the strip (a file called `000002750.safetensors`). The
-  // raw filename is the only honest thing left to show.
-  return { text: filename || "no name in file", derived: true };
+  // raw filename is the only honest thing left to show — and it is the file's
+  // string verbatim, which is what the row says out loud.
+  if (filename) return { text: filename, state: "from-file" };
+  return { text: "", state: "needs-a-name" };
 }
 
 /**

@@ -161,7 +161,8 @@ def derive_model_name(filename: str) -> str:
 
     Returns:
         A human-readable name, or ``""`` when nothing survives. Callers decide
-        what an empty result looks like; the shelf shows "no name in file".
+        what an empty result looks like; the shelf falls back to the raw
+        filename and marks the row as carrying the file's own name.
 
     Examples:
         >>> derive_model_name("JimmyCarr_000002750.safetensors")

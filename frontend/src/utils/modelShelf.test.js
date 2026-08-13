@@ -65,7 +65,7 @@ describe("deriveModelName", () => {
 describe("modelName", () => {
   it("prefers the name somebody gave it, and says nobody did", () => {
     expect(modelName({ display_name: "Clementine", filename: "x.st" })).toEqual(
-      { text: "Clementine", derived: false },
+      { text: "Clementine", state: "named" },
     );
   });
 
@@ -77,18 +77,23 @@ describe("modelName", () => {
         display_name: null,
         filename: "Foxglove_Char_000000250.safetensors",
       }),
-    ).toEqual({ text: "Foxglove Char", derived: true });
+    ).toEqual({ text: "Foxglove Char", state: "derived" });
   });
 
-  it("falls back to the raw filename rather than to a blank", () => {
+  it("separates the file's own string from one we made", () => {
+    // Nothing survived the strip, so what is shown IS the filename — a
+    // different piece of news from `derived`, and the row says which.
     expect(modelName({ filename: "000002750.safetensors" })).toEqual({
       text: "000002750.safetensors",
-      derived: true,
+      state: "from-file",
     });
   });
 
-  it("never returns an empty string", () => {
-    expect(modelName({}).text).not.toBe("");
+  it("returns nothing to show when there is nothing to show", () => {
+    // Deliberately empty rather than the old `no name in file`, which looked
+    // like a name, sorted like one and read as inert. The row draws this state
+    // as a field asking to be filled (#897).
+    expect(modelName({})).toEqual({ text: "", state: "needs-a-name" });
   });
 });
 
