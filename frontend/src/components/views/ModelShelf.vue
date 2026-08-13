@@ -446,9 +446,10 @@
                   row.memberCount > 1 ? isStackOpen(row.stack_id) : undefined
                 "
                 :aria-selected="store.isSelected(row.id)"
+                aria-keyshortcuts="F2"
                 :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
                 :data-row-key="row.rowKey"
-                :draggable="canDrag(row)"
+                :draggable="canDrag(row) && editingRowKey !== row.rowKey"
                 @click="pickRow(row, $event)"
                 @keydown="onRowKeydown(row, $event)"
                 @focus="focusedRowKey = row.rowKey"
@@ -483,14 +484,56 @@
                   <ModelMark :row="row" />
                 </span>
                 <span role="gridcell" class="shelf-row-label">
-                  <span
-                    class="shelf-row-name"
-                    :class="{ 'shelf-row-name--derived': row.name.derived }"
-                    >{{ row.name.text
-                    }}<span v-if="row.name.derived" class="visually-hidden">
-                      (name taken from the filename)</span
-                    ></span
-                  >
+                  <!-- The name is a FIELD, and it has four states, because
+                       naming is the commonest fix on this shelf and the reader
+                       has to be able to tell "somebody chose this" from "we
+                       guessed" from "there is nothing here" without opening
+                       anything. Rendering all four as one string is what made
+                       an unnamed row look inert, and an inert row never gets
+                       named (#897). The tag beside the name is the carrier;
+                       the type and the accent are hints on top of it, so the
+                       distinction survives greyscale. -->
+                  <input
+                    v-if="editingRowKey === row.rowKey"
+                    v-model="editingName"
+                    class="shelf-row-rename"
+                    type="text"
+                    :placeholder="row.name.text || 'Name this model'"
+                    :aria-label="`Name for ${row.filename || 'this model'}`"
+                    @click.stop
+                    @keydown="onRenameKeydown"
+                    @blur="commitRename"
+                  />
+                  <template v-else>
+                    <span
+                      class="shelf-row-name"
+                      :class="`shelf-row-name--${row.name.state}`"
+                      >{{ row.name.text || "Name this model" }}</span
+                    >
+                    <span
+                      v-if="NAME_TAG[row.name.state]"
+                      class="shelf-name-tag"
+                      :class="`shelf-name-tag--${row.name.state}`"
+                      :title="NAME_TAG[row.name.state].title"
+                      >{{ NAME_TAG[row.name.state].label }}</span
+                    >
+                    <!-- Decorative, and deliberately not focusable: the row is
+                         the control on this grid, so the keyboard path is F2 on
+                         the row (announced by `aria-keyshortcuts`) rather than
+                         a tab stop per row across 1,800 of them. -->
+                    <v-icon
+                      class="shelf-name-pencil"
+                      :class="{
+                        'shelf-name-pencil--persistent':
+                          row.name.state === 'needs-a-name',
+                      }"
+                      size="14"
+                      title="Rename (F2)"
+                      aria-hidden="true"
+                      @click.stop="startRename(row)"
+                      >mdi-pencil-outline</v-icon
+                    >
+                  </template>
                   <!-- The step, on any row that is not a stack cover.
                        `deriveModelName` strips the trailing step from the
                        filename on the stated grounds that "the step is parsed
@@ -1319,6 +1362,15 @@ function onRowKeydown(row, event) {
     }
     return;
   }
+  // The keyboard half of the pencil. F2 is the rename key everywhere a list has
+  // one, and it keeps the affordance off the tab order: the shelf's dialect is
+  // that the ROW is the control, so a focusable pencil per row would be 1,800
+  // new tab stops for the gesture one key already covers.
+  if (event.key === "F2") {
+    event.preventDefault();
+    startRename(row);
+    return;
+  }
   if (event.key === " " || event.key === "Enter") {
     event.preventDefault();
     store.selectFromClick(
@@ -1333,6 +1385,92 @@ function onRowKeydown(row, event) {
   // after a click — rather than only while a row holds the roving tab stop,
   // which is what it used to mean and is not what a reader expects from
   // "Escape clears the selection".
+}
+
+/**
+ * What the two "nobody has named this" states say out loud.
+ *
+ * Words, not colour: the accent on the from-file chip is a hint and the label
+ * is what carries the meaning, so the pair still reads in greyscale. They are
+ * different news — one string is the file's own and one is ours — and the whole
+ * point of #897 is that a reader can tell which without opening the row.
+ */
+const NAME_TAG = {
+  derived: {
+    label: "derived",
+    title:
+      "PixlStash made this name from the file. Nobody has named this model.",
+  },
+  "from-file": {
+    label: "from filename",
+    title: "This is the file's own name. Nobody has named this model.",
+  },
+};
+
+// Inline rename. One row at a time, held by row key: the field is what makes
+// the dashed rule and the pencil honest — an affordance that opened a dialog
+// would be advertising a field the row does not have.
+const editingRowKey = ref("");
+const editingName = ref("");
+let editingRow = null;
+
+/** Put the field on a row, seeded with the GIVEN name, not the shown one. */
+function startRename(row) {
+  editingRow = row;
+  editingRowKey.value = row.rowKey;
+  // Seeded from `display_name`, so opening the field on a derived row offers an
+  // empty box: the derived string is a guess and pre-filling it would turn one
+  // Enter into somebody having chosen it.
+  editingName.value = row.display_name || "";
+  nextTick(() => {
+    const el = rootEl.value?.querySelector(".shelf-row-rename");
+    el?.focus();
+    el?.select();
+  });
+}
+
+function endRename() {
+  editingRow = null;
+  editingRowKey.value = "";
+  editingName.value = "";
+}
+
+/**
+ * Commit the field, on Enter or on losing focus.
+ *
+ * Closes BEFORE it writes, so the blur the unmount fires finds nothing to do
+ * and the row cannot be written twice. An empty box clears the name back to
+ * `NULL`, which is what puts the model back on the backend's naming queue.
+ */
+async function commitRename() {
+  const row = editingRow;
+  if (!row) return;
+  const next = editingName.value.trim();
+  endRename();
+  if (next === String(row.display_name || "").trim()) return;
+  // A cover stands for every member of the run, and they share one name.
+  await store.editModelIds(row.memberIds ?? [row.id], {
+    display_name: next || null,
+  });
+}
+
+/**
+ * The field's own keys.
+ *
+ * Everything is stopped from reaching the row and the shelf root: Arrow walks
+ * the list, Space and Enter pick, and Escape clears the selection, so a name
+ * could not be typed with any of them live underneath.
+ */
+function onRenameKeydown(event) {
+  event.stopPropagation();
+  if (event.key !== "Enter" && event.key !== "Escape") return;
+  event.preventDefault();
+  const key = editingRowKey.value;
+  if (event.key === "Enter") commitRename();
+  else endRename();
+  // Focus goes back to the row it came from: the field is gone and a keyboard
+  // reader would otherwise be dropped at the top of the document.
+  nextTick(() => focusDrawnRow(key));
 }
 
 /**
@@ -2003,12 +2141,40 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Reserved on every state, so the rule appearing under the pointer cannot
+     shift the row's baseline by a pixel as the reader scans down it. */
+  border-bottom: 1px dashed transparent;
 }
 
-/* The unnamed third. Mono at regular weight, at FULL strength: §3 gives the
-   mono face to file paths, and a filename-derived name is one — so this says
-   what the string is rather than demoting it. Rank is never opacity (§5.1),
-   and 37% of rows faded would be a column of ghosts. */
+/* The editable rule, on hover AND on the tab stop. Hover alone is the defect:
+   a keyboard reader would have no sign the name is a field at all, and
+   `:focus-within` on the row covers both the row itself and the field it
+   opens. Not on `--needs-a-name`, which carries its own accent rule always and
+   must not be quieted down to this one while the pointer is over it. */
+.shelf-row:hover .shelf-row-name:not(.shelf-row-name--needs-a-name),
+.shelf-row:focus-within .shelf-row-name:not(.shelf-row-name--needs-a-name) {
+  border-bottom-color: rgba(var(--v-theme-on-background), 0.45);
+}
+
+/* An EMPTY FIELD inviting a name, never disabled-looking text — the one
+   distinction #897 says decides whether these rows ever get fixed. So: full
+   ink, an accent rule that is always there, and a pencil that never hides.
+   Italic because rank is style and not another step down in contrast, the same
+   call `.shelf-col-none` makes one column over. */
+.shelf-row-name--needs-a-name {
+  font-style: italic;
+  font-weight: var(--weight-regular);
+  border-bottom-color: rgb(var(--v-theme-accent));
+}
+
+/* A readable name we generated. The UI face, because this string is OURS and
+   is not in the file — mono would claim it were. Regular weight, so it does
+   not carry the authority of a title somebody chose; the tag beside it says
+   the rest. */
+.shelf-row-name--derived {
+  font-weight: var(--weight-regular);
+}
+
 /* Quiet beside the name, in the same slot the stack count uses: it qualifies
    the identity rather than being part of it. Tabular figures so a column of
    steps lines up when several members of a run sit together. */
@@ -2025,9 +2191,82 @@ watch(
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 
-.shelf-row-name--derived {
+/* The file's own string, shown because nothing survived the strip. Mono at
+   regular weight, at FULL strength: §3 gives the mono face to file paths, and
+   this IS one — so the face says what the string is rather than demoting it.
+   Rank is never opacity (§5.1), and 37% of rows faded would be a column of
+   ghosts. (The comment used to sit above `.shelf-row-at-step`, two rules from
+   the one it describes.) */
+.shelf-row-name--from-file {
   font-family: var(--font-mono);
   font-weight: var(--weight-regular);
+}
+
+/* The two "nobody has named this" tags. Both are shapes with words in them, so
+   which is which survives greyscale (§4): the accent is a hint on the
+   from-file one, never the thing carrying the meaning. */
+.shelf-name-tag {
+  flex: none;
+  padding: 0 var(--space-2);
+  border: 1px solid rgba(var(--v-theme-on-background), 0.35);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+  /* 0.7 and not 0.6: at 11px the lower alpha misses the contrast floor (#836). */
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+.shelf-name-tag--from-file {
+  border-color: rgba(var(--v-theme-accent), 0.6);
+  background: rgba(var(--v-theme-accent), 0.14);
+  /* The surface's own ink on a 14% wash, NOT `on-accent`: that pairing is for a
+     solid fill and measures near-invisible over a tint (§4, §11). */
+  color: rgb(var(--v-theme-on-background));
+}
+
+/* The affordance itself. Opacity rather than `display`, so it holds its own
+   width and the name never reflows out from under the pointer. */
+.shelf-name-pencil {
+  flex: none;
+  opacity: 0;
+  cursor: pointer;
+  color: rgba(var(--v-theme-on-background), 0.7);
+  transition: opacity var(--dur-2) var(--ease-standard);
+}
+
+.shelf-row:hover .shelf-name-pencil,
+.shelf-row:focus-within .shelf-name-pencil,
+.shelf-name-pencil--persistent {
+  opacity: 1;
+}
+
+/* On the row that has no name, the pencil is the ask and wears the accent with
+   the rule under the placeholder. */
+.shelf-name-pencil--persistent {
+  color: rgb(var(--v-theme-accent));
+}
+
+/* Editing: a real bordered field, in the app's one focus language (§11). Sized
+   to the text it replaces so committing does not jump the row. */
+.shelf-row-rename {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0 var(--space-2);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-on-background));
+  background: rgba(var(--v-theme-on-background), 0.06);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+}
+
+.shelf-row-rename:focus {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 /* No `margin-left` any more: the status glyph is a column of its own now, and

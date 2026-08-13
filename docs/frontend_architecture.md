@@ -1388,7 +1388,7 @@ express that. Like Duplicates it is excluded from `selectionOwnsHighlight` in
 `SideBar.vue`, or the underlying picture selection would light a second active
 destination in the rail.
 
-Four rules come from measurement against real adapter folders and are easy to
+These rules come from measurement against real adapter folders and are easy to
 undo by accident:
 
 - **A blank cell is the failure mode, not an edge case.** 37% of real adapters
@@ -1401,12 +1401,38 @@ undo by accident:
   and stops a guess being mistaken for a choice. `deriveModelName` mirrors
   `pixlstash/utils/model_utils.py`; `cleanAssetName` beneath it must not drift,
   because its Python original feeds stored sentence embeddings.
-- **The derived name is marked by type, never by opacity.** `--font-mono` at
-  `--weight-regular` and full strength: §3 gives the mono face to file paths,
-  and a filename-derived name is one. Rank is never opacity
-  (`visual-language.md` §5.1) and a third of the rows faded would be a column
-  of ghosts. A font swap is silent to a screen reader, so the row also carries
-  a `visually-hidden` qualifier.
+- **The name has FOUR states and the row draws each one differently.**
+  `modelName` returns `{text, state}` with `state` one of `named` / `derived` /
+  `from-file` / `needs-a-name`, and naming is the commonest fix on this shelf,
+  so telling them apart is the column's main job (#897):
+  - `named` — somebody chose it. Plain, at `--weight-semibold`.
+  - `derived` — we made a readable string the file does not contain. The **UI**
+    face at `--weight-regular` (mono would claim the string were the file's),
+    plus an outline tag reading `derived`.
+  - `from-file` — nothing survived the strip, so what is shown *is* the
+    filename. `--font-mono` (§3 gives mono to file paths) plus a small **accent**
+    tag reading `from filename`.
+  - `needs-a-name` — no name and no filename. `text` is deliberately **empty**
+    and the row draws an italic `Name this model` prompt with a permanent accent
+    rule and a pencil that never hides. It used to read `no name in file`, which
+    looks like a name and reads as inert, so the row that most needed naming was
+    the one that least invited it.
+  Rank is type, shape and words — **never opacity** (`visual-language.md` §5.1):
+  a third of the rows faded would be a column of ghosts, and the two "nobody has
+  named this" tags carry their meaning in the label so the pair survives
+  greyscale. The empty `text` is already handled by `compareOn`, which sorts a
+  row that cannot answer the key last in both directions.
+- **The name is a field, and the affordance is not hover-only.** The dashed rule
+  and the pencil appear on `.shelf-row:hover` **and** `:focus-within`, or a
+  keyboard reader would have no sign the name is editable. Editing happens
+  **inline** — a bordered input with `--focus-ring`, committed on Enter or on
+  blur, abandoned on Escape, writing through `store.editModelIds(ids, changes)`
+  (the selection-free half of `editSelected`) and taking a stack cover's whole
+  run, since the members share one name. The keyboard path is **F2 on the row**
+  (`aria-keyshortcuts`), not a focusable pencil: the shelf's dialect is that the
+  row is the control, and a pencil per row would be 1,800 new tab stops. The
+  field stops its own keys, or Arrow, Space and Escape would walk and clear the
+  list from under it.
 - **`unknown` is never rendered as a checkpoint.** `file_kind='unknown'` is a
   first-class stored value with its own glyph and the word "Unclassified". It
   is in neither list by default and is fetched only from the *adapters* block
