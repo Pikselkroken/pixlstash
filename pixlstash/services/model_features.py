@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+from functools import lru_cache
 from typing import Optional
 
 from pixlstash.pixl_logging import get_logger
@@ -59,7 +60,7 @@ FEATURE_OTHER = "other"
 # Repo ids PixlStash's own code fetches, and what each is for. Restated rather
 # than imported for the reason `builtin_models` restates filenames: joycaption,
 # florence2 and wd14 import torch and onnxruntime at module level, and this runs
-# at start-up. `tests/test_model_features.py` imports the real constants, where
+# at start-up. `tests/test_builtin_models.py` imports the real constants, where
 # the cost is free, and asserts the two agree.
 OUR_REPOS: dict[str, str] = {
     # `joycaption._MODEL_NAME`
@@ -120,14 +121,20 @@ _PIPELINE_MARKER = "model_index.json"
 _CONFIG_MARKER = "config.json"
 
 
-def _base_model_aliases() -> set[str]:
-    """Every HuggingFace repo id the known-base-models table already names."""
+@lru_cache(maxsize=1)
+def _base_model_aliases() -> frozenset[str]:
+    """Every HuggingFace repo id the known-base-models table already names.
+
+    Cached: `KNOWN_BASE_MODELS` is a shipped constant, and the caller runs once
+    per cached repo at start-up, so rebuilding the set per repo is 43 entries
+    walked for nothing on every one of them.
+    """
     aliases = set()
     for meta in KNOWN_BASE_MODELS.values():
         for alias in meta.get("aliases", ()):  # type: ignore[union-attr]
             if "/" in alias:
                 aliases.add(alias.lower())
-    return aliases
+    return frozenset(aliases)
 
 
 def _snapshot_dirs(repo) -> list[str]:
@@ -175,8 +182,9 @@ def _feature_from_files(snapshot: str) -> Optional[str]:
             data = json.load(handle)
     except (OSError, ValueError, UnicodeDecodeError) as exc:
         logger.info(
-            "Could not read %s (%s); the repo will be labelled `other` rather "
-            "than guessed at.",
+            "Could not read %s (%s); this snapshot answers nothing, so the repo "
+            "falls through to its other revisions and then to its name, and is "
+            "labelled `other` if neither answers rather than guessed at.",
             config,
             exc,
         )
