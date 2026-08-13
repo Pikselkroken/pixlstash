@@ -377,6 +377,58 @@ export function locationState(locations) {
 }
 
 /**
+ * The registered folders whose every copy is out of reach, and how many rows
+ * each one takes with it.
+ *
+ * This is what lets an unplugged drive state its scope ONCE. `unreachable` is
+ * the common case for anyone keeping adapters on an external disk — the whole
+ * folder flips together (`ModelFolderScanner._mark_unreachable`) — and 300 rows
+ * each carrying their own mark is 300 statements of one fact.
+ *
+ * A folder qualifies only when NOTHING under it was readable. One `present`
+ * copy means the drive is plugged in and this is a per-row story again, and one
+ * `missing` copy means the folder WAS readable, which is a different fact and
+ * not one to fold into "offline".
+ *
+ * Counted per ROW rather than per copy, because a row is what the reader sees
+ * and a model registered twice in one folder is still one line on the shelf.
+ *
+ * @param {Array<Object>} rows - shelf rows, each with `locations`.
+ * @returns {Array<{folderId: number, path: string, count: number}>} sorted by
+ *   path, so the banner reads the same on every render.
+ */
+export function offlineFolders(rows) {
+  const byFolder = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const seen = new Set();
+    for (const loc of row?.locations || []) {
+      const id = Number(loc?.folder_id);
+      if (!Number.isInteger(id)) continue;
+      let folder = byFolder.get(id);
+      if (!folder) {
+        folder = {
+          folderId: id,
+          path: String(loc?.folder_path || ""),
+          count: 0,
+          offline: true,
+        };
+        byFolder.set(id, folder);
+      }
+      if (loc?.state !== "unreachable") folder.offline = false;
+      // One row, one tally, however many copies of it this folder holds.
+      else if (!seen.has(id)) {
+        seen.add(id);
+        folder.count += 1;
+      }
+    }
+  }
+  return [...byFolder.values()]
+    .filter((folder) => folder.offline && folder.count)
+    .map(({ folderId, path, count }) => ({ folderId, path, count }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
  * Say what an ai-toolkit import produced, naming the failures rather than
  * swallowing them.
  *

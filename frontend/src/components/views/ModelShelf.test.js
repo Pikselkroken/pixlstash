@@ -1518,3 +1518,87 @@ describe("Add file", () => {
     expect(notices.notices[0].text).toContain("already inside");
   });
 });
+
+describe("the two kinds of absence", () => {
+  // The whole of #898: a registered file that is GONE and a drive that is
+  // simply not plugged in are different facts, and rendering them the same way
+  // trains the reader to ignore both. The offline case is the common one for
+  // anyone keeping adapters on an external disk.
+
+  const at = (folderId, state) => ({
+    folder_id: folderId,
+    folder_path: `/mnt/${folderId}`,
+    relpath: "a.safetensors",
+    state,
+  });
+
+  it("gives broken and offline rows different classes, not one 'absent' one", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1, locations: [at(7, "missing")] }),
+      adapter({ id: 2, locations: [at(8, "unreachable")] }),
+      adapter({ id: 3, locations: [at(9, "present")] }),
+    ]);
+    const rows = wrapper.findAll(".shelf-row");
+    expect(rows[0].classes()).toContain("shelf-row--broken");
+    expect(rows[0].classes()).not.toContain("shelf-row--offline");
+    expect(rows[1].classes()).toContain("shelf-row--offline");
+    expect(rows[1].classes()).not.toContain("shelf-row--broken");
+    expect(rows[2].classes()).not.toContain("shelf-row--broken");
+    expect(rows[2].classes()).not.toContain("shelf-row--offline");
+  });
+
+  it("keeps the error colour off the offline row", async () => {
+    // The status glyph is the one place a hue is spent on this column, and
+    // `unreachable` must not take it: nothing is wrong and nothing is lost.
+    const wrapper = await mountShelf([
+      adapter({ id: 1, locations: [at(7, "missing")] }),
+      adapter({ id: 2, locations: [at(8, "unreachable")] }),
+    ]);
+    const marks = wrapper.findAll(".shelf-row-loc");
+    expect(marks[0].classes()).toContain("shelf-row-loc--missing");
+    expect(marks[1].classes()).toContain("shelf-row-loc--unreachable");
+  });
+
+  it("states an offline mount's scope once, with its row count", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1, locations: [at(7, "unreachable")] }),
+      adapter({ id: 2, locations: [at(7, "unreachable")] }),
+    ]);
+    const banner = wrapper.find(".shelf-offline-banner");
+    expect(banner.exists()).toBe(true);
+    expect(textOf(banner)).toContain("/mnt/7 is offline — 2 models");
+    // Once, not once per row.
+    expect(wrapper.findAll(".shelf-offline-banner")).toHaveLength(1);
+  });
+
+  it("says nothing about a folder that was readable", async () => {
+    // `missing` means the folder WAS read. Calling that mount offline would be
+    // the same conflation the row treatment exists to undo.
+    const wrapper = await mountShelf([
+      adapter({ id: 1, locations: [at(7, "missing")] }),
+    ]);
+    expect(wrapper.find(".shelf-offline-banner").exists()).toBe(false);
+  });
+});
+
+describe("what a scan just added", () => {
+  it("badges only the rows the fetch brought in, and clears them next time", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    expect(wrapper.find(".shelf-row-new").exists()).toBe(false);
+
+    listAdapters.mockResolvedValue([adapter({ id: 1 }), adapter({ id: 2 })]);
+    await store.fetchRows({ markNew: true });
+    await wrapper.vm.$nextTick();
+    const badged = wrapper
+      .findAll(".shelf-row")
+      .filter((row) => row.find(".shelf-row-new").exists());
+    expect(badged).toHaveLength(1);
+    expect(textOf(badged[0])).toContain("New");
+
+    // An ordinary refresh is not an arrival, so the mark does not survive one.
+    await store.fetchRows();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-row-new").exists()).toBe(false);
+  });
+});

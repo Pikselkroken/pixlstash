@@ -228,6 +228,18 @@
       <!-- The visible half of the same statement. `inert` on the wrapper is
            what actually stops the interaction; this is what says so. -->
       <div v-if="moves.running" class="shelf-dim" aria-hidden="true"></div>
+      <!-- An unplugged drive states its scope ONCE, here, rather than through
+           300 rows each carrying the same mark. The rows still take the offline
+           treatment — that is what tells one row from its neighbour — but the
+           REASON is a fact about the mount and belongs to the mount. -->
+      <p
+        v-if="offlineNote"
+        class="shelf-offline-banner"
+        :title="offlineMountPaths"
+      >
+        <v-icon size="16">mdi-power-plug-off-outline</v-icon>
+        <span>{{ offlineNote }}</span>
+      </p>
       <p v-if="store.loading" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
         {{ store.error }}
@@ -438,7 +450,11 @@
             <template v-for="row in group.rows" :key="row.rowKey">
               <li
                 class="ps-row shelf-row"
-                :class="{ 'shelf-row--selected': store.isSelected(row.id) }"
+                :class="{
+                  'shelf-row--selected': store.isSelected(row.id),
+                  'shelf-row--offline': row.locState === 'unreachable',
+                  'shelf-row--broken': BROKEN_STATES.has(row.locState),
+                }"
                 :title="rowTitle(row)"
                 role="row"
                 aria-level="1"
@@ -491,6 +507,14 @@
                       (name taken from the filename)</span
                     ></span
                   >
+                  <!-- What the scan you just ran brought in. The SUCCESS
+                       treatment, because an arrival is a good outcome — and
+                       nothing else on a row is green, so it reads without a
+                       key. A word rather than a dot: the shelf is a list of
+                       1,800 rows and a dot beside one name says nothing about
+                       what is different about it. Cleared by the next fetch,
+                       so it is never a stale mark from three refreshes ago. -->
+                  <span v-if="row.isNew" class="shelf-row-new">New</span>
                   <!-- The step, on any row that is not a stack cover.
                        `deriveModelName` strips the trailing step from the
                        filename on the stated grounds that "the step is parsed
@@ -1122,7 +1146,10 @@ async function onFilePicked(path) {
   adding.value = true;
   try {
     const added = await addModelFile(path);
-    await Promise.all([store.fetchRows(), foldersStore.refresh({ quiet: true })]);
+    await Promise.all([
+      store.fetchRows(),
+      foldersStore.refresh({ quiet: true }),
+    ]);
     notices.push({
       level: "success",
       text: `Added ${added?.filename || "the file"} to the shelf. The original is still where it was.`,
@@ -1181,9 +1208,18 @@ const LOC_ICON = {
 const LOC_TITLE = {
   present: "",
   missing: "The file is not where it was",
-  unreachable: "Could not check this location",
+  // Not "the drive is unplugged", however common that is: a subdirectory the
+  // scan could not list lands here too, and naming a cause we did not observe
+  // is the same overclaim the muted glyph exists to avoid.
+  unreachable: "Out of reach: this location could not be read",
   forgotten: "Every registered copy has been forgotten",
 };
+
+// The two states that mean SOMETHING IS WRONG, as against `unreachable`, which
+// means nothing is. Both are a registered file that is not there: `missing` was
+// looked for in a readable folder and not found, `forgotten` has no registered
+// copy left at all. They share the row treatment because they share the fact.
+const BROKEN_STATES = new Set(["missing", "forgotten"]);
 
 // Trainers spell these however they like; the shelf spells them one way.
 const ALGO_LABEL = {
@@ -1407,6 +1443,36 @@ function meterLabel(band) {
   const shelf = formatModelSize(band.shelfBytes);
   return `${free} free of ${total} · ${shelf} on the shelf`;
 }
+
+/**
+ * The offline mounts, said once, with the number of rows they take with them.
+ *
+ * One sentence however many folders are out: the reader's question is "is
+ * something wrong or is a disk just unplugged", and a list of paths is the
+ * answer to a question they have not asked yet. The paths ride in the `title`
+ * for when they have.
+ *
+ * Deliberately NOT the error voice. Nothing here is lost and nothing needs
+ * fixing — the models come back the moment the drive does — so the line states
+ * the fact and stops.
+ */
+const offlineNote = computed(() => {
+  const mounts = store.offlineMounts;
+  if (!mounts.length) return "";
+  const models = modelCount(
+    mounts.reduce((total, mount) => total + mount.count, 0),
+  );
+  if (mounts.length === 1) {
+    return `${mounts[0].path} is offline — ${models} on it cannot be read.`;
+  }
+  const folders = `${mounts.length.toLocaleString()} model folders`;
+  return `${folders} are offline — ${models} on them cannot be read.`;
+});
+
+/** The offline paths, for the banner's tooltip. */
+const offlineMountPaths = computed(() =>
+  store.offlineMounts.map((mount) => mount.path).join("\n"),
+);
 
 /**
  * The count under the title.
@@ -1634,6 +1700,76 @@ watch(
    it by a pixel, and 200 selected rows would shimmer as the list scrolls. */
 .shelf-row--selected {
   background: rgba(var(--v-theme-primary), 0.12);
+}
+
+/* ── The two kinds of absence ──────────────────────────────────────────────
+   BROKEN is a fault: the file was registered and is gone. It takes the error
+   rail and the error mark in the status column.
+
+   OFFLINE is not a fault: the drive is simply not plugged in, nothing is lost,
+   and the models come back with it. It takes a DASHED rail and muted ink, and
+   deliberately NEVER the error colour — the offline case is the common one for
+   anyone keeping adapters on an external disk, and painting it as a failure is
+   what trains a reader to ignore both.
+
+   They are told apart in GREYSCALE, which is what makes this a treatment and
+   not a hue: solid rail, dashed rail, no rail, plus two different glyphs. The
+   colours only reinforce what the shapes already say.
+
+   Both ride `.ps-row`'s own rail (`border-left: 3px solid transparent`,
+   §5.1) — always present, always transparent, only its colour and style
+   change — so a row that flips state does not move a pixel. */
+.shelf-row--broken {
+  border-left-color: rgb(var(--v-theme-error));
+}
+
+.shelf-row--offline {
+  border-left-style: dashed;
+  border-left-color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* Muted ink, not faded ink. 0.7 is the alpha the figure columns already carry
+   and the one #836 measured as clearing contrast at this size; 0.6 does not.
+   The NAME is what recedes, because on an offline row the row's own content is
+   what is out of reach, where a broken row's name is still perfectly true and
+   only its file is gone. */
+.shelf-row--offline .shelf-row-name {
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* What the last scan added, in the success treatment: `success` as a
+   foreground and a border on the canvas, which is the tier it is for (§4) and
+   measures 4.87:1 light / 5.96:1 dark. The outline-pill shape rather than the
+   filled count pill — that one is reserved for picture counts, and this is a
+   word. Beside the name in the same inline slot as the step count, so nothing
+   gains a column that is empty on 1,800 rows. */
+.shelf-row-new {
+  flex: none;
+  padding: 0 var(--space-2);
+  border: 1px solid rgba(var(--v-theme-success), 0.5);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: rgb(var(--v-theme-success));
+}
+
+/* The offline mount's one statement. A quiet strip in the same muted ink and
+   the same dashed rail as the rows it accounts for, so the two read as one
+   fact rather than two — and never the error surface, for the reason the row
+   treatment is not the error colour either. */
+.shelf-offline-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px dashed rgba(var(--v-theme-on-background), 0.7);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: var(--hover-wash);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-background), 0.7);
 }
 
 /* ── Drive bands ───────────────────────────────────────────────────────────

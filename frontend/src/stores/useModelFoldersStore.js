@@ -177,8 +177,10 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     }
 
     if (changed) scanning.value = new Map(scanning.value);
-    // Only a scan that actually landed changed what the shelf holds.
-    if (landed) useModelShelfStore().fetchRows();
+    // Only a scan that actually landed changed what the shelf holds. `markNew`
+    // is what puts the `New` badge on the rows it brought in: a 1,800-row shelf
+    // gaining forty is otherwise a change nobody can see.
+    if (landed) useModelShelfStore().fetchRows({ markNew: true });
     if (!scanning.value.size) stopPolling();
   }
 
