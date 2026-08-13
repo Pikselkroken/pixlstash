@@ -49,6 +49,21 @@
       Set kind
     </AppButton>
 
+    <!-- Stack, the manual half of grouping. The toolbar's sweep proposes only
+         what a training step spells out; a run whose files the detector cannot
+         read as one has no other way to be said. Gated on every rule the route
+         enforces, with the failing one in the tooltip. -->
+    <AppButton
+      size="sm"
+      variant="secondary"
+      icon-left="layers-outline"
+      :disabled="!stackable"
+      :title="stackTitle"
+      @click="emit('stack')"
+    >
+      Stack these
+    </AppButton>
+
     <!-- Assign, the fifth verb, as two pickers rather than a button: it names
          an entity, and the shelf uses the same picker the grid does so the
          search, the tri-state and the keyboard model are learned once. Both are
@@ -154,12 +169,13 @@ import AppButton from "../widgets/AppButton.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
-import { movableCopies } from "../../utils/modelShelf";
+import { formatModelSize, movableCopies } from "../../utils/modelShelf";
 
 const emit = defineEmits([
   "rename",
   "set-base-model",
   "set-kind",
+  "stack",
   "set-icon",
   "clear-icons",
   "move",
@@ -170,9 +186,39 @@ const store = useModelShelfStore();
 const folders = useModelFoldersStore();
 const moves = useModelMovesStore();
 
+/**
+ * What the selection weighs, stack members included.
+ *
+ * Summed off `members` rather than the payload's `total_size` for the reason
+ * {@link collapseStacks} counts what is shown: a filter can hide part of a run,
+ * and a figure covering rows the reader cannot reach would not describe the
+ * selection they made. A row that stands alone carries no `members`.
+ */
+const selectedBytes = computed(() =>
+  store.selectedRows.reduce(
+    (total, row) =>
+      total +
+      (row.members
+        ? row.members.reduce((sum, m) => sum + (Number(m.file_size) || 0), 0)
+        : Number(row.file_size) || 0),
+    0,
+  ),
+);
+
+/**
+ * The count and what it weighs, in the separator the app already uses.
+ *
+ * The size is what makes a bulk verb reviewable before it runs: "Forget these
+ * 40" says nothing about what is being reclaimed and "12.4 GB" does. Dropped
+ * rather than shown as `0 B` when nothing in the selection has a recorded size,
+ * because a shelf that has not been hashed yet would otherwise claim the
+ * selection is empty.
+ */
 const countLabel = computed(() => {
   const n = store.selectedRows.length;
-  return `${n.toLocaleString()} ${n === 1 ? "model" : "models"} selected`;
+  const head = `${n.toLocaleString()} ${n === 1 ? "model" : "models"} selected`;
+  const size = formatModelSize(selectedBytes.value);
+  return selectedBytes.value && size ? `${head} · ${size}` : head;
 });
 
 /**
@@ -291,6 +337,69 @@ const moveTitle = computed(() => {
   return `Move ${n.toLocaleString()} ${n === 1 ? "file" : "files"} into another folder`;
 });
 
+/**
+ * Why this selection cannot become one training run, or `""` when it can.
+ *
+ * Stack is the manual counterpart to the toolbar's detection sweep, which
+ * proposes only files differing by a training step: a run the detector cannot
+ * name is otherwise ungroupable, and there is no other way to say "these are
+ * one run".
+ *
+ * Every gate the route enforces (`services/stack_detector.apply_stack`) is
+ * checked here, so the button is never offered where it could only come back
+ * refused: two or more models, adapters only, none already in a stack, each
+ * with a copy actually present, and ONE folder holding all of them — a run is
+ * files that sit together, and stacking across folders would invent one and put
+ * its members on two drives.
+ *
+ * The gate and its sentence are ONE computed rather than a boolean beside a
+ * message that has to be kept in step with it. Written as two, the tooltip
+ * named the shared-folder rule for every refusal the boolean made after the
+ * cheap checks — so a selection blocked by an unplugged drive was told its files
+ * were in different folders, which is a different fact and sends the reader to
+ * fix the wrong thing.
+ */
+const stackRefusal = computed(() => {
+  const rows = store.selectedRows;
+  if (rows.length < 2) {
+    return "Select the files of one training run to group them";
+  }
+  if (rows.some((row) => row.stack_id != null)) {
+    return "Something here is already part of a run";
+  }
+  if (rows.some((row) => row.file_kind !== "adapter")) {
+    return "Only adapters are training runs";
+  }
+  let shared = null;
+  for (const row of rows) {
+    const here = (row.locations || [])
+      .filter((loc) => loc.state === "present")
+      .map((loc) => Number(loc.folder_id));
+    // Its own refusal, and not the folder one: `missing` and `unreachable` mean
+    // there is no file here to group, which the reader fixes by plugging a
+    // drive in rather than by moving anything.
+    if (!here.length) {
+      return "Only files that are actually on this machine can be grouped";
+    }
+    shared =
+      shared === null
+        ? new Set(here)
+        : new Set(here.filter((id) => shared.has(id)));
+    if (!shared.size) {
+      return "A run is files that sit together, so they must all be in one folder";
+    }
+  }
+  return "";
+});
+
+const stackable = computed(() => !stackRefusal.value);
+
+const stackTitle = computed(
+  () =>
+    stackRefusal.value ||
+    `Group these ${store.selectedRows.length.toLocaleString()} files into one run`,
+);
+
 /** The selected models that actually have an icon to clear. */
 const withIcons = computed(() =>
   store.selectedRows.filter((row) => row.icon_sha256),
@@ -316,7 +425,15 @@ function clear() {
   store.clearSelection();
 }
 
-defineExpose({ forgettable, assignable, membership, movable, withIcons });
+defineExpose({
+  forgettable,
+  assignable,
+  membership,
+  movable,
+  selectedBytes,
+  stackable,
+  withIcons,
+});
 </script>
 
 <style scoped>

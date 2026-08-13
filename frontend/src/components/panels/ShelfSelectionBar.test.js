@@ -201,6 +201,97 @@ describe("the selection bar", () => {
     });
   });
 
+  it("says what the selection weighs, stack members included", async () => {
+    // The figure is what makes a bulk verb reviewable: "Forget these 2" says
+    // nothing about what is reclaimed. A stack counts every member, because the
+    // verbs act on the whole run and one row stands for all of it.
+    selectRows([
+      row(1, "present", { file_size: 1024 * 1024 * 200 }),
+      row(2, "present", {
+        file_size: 1024 * 1024 * 100,
+        stack_id: 7,
+        stack_position: 0,
+      }),
+      row(3, "present", {
+        file_size: 1024 * 1024 * 100,
+        stack_id: 7,
+        stack_position: 1,
+      }),
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    // Two rows drawn (the stack folded into one), three files counted.
+    expect(wrapper.find(".shelf-selbar-count").text()).toBe(
+      "2 models selected · 400.0 MB",
+    );
+  });
+
+  it("states the count alone when no size is recorded", async () => {
+    // A file the hash worker has not reached has no size. `0 B` would claim the
+    // selection is empty, which is a different and wrong statement.
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.find(".shelf-selbar-count").text()).toBe("1 model selected");
+  });
+
+  it("offers Stack for two present adapters in one folder", async () => {
+    selectRows([row(1, "present"), row(2, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    await verb(wrapper, "Stack these").trigger("click");
+    expect(wrapper.emitted("stack")).toHaveLength(1);
+  });
+
+  it("refuses Stack across folders, which would invent a run", async () => {
+    // The gate the route enforces in `apply_stack`: a run is files that sit
+    // together, so stacking across two drives would create one that never was.
+    selectRows([
+      row(1, "present"),
+      row(2, "present", {
+        locations: [{ state: "present", folder_id: 2, relpath: "y" }],
+      }),
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    const stack = verb(wrapper, "Stack these");
+    expect(stack.attributes("disabled")).toBeDefined();
+    expect(stack.attributes("title")).toContain("one folder");
+  });
+
+  it("names the missing file, not the folders, when a copy is not there", async () => {
+    // The two refusals are different repairs. An unplugged drive is fixed by
+    // plugging it in; being told the files are in different folders would send
+    // the reader to move something instead, and they are in one folder.
+    selectRows([row(1, "present"), row(2, "unreachable")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    const stack = verb(wrapper, "Stack these");
+    expect(stack.attributes("disabled")).toBeDefined();
+    expect(stack.attributes("title")).toContain("on this machine");
+    expect(stack.attributes("title")).not.toContain("folder");
+  });
+
+  it("refuses Stack on one model, a checkpoint, or a row already in a run", async () => {
+    const store = selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(verb(wrapper, "Stack these").attributes("disabled")).toBeDefined();
+
+    store.rows = [
+      ...store.rows,
+      row(2, "present", { file_kind: "checkpoint" }),
+    ];
+    store.toggleSelected(2);
+    await wrapper.vm.$nextTick();
+    expect(verb(wrapper, "Stack these").attributes("title")).toContain(
+      "Only adapters",
+    );
+
+    store.rows = [row(1, "present"), row(3, "present", { stack_id: 7 })];
+    store.clearSelection();
+    store.toggleSelected(1);
+    store.toggleSelected(3);
+    await wrapper.vm.$nextTick();
+    expect(verb(wrapper, "Stack these").attributes("title")).toContain(
+      "already part of a run",
+    );
+  });
+
   it("clears the selection without touching the rows", async () => {
     const store = selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
