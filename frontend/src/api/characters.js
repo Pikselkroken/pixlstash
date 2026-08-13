@@ -8,7 +8,7 @@
 //
 // See docs/frontend_architecture.md §8 ("The `src/api/` resource layer").
 
-import { apiClient, appendShareToken} from "../utils/apiClient";
+import { apiClient, appendShareToken } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
@@ -49,10 +49,9 @@ export function characterThumbnailUrl(id) {
  * @returns {Promise<Array<Object>>} the character list (the response body).
  */
 export async function listCharacters({ params } = {}) {
-  return unwrap(apiClient.get(
-    charactersUrl(""),
-    params ? { params } : undefined,
-  ));
+  return unwrap(
+    apiClient.get(charactersUrl(""), params ? { params } : undefined),
+  );
 }
 
 /**
@@ -104,9 +103,11 @@ export async function deleteCharacter(id) {
  *   the only subset an assignment can ever apply to.
  */
 export async function getCharacterMembership(pictureIds) {
-  return unwrap(apiClient.post(charactersUrl("/membership"), {
-    picture_ids: pictureIds,
-  }));
+  return unwrap(
+    apiClient.post(charactersUrl("/membership"), {
+      picture_ids: pictureIds,
+    }),
+  );
 }
 
 /**
@@ -116,9 +117,11 @@ export async function getCharacterMembership(pictureIds) {
  * @returns {Promise<Object>} the response body.
  */
 export async function addCharacterFaces(id, pictureIds) {
-  return unwrap(apiClient.post(charactersUrl(`/${id}/faces`), {
-    picture_ids: pictureIds,
-  }));
+  return unwrap(
+    apiClient.post(charactersUrl(`/${id}/faces`), {
+      picture_ids: pictureIds,
+    }),
+  );
 }
 
 /**
@@ -132,9 +135,11 @@ export async function addCharacterFaces(id, pictureIds) {
  * @returns {Promise<Object>} the response body.
  */
 export async function removeCharacterFaces(id, pictureIds) {
-  return unwrap(apiClient.delete(charactersUrl(`/${id}/faces`), {
-    data: { picture_ids: pictureIds },
-  }));
+  return unwrap(
+    apiClient.delete(charactersUrl(`/${id}/faces`), {
+      data: { picture_ids: pictureIds },
+    }),
+  );
 }
 
 /**
@@ -171,17 +176,16 @@ export async function getCharacterName(id) {
  *   HTTP cache after the thumbnail has been regenerated.
  * @returns {Promise<Blob>} the image data.
  */
-export async function getCharacterThumbnail(
-  id,
-  { cacheBuster } = {},
-) {
+export async function getCharacterThumbnail(id, { cacheBuster } = {}) {
   const path =
     cacheBuster != null
       ? `/${id}/thumbnail?cb=${cacheBuster}`
       : `/${id}/thumbnail`;
-  return unwrap(apiClient.get(charactersUrl(path), {
-    responseType: "blob",
-  }));
+  return unwrap(
+    apiClient.get(charactersUrl(path), {
+      responseType: "blob",
+    }),
+  );
 }
 
 /**
@@ -191,9 +195,11 @@ export async function getCharacterThumbnail(
  * @returns {Promise<Object>} the response body.
  */
 export async function addCharacterFacesByFaceId(id, faceIds) {
-  return unwrap(apiClient.post(charactersUrl(`/${id}/faces`), {
-    face_ids: faceIds,
-  }));
+  return unwrap(
+    apiClient.post(charactersUrl(`/${id}/faces`), {
+      face_ids: faceIds,
+    }),
+  );
 }
 
 /**
@@ -203,9 +209,11 @@ export async function addCharacterFacesByFaceId(id, faceIds) {
  * between review and assignment.
  */
 export async function addCharacterFaceAssignments(id, faceAssignments) {
-  return unwrap(apiClient.post(charactersUrl(`/${id}/faces`), {
-    face_assignments: faceAssignments,
-  }));
+  return unwrap(
+    apiClient.post(charactersUrl(`/${id}/faces`), {
+      face_assignments: faceAssignments,
+    }),
+  );
 }
 
 /**
@@ -221,10 +229,12 @@ export async function addCharacterFaceAssignments(id, faceAssignments) {
  *   number of pictures in scope.
  */
 export async function getCharacterSummary(id, params) {
-  return unwrap(apiClient.get(
-    charactersUrl(`/${id}/summary`),
-    params ? { params } : undefined,
-  ));
+  return unwrap(
+    apiClient.get(
+      charactersUrl(`/${id}/summary`),
+      params ? { params } : undefined,
+    ),
+  );
 }
 
 /**
@@ -239,9 +249,11 @@ export async function getCharacterSummary(id, params) {
  * @returns {Promise<Object>} the response body.
  */
 export async function removeCharacterFacesByFaceId(id, faceIds) {
-  return unwrap(apiClient.delete(charactersUrl(`/${id}/faces`), {
-    data: { face_ids: faceIds },
-  }));
+  return unwrap(
+    apiClient.delete(charactersUrl(`/${id}/faces`), {
+      data: { face_ids: faceIds },
+    }),
+  );
 }
 
 /**
@@ -251,7 +263,5 @@ export async function removeCharacterFacesByFaceId(id, faceIds) {
  *   `reference_picture_ids` is the ordered list.
  */
 export async function getReferencePictures(id) {
-  return unwrap(apiClient.get(
-    charactersUrl(`/${id}/reference_pictures`),
-  ));
+  return unwrap(apiClient.get(charactersUrl(`/${id}/reference_pictures`)));
 }

@@ -490,7 +490,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         ...results.flat(),
       ];
       // Cleared on every ordinary fetch, so the badge is exactly "what the scan
-      // you just ran added" and never a stale mark from one three refreshes ago.
+      // you just ran added" and never a stale mark from three refreshes ago.
       newIds.value = markNew
         ? new Set(
             rows.value.map((row) => row.id).filter((id) => !before.has(id)),

@@ -533,10 +533,18 @@
                       :title="NAME_TAG[row.name.state].title"
                       >{{ NAME_TAG[row.name.state].label }}</span
                     >
-                    <!-- Decorative, and deliberately not focusable: the row is
-                         the control on this grid, so the keyboard path is F2 on
-                         the row (announced by `aria-keyshortcuts`) rather than
-                         a tab stop per row across 1,800 of them. -->
+                    <!-- Named but deliberately not a tab stop: the row is the
+                         control on this grid, so the keyboard path is F2 on the
+                         row (announced by `aria-keyshortcuts`) rather than a
+                         tab stop per row across 1,800 of them.
+
+                         `tabindex="-1"` is what buys that, NOT `aria-hidden`,
+                         which is what this used to carry. Hiding a click target
+                         from the accessibility tree is invalid ARIA and it cost
+                         something real: voice control ("click Rename") and the
+                         AT element list both need a role and a name, and a
+                         pointer-free-but-sighted user had no way to reach the
+                         pencil at all. -->
                     <v-icon
                       class="shelf-name-pencil"
                       :class="{

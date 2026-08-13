@@ -4,7 +4,7 @@
 // (`/picture_sets/{id}/members/{pictureId}`), so bulk actions are the caller's
 // loop over these calls, not a bulk endpoint.
 
-import { apiClient, appendShareToken} from "../utils/apiClient";
+import { apiClient, appendShareToken } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
@@ -48,10 +48,7 @@ export function pictureSetThumbnailUrl(id) {
  * @returns {Promise<Array<Object>>} the picture-set list (the response body).
  */
 export async function listPictureSets({ params } = {}) {
-  return unwrap(apiClient.get(
-    setsUrl(""),
-    params ? { params } : undefined,
-  ));
+  return unwrap(apiClient.get(setsUrl(""), params ? { params } : undefined));
 }
 
 /**
@@ -105,10 +102,12 @@ export async function getPictureSetMembership(
   pictureIds,
   { includeDeleted = false } = {},
 ) {
-  return unwrap(apiClient.post(setsUrl("/membership"), {
-    picture_ids: pictureIds,
-    include_deleted: includeDeleted,
-  }));
+  return unwrap(
+    apiClient.post(setsUrl("/membership"), {
+      picture_ids: pictureIds,
+      include_deleted: includeDeleted,
+    }),
+  );
 }
 
 /**
@@ -118,9 +117,7 @@ export async function getPictureSetMembership(
  * @returns {Promise<Object>} the response body.
  */
 export async function addPictureToSet(setId, pictureId) {
-  return unwrap(apiClient.post(
-    setsUrl(`/${setId}/members/${pictureId}`),
-  ));
+  return unwrap(apiClient.post(setsUrl(`/${setId}/members/${pictureId}`)));
 }
 
 /**
@@ -130,9 +127,7 @@ export async function addPictureToSet(setId, pictureId) {
  * @returns {Promise<Object>} the response body.
  */
 export async function removePictureFromSet(setId, pictureId) {
-  return unwrap(apiClient.delete(
-    setsUrl(`/${setId}/members/${pictureId}`),
-  ));
+  return unwrap(apiClient.delete(setsUrl(`/${setId}/members/${pictureId}`)));
 }
 
 /**

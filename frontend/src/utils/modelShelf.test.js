@@ -203,6 +203,19 @@ describe("offlineFolders", () => {
       "/mnt/zed",
     ]);
   });
+
+  it("counts numerically, so /mnt/2 is not filed after /mnt/10", () => {
+    // The shelf's other lists already collate this way; a bare `localeCompare`
+    // here read `/mnt/10, /mnt/2` and made the banner disagree with the rows.
+    const rows = [
+      { id: 1, locations: [at(1, "unreachable", "/mnt/disk10")] },
+      { id: 2, locations: [at(2, "unreachable", "/mnt/Disk2")] },
+    ];
+    expect(offlineFolders(rows).map((f) => f.path)).toEqual([
+      "/mnt/Disk2",
+      "/mnt/disk10",
+    ]);
+  });
 });
 
 describe("bandGroups", () => {
@@ -794,5 +807,19 @@ describe("assignmentMarks", () => {
   it("returns nothing for a model assigned to nothing", () => {
     expect(assignmentMarks([], {})).toEqual([]);
     expect(assignmentMarks(undefined)).toEqual([]);
+  });
+
+  it("does not serve a stale name after the entity list is replaced", () => {
+    // The id maps are cached per LIST REFERENCE, because this is called once
+    // per shelf row and rebuilding them there cost rows x entities (#915
+    // review). The entity store replaces the array on every refresh rather than
+    // mutating it, so a rename must come through on the next render.
+    const before = [{ id: 7, name: "Ada" }];
+    const after = [{ id: 7, name: "Ada Lovelace" }];
+    const marks = (characters) =>
+      assignmentMarks([attach("character", 7)], { characters })[0].label;
+    expect(marks(before)).toBe("Character: Ada");
+    expect(marks(before)).toBe("Character: Ada");
+    expect(marks(after)).toBe("Character: Ada Lovelace");
   });
 });
