@@ -140,9 +140,40 @@ describe("ProgressOverlay accessibility", () => {
     ).toBe(true);
   });
 
+  it("does not double-punctuate a message that is already a sentence", () => {
+    // The shelf hands over a whole receipt as the title (#900), and the running
+    // message ends in an ellipsis. Both would announce as "\u2026.: failed."
+    const w = mountOverlay({
+      status: "failed",
+      message: "Moved 3 files. 1 file could not be moved and stayed put.",
+    });
+    expect(live(w)).toBe(
+      "Moved 3 files. 1 file could not be moved and stayed put: failed.",
+    );
+  });
+
   it("shows no failure marker while running", () => {
     expect(
       mountOverlay({ percent: 5 }).find(".progress-overlay__failed").exists(),
     ).toBe(false);
+  });
+});
+
+describe("the card's one button", () => {
+  it("is gated on the label alone, so a held failure can be dismissed", () => {
+    // #900: the shelf keeps a failed move's card up in the panel that ran it
+    // and labels the button `Dismiss`. Gating on `!isTerminal` as well would
+    // strand that card with no way out.
+    const w = mountOverlay({ status: "failed", abortLabel: "Dismiss" });
+    const button = w.find(".progress-overlay__abort");
+    expect(button.text()).toBe("Dismiss");
+    button.trigger("click");
+    expect(w.emitted("abort")).toHaveLength(1);
+  });
+
+  it("is absent when the caller drops the label at the end", () => {
+    // What the export does: it nulls the label on every terminal status.
+    const w = mountOverlay({ status: "completed", abortLabel: null });
+    expect(w.find(".progress-overlay__abort").exists()).toBe(false);
   });
 });
