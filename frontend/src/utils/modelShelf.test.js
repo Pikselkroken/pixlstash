@@ -25,6 +25,8 @@ import {
   offlineFolders,
   stackReceipt,
   trainingStep,
+  withFolderSignals,
+  FOLDER_TIERS,
 } from "./modelShelf";
 
 describe("cleanAssetName", () => {
@@ -427,6 +429,159 @@ describe("withEmptyFolders", () => {
     expect(withEmptyFolders(groups, [{ id: 1, path: "/models/loras" }])).toBe(
       groups,
     );
+  });
+});
+
+describe("withFolderSignals", () => {
+  const group = (folderId, path) => ({
+    key: path,
+    label: path,
+    labelKind: "path",
+    folderId,
+    rows: [],
+  });
+
+  const devices = (entries) => {
+    const byFolder = new Map();
+    for (const device of entries) {
+      for (const id of device.folder_ids) byFolder.set(id, device);
+    }
+    return byFolder;
+  };
+
+  it("gives folders on one drive one rail colour, and two drives two", () => {
+    // The whole point of the hue: "these are on the same physical disk" read
+    // off the header, without opening the folders dialog.
+    const [a, b, c] = withFolderSignals(
+      [
+        group(1, "/mnt/fast/loras"),
+        group(2, "/mnt/fast/ckpt"),
+        group(3, "/ext"),
+      ],
+      {
+        folders: [
+          { id: 1, path: "/mnt/fast/loras", kind: "user" },
+          { id: 2, path: "/mnt/fast/ckpt", kind: "user" },
+          { id: 3, path: "/ext", kind: "user" },
+        ],
+        deviceByFolderId: devices([
+          { device_id: "9", label: "FastModels", folder_ids: [1, 2] },
+          { device_id: "12", label: "Archive", folder_ids: [3] },
+        ]),
+      },
+    );
+    expect(a.drive.rail).toBe(b.drive.rail);
+    expect(c.drive.rail).not.toBe(a.drive.rail);
+    // The chip carries the identity; the colour is only a grouping hint.
+    expect(a.drive.label).toBe("FastModels");
+    expect(c.drive.label).toBe("Archive");
+  });
+
+  it("numbers the drives by device id, not by the order groups arrive in", () => {
+    // A group order that decided the colours would repaint every folder's rail
+    // when a filter emptied a group or a new disk was plugged in.
+    const context = {
+      folders: [
+        { id: 1, path: "/a", kind: "user" },
+        { id: 2, path: "/b", kind: "user" },
+      ],
+      deviceByFolderId: devices([
+        { device_id: "aaa", folder_ids: [1] },
+        { device_id: "bbb", folder_ids: [2] },
+      ]),
+    };
+    const forward = withFolderSignals(
+      [group(1, "/a"), group(2, "/b")],
+      context,
+    );
+    const reversed = withFolderSignals(
+      [group(2, "/b"), group(1, "/a")],
+      context,
+    );
+    expect(reversed[1].drive.rail).toBe(forward[0].drive.rail);
+    expect(reversed[0].drive.rail).toBe(forward[1].drive.rail);
+  });
+
+  it("gives an unmeasured drive no rail colour rather than inventing one", () => {
+    // We do not know which disk this is on, and a colour would claim a grouping
+    // nothing measured.
+    const [only] = withFolderSignals([group(7, "/net/models")], {
+      folders: [{ id: 7, path: "/net/models", kind: "user" }],
+      deviceByFolderId: devices([{ device_id: null, folder_ids: [7] }]),
+    });
+    expect(only.drive).toBe(null);
+  });
+
+  it("states each tier in a shape and a word, never in a colour", () => {
+    const [managed, locked, plain] = withFolderSignals(
+      [group(1, "/store"), group(2, "/hf"), group(3, "/mine")],
+      {
+        folders: [
+          { id: 1, path: "/store", kind: "managed" },
+          { id: 2, path: "/hf", kind: "foreign" },
+          { id: 3, path: "/mine", kind: "user" },
+        ],
+      },
+    );
+    expect(managed.icon).toBe(FOLDER_TIERS.managed.icon);
+    expect(managed.chip).toBe("Managed");
+    expect(locked.icon).toBe(FOLDER_TIERS.foreign.icon);
+    expect(locked.chip).toBe("Locked");
+    // The unmarked case: chipping every header would hide the two that matter.
+    expect(plain.icon).toBe(FOLDER_TIERS.user.icon);
+    expect(plain.chip).toBe("");
+  });
+
+  it("marks an unreachable folder offline, and keeps its tier chip", () => {
+    const [only] = withFolderSignals([group(2, "/hf")], {
+      folders: [{ id: 2, path: "/hf", kind: "foreign" }],
+      offlineFolderIds: new Set([2]),
+    });
+    expect(only.offline).toBe(true);
+    // A different GLYPH, so the reachability survives greyscale — and the tier
+    // is still stated, because a locked folder is locked whether or not the
+    // disk is plugged in.
+    expect(only.icon).toBe("mdi-lan-disconnect");
+    expect(only.chip).toBe("Locked");
+  });
+
+  it("nests a folder that sits inside another registered one, one level only", () => {
+    const [parent, child, sibling, deeper] = withFolderSignals(
+      [
+        group(1, "/models"),
+        group(2, "/models/loras"),
+        group(3, "/models-old"),
+        group(4, "/models/loras/flux"),
+      ],
+      {
+        folders: [
+          { id: 1, path: "/models", kind: "user" },
+          { id: 2, path: "/models/loras", kind: "user" },
+          { id: 3, path: "/models-old", kind: "user" },
+          { id: 4, path: "/models/loras/flux", kind: "user" },
+        ],
+      },
+    );
+    expect(parent.nested).toBe(false);
+    expect(child.nested).toBe(true);
+    // A prefix that is not a path boundary is a different folder, not a child.
+    expect(sibling.nested).toBe(false);
+    // Two registered folders above it, still one step: the indent says "inside
+    // another folder", which is a yes or a no.
+    expect(deeper.nested).toBe(true);
+  });
+
+  it("leaves a group that is not a folder alone", () => {
+    // "No registered copy" has no folder id, no disk and no tier — decorating
+    // it would put a drive rail over the one group that exists because there is
+    // no drive.
+    const [only] = withFolderSignals([{ key: "none", label: "x", rows: [] }], {
+      folders: [{ id: 1, path: "/models", kind: "user" }],
+    });
+    expect(only.tier).toBe(null);
+    expect(only.drive).toBe(null);
+    expect(only.chip).toBe("");
+    expect(only.nested).toBe(false);
   });
 });
 

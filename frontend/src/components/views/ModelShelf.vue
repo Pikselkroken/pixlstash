@@ -341,10 +341,14 @@
                  a payload this target takes (#757). -->
             <button
               class="ps-row shelf-group-btn"
-              :class="{ 'shelf-group-btn--drop': dropTargetKey === group.key }"
+              :class="{
+                'shelf-group-btn--drop': dropTargetKey === group.key,
+                'shelf-group-btn--offline': group.offline,
+              }"
+              :style="groupStyle(group)"
               type="button"
               :aria-expanded="!store.isCollapsed(group.key)"
-              :aria-label="`${group.label}, ${modelCount(group.rows.length)}`"
+              :aria-label="groupLabel(group)"
               @click="store.toggleGroup(group.key)"
               @dragover="onGroupDragOver(group, $event)"
               @dragleave="onGroupDragLeave(group)"
@@ -361,17 +365,43 @@
               <!-- Column 2 carries the axis glyph rather than sitting empty:
                    the reserved width is there either way, and a folder header
                    with a gap where the row thumbnails are reads as a missing
-                   image rather than as alignment. -->
+                   image rather than as alignment. Under `Folder` the glyph is
+                   the TIER's — one mdi folder family, never a hand-drawn box —
+                   and an unreachable folder wears the disconnected mark
+                   instead, which is the shape half of the offline treatment. -->
               <span class="shelf-group-mark">
                 <v-icon size="18">{{
-                  GROUP_BY_LABELS[store.view.groupBy].icon
+                  group.icon || GROUP_BY_LABELS[store.view.groupBy].icon
                 }}</v-icon>
               </span>
-              <span
-                class="shelf-group-label"
-                :class="`shelf-group-label--${group.labelKind}`"
-                >{{ group.label }}</span
-              >
+              <!-- Column 3 holds the label and everything that qualifies it.
+                   The chips are WORDS on purpose: the rail's hue groups the
+                   folders on one disk and the tier's glyph gives it a shape,
+                   but neither survives greyscale on its own, and only the chip
+                   is readable out loud. -->
+              <span class="shelf-group-id">
+                <span
+                  class="shelf-group-label"
+                  :class="`shelf-group-label--${group.labelKind}`"
+                  >{{ group.label }}</span
+                >
+                <span v-if="group.chip" class="shelf-group-chip">{{
+                  group.chip
+                }}</span>
+                <!-- Only where no band names the drive already: under `Drive,
+                     then folder` the band above IS this chip, and repeating it
+                     on every folder under it is noise rather than a signal. -->
+                <span
+                  v-if="!group.band && group.drive"
+                  class="shelf-group-chip"
+                >
+                  <v-icon size="12">mdi-harddisk</v-icon>
+                  {{ group.drive.label }}
+                </span>
+                <span v-if="group.offline" class="shelf-group-chip"
+                  >Offline</span
+                >
+              </span>
               <span class="shelf-group-count">{{
                 modelCount(group.rows.length)
               }}</span>
@@ -784,6 +814,7 @@ import {
   bandGroups,
   bandUsage,
   withEmptyFolders,
+  withFolderSignals,
   formatModelSize,
   GROUP_BY_LABELS,
   movableCopies,
@@ -1573,9 +1604,15 @@ function modelCount(n) {
   return `${n.toLocaleString()} ${n === 1 ? "model" : "models"}`;
 }
 
+/** The folders every copy of which is unreachable, for the headers' rails. */
+const offlineFolderIds = computed(
+  () => new Set(store.offlineMounts.map((mount) => mount.folderId)),
+);
+
 /**
  * The groups as drawn: banded by drive under `Folder` + `Drive, then folder`,
- * and the store's own order on every other axis.
+ * and the store's own order on every other axis, each folder group carrying
+ * what its header states about the folder (#899).
  *
  * Banded HERE rather than in the store because the drives are the folder
  * store's data and the folder store already imports the shelf store; reaching
@@ -1589,9 +1626,55 @@ const shownGroups = computed(() => {
   // default destination for a drop or an import — which it cannot be while the
   // owner has no way to see it.
   const groups = withEmptyFolders(store.groups, foldersStore.folders);
-  if (store.view.folderLayout !== "drive") return groups;
-  return bandGroups(groups, foldersStore.deviceByFolderId);
+  const arranged =
+    store.view.folderLayout === "drive"
+      ? bandGroups(groups, foldersStore.deviceByFolderId)
+      : groups;
+  // Last, so it decorates what is actually drawn under either layout. The
+  // offline set comes off the SHELF store rather than the registry: "wholly out
+  // of reach" is a fact about the copies, and the registry only knows a path.
+  return withFolderSignals(arranged, {
+    folders: foldersStore.folders,
+    deviceByFolderId: foldersStore.deviceByFolderId,
+    offlineFolderIds: offlineFolderIds.value,
+  });
 });
+
+/**
+ * The rail, and the one step of nesting.
+ *
+ * Both ride machinery that is already there: `.ps-row`'s rail is always present
+ * and always transparent (§5.1), so only its colour changes and a header that
+ * gains a drive does not move a pixel; `--depth` is the shared row system's own
+ * indent and is what every nested row in the sidebar uses.
+ */
+function groupStyle(group) {
+  const style = {};
+  // Not on an offline header: that rail is muted and dashed, and a drive hue
+  // on it would say the disk is there.
+  if (group.drive && !group.offline) style.borderLeftColor = group.drive.rail;
+  if (group.nested) style["--depth"] = 1;
+  return style;
+}
+
+/**
+ * What a folder header says out loud.
+ *
+ * The same three facts the chips and the rail carry, because a rail has no
+ * accessible name and a hue has none either: the tier, the drive and whether
+ * the folder can be reached at all.
+ */
+function groupLabel(group) {
+  return [
+    group.label,
+    group.chip,
+    group.drive?.label,
+    group.offline ? "offline" : "",
+    modelCount(group.rows.length),
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
 
 function usage(band) {
   return bandUsage(band);
@@ -2139,6 +2222,50 @@ watch(
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
+}
+
+/* Column 3: the label and the marks that qualify it, on one baseline. The
+   label is the only thing allowed to shrink — a chip that ellipsised would be
+   an unreadable word rather than a shorter one. */
+.shelf-group-id {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* The tier, the drive and the offline state, each as a WORD. The outline pill
+   at label weight, the same shape `.mf-chip` gives the folders dialog: this is
+   the same fact in a second place, and a second shape for it would read as a
+   second kind of thing. Never a filled pill — that one is the picture count's. */
+.shelf-group-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-divider));
+  border-radius: var(--radius-sm);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-background), 0.7);
+  white-space: nowrap;
+}
+
+/* ── The folder header's own two kinds of absence ──────────────────────────
+   OFFLINE is the folder-level twin of `.shelf-row--offline`, and takes the
+   same treatment for the same reason: a dashed rail and muted ink, and
+   deliberately NEVER the error colour, because an unplugged disk is not a
+   fault and nothing under it is lost. The drive hue is dropped rather than
+   dashed in colour — a coloured rail says "this is which disk", and we cannot
+   see the disk. */
+.shelf-group-btn--offline {
+  border-left-style: dashed;
+  border-left-color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+.shelf-group-btn--offline .shelf-group-label,
+.shelf-group-btn--offline .shelf-group-mark {
+  color: rgba(var(--v-theme-on-background), 0.7);
 }
 
 /* A folder header's label is a literal filesystem path. §3 gives the mono face
