@@ -16,20 +16,29 @@ I/O-bound on one disk regardless. A second POST while one runs is a 409.
 moved. That is the ruling, and it is the only answer that does not need its own
 crash-window argument for the undo.
 
-**Relocating the managed store lives here too**, at
+**Relocating a folder PixlStash owns lives here too**, at
 ``POST /model-folders/{folder_id}/relocate``, despite the path — because a
 relocation *is* a move, of every file one folder holds, and it runs the same
 plan/execute machinery and the same single job slot. Doing it any other way
-would mean a second implementation of the ordering.
+would mean a second implementation of the ordering. Two folders qualify and
+``managed_model_store.relocatable_identity`` is the one place that says which:
+the managed store, and the folder PixlStash downloads its own engines into
+(#905, closing #112).
 
 The relocation's own trick is how it keeps "exactly one ``managed`` folder"
 true throughout. The new location is registered as an ordinary ``user`` folder
 first; every file is moved into it with its ``model_file`` row repointed
 individually, so the per-file invariant is untouched; and only when every file
-has landed does **one** transaction promote the new row to ``managed`` and drop
-the old one. A crash at any point leaves exactly one managed row (the old,
-partly emptied store) plus a ``user`` folder holding what already moved, with
-every row naming a file that exists. Re-running the relocation resumes it.
+has landed does **one** transaction promote the new row and drop the old one. A
+crash at any point leaves exactly one managed row (the old, partly emptied
+store) plus a ``user`` folder holding what already moved, with every row naming
+a file that exists. Re-running the relocation resumes it.
+
+The download folder adds two steps to that ending, both after the last file has
+landed and before the hub is told: its **companion** files are carried across
+(they are declared but have no ``model_file`` row, and an engine without its
+label set is a broken engine), and the new location is **recorded**, so every
+downloader follows the folder instead of re-fetching what was just moved.
 
 Authorization: `LOCAL_OWNER_ONLY` on all three, declared in
 ``pixlstash/authz/registry.py`` and never inline. See the §16.3 note on the
@@ -40,6 +49,7 @@ tier in ``docs/backend_architecture.md``; the reasoning per route is in
 from __future__ import annotations
 
 import os
+import shutil
 import threading
 from datetime import datetime, timezone
 from typing import Optional
@@ -48,11 +58,11 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.managed_model_store import (
-    MANAGED_KIND,
-    MANAGED_MOVABLE,
-    MANAGED_OWNER,
+from pixlstash.services.builtin_models import (
+    is_builtin_model_dir,
+    set_builtin_model_dir,
 )
+from pixlstash.services.managed_model_store import relocatable_identity
 from pixlstash.services.model_mover import (
     SHELF_IO_LOCK,
     ModelMover,
@@ -273,18 +283,26 @@ def _register_or_reuse(hub, path: str) -> int:
         )
 
 
-def _finish_relocation(hub, old_folder_id: int, new_folder_id: int) -> None:
+def _finish_relocation(
+    hub, old_folder_id: int, new_folder_id: int, identity: tuple[str, str, str]
+) -> None:
     """Promote the new folder and retire the old one, in one transaction.
 
-    Ordered so that at no instant are there two ``managed`` rows or none: the
-    old row stops being managed and the new one starts being managed inside a
-    single commit.
+    Ordered so that at no instant are there two rows of the relocating folder's
+    kind or none: the old row stops being it and the new one starts being it
+    inside a single commit. That matters for the managed store, of which exactly
+    one must exist, and costs nothing for the built-in download folder.
 
     The old folder's ``missing`` and ``unreachable`` rows are carried across
     rather than dropped. They are tombstones — a file the shelf once saw and can
     re-link by content — and the store moving is not news about whether those
     files came back.
+
+    Args:
+        identity: The ``(kind, owner, movable)`` the folder keeps at its new
+            path, from :func:`relocatable_identity`.
     """
+    kind, owner, movable = identity
     with hub.transaction() as conn:
         conn.execute(
             "UPDATE model_file SET model_folder_id = ? WHERE model_folder_id = ?",
@@ -292,9 +310,47 @@ def _finish_relocation(hub, old_folder_id: int, new_folder_id: int) -> None:
         )
         conn.execute(
             "UPDATE model_folder SET kind = ?, owner = ?, movable = ? WHERE id = ?",
-            (MANAGED_KIND, MANAGED_OWNER, MANAGED_MOVABLE, new_folder_id),
+            (kind, owner, movable, new_folder_id),
         )
         conn.execute("DELETE FROM model_folder WHERE id = ?", (old_folder_id,))
+
+
+def _move_leftovers(source: str, destination: str) -> None:
+    """Carry the files no ``model_file`` row names across with the folder.
+
+    Only the built-in download folder needs this, and it needs it badly. The
+    mover moves *catalogued* copies, and the declaration gives a row to the
+    engine file alone: the tagger's label set, its revision sidecar and WD14's
+    ``selected_tags.csv`` are declared as **companions** and have no row. Leaving
+    them behind would move a tagger to a folder where it does not work, and the
+    engine would then download the whole thing again — the exact failure #905 is
+    about.
+
+    The managed store deliberately does NOT do this: what the owner left in it is
+    theirs and stays put. Here the folder is ours end to end, so everything in it
+    is ours to move, including whatever a previous build downloaded.
+
+    Failures are logged per file and never raised: every catalogued copy has
+    already moved and been verified by the time this runs, so a companion that
+    could not follow is worth a loud line and a re-download, not an exception
+    thrown from a finished job.
+    """
+    for root, _dirs, files in os.walk(source):
+        for name in files:
+            origin = os.path.join(root, name)
+            target = os.path.join(destination, os.path.relpath(origin, source))
+            try:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                shutil.move(origin, target)
+            except OSError as exc:
+                logger.error(
+                    "Could not move %s to %s while relocating PixlStash's "
+                    "download folder: %s. The file stays where it is and will "
+                    "be downloaded again at the new location if it is needed.",
+                    origin,
+                    target,
+                    exc,
+                )
 
 
 def _remove_if_empty(path: str) -> None:
@@ -500,21 +556,23 @@ def create_router(server) -> APIRouter:
 
     @router.post(
         "/model-folders/{folder_id}/relocate",
-        summary="Move the managed model store to another location",
+        summary="Move a folder PixlStash owns to another location",
         description=(
-            "Moves every file the managed store holds to a new host path and "
-            "points the store at it. This is a model move like any other — copy, "
-            "verify by SHA-256, repoint the row and commit, then unlink, per "
-            "file — so an interruption leaves duplicates rather than rows naming "
-            "files that are gone, and a move within one filesystem is a rename. "
-            "Only the managed store can be relocated: an ordinary folder is one "
-            "you registered, so if you move it yourself, register it again."
+            "Moves every file the folder holds to a new host path and points the "
+            "folder at it. This is a model move like any other — copy, verify by "
+            "SHA-256, repoint the row and commit, then unlink, per file — so an "
+            "interruption leaves duplicates rather than rows naming files that "
+            "are gone, and a move within one filesystem is a rename. "
+            "Two folders can be relocated: the managed store, and the folder "
+            "PixlStash downloads its own engines into, whose new location is "
+            "recorded so every downloader follows it. A folder you registered "
+            "is one you moved yourself; register it again at its new path."
         ),
         status_code=202,
         tags=["model_shelf"],
         response_model=MoveStatusResponse,
     )
-    def relocate_managed_store(
+    def relocate_model_folder(
         folder_id: int, request: Request, payload: RelocateRequest = Body(...)
     ):
         server.auth.ensure_secure_when_required(request)
@@ -523,18 +581,24 @@ def create_router(server) -> APIRouter:
         )
         if folder is None:
             raise HTTPException(status_code=404, detail="Model folder not found.")
-        if folder["kind"] != MANAGED_KIND:
+        identity = relocatable_identity(folder)
+        if identity is None:
             # 409 for the same reason the managed store's DELETE is 409: the
             # caller is authorized and the request is well formed, and what
             # refuses it is what the target row is.
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "Only the managed store can be relocated. A folder you "
-                    "registered is one you moved yourself; register it again at "
-                    "its new path."
+                    "This folder cannot be relocated. Only the managed store "
+                    "and PixlStash's own download folder can be; a folder you "
+                    "registered is one you moved yourself, so register it again "
+                    "at its new path."
                 ),
             )
+        # Read before anything moves: `relocatable_identity` recognises the
+        # download folder by comparing it with `builtin_model_dir()`, and this
+        # route is about to change what that returns.
+        is_download_folder = is_builtin_model_dir(folder["path"])
 
         # **Canonicalized before the blocklist runs, and the canonical form is
         # what gets registered.** Two reviews disagreed about this. The security
@@ -616,18 +680,42 @@ def create_router(server) -> APIRouter:
             failed = [o for o in report.outcomes if o.status != "moved"]
             if failed or report.cancelled:
                 logger.warning(
-                    "Managed store relocation to %s stopped with %d file(s) not "
-                    "moved. The store stays at %s and the moved files are "
+                    "Relocation of %s to %s stopped with %d file(s) not moved. "
+                    "The folder stays where it is and the moved files are "
                     "catalogued under the new folder; re-run to finish.",
+                    folder["path"],
                     destination_path,
                     len(failed),
-                    folder["path"],
                 )
                 return
-            _finish_relocation(server.hub, folder_id, destination_id)
+            if is_download_folder:
+                # Companions first, then the pointer, then the hub. Each step is
+                # only correct once the one before it has happened: an engine
+                # without its label set is broken, and a pointer written before
+                # the files arrived would send the next download to an empty
+                # folder.
+                _move_leftovers(folder["path"], destination_path)
+                try:
+                    set_builtin_model_dir(destination_path)
+                except OSError as exc:
+                    # The files ARE at the new path, so the hub is still told the
+                    # truth. What is lost is the memory of it: the next start
+                    # resolves the default location again, declares it, and
+                    # downloads there. Loud, because the fix is to write the
+                    # pointer by hand or re-run the relocation.
+                    logger.error(
+                        "Moved PixlStash's downloads to %s but could not record "
+                        "the new location (%s). The shelf will show them there, "
+                        "but the next start will download to the default folder "
+                        "again. Re-run the relocation once %s is writable.",
+                        destination_path,
+                        exc,
+                        os.path.dirname(destination_path),
+                    )
+            _finish_relocation(server.hub, folder_id, destination_id, identity)
             _remove_if_empty(folder["path"])
             logger.info(
-                "Managed model store relocated from %s to %s (%d file(s)).",
+                "Model folder relocated from %s to %s (%d file(s)).",
                 folder["path"],
                 destination_path,
                 len(plan.moves),

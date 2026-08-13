@@ -26,6 +26,18 @@ vi.mock("../../stores/useModelShelfStore", () => ({
   useModelShelfStore: () => ({ fetchRows: vi.fn() }),
 }));
 
+// The move job is the store's, not the dialog's — the dialog only starts one.
+const relocate = vi.fn();
+let moveBusy = false;
+vi.mock("../../stores/useModelMovesStore", () => ({
+  useModelMovesStore: () => ({
+    relocate: (...a) => relocate(...a),
+    get busy() {
+      return moveBusy;
+    },
+  }),
+}));
+
 import ModelFoldersDialog from "./ModelFoldersDialog.vue";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 
@@ -53,6 +65,7 @@ function folder(overrides = {}) {
     kind: "user",
     owner: null,
     movable: "per_item",
+    relocatable: false,
     host_path: null,
     delete_after_import: false,
     last_checked: null,
@@ -68,7 +81,31 @@ const MANAGED = folder({
   path: "/var/pixlstash/models",
   kind: "managed",
   movable: "root_only",
+  relocatable: true,
   file_count: 3,
+});
+
+// PixlStash's own download folder. `movable` is identical to the InsightFace
+// packs' below, which is why the row reads the server's `relocatable` and never
+// derives Move from `movable` itself.
+const DOWNLOADS = folder({
+  id: 4,
+  path: "/home/g/.local/share/pixlstash/downloaded_models",
+  kind: "foreign",
+  owner: "pixlstash",
+  movable: "root_only",
+  relocatable: true,
+  file_count: 4,
+});
+
+const INSIGHTFACE = folder({
+  id: 5,
+  path: "/home/g/.insightface/models",
+  kind: "foreign",
+  owner: "pixlstash",
+  movable: "root_only",
+  relocatable: false,
+  file_count: 2,
 });
 
 async function open(rows, { canManage = true, inDocker = false } = {}) {
@@ -88,6 +125,8 @@ async function open(rows, { canManage = true, inDocker = false } = {}) {
 beforeEach(() => {
   setActivePinia(createPinia());
   listModelFolders.mockReset().mockResolvedValue([]);
+  relocate.mockReset().mockResolvedValue(true);
+  moveBusy = false;
   forgetModelFolder.mockReset().mockResolvedValue({ tombstoned_files: 0 });
   rescanModelFolder.mockReset().mockResolvedValue({ status: "started" });
 });
@@ -128,16 +167,62 @@ describe("the managed store", () => {
   });
 });
 
-describe("relocation, which is not built yet", () => {
-  it("renders the control blocked and reachable, with its reason", async () => {
-    const wrapper = await open([MANAGED]);
-    const move = wrapper
+describe("relocation", () => {
+  function moveButton(wrapper) {
+    return wrapper
       .findAll("button")
       .find((b) => (b.attributes("aria-label") || "").startsWith("Move"));
+  }
+
+  it("offers Move on the folders the server says relocate", async () => {
+    const wrapper = await open([MANAGED, DOWNLOADS]);
+    const labels = wrapper
+      .findAll("button")
+      .map((b) => b.attributes("aria-label") || "")
+      .filter((l) => l.startsWith("Move"));
+    expect(labels).toHaveLength(2);
+    expect(labels.join(" ")).toContain("downloaded_models");
+  });
+
+  it("offers none on a root_only folder that has no relocate route", async () => {
+    // The InsightFace packs say `root_only` and answer 409 (#906). Deriving the
+    // verb from `movable` would put a button there that can only ever fail.
+    const wrapper = await open([INSIGHTFACE]);
+    expect(moveButton(wrapper)).toBeUndefined();
+  });
+
+  it("sends the picked path for the folder the owner clicked", async () => {
+    const wrapper = await open([MANAGED, DOWNLOADS]);
+    const move = wrapper
+      .findAll("button")
+      .filter((b) => (b.attributes("aria-label") || "").startsWith("Move"))[1];
+    await move.trigger("click");
+    wrapper
+      .getComponent({ name: "FolderBrowser" })
+      .vm.$emit("select", "/mnt/x");
+    await wrapper.vm.$nextTick();
+    expect(relocate).toHaveBeenCalledWith(DOWNLOADS.id, "/mnt/x");
+  });
+
+  it("blocks the verb while a move is running rather than taking the 409", async () => {
+    // One job, machine-wide, is the server's rule. A second POST is a 409, so
+    // the reason is said in the row instead of reported afterwards.
+    moveBusy = true;
+    const wrapper = await open([MANAGED]);
+    const move = moveButton(wrapper);
     expect(move.attributes("aria-disabled")).toBe("true");
     expect(move.attributes("disabled")).toBeUndefined();
-    const reason = wrapper.get(`#${move.attributes("aria-describedby")}`);
-    expect(reason.text()).toContain("not available in this release");
+    await move.trigger("click");
+    expect(relocate).not.toHaveBeenCalled();
+  });
+
+  it("is unavailable to a remote owner, reachably", async () => {
+    const wrapper = await open([MANAGED], { canManage: false });
+    const move = moveButton(wrapper);
+    expect(move.attributes("aria-disabled")).toBe("true");
+    expect(move.attributes("aria-describedby")).toBe("mf-remote-note");
+    await move.trigger("click");
+    expect(relocate).not.toHaveBeenCalled();
   });
 });
 

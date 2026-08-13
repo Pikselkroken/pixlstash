@@ -2294,10 +2294,19 @@ Four states are designed rather than left to fail on click:
   **409, not a 403**: the caller is authorized and the target's state refuses,
   because exactly one such row always exists and it is PixlStash's own storage.
   A button that could only ever 409 is a worse answer than no button, so the
-  row carries Relocate in that slot instead, and the reason its Forget is
-  missing is **rendered in the row**, not in a tooltip. Relocation itself is
-  not built yet: the control ships blocked and described, so its absence is not
-  mistaken for a design gap.
+  row carries Move in that slot instead, and the reason its Forget is missing is
+  **rendered in the row**, not in a tooltip.
+- **Move is offered on `relocatable`, never on `movable`.** The server says which
+  rows relocate, because the client cannot work it out: PixlStash's own download
+  folder (#905) and the InsightFace packs both read `kind: foreign`,
+  `owner: pixlstash`, `movable: root_only`, and only the first has a route — the
+  backend tells them apart by path. Move reuses `FolderBrowser` as its picker,
+  the same one Add uses, so the dialog remembers which verb opened it. The job
+  itself belongs to `useModelMovesStore`, not to this dialog: a relocation of
+  438 GB outlives the panel, the shelf behind it already draws that progress, and
+  there is **one move at a time machine-wide**, so a second is blocked in the row
+  with its reason rather than reported as a 409 afterwards. The dialog closes when
+  the job is accepted.
 - **Every action slot is reserved.** Three slots per row plus a trailing help
   mark, and an action a row does not have is hidden with `visibility`, never
   `v-if`: §5.1's glyph-gutter rule applied to the right edge, or the managed

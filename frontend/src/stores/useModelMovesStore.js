@@ -4,6 +4,7 @@ import { defineStore } from "pinia";
 import {
   cancelModelMove,
   getModelMoveStatus,
+  relocateModelFolder,
   startModelMove,
 } from "../api/modelMoves";
 import { onSessionReset } from "../utils/apiClient";
@@ -191,16 +192,43 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
    */
   async function start(destinationFolderId, items) {
     if (busy.value || !items?.length) return false;
+    return begin(
+      () => startModelMove(destinationFolderId, items),
+      "Could not start that move.",
+    );
+  }
+
+  /**
+   * Move a whole folder PixlStash owns to another host path, files and all.
+   *
+   * The same job, watched the same way — a relocation IS a move — so it takes
+   * the one machine-wide slot, reports through the same progress and ends in
+   * the same receipt and refresh.
+   *
+   * @param {number} folderId - a folder whose `relocatable` is true.
+   * @param {string} path - an absolute host path.
+   * @returns {Promise<boolean>} true when the job was accepted.
+   */
+  async function relocate(folderId, path) {
+    if (busy.value || !folderId || !path) return false;
+    return begin(
+      () => relocateModelFolder(folderId, path),
+      "Could not start that move.",
+    );
+  }
+
+  /** Take the one job slot with *request*, and watch whatever it returns. */
+  async function begin(request, failureMessage) {
     const notices = useNoticeStore();
     starting.value = true;
     error.value = "";
     try {
-      job.value = await startModelMove(destinationFolderId, items);
+      job.value = await request();
       watching = true;
       startPolling();
       return true;
     } catch (err) {
-      error.value = errorDetail(err) || "Could not start that move.";
+      error.value = errorDetail(err) || failureMessage;
       notices.push({ level: "error", text: error.value });
       return false;
     } finally {
@@ -276,6 +304,7 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     percent,
     cancelRequested,
     start,
+    relocate,
     cancel,
     adopt,
     poll,

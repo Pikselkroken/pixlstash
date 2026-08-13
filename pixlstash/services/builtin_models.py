@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from platformdirs import user_data_dir
+
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.adapter_header import FILE_ENGINE
 
@@ -51,8 +53,10 @@ BUILTIN_OWNER = "pixlstash"
 
 # How a declared folder moves, which is a statement about the folder rather than
 # a permission. `root_only` means "if it relocates, it relocates whole" — true of
-# PixlStash's own downloads and of the InsightFace packs, whichever of them has a
-# relocate route yet. `fixed` means it cannot be relocated at all because
+# PixlStash's own downloads, which have a relocate route since #905, and of the
+# InsightFace packs, which do not yet (#906). Whether a route exists is
+# `managed_model_store.relocatable_identity`, not this column. `fixed` means it
+# cannot be relocated at all because
 # something else owns where it lives: the HuggingFace cache's location is
 # `HF_HOME`, read at import by a library shared with every other tool on the
 # machine, so "moving" it is a restart and a re-download rather than a move.
@@ -168,12 +172,65 @@ BUILTIN_ENGINES: tuple[BuiltinEngine, ...] = (
 )
 
 
-# Lets a test point the declaration at a temp folder. Without it a Server built
-# on a temp config dir still declares rows about the developer's REAL home, so
-# the shelf's contents depend on which engines that machine happens to have
-# downloaded — which is how `test_workers_api` came to assert `3 == 0` on a
-# runner whose model cache was warm.
+# Redirects the folder whole — declaration and downloads alike, since all three
+# callers now ask this module. Kept for a deployment that wants the folder
+# somewhere else without moving what is already in it (a container image with a
+# mounted model volume is the case); the tests do not use it, because a fresh
+# temp directory here means every engine downloads again.
 BUILTIN_MODEL_DIR_ENV = "PIXLSTASH_BUILTIN_MODEL_DIR"
+
+# The folder's name at its default location, under the platform user data dir.
+BUILTIN_DIRNAME = "downloaded_models"
+
+# Where a relocation records the folder's new home: one line of text, beside the
+# place the folder started. A FILE and not a row in the hub, because this path is
+# machine-global — one download serves every library and every server instance on
+# the host — while a hub belongs to one deployment. Putting it in the hub would
+# mean a second deployment on the same machine kept downloading to the old place,
+# which is the divergence this whole accessor exists to remove.
+BUILTIN_MODEL_DIR_POINTER = "downloaded_models.location"
+
+
+def _pixlstash_data_dir() -> str:
+    """The platform user data directory. A seam the tests point at a tmp_path."""
+    return user_data_dir("pixlstash")
+
+
+def _pointer_path() -> str:
+    return os.path.join(_pixlstash_data_dir(), BUILTIN_MODEL_DIR_POINTER)
+
+
+def _configured_model_dir() -> Optional[str]:
+    """The location a relocation recorded, or None if it never happened.
+
+    Unreadable is treated as never-relocated and said so loudly: the alternative
+    is refusing to name a download folder at all, which disables every engine
+    over one bad file.
+    """
+    pointer = _pointer_path()
+    try:
+        with open(pointer, encoding="utf-8") as handle:
+            configured = handle.read().strip()
+    except FileNotFoundError:
+        # The normal state on a machine that has never relocated the folder.
+        return None
+    except OSError as exc:
+        logger.error(
+            "Could not read %s (%s), which records where PixlStash downloads "
+            "its engines. Falling back to the default location; if the folder "
+            "was relocated, the engines it holds will be downloaded again.",
+            pointer,
+            exc,
+        )
+        return None
+    if not configured:
+        logger.warning(
+            "%s is empty, so it names no download folder. Using the default "
+            "location. Delete the file to silence this.",
+            pointer,
+        )
+        return None
+    return configured
 
 
 def builtin_model_dir() -> str:
@@ -182,34 +239,67 @@ def builtin_model_dir() -> str:
     Machine-global on purpose: one download serves every library and every
     server instance on the host, exactly as the hub itself does.
 
-    **The same expression the downloaders build, not a shared one.**
-    `inference/engine.py` and `image_embedding_task.py` each compute
-    `user_data_dir("pixlstash")/downloaded_models` for themselves, and an earlier
-    version of this docstring claimed being "in one place" meant the declaration
-    could not point somewhere the downloaders do not fill. It does not — the
-    three agree because they spell the same thing, which is a convention rather
-    than a guarantee.
+    **The one answer, and everything that reads or writes the folder asks for
+    it.** The declaration below, ``inference/engine.py`` and
+    ``tasks/image_embedding_task.py`` used to each build
+    ``user_data_dir("pixlstash")/downloaded_models`` for themselves, so they
+    agreed by convention rather than by construction and the folder could not be
+    moved: the shelf would have declared the new location while every downloader
+    kept filling the old one and re-fetching what had been moved away (#905).
 
-    That matters because of the override below, which redirects **only this
-    function**. That is exactly what the test suite wants: point the declaration
-    at an empty directory so a Server built on a temp config does not describe
-    the developer's real home, while nothing redirects downloads that the tests
-    never make. It is a test seam and is not safe as a way to relocate the
-    store — set it in production and the shelf would declare an empty folder
-    while the engines kept landing in the real one. Relocating for real is
-    `POST /model-folders/{id}/relocate`, which moves the files too.
+    Resolution order, first hit wins:
 
-    Making all three share this function is the right end state; it needs
-    `ImageEmbeddingTask.AESTHETIC_MODELS` to stop being built at import time,
-    which is a change to the download path and not to this one.
+    1. :data:`BUILTIN_MODEL_DIR_ENV`, for a deployment that wants the folder
+       elsewhere without moving what is in it;
+    2. the location a relocation recorded, in
+       :data:`BUILTIN_MODEL_DIR_POINTER` beside the default;
+    3. ``user_data_dir("pixlstash")/downloaded_models``.
+
+    Read on every call rather than cached, so a relocation applies to the next
+    download instead of to the next restart.
     """
     override = os.environ.get(BUILTIN_MODEL_DIR_ENV, "").strip()
     if override:
         return override
+    configured = _configured_model_dir()
+    if configured:
+        return configured
+    return os.path.join(_pixlstash_data_dir(), BUILTIN_DIRNAME)
 
-    from platformdirs import user_data_dir
 
-    return os.path.join(user_data_dir("pixlstash"), "downloaded_models")
+def set_builtin_model_dir(path: str) -> None:
+    """Record where PixlStash downloads its engines from now on.
+
+    Written after the files have landed at *path* and before the hub is told the
+    folder moved, so an interruption between the two leaves the pointer naming
+    the place the files really are.
+
+    Args:
+        path: The folder the engines now live in.
+
+    Raises:
+        OSError: if the pointer could not be written. The caller decides — the
+            files have already moved by then, so this is news to report rather
+            than a reason to undo anything.
+    """
+    pointer = _pointer_path()
+    os.makedirs(os.path.dirname(pointer), exist_ok=True)
+    with open(pointer, "w", encoding="utf-8") as handle:
+        handle.write(path)
+    logger.info(
+        "PixlStash now downloads its engines to %s (recorded in %s).", path, pointer
+    )
+
+
+def is_builtin_model_dir(path: str) -> bool:
+    """Whether *path* is the folder PixlStash downloads its engines into.
+
+    By path rather than by ``kind``/``owner``/``movable``, which the download
+    folder shares with the InsightFace packs: :func:`declare_folder` writes the
+    same three values for every root PixlStash declares, so those columns cannot
+    tell the two apart.
+    """
+    return os.path.realpath(path) == os.path.realpath(builtin_model_dir())
 
 
 def _utcnow() -> str:

@@ -402,7 +402,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("POST", "/api/v1/model-folders/{folder_id}/relocate"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 takes a caller-supplied host path and moves every file the managed model store holds into it, then unlinks the originals — the reference-folders/{folder_id}/relocate class with the file movement of POST /model-moves; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 takes a caller-supplied host path and moves every file a folder PixlStash owns into it, then unlinks the originals — the reference-folders/{folder_id}/relocate class with the file movement of POST /model-moves; the managed store and (since #905) PixlStash's own download folder, whose new location is recorded for every downloader; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("DELETE", "/api/v1/model-moves"): RoutePolicy(
         _LOCAL,
