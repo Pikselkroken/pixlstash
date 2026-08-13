@@ -477,7 +477,7 @@ class ModelMover:
         # HuggingFace's bookkeeping for ComfyUI and everything else too. Its real
         # control is `HF_HOME`, read at import: a restart and a re-download, not
         # a move. The same applies to an InsightFace pack and to PixlStash's own
-        # engines, and it is why all three roots are declared `root_only`.
+        # engines, and it is why these roots are declared `root_only` or `fixed`.
         # Both values, and the pair is the point. `root_only` says the folder
         # relocates as a whole; `fixed` says it cannot relocate at all because
         # another tool owns where it lives. Neither permits a per-item move out,
