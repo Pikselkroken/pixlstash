@@ -1971,6 +1971,29 @@ only after each row is committed, so "nothing imported" and "the run is gone"
 cannot both be true, and saying it anyway would tell the reader their run was
 destroyed for nothing.
 
+**`Add file` is the same step's loose-file half, and it reuses `FolderBrowser`
+in a file mode rather than an `<input type=file>`.** The file is on the machine
+running PixlStash and the server copies it there, so an upload would push a
+gigabyte through the browser to land it a directory away from where it started —
+and `<input type=file>` cannot give the host path the route needs anyway. (The
+icon verb *does* use a real file input, because an icon is small and its bytes
+genuinely have to travel.) The picker's file mode is opt-in on both sides: the
+`pickModelFile` prop turns a click on a file into a selection instead of a
+no-op, and it is what sets `include_model_files` on `GET /filesystem/browse`, so
+every other folder picker keeps a directory-only list. A click **selects**, it
+never confirms — a single click that started a copy would be one slip of the
+pointer away from writing a file nobody chose.
+
+**No confirmation and no destination picker on `Add file`.** A copy into
+PixlStash's own managed store writes over nothing, removes nothing, and is undone
+by forgetting the row; a prompt would be ceremony around the least dangerous
+verb the shelf has. The receipt says the original is still where it was, because
+nothing else in the UI would say so. Choosing another destination is what a drag
+onto a folder group already does, and it does it better — with the folder in
+front of you. Both stores are refreshed afterwards, for the reason the import
+refreshes both: the shelf gained a row and the destination folder's file count
+and `shelf_bytes` moved with it, so the drive bands are stale too.
+
 **The toolbar button is hidden, not disabled, when no `source` folder is
 registered** — unlike the selection bar's verbs, which are about a selection the
 reader just made and therefore owe an explanation in a tooltip. This is about a

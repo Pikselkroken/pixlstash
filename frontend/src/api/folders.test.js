@@ -89,7 +89,7 @@ describe("api/folders", () => {
     apiClient.get.mockResolvedValue({ data: { entries: [], path: "/" } });
     await browseFilesystem("/srv");
     expect(apiClient.get).toHaveBeenCalledWith("/filesystem/browse", {
-      params: { path: "/srv", show_hidden: false },
+      params: { path: "/srv", show_hidden: false, include_model_files: false },
     });
   });
 
@@ -99,7 +99,17 @@ describe("api/folders", () => {
     apiClient.get.mockResolvedValue({ data: { entries: [], path: "/" } });
     await browseFilesystem(null, { showHidden: true });
     expect(apiClient.get).toHaveBeenCalledWith("/filesystem/browse", {
-      params: { path: undefined, show_hidden: true },
+      params: { path: undefined, show_hidden: true, include_model_files: false },
+    });
+  });
+
+  // The shelf's `Add file` picker is the only caller that wants files listed,
+  // so the flag is opt-in and every folder picker keeps its directory-only list.
+  it("browseFilesystem asks for model files only when the picker wants them", async () => {
+    apiClient.get.mockResolvedValue({ data: { entries: [], path: "/" } });
+    await browseFilesystem("/srv", { includeModelFiles: true });
+    expect(apiClient.get).toHaveBeenCalledWith("/filesystem/browse", {
+      params: { path: "/srv", show_hidden: false, include_model_files: true },
     });
   });
 

@@ -148,10 +148,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_25_local_5_loopback():
+def test_host_capability_tier_split_is_26_local_5_loopback():
     """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 29 routes carry a
-    locality tier = 24 local + 5 loopback.
+    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 31 routes carry a
+    locality tier = 26 local + 5 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -194,6 +194,21 @@ def test_host_capability_tier_split_is_25_local_5_loopback():
     class carrying ``POST /model-moves``' file movement, so it is the one route
     in the shelf that is on this tier for **both** reasons at once.
 
+    30 = 25 + 5 with ``GET /model-folders/{folder_id}/runs/{run_name}/samples/
+    {filename}``, which serves one preview image out of a registered output root
+    so a step can be judged before it is imported: it reads inside a registered
+    host root and writes nothing, which is ``rescan``'s authority class.
+
+    31 = 26 + 5 with ``POST /model-files``, the shelf's ``Add file`` (plan F6).
+    It is the second route on this tier for **both** reasons at once, and the
+    first shelf route that takes a host path in its *body*: it copies one loose
+    file from anywhere on the machine into a registered folder and registers it.
+    The path cannot be avoided — the file is by definition somewhere nobody
+    registered — so the containment is on the write and the read is bounded
+    instead (one regular ``.safetensors``, refused outright if it already lies
+    inside a registered folder). It never unlinks: the source is the owner's own
+    file.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -207,7 +222,7 @@ def test_host_capability_tier_split_is_25_local_5_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 25, sorted(local)
+    assert len(local) == 26, sorted(local)
 
 
 # ===========================================================================

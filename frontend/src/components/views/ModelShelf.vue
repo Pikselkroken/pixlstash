@@ -121,6 +121,27 @@
           <ShelfShowPanel />
         </v-menu>
 
+        <!-- The loose-file path (F6). Beside Import rather than in the folders
+             dialog, because it is not a folder operation: it is the way one
+             adapter that belongs to no training run gets onto the shelf without
+             a folder being registered for it. The file is copied into the
+             managed store; the original stays where the owner put it. -->
+        <button
+          ref="addFileBtnRef"
+          class="bar-btn bar-btn--boxed"
+          :class="{ 'bar-btn--open': addFileOpen }"
+          type="button"
+          title="Add a model file"
+          aria-label="Add a model file"
+          :aria-busy="adding || undefined"
+          @click="openAddFile"
+        >
+          <!-- A copy of a 6 GB checkpoint is not instant, and this button is
+               the only thing on screen that knows one is running. -->
+          <v-icon v-if="adding" size="19" class="mdi-spin">mdi-loading</v-icon>
+          <v-icon v-else size="19">mdi-file-plus-outline</v-icon>
+        </button>
+
         <!-- Shown only once an ai-toolkit output root is registered. Hidden
              rather than disabled, unlike the selection bar's verbs: those are
              about a selection the reader just made and owe an explanation, and
@@ -598,6 +619,19 @@
     <ShelfStackProposalsDialog :open="stacksOpen" @close="closeStacks" />
     <ModelFoldersDialog :open="foldersOpen" @close="closeFolders" />
 
+    <!-- The shipped host-path picker again, in its file mode. A server-side
+         picker rather than an `<input type=file>`: the file is on the machine
+         running PixlStash and the server copies it there, so an upload would
+         push a gigabyte through the browser to land it beside where it started.
+         (The icon verb uses a real file input because an icon is small and its
+         bytes genuinely have to travel.) -->
+    <FolderBrowser
+      :open="addFileOpen"
+      pick-model-file
+      @select="onFilePicked"
+      @close="closeAddFile"
+    />
+
     <ProgressOverlay
       :visible="moves.running"
       :status="moves.running ? 'running' : 'idle'"
@@ -621,10 +655,12 @@ import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
+import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
+import { addModelFile } from "../../api/modelFiles";
 import { createStack } from "../../api/modelStacks";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
@@ -1007,6 +1043,62 @@ async function closeImport() {
     ? importBtnRef.value
     : rootEl.value
   )?.focus();
+}
+
+// ── Add file (shelf plan F6's remainder) ────────────────────────────────────
+//
+// The loose-file path: one adapter that belongs to no training run and does not
+// deserve a registered folder of its own. It lands in the managed store — the
+// ruled default destination — and the server registers it as it copies, so the
+// row is on the shelf when the call returns and no rescan is needed.
+//
+// No confirmation and no destination picker. A copy into PixlStash's own store
+// writes nothing the owner had, removes nothing, and is undone by forgetting the
+// row; asking twice would be ceremony around the least dangerous shelf verb
+// there is. Choosing another destination is what a drag onto a folder already
+// does, and it does it better, with the folder in front of you.
+
+const addFileOpen = ref(false);
+const addFileBtnRef = ref(null);
+const adding = ref(false);
+
+function openAddFile() {
+  if (adding.value) return;
+  addFileOpen.value = true;
+}
+
+async function closeAddFile() {
+  addFileOpen.value = false;
+  await nextTick();
+  addFileBtnRef.value?.focus();
+}
+
+/**
+ * Copy the chosen file into the managed store and refresh what it changed.
+ *
+ * Both stores, for the reason the import has: the shelf gained a row, and the
+ * store's file count and `shelf_bytes` moved with it, so the drive bands are
+ * stale too.
+ */
+async function onFilePicked(path) {
+  if (!path || adding.value) return;
+  const notices = useNoticeStore();
+  adding.value = true;
+  try {
+    const added = await addModelFile(path);
+    await Promise.all([store.fetchRows(), foldersStore.refresh({ quiet: true })]);
+    notices.push({
+      level: "success",
+      text: `Added ${added?.filename || "the file"} to the shelf. The original is still where it was.`,
+    });
+  } catch (err) {
+    notices.push({
+      level: "error",
+      text: errorDetail(err) || "Could not add that file.",
+    });
+  } finally {
+    adding.value = false;
+  }
 }
 
 // Two controls open the same dialog, so which one gets focus back is a fact
@@ -1403,6 +1495,17 @@ watch(
 </script>
 
 <style scoped>
+/* The spinner keeps spinning under reduced motion, slower. The global reset in
+   design-tokens.css zeroes every element's animation, and @mdi/font puts this
+   one on ::before, where the reset lands — a frozen mdi-loading reads as a
+   rendering fault rather than as "working". Same fix as `LoginScreen`. */
+@media (prefers-reduced-motion: reduce) {
+  .bar-btn .mdi-spin::before {
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
 .shelf {
   display: flex;
   flex-direction: column;

@@ -263,6 +263,59 @@ class ModelFolderScanner:
                 folder_id=folder_id, path=path, state=STATE_MISSING, skipped=True
             )
 
+    def register_file(
+        self,
+        folder_id: int,
+        abs_path: str,
+        relpath: str,
+        *,
+        sha256: Optional[str] = None,
+    ) -> Optional[int]:
+        """Register one file that has just been put into a registered folder.
+
+        The single-file half of :meth:`scan_folder`, for the file ``POST
+        /model-files`` has itself copied in: the row is written by the same
+        ``_describe`` → ``_write_batch`` path a walk uses, so an added file and a
+        scanned one are one kind of row rather than two dialects of it — same
+        header parse, same ``ON CONFLICT(sha256)`` join onto an existing model.
+
+        **It sweeps nothing.** A walk marks every row it did not see ``missing``;
+        this looks at one name and touches no other row, which is what makes it
+        safe to call on a folder holding 1,800 files nobody just walked.
+
+        Args:
+            folder_id: The registered folder the file now sits in.
+            abs_path: The file itself, already inside that folder.
+            relpath: Its path relative to the folder root — the ``model_file``
+                key, so the caller's containment decides it.
+            sha256: The file's digest, when the caller already has it because it
+                just wrote and verified these bytes. It is used rather than
+                recomputed: a walk hashes because it found a file it knows
+                nothing about, and re-reading a gigabyte the copy hashed twice a
+                moment ago would only add to the wait before the row appears.
+                A **checkpoint** therefore keeps this digest instead of the
+                deferred NULL a scan leaves it (``MissingCheckpointHashFinder``
+                exists so nobody reads 24 GB to hash it; here the bytes went
+                through a hash on their way in, so the read is already paid for).
+
+        Returns:
+            The ``model.id`` the file landed on, or ``None`` when it could not be
+            stat'ed, parsed or hashed. ``_describe`` has logged why; the file is
+            left unregistered rather than recorded wrong.
+        """
+        result = FolderScanResult(
+            folder_id=folder_id, path=abs_path, state=STATE_PRESENT
+        )
+        record = self._describe(abs_path, relpath, {}, result, known_digest=sha256)
+        if record is None:
+            return None
+        self._write_batch(folder_id, [record], _utcnow())
+        row = self._hub.fetchone(
+            "SELECT model_id FROM model_file WHERE model_folder_id = ? AND relpath = ?",
+            (folder_id, relpath),
+        )
+        return int(row["model_id"]) if row is not None else None
+
     def _folder_exists(self, folder_id: int) -> bool:
         return (
             self._hub.fetchone("SELECT 1 FROM model_folder WHERE id = ?", (folder_id,))
@@ -381,8 +434,15 @@ class ModelFolderScanner:
         relpath: str,
         known: dict[str, _KnownFile],
         result: FolderScanResult,
+        known_digest: Optional[str] = None,
     ) -> Optional[_FileRecord]:
         """Return the row for one file, hashing it only when it has to be.
+
+        ``known_digest`` is the second way of not hashing, beside the
+        unchanged-file fast path below: :meth:`register_file`'s caller has just
+        written and verified these bytes, so it holds the digest already. A walk
+        never has one — it found a file it knows nothing about — and passes
+        ``None``.
 
         A file already recorded at this relpath whose size *and* mtime both still
         match is taken as unchanged and is not re-hashed: re-reading every byte
@@ -459,9 +519,19 @@ class ModelFolderScanner:
         )
 
         if info.file_kind == FILE_CHECKPOINT:
-            # No hash: it may be 24 GB. MissingCheckpointHashFinder supplies it.
             result.checkpoints += 1
-            return record
+            # No hash: it may be 24 GB. MissingCheckpointHashFinder supplies it.
+            # Unless the caller already has one, which only happens when it just
+            # copied these bytes through a hash — then the read the finder exists
+            # to defer has already been paid for, and deferring anyway would
+            # schedule a second one for nothing.
+            if known_digest is None:
+                return record
+            return record._replace(digest=known_digest)
+
+        if known_digest is not None:
+            result.adapters += 1
+            return record._replace(digest=known_digest)
 
         try:
             digest = sha256_file(abs_path)

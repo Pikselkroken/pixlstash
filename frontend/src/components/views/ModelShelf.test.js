@@ -46,6 +46,14 @@ vi.mock("../../api/modelMoves", () => ({
   cancelModelMove: vi.fn(),
 }));
 
+// `Add file` (F6). Mocked rather than left real for the same reason the folder
+// reads are: it is a network call on a user gesture, and this suite is about
+// what the shelf does with the answer.
+const addModelFile = vi.fn();
+vi.mock("../../api/modelFiles", () => ({
+  addModelFile: (...args) => addModelFile(...args),
+}));
+
 // The manual stack verb's only write. Mocked here rather than left real
 // because the bar's button is what this suite drives, and the assertion worth
 // having is which ids reach the route.
@@ -63,6 +71,7 @@ vi.mock("../../api/modelFolders", async (importOriginal) => ({
 
 import ModelShelf from "./ModelShelf.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 
 const globalOpts = {
   global: {
@@ -81,6 +90,10 @@ const globalOpts = {
       ShelfEditDialog: true,
       ShelfMoveDialog: true,
       ModelImportDialog: true,
+      // The host-path picker `Add file` opens. Real, it would drag Vuetify's
+      // dialog provider into a suite that installs none; stubbed, it still
+      // emits `select`, which is the whole of what this view listens for.
+      FolderBrowser: true,
       ShelfStackProposalsDialog: true,
       ProgressOverlay: true,
       // The picker inside the selection bar, which the bar's own suite covers.
@@ -137,6 +150,7 @@ beforeEach(() => {
   // from an unawaited promise.
   getModelMoveStatus.mockReset();
   getModelMoveStatus.mockResolvedValue({ status: "idle", results: [] });
+  addModelFile.mockReset();
 });
 
 describe("a row with nothing in its header", () => {
@@ -1383,5 +1397,61 @@ describe("Escape", () => {
 
     await wrapper.find(".shelf-toolbar").trigger("keydown", { key: "Escape" });
     expect(store.selectedRows).toHaveLength(1);
+  });
+});
+
+
+describe("Add file", () => {
+  // F6's remainder: the way one adapter that belongs to no training run gets
+  // onto the shelf without a folder being registered for it.
+
+  async function pick(wrapper, path) {
+    wrapper.findComponent({ name: "FolderBrowser" }).vm.$emit("select", path);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+  }
+
+  it("offers the verb in the toolbar, with a name a reader can hear", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    expect(
+      wrapper.find('[aria-label="Add a model file"]').exists(),
+    ).toBe(true);
+  });
+
+  it("sends the picked path and refreshes the shelf, so no rescan is needed", async () => {
+    // The done-when of #901: the row is there when the call returns. The shelf
+    // is refetched rather than the response being spliced in, because the
+    // server decides what the row says (name, kind, base model, size).
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    addModelFile.mockResolvedValue({
+      model_id: 7,
+      filename: "loose.safetensors",
+      folder_id: 2,
+      folder_path: "/store",
+    });
+    const before = listAdapters.mock.calls.length;
+
+    await pick(wrapper, "/home/u/Downloads/loose.safetensors");
+
+    expect(addModelFile).toHaveBeenCalledWith("/home/u/Downloads/loose.safetensors");
+    expect(listAdapters.mock.calls.length).toBeGreaterThan(before);
+    const notices = useNoticeStore();
+    expect(notices.notices[0].level).toBe("success");
+    // The one thing a reader might fear about a verb that copies: it says the
+    // original is untouched, because nothing else in the UI would say so.
+    expect(notices.notices[0].text).toContain("still where it was");
+  });
+
+  it("reports a refusal rather than leaving it looking like it landed", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    addModelFile.mockRejectedValue({
+      response: { data: { detail: "That file is already inside /m." } },
+    });
+
+    await pick(wrapper, "/m/known.safetensors");
+
+    const notices = useNoticeStore();
+    expect(notices.notices[0].level).toBe("error");
+    expect(notices.notices[0].text).toContain("already inside");
   });
 });
