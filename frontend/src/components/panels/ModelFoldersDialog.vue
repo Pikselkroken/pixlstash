@@ -203,7 +203,7 @@ import {
   useModelFoldersStore,
 } from "../../stores/useModelFoldersStore";
 import { relativeDate } from "../../utils/snapshots";
-import { formatModelSize } from "../../utils/modelShelf";
+import { FOLDER_TIERS, formatModelSize } from "../../utils/modelShelf";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -239,17 +239,13 @@ const DOCKER_REASON =
   "Adding a folder needs its path on the host, which PixlStash cannot ask for from inside Docker. Add it from the command line for now.";
 
 // One folder family, so the column reads as "which kind of folder" rather than
-// as four unrelated marks.
-const KIND_ICON = {
-  managed: "mdi-folder-home-outline",
-  user: "mdi-folder-outline",
-  source: "mdi-folder-cog-outline",
-  // The only kind the owner can neither scan nor forget, so it is the only one
-  // that gets the lock. `managed` is not locked — it holds no association to
-  // dissolve, but it is scannable and relocatable, which is why it keeps the
-  // home glyph rather than joining this one.
-  foreign: "mdi-folder-lock-outline",
-};
+// as four unrelated marks — and ONE copy of it, shared with the shelf's folder
+// headers (#899), which state the same tier about the same registry. `managed`
+// is not locked: it holds no association to dissolve, but it is scannable and
+// relocatable, which is why it keeps the home glyph rather than the lock.
+const KIND_ICON = Object.fromEntries(
+  Object.entries(FOLDER_TIERS).map(([kind, tier]) => [kind, tier.icon]),
+);
 
 const browseOpen = ref(false);
 const expanded = ref(new Set());

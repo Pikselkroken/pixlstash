@@ -272,6 +272,167 @@ export const FOLDER_LAYOUT_LABELS = {
 };
 
 /**
+ * What each folder tier is marked with, in ONE icon family.
+ *
+ * Shared with `ModelFoldersDialog`, which is where these glyphs started: the
+ * shelf header and the dialog row are two views of the same registry, and two
+ * copies of the map would be two vocabularies for one fact. Nothing here is
+ * hand-drawn — the header used to have no tier mark at all, and the mock that
+ * proposed one built a folder out of a div and a `::before` tab, which is a
+ * second icon family by construction.
+ *
+ * `chip` is the WORD the tier is stated in, and it is what makes the tier
+ * survive greyscale together with the glyph's shape. `user` has none: a folder
+ * the owner registered is the unmarked case, and chipping every header would
+ * make the two that matter invisible among them.
+ */
+export const FOLDER_TIERS = {
+  managed: {
+    icon: "mdi-folder-home-outline",
+    chip: "Managed",
+    note: "PixlStash keeps its own models here.",
+  },
+  // The only kind the owner can neither scan nor forget, so it is the only one
+  // that gets the lock — the same rule the folders dialog's glyph column uses.
+  foreign: {
+    icon: "mdi-folder-lock-outline",
+    chip: "Locked",
+    note: "Owned by another tool. PixlStash reads it and never writes to it.",
+  },
+  source: {
+    icon: "mdi-folder-cog-outline",
+    chip: "ai-toolkit",
+    note: "Training output. Models are imported from here, not catalogued in place.",
+  },
+  user: { icon: "mdi-folder-outline", chip: "", note: "" },
+};
+
+/** The glyph a folder whose drive is not plugged in wears, instead of its tier's. */
+const OFFLINE_ICON = "mdi-lan-disconnect";
+
+// The rail keeps its palette entry's HUE and pins saturation and lightness, the
+// same renormalisation `markBackground` does and for the same reason: a colour
+// picked for identity is not automatically a colour that reads as a 3px line.
+// Mid lightness rather than the mark's 30%, because this line sits on the
+// canvas in BOTH themes and nothing is ever written on it.
+const RAIL_SATURATION = 60;
+const RAIL_LIGHTNESS = 50;
+
+/**
+ * The rail colour a drive gets, by its position in the drive order.
+ *
+ * A grouping hint and never the identity: the chip (or the band above) names
+ * the volume, and the palette repeats after 48 drives. `SET_COLORS` is
+ * deliberately interleaved so neighbouring indices are far apart in hue, which
+ * is what makes "these two folders are on one disk" readable at a glance.
+ *
+ * @param {number} index - position in the drive order.
+ * @returns {string} an `hsl()` colour.
+ */
+export function driveRailColor(index) {
+  const entry = SET_COLORS[index % SET_COLORS.length].value;
+  return `hsl(${hueOf(entry)} ${RAIL_SATURATION}% ${RAIL_LIGHTNESS}%)`;
+}
+
+/**
+ * True when `path` sits inside `parent`, one registered folder inside another.
+ *
+ * String comparison on a separator boundary, which is what keeps `/models` from
+ * swallowing `/models-old`. Both separators, because a registry written on
+ * Windows holds backslashes.
+ */
+function isInside(path, parent) {
+  if (!path || !parent || path === parent) return false;
+  const head = parent.replace(/[/\\]+$/, "");
+  const rest = path.slice(head.length);
+  return path.startsWith(head) && /^[/\\]/.test(rest);
+}
+
+/**
+ * Tell each folder header what drive it is on, what tier it is and whether it
+ * can be reached (#899).
+ *
+ * A header used to carry a path and a count and nothing else, so the answer to
+ * "which disk is this on", "is this one PixlStash writes to" and "is this drive
+ * even plugged in" lived only in the folders dialog. All three are properties
+ * of the folder registry, which the shelf already holds; none of them needed a
+ * request.
+ *
+ * **Every distinction here survives greyscale.** The drive is a hue on the rail
+ * AND a chip that names the volume; the tier is a glyph shape AND a word; the
+ * offline state is a DASHED rail and muted ink — never the error colour, for
+ * the reason the offline row treatment is not the error colour either. Nothing
+ * is carried by hue alone.
+ *
+ * Drives are numbered in a stable order (by device id) rather than by the order
+ * the groups happen to arrive in, or plugging a disk in would repaint every
+ * other folder's rail. A folder whose drive could not be measured gets NO rail
+ * colour: we do not know what disk it is on, and inventing a colour for it
+ * would claim a grouping nothing measured.
+ *
+ * @param {Array<Object>} groups - folder groups, each carrying `folderId`.
+ * @param {Object} context
+ * @param {Array<Object>} context.folders - rows from `GET /model-folders`.
+ * @param {Map<number, Object>} [context.deviceByFolderId] - from the folder store.
+ * @param {Set<number>} [context.offlineFolderIds] - folders wholly out of reach.
+ * @returns {Array<Object>} the same groups, each with `tier`, `icon`, `chip`,
+ *   `drive` (`{label, rail}` or null), `offline` and `nested`.
+ */
+export function withFolderSignals(
+  groups,
+  { folders = [], deviceByFolderId = null, offlineFolderIds = null } = {},
+) {
+  const byId = new Map(
+    (folders || []).map((folder) => [Number(folder.id), folder]),
+  );
+  const paths = (folders || []).map((folder) => String(folder.path || ""));
+  // Drive order, fixed before anything is drawn. Sorted by device id so it is
+  // the same on every render and the same for every reader.
+  const driveIndex = new Map(
+    [
+      ...new Set(
+        [...(deviceByFolderId?.values?.() || [])]
+          .map((device) => device?.device_id)
+          .filter(Boolean)
+          .map(String),
+      ),
+    ]
+      .sort()
+      .map((id, index) => [id, index]),
+  );
+  return (groups || []).map((group) => {
+    const folderId = Number(group.folderId);
+    const folder = Number.isInteger(folderId) ? byId.get(folderId) : null;
+    const device = Number.isInteger(folderId)
+      ? deviceByFolderId?.get?.(folderId) || null
+      : null;
+    const tier = FOLDER_TIERS[folder?.kind] ? folder.kind : "user";
+    const offline = Boolean(offlineFolderIds?.has?.(folderId));
+    const deviceId = device?.device_id ? String(device.device_id) : "";
+    return {
+      ...group,
+      tier: folder ? tier : null,
+      icon: offline ? OFFLINE_ICON : FOLDER_TIERS[tier].icon,
+      chip: folder ? FOLDER_TIERS[tier].chip : "",
+      note: folder ? FOLDER_TIERS[tier].note : "",
+      drive: deviceId
+        ? {
+            label: device.label || device.mount_point || "",
+            rail: driveRailColor(driveIndex.get(deviceId) ?? 0),
+          }
+        : null,
+      offline,
+      // One level, never two: nesting here says "this folder lives inside
+      // another registered one", which is a yes or a no. A registry three deep
+      // would otherwise walk the headers off the left edge of the panel.
+      nested: paths.some((other) =>
+        isInside(String(folder?.path || ""), other),
+      ),
+    };
+  });
+}
+
+/**
  * Arrange folder groups into drive bands.
  *
  * Two levels, which is what the plan allows and no more: the band is the drive

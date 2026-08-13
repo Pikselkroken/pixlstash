@@ -854,6 +854,144 @@ describe("drive bands", () => {
   });
 });
 
+describe("what a folder header says about its folder (#899)", () => {
+  const inFolder = (id, folderId, path, state = "present") =>
+    adapter({
+      id,
+      sha256: String(id).repeat(64).slice(0, 64),
+      locations: [
+        { state, folder_id: folderId, folder_path: path, relpath: "a.st" },
+      ],
+    });
+
+  async function mountFolders(rows, { folders = [], devices = [] } = {}) {
+    listModelFolders.mockResolvedValue(folders);
+    listModelFolderDevices.mockResolvedValue(devices);
+    const wrapper = await mountShelf(rows);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  }
+
+  it("rails the folders on one drive in one colour, and names the volume", async () => {
+    const wrapper = await mountFolders(
+      [
+        inFolder(1, 1, "/mnt/fast/loras"),
+        inFolder(2, 2, "/mnt/fast/ckpt"),
+        inFolder(3, 3, "/ext/loras"),
+      ],
+      {
+        folders: [
+          { id: 1, path: "/mnt/fast/loras", kind: "user", file_count: 1 },
+          { id: 2, path: "/mnt/fast/ckpt", kind: "user", file_count: 1 },
+          { id: 3, path: "/ext/loras", kind: "user", file_count: 1 },
+        ],
+        devices: [
+          { device_id: "9", label: "FastModels", folder_ids: [1, 2] },
+          { device_id: "12", label: "Archive", folder_ids: [3] },
+        ],
+      },
+    );
+    // Alphabetical by path under this layout: /ext/loras, then the two on
+    // /mnt/fast.
+    const headers = wrapper.findAll(".shelf-group-btn");
+    const rails = headers.map((btn) => btn.attributes("style") || "");
+    expect(rails[1]).toContain("border-left-color");
+    // Same disk, same rail; a different disk, a different one.
+    expect(rails[2]).toBe(rails[1]);
+    expect(rails[0]).not.toBe(rails[1]);
+    // ...and the identity is a WORD, because the hue is only a grouping hint.
+    expect(textOf(headers[1])).toContain("FastModels");
+    expect(textOf(headers[0])).toContain("Archive");
+  });
+
+  it("leaves the drive chip to the band when there is a band", async () => {
+    // Under `Drive, then folder` the band above IS the chip. Repeating it on
+    // every folder under it would be noise rather than a second signal.
+    listModelFolders.mockResolvedValue([
+      { id: 1, path: "/mnt/fast/loras", kind: "user", file_count: 1 },
+    ]);
+    listModelFolderDevices.mockResolvedValue([
+      { device_id: "9", label: "FastModels", folder_ids: [1] },
+    ]);
+    const wrapper = await mountShelf([inFolder(1, 1, "/mnt/fast/loras")]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
+    await wrapper.vm.$nextTick();
+
+    expect(textOf(wrapper.find(".shelf-band-heading"))).toContain("FastModels");
+    expect(textOf(wrapper.find(".shelf-group-btn"))).not.toContain(
+      "FastModels",
+    );
+    // The rail still runs down the header: it is what says the two folders
+    // under one band belong together once the band has scrolled away.
+    expect(wrapper.find(".shelf-group-btn").attributes("style")).toContain(
+      "border-left-color",
+    );
+  });
+
+  it("states the tier in a word and a glyph, on the header itself", async () => {
+    const wrapper = await mountFolders(
+      [
+        inFolder(1, 1, "/store"),
+        inFolder(2, 2, "/hf"),
+        inFolder(3, 3, "/mine"),
+      ],
+      {
+        folders: [
+          { id: 1, path: "/store", kind: "managed", file_count: 1 },
+          { id: 2, path: "/hf", kind: "foreign", file_count: 1 },
+          { id: 3, path: "/mine", kind: "user", file_count: 1 },
+        ],
+      },
+    );
+    const headers = wrapper.findAll(".shelf-group-btn");
+    const chips = headers.map((h) =>
+      h.findAll(".shelf-group-chip").map((c) => textOf(c)),
+    );
+    // Alphabetical by path: /hf, /mine, /store.
+    expect(chips[0]).toEqual(["Locked"]);
+    expect(chips[1]).toEqual([]);
+    expect(chips[2]).toEqual(["Managed"]);
+    // The reader who never opens the header still hears all three.
+    expect(headers[2].attributes("aria-label")).toBe(
+      "/store, Managed, 1 model",
+    );
+  });
+
+  it("marks an offline folder without ever using the error treatment", async () => {
+    const wrapper = await mountFolders(
+      [inFolder(1, 1, "/ext/loras", "unreachable")],
+      {
+        folders: [{ id: 1, path: "/ext/loras", kind: "user", file_count: 1 }],
+      },
+    );
+    const header = wrapper.find(".shelf-group-btn");
+    expect(header.classes()).toContain("shelf-group-btn--offline");
+    // A word as well as the dashed rail, so nothing here is carried by colour.
+    expect(textOf(header)).toContain("Offline");
+    expect(header.attributes("aria-label")).toContain("offline");
+    // The dashed rail replaces the drive hue rather than joining it: we cannot
+    // see the disk, so nothing on this header may claim which one it is.
+    expect(header.attributes("style") || "").not.toContain("border-left-color");
+  });
+
+  it("indents a folder registered inside another registered folder", async () => {
+    const wrapper = await mountFolders(
+      [inFolder(1, 1, "/models"), inFolder(2, 2, "/models/loras")],
+      {
+        folders: [
+          { id: 1, path: "/models", kind: "user", file_count: 1 },
+          { id: 2, path: "/models/loras", kind: "user", file_count: 1 },
+        ],
+      },
+    );
+    const [parent, child] = wrapper.findAll(".shelf-group-btn");
+    // `--depth` is the shared row system's own indent, not a private padding.
+    expect(parent.attributes("style") || "").not.toContain("--depth");
+    expect(child.attributes("style")).toContain("--depth: 1");
+  });
+});
+
 describe("the group header's reserved column", () => {
   it("carries the axis glyph rather than an empty gap", async () => {
     // The width is reserved either way so the header's label lines up with the

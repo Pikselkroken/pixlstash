@@ -1606,6 +1606,62 @@ models is thirty-six headers. Under `Folder` the second level is spent on the
 F5's stacks nest inside a *row*, not inside a header, so they do not want a
 third level.
 
+#### What a folder header states (#899)
+
+A folder header used to carry a path and a count, so "which disk is this on",
+"is this one PixlStash writes to" and "is this drive even plugged in" were
+answerable only by opening the folders dialog. All three are properties of the
+registry the shelf already holds, so none of them costs a request:
+`withFolderSignals()` (pure, in `utils/modelShelf.js`) decorates the drawn
+groups with `tier`, `icon`, `chip`, `drive`, `offline` and `nested`.
+
+- **Every distinction survives greyscale.** The drive is a hue on the rail *and*
+  a chip naming the volume; the tier is a glyph *shape* and a *word*; offline is
+  a **dashed** rail plus muted ink. Nothing here is carried by hue alone, which
+  is the same rule "the two kinds of absence" below states for rows.
+- **The rail's colour is a grouping hint, never an identity.** It says "these
+  folders are on one disk"; the chip or the band above says *which*. Drives are
+  numbered in a stable order (sorted `device_id`), not in the order the groups
+  arrive in, or plugging a disk in would repaint every other folder's rail.
+  `driveRailColor` keeps a `SET_COLORS` entry's **hue** and pins saturation and
+  lightness, the same renormalisation `markBackground` does and for the same
+  reason — a colour picked for identity is not automatically one that reads as a
+  3px line. The palette is deliberately interleaved, so neighbouring indices are
+  far apart in hue.
+- **An unmeasured drive gets no rail colour.** We do not know which disk the
+  folder is on, and a colour there would claim a grouping nothing measured.
+- **The drive chip is drawn only where no band names the drive already.** Under
+  `Drive, then folder` the band *is* the chip, and repeating it on every folder
+  under it is noise rather than a second signal. The rail still runs down each
+  header, which is what holds the grouping together once the band has scrolled
+  off.
+- **The tier's glyph is the folders dialog's own.** `FOLDER_TIERS` lives in
+  `utils/modelShelf.js` and `ModelFoldersDialog.vue` reads its `KIND_ICON` out
+  of it: the header and the dialog row are two views of one registry, and two
+  copies of the map would be two vocabularies for one fact. It is also why the
+  glyph is an mdi folder like every other — an earlier mock hand-drew one from a
+  `div` plus a `::before` tab, which is a second icon family by construction.
+  `managed` takes the home glyph and `foreign` the lock, because `foreign` is
+  the only kind the owner can neither scan nor forget. `user` is the **unmarked**
+  case: chipping every header would hide the two that matter.
+- **Offline swaps the glyph and drops the drive hue.** The disconnected mark is
+  the shape half of the treatment, and the rail goes dashed-and-muted rather
+  than dashed-in-the-drive-colour — a coloured rail says "this is which disk",
+  and we cannot see the disk. Never the error colour, for the reason the offline
+  *row* is not the error colour either.
+- **Nesting is one level and never two.** A folder registered inside another
+  registered folder takes one `--depth` step, the shared row system's own indent
+  (§5.1) rather than a private padding. The question the indent answers is a yes
+  or a no; a registry three deep would otherwise walk the headers off the panel.
+  The prefix test is on a **separator boundary**, so `/models` does not swallow
+  `/models-old`.
+- **A group that is not a folder is left alone.** "No registered copy" has no
+  `folderId`, no disk and no tier — the same reason `bandGroups` leaves it
+  unbanded.
+- **The rail and the chips have accessible equivalents.** A rail has no
+  accessible name and a hue has none either, so the header's `aria-label` states
+  the tier, the drive and the offline state alongside the path and the count.
+
 #### The two kinds of absence (#898)
 
 `locationState()` reduces a row's copies to one word, and the shelf renders
