@@ -220,14 +220,17 @@ describe("the four naming states", () => {
 
   it("draws each of them differently", async () => {
     const rows = (await mountStates()).findAll(".shelf-row");
-    expect(rows.map((row) => row.find(".shelf-row-name").classes()[1])).toEqual(
-      [
-        "shelf-row-name--named",
-        "shelf-row-name--needs-a-name",
-        "shelf-row-name--derived",
-        "shelf-row-name--from-file",
-      ],
-    );
+    const stateClass = (row) =>
+      row
+        .find(".shelf-row-name")
+        .classes()
+        .find((c) => c.startsWith("shelf-row-name--"));
+    expect(rows.map(stateClass)).toEqual([
+      "shelf-row-name--named",
+      "shelf-row-name--needs-a-name",
+      "shelf-row-name--derived",
+      "shelf-row-name--from-file",
+    ]);
   });
 
   it("tells derived from the file's own name without opening anything", async () => {
