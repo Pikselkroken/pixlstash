@@ -806,7 +806,133 @@ describe("drive bands", () => {
     // Free leads: it is the number that decides whether the next checkpoint
     // fits, and the meter is read at a glance rather than computed from.
     expect(textOf(bands[0])).toContain("512.0 GB free of 1.0 TB");
-    expect(wrapper.findAll(".shelf-band-fill")).toHaveLength(2);
+
+    // Three segments carving up the track, in the legend's order, and their
+    // widths add to the whole drive. Two overlaid fills could not say which of
+    // "how full is the disk" and "how much is ours" a boundary marked (#893).
+    const segs = wrapper.findAll(".shelf-band-seg");
+    expect(segs).toHaveLength(3);
+    expect(segs.map((s) => s.attributes("style"))).toEqual([
+      "width: 25%;", // 256 GB on the shelf
+      "width: 25%;", // 256 GB belonging to anything else
+      "width: 50%;", // 512 GB free
+    ]);
+    // The meter is decorative: the same figures are already visible text in
+    // this heading, so labelling it made every band announce them twice.
+    expect(wrapper.find(".shelf-band-meter").attributes("aria-hidden")).toBe(
+      "true",
+    );
+    expect(
+      wrapper.find(".shelf-band-meter").attributes("role"),
+    ).toBeUndefined();
+  });
+
+  it("keys the meter once for the view, not once per band", async () => {
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: "9",
+        mount_point: "/mnt/fast",
+        label: "FastModels",
+        total_bytes: 1024 ** 4,
+        free_bytes: 512 * 1024 ** 3,
+        shelf_bytes: 256 * 1024 ** 3,
+        folder_ids: [1],
+      },
+      {
+        device_id: "10",
+        mount_point: "/mnt/slow",
+        label: "SlowModels",
+        total_bytes: 1024 ** 4,
+        free_bytes: 512 * 1024 ** 3,
+        shelf_bytes: 128 * 1024 ** 3,
+        folder_ids: [2],
+      },
+    ]);
+    const wrapper = await mountShelf([
+      inFolder(1, 1, "/mnt/fast/loras"),
+      inFolder(2, 2, "/mnt/slow/checkpoints"),
+    ]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.findAll(".shelf-band-heading")).toHaveLength(2);
+    expect(wrapper.findAll(".shelf-band-legend")).toHaveLength(1);
+    expect(textOf(wrapper.find(".shelf-band-legend"))).toContain(
+      "On the shelf",
+    );
+    expect(textOf(wrapper.find(".shelf-band-legend"))).toContain("Other files");
+    expect(textOf(wrapper.find(".shelf-band-legend"))).toContain("Free");
+  });
+
+  it("draws no key when no meter is on screen to key", async () => {
+    // An unmeasured drive renders no meter, so a shelf of only offline drives
+    // would otherwise print a key to a picture nobody can see.
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: null,
+        mount_point: "/net/models",
+        total_bytes: null,
+        free_bytes: null,
+        shelf_bytes: 0,
+        folder_ids: [7],
+      },
+    ]);
+    const wrapper = await mountShelf([inFolder(1, 7, "/net/models/loras")]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".shelf-band-heading").exists()).toBe(true);
+    expect(wrapper.find(".shelf-band-legend").exists()).toBe(false);
+  });
+
+  it("warns when a drive has no room for the next checkpoint", async () => {
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: "9",
+        mount_point: "/mnt/fast",
+        label: "FastModels",
+        total_bytes: 1024 ** 4,
+        free_bytes: 8 * 1024 ** 3,
+        shelf_bytes: 512 * 1024 ** 3,
+        folder_ids: [1],
+      },
+    ]);
+    const wrapper = await mountShelf([inFolder(1, 1, "/mnt/fast/loras")]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
+    await wrapper.vm.$nextTick();
+
+    // The word carries the state in greyscale, and in a screen reader, without
+    // a live region: this is a standing fact about a disk, not an event.
+    expect(textOf(wrapper.find(".shelf-band-heading"))).toContain(
+      "Only 8.0 GB free of 1.0 TB",
+    );
+    expect(wrapper.find(".shelf-band-meter--low").exists()).toBe(true);
+    expect(wrapper.find(".shelf-band-figures--low").exists()).toBe(true);
+    expect(wrapper.find(".shelf-band-heading").attributes("role")).not.toBe(
+      "alert",
+    );
+  });
+
+  it("leaves a roomy drive unwarned however full it looks", async () => {
+    // 400 GB left is a tenth of this drive. A percentage rule would cry wolf
+    // here, on exactly the hardware people keep models on.
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: "9",
+        mount_point: "/mnt/fast",
+        label: "FastModels",
+        total_bytes: 4000 * 1024 ** 3,
+        free_bytes: 400 * 1024 ** 3,
+        shelf_bytes: 1024 ** 3,
+        folder_ids: [1],
+      },
+    ]);
+    const wrapper = await mountShelf([inFolder(1, 1, "/mnt/fast/loras")]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
+    await wrapper.vm.$nextTick();
+
+    expect(textOf(wrapper.find(".shelf-band-heading"))).not.toContain("Only");
+    expect(wrapper.find(".shelf-band-meter--low").exists()).toBe(false);
   });
 
   it("says a drive is unknown rather than drawing it empty", async () => {

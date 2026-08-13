@@ -287,17 +287,61 @@ describe("bandGroups", () => {
 });
 
 describe("bandUsage", () => {
-  it("reports the shelf's share as part of what is used, never beside it", () => {
-    // Two fills in one track: if the shelf's share were measured against free
-    // space the two could sum past the drive.
+  it("splits the drive into three segments that carve up what is used", () => {
+    // The shelf's share is a PART of what is used, so `other` is the rest of
+    // the used space and not the whole of it. Drawing `used` and `shelf` as
+    // two overlaid fills was the original shape and it left the reader unable
+    // to tell which of the two a given boundary marked.
     const usage = bandUsage({
       totalBytes: 1000,
       freeBytes: 250,
       shelfBytes: 500,
     });
-    expect(usage.usedPct).toBe(75);
     expect(usage.shelfPct).toBe(50);
-    expect(usage.shelfPct).toBeLessThanOrEqual(usage.usedPct);
+    expect(usage.otherPct).toBe(25);
+    expect(usage.freePct).toBe(25);
+    expect(usage.usedPct).toBe(75);
+  });
+
+  it("keeps the three segments summing to exactly one full track", () => {
+    // Laid out in a row rather than overlaid, so anything short of 100 opens a
+    // sliver of bare track at the right-hand end that reads as free space.
+    for (const band of [
+      { totalBytes: 3, freeBytes: 1, shelfBytes: 1 },
+      { totalBytes: 1024 ** 4, freeBytes: 7, shelfBytes: 123456789 },
+      { totalBytes: 1000, freeBytes: 1000, shelfBytes: 0 },
+      { totalBytes: 1000, freeBytes: 0, shelfBytes: 1000 },
+    ]) {
+      const usage = bandUsage(band);
+      expect(usage.shelfPct + usage.otherPct + usage.freePct).toBeCloseTo(
+        100,
+        10,
+      );
+      expect(usage.otherPct).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("measures low space in checkpoints that would fit, not in percentages", () => {
+    const GB = 1024 ** 3;
+    // 400 GB left on a 4 TB drive is a tenth of it, and dozens more models.
+    // The fraction rule would warn here, which is the cry-wolf case.
+    expect(
+      bandUsage({ totalBytes: 4000 * GB, freeBytes: 400 * GB, shelfBytes: 0 })
+        .lowFree,
+    ).toBe(false);
+    // The same drive with room for two more checkpoints IS worth saying, even
+    // though it is only 1% and no fraction rule set for the small disk would
+    // have caught it.
+    expect(
+      bandUsage({ totalBytes: 4000 * GB, freeBytes: 40 * GB, shelfBytes: 0 })
+        .lowFree,
+    ).toBe(true);
+    // And 60 GB on a small SSD is nearly half of it but still not low, which
+    // is the direction a fraction rule gets backwards.
+    expect(
+      bandUsage({ totalBytes: 128 * GB, freeBytes: 60 * GB, shelfBytes: 0 })
+        .lowFree,
+    ).toBe(false);
   });
 
   it("refuses to draw a meter for a drive it could not measure", () => {
@@ -311,12 +355,15 @@ describe("bandUsage", () => {
   it("never lets a stale shelf figure overflow the track", () => {
     // `shelf_bytes` is counted from the hub and the capacity from the disk, so
     // a scan mid-flight can make the first exceed the second for a moment.
+    // `other` must absorb the clamp and stay at zero rather than going
+    // negative, which would draw a segment growing leftwards.
     const usage = bandUsage({
       totalBytes: 1000,
       freeBytes: 900,
       shelfBytes: 5000,
     });
     expect(usage.shelfPct).toBe(usage.usedPct);
+    expect(usage.otherPct).toBe(0);
   });
 });
 
