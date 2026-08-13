@@ -789,3 +789,37 @@ def test_forgetting_a_model_takes_its_capabilities_with_it(server_hub, tmp_path)
     assert not server_hub.fetchall(
         "SELECT 1 FROM model_capability WHERE model_id = ?", (model_id,)
     )
+
+
+def test_re_declaring_an_unchanged_set_writes_nothing(
+    server_hub, tmp_path, monkeypatch
+):
+    """Every root here is re-declared on every server start, and the set changes
+    about never — so an unchanged declaration must not rewrite the rows.
+
+    This is not only churn. Rewriting ~35 entries' capabilities on every Server
+    a process builds was enough extra hub write traffic to take the Windows CI
+    shard down with a SIGSEGV during interpreter teardown, seconds after a fully
+    green test run (PR #922). Asserted on `rowid`, which is what a
+    delete-and-reinsert changes and a no-op leaves alone.
+    """
+    _hf_cache(
+        monkeypatch,
+        ("florence-community/Florence-2-base", "SmilingWolf/wd-convnext-tagger-v3"),
+    )
+    folder_id = declare_huggingface_cache(server_hub, str(tmp_path))
+    assert folder_id is not None
+
+    def rowids():
+        return [
+            (row["rowid"], row["capability"])
+            for row in server_hub.fetchall(
+                "SELECT rowid, capability FROM model_capability ORDER BY rowid"
+            )
+        ]
+
+    before = rowids()
+    assert [cap for _, cap in before] == ["captioner", "detector", "tagger"]
+
+    assert declare_huggingface_cache(server_hub, str(tmp_path)) == folder_id
+    assert rowids() == before, "an unchanged declaration rewrote the rows"

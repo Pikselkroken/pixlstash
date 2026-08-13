@@ -421,11 +421,38 @@ def declare_folder(
                     (state, now, folder_id, entry.relpath),
                 )
 
-            # DIAGNOSTIC (to be reverted): the capability write is disabled to
-            # split the Windows shard-4 SIGSEGV between the new table's DDL and
-            # this write. Two capability tests fail on the Linux shards while
-            # this is in; the signal wanted is backend-windows shard 4.
-            _ = model_id
+            # Restated wholesale when it differs, and NOT TOUCHED when it does
+            # not. The declaration is still the authority — a capability it no
+            # longer claims has to go, or a model that stopped serving a feature
+            # would stay listed under it — but every root here is re-declared on
+            # every server start, and the set changes about never. Rewriting it
+            # each boot was pure write amplification: ~35 declared entries per
+            # start (engines, InsightFace packs, every cached HuggingFace repo)
+            # rewritten by every Server this process builds, for rows that were
+            # already correct.
+            #
+            # The read is one indexed lookup on the primary key's leading
+            # column, against two rows at most, and it replaces two writes.
+            # Ordered by `rowid` so the comparison sees the stored ORDER too:
+            # primary-first is what `model.kind` agrees with and what the shelf
+            # renders, so a reordered set is a real difference, not a no-op.
+            declared = list(entry.declared_capabilities)
+            stored = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT capability FROM model_capability "
+                    "WHERE model_id = ? ORDER BY rowid",
+                    (model_id,),
+                ).fetchall()
+            ]
+            if stored != declared:
+                conn.execute(
+                    "DELETE FROM model_capability WHERE model_id = ?", (model_id,)
+                )
+                conn.executemany(
+                    "INSERT INTO model_capability (model_id, capability) VALUES (?, ?)",
+                    [(model_id, capability) for capability in declared],
+                )
         # The sweep, and these folders have nowhere else to get one. The folder
         # scanner does this pass for every folder it walks — anything it did not
         # see this run goes `missing` — and it skips these precisely because
