@@ -58,10 +58,30 @@ logger = get_logger(__name__)
 INSIGHTFACE_DIR_ENV = "PIXLSTASH_INSIGHTFACE_DIR"
 HUGGINGFACE_CACHE_DIR_ENV = "PIXLSTASH_HUGGINGFACE_CACHE_DIR"
 
+# InsightFace's own layout: it joins this onto whatever root it is given.
+INSIGHTFACE_MODELS_SUBDIR = "models"
+
 # InsightFace stores each pack as a directory. The zip it downloaded to build
 # one sits beside it and is the tool's own leftover, not a model — the same
 # judgement `TOOLING_DIRS` makes about `.cache`.
 _PACK_ARCHIVE_SUFFIX = ".zip"
+
+
+def insightface_models_dir_under(root: str) -> str:
+    """The directory ``FaceAnalysis`` loads packs from, given an InsightFace root.
+
+    ``models`` is InsightFace's own layout and is not ours to choose: the
+    library joins it onto whatever ``root`` it is given. That is why relocating
+    the packs is a change of *root* rather than of this folder — see
+    ``POST /model-folders/{id}/relocate``.
+
+    Args:
+        root: An InsightFace root.
+
+    Returns:
+        The absolute models directory under it.
+    """
+    return os.path.join(root, INSIGHTFACE_MODELS_SUBDIR)
 
 
 def insightface_models_dir() -> str:
@@ -78,7 +98,7 @@ def insightface_models_dir() -> str:
     override = os.environ.get(INSIGHTFACE_DIR_ENV, "").strip()
     if override:
         return override
-    return os.path.join(insightface_root(), "models")
+    return insightface_models_dir_under(insightface_root())
 
 
 def huggingface_cache_dir() -> Optional[str]:

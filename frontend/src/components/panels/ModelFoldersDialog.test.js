@@ -139,6 +139,39 @@ describe("relocation, which is not built yet", () => {
     const reason = wrapper.get(`#${move.attributes("aria-describedby")}`);
     expect(reason.text()).toContain("not available in this release");
   });
+
+  // Keyed on `movable`, not on `kind`. The InsightFace packs are `foreign` and
+  // relocate as a whole (#906); the HuggingFace cache is `foreign` too and
+  // cannot relocate at all, because its location is `HF_HOME`.
+  it("offers Move on a folder that relocates as a whole, whatever its kind", async () => {
+    const wrapper = await open([
+      folder({
+        id: 4,
+        kind: "foreign",
+        movable: "root_only",
+        path: "/home/me/.insightface/models",
+      }),
+    ]);
+    const labels = wrapper
+      .findAll("button")
+      .map((b) => b.attributes("aria-label") || "");
+    expect(labels.some((l) => l.startsWith("Move"))).toBe(true);
+  });
+
+  it("offers no Move on a folder another tool's location owns", async () => {
+    const wrapper = await open([
+      folder({
+        id: 5,
+        kind: "foreign",
+        movable: "fixed",
+        path: "/home/me/.cache/huggingface/hub",
+      }),
+    ]);
+    const labels = wrapper
+      .findAll("button")
+      .map((b) => b.attributes("aria-label") || "");
+    expect(labels.some((l) => l.startsWith("Move"))).toBe(false);
+  });
 });
 
 describe("a remote owner", () => {

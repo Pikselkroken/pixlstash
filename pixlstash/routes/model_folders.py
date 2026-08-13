@@ -162,7 +162,14 @@ class ModelFolderResponse(BaseModel):
         default=None,
         description="Which subsystem owns the folder; null for a folder the user chose.",
     )
-    movable: str = Field(description="`per_item`, `root_only` or `external`.")
+    movable: str = Field(
+        description=(
+            "`per_item` (files move one at a time), `root_only` (relocates as a "
+            "whole — offer Move on it), `external` (taken from, never written "
+            "into) or `fixed` (cannot relocate at all; another tool owns where "
+            "it lives)."
+        )
+    )
     host_path: Optional[str] = None
     delete_after_import: Optional[bool] = None
     last_checked: Optional[str] = Field(

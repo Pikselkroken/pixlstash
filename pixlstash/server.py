@@ -117,6 +117,7 @@ from pixlstash.routes.snapshots import create_router as create_snapshots_router
 from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
 from pixlstash.utils.atomic_write import write_json_atomic
+from pixlstash.utils.insightface_model_utils import set_insightface_root
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from pixlstash.utils.request_origin import OriginClientMiddleware
@@ -478,6 +479,14 @@ class Server(
                 "own engines will not be listed on the shelf this session.",
                 exc,
             )
+        # Before the declaration below, which reads it: the InsightFace packs
+        # are relocatable, and their location is a persisted setting rather than
+        # a constant. Applied to the process-global reader every InsightFace
+        # caller goes through — the downloader, this declaration and the
+        # `FaceAnalysis(root=…)` the face pipeline constructs — so a relocated
+        # root cannot leave the shelf pointing at one directory while the packs
+        # load from another.
+        set_insightface_root(self._server_config.get("insightface_root"))
         # The other two roots models land in. Same deal as above and same
         # failure policy: each is declared independently so one unreadable root
         # cannot cost the shelf the other two.
@@ -1056,6 +1065,13 @@ class Server(
                 "image_root": default_image_root,
                 "default_device": "auto",
                 "insightface_model_pack": "buffalo_l",
+                # Where the InsightFace packs live. Empty means the library's own
+                # default (`~/.insightface`); a relocation writes the new root
+                # here. Unlike `PIXLSTASH_BUILTIN_MODEL_DIR` this is safe to set
+                # in production, because `insightface_root()` is the only reader
+                # and the downloads, the shelf row and `FaceAnalysis` all go
+                # through it.
+                "insightface_root": "",
                 "min_free_disk_gb": 1.0,
                 "min_free_vram_mb": 1024.0,
                 "cors_origins": [],
@@ -1090,6 +1106,8 @@ class Server(
                     server_config["default_device"] = "auto"
                 if "insightface_model_pack" not in server_config:
                     server_config["insightface_model_pack"] = "buffalo_l"
+                if "insightface_root" not in server_config:
+                    server_config["insightface_root"] = ""
                 if "min_free_disk_gb" not in server_config:
                     server_config["min_free_disk_gb"] = 1.0
                 if "min_free_vram_mb" not in server_config:

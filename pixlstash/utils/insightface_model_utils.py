@@ -1,11 +1,17 @@
 """Helpers for selecting and provisioning the InsightFace model pack.
 
-PixlStash's face pipeline runs through ``insightface.app.FaceAnalysis(name=<pack>)``.
-``FaceAnalysis`` resolves ``~/.insightface/models/<pack>/`` and loads every
-``*.onnx`` file it finds there. The default ``buffalo_l`` pack is in InsightFace's
-auto-download zoo, so it provisions itself. ``auraface`` (``fal/AuraFace-v1``) is
-**not** in that zoo, so when it is selected we download it from HuggingFace into
-the expected directory before ``FaceAnalysis`` is constructed.
+PixlStash's face pipeline runs through
+``insightface.app.FaceAnalysis(name=<pack>, root=<root>)``. ``FaceAnalysis``
+resolves ``<root>/models/<pack>/`` and loads every ``*.onnx`` file it finds
+there. The default ``buffalo_l`` pack is in InsightFace's auto-download zoo, so
+it provisions itself. ``auraface`` (``fal/AuraFace-v1``) is **not** in that zoo,
+so when it is selected we download it from HuggingFace into the expected
+directory before ``FaceAnalysis`` is constructed.
+
+**The root is a setting** (``server_config["insightface_root"]``, defaulting to
+``~/.insightface``) rather than a constant, so the packs can be moved off the
+system drive — see :func:`insightface_root` and
+``POST /model-folders/{id}/relocate``.
 
 License note (the provenance decision is the user's; this module only makes the
 switch available):
@@ -22,6 +28,7 @@ import os
 import shutil
 import threading
 import time
+from typing import Optional
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.path_utils import resolve_path_within
@@ -54,7 +61,17 @@ _DOWNLOADABLE_PACKS: dict[str, tuple[str, str]] = {
 
 # Root InsightFace searches for model packs. FaceAnalysis defaults to
 # ``~/.insightface`` and looks under ``<root>/models/<pack>/``.
-_INSIGHTFACE_ROOT = os.path.expanduser(os.path.join("~", ".insightface"))
+DEFAULT_INSIGHTFACE_ROOT = os.path.expanduser(os.path.join("~", ".insightface"))
+
+# The configured root, or None for the default above. Process-global rather than
+# threaded through vault → engine → task, because it is a statement about this
+# *machine's* disk and not about a library: `FaceAnalysis` is constructed from
+# one place, `_pack_dir` downloads into it from another, and the shelf declares
+# it from a third, so a value passed down one of those chains would have to be
+# re-derived by the other two. The Server sets it once at start-up from
+# `server_config["insightface_root"]`, and the relocate route rewrites it in the
+# same transaction-of-sorts as the setting it persists.
+_configured_root: Optional[str] = None
 
 # After a failed download, suppress re-attempts (and repeated error logging) for
 # this window so a hard-down network does not hammer HuggingFace or log on every
@@ -67,14 +84,39 @@ _download_failures_lock = threading.Lock()
 def insightface_root() -> str:
     """Where InsightFace keeps its packs.
 
-    A reader for the module constant, so the shelf's declaration
-    (:mod:`pixlstash.services.builtin_caches`) can name the same directory this
-    module downloads into without restating the path or reaching for a private.
+    The **single** reader of the configured root, so the three places that need
+    it — this module's downloads, the shelf's declaration
+    (:mod:`pixlstash.services.builtin_caches`) and the ``FaceAnalysis(root=…)``
+    the face pipeline constructs — cannot drift apart. That is the property #905
+    says the built-in download folder still lacks and the reason this one can be
+    relocated at all: a setting that only half the callers read would move the
+    shelf's row while the packs kept loading from the old directory.
 
     Returns:
-        The absolute InsightFace root.
+        The absolute InsightFace root — the configured one, or
+        :data:`DEFAULT_INSIGHTFACE_ROOT` when nothing has been configured.
     """
-    return _INSIGHTFACE_ROOT
+    return _configured_root or DEFAULT_INSIGHTFACE_ROOT
+
+
+def set_insightface_root(path: Optional[str]) -> None:
+    """Point every InsightFace caller at *path*.
+
+    Called by the Server at start-up with the persisted
+    ``server_config["insightface_root"]``, and again by
+    ``POST /model-folders/{id}/relocate`` once the packs have landed at their new
+    location, so a running server does not have to be restarted to find them.
+
+    Args:
+        path: The new root, or None/empty to fall back to the default.
+    """
+    global _configured_root
+    cleaned = (path or "").strip()
+    _configured_root = cleaned or None
+    logger.info(
+        "InsightFace packs will be read from and downloaded into %s.",
+        insightface_root(),
+    )
 
 
 def validate_model_pack(model_pack: str) -> str:
@@ -104,8 +146,13 @@ def validate_model_pack(model_pack: str) -> str:
 
 
 def _pack_dir(model_pack: str) -> str:
-    """Return the on-disk directory FaceAnalysis loads *model_pack* from."""
-    return os.path.join(_INSIGHTFACE_ROOT, "models", model_pack)
+    """Return the on-disk directory FaceAnalysis loads *model_pack* from.
+
+    Resolved per call rather than at import: the root is relocatable, and a
+    module-level join would keep downloading into the directory the packs were
+    moved out of.
+    """
+    return os.path.join(insightface_root(), "models", model_pack)
 
 
 def _pack_is_present(model_pack: str) -> bool:
@@ -123,7 +170,7 @@ def ensure_model_pack_available(model_pack: str) -> None:
     auto-downloads (e.g. ``buffalo_l``) this is a no-op — ``FaceAnalysis`` fetches
     them itself. For packs PixlStash provisions (e.g. ``auraface``), the pack is
     downloaded from a pinned HuggingFace revision into
-    ``~/.insightface/models/<pack>/`` if it is not already present.
+    ``<insightface_root()>/models/<pack>/`` if it is not already present.
 
     Args:
         model_pack: The configured InsightFace model pack name.
@@ -131,7 +178,7 @@ def ensure_model_pack_available(model_pack: str) -> None:
     Raises:
         ValueError: If *model_pack* is not a known pack.
         RuntimeError: If a required download fails. The message explains that the
-            user can place the pack manually in ``~/.insightface/models/<pack>/``.
+            user can place the pack manually in the pack directory.
     """
     validate_model_pack(model_pack)
 

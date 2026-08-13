@@ -96,7 +96,44 @@ def test_get_or_init_passes_model_pack_name(pack, cpu_spillover):
     fa.assert_called_once()
     _, kwargs = fa.call_args
     assert kwargs.get("name") == pack
+    # The root is passed explicitly rather than left to FaceAnalysis's own
+    # `~/.insightface` default, which is what makes it relocatable at all.
+    assert kwargs.get("root") == model_utils.insightface_root()
     _reset_face_globals()
+
+
+@pytest.mark.parametrize("cpu_spillover", [False, True])
+def test_get_or_init_loads_from_the_configured_root(tmp_path, cpu_spillover):
+    """A relocated root is where the packs are downloaded to *and* loaded from.
+
+    The two have to agree or the relocation is worse than not offering one: the
+    shelf would report the packs on the new drive while ``FaceAnalysis`` quietly
+    re-downloaded them to the old one. Both go through
+    ``insightface_model_utils.insightface_root()``, so this asserts the one
+    setting reaches both callers.
+    """
+    _reset_face_globals()
+    relocated = str(tmp_path / "big-drive" / ".insightface")
+    original = model_utils.insightface_root()
+    model_utils.set_insightface_root(relocated)
+    try:
+        assert model_utils._pack_dir("buffalo_l") == os.path.join(
+            relocated, "models", "buffalo_l"
+        )
+        with (
+            mock.patch(
+                "pixlstash.tasks.face_extraction_task.ensure_model_pack_available"
+            ),
+            mock.patch("insightface.app.FaceAnalysis") as fa,
+            mock.patch("torch.cuda.is_available", return_value=False),
+        ):
+            FaceExtractionTask.get_or_init_insightface(
+                _make_engine("buffalo_l"), cpu_spillover=cpu_spillover
+            )
+        assert fa.call_args.kwargs.get("root") == relocated
+    finally:
+        model_utils.set_insightface_root(original)
+        _reset_face_globals()
 
 
 # --------------------------------------------------------------------------- #
@@ -131,7 +168,7 @@ def test_get_or_init_unknown_pack_raises():
 
 def test_auraface_downloads_when_absent(tmp_path, monkeypatch):
     # Point the insightface root at a temp dir so nothing exists yet.
-    monkeypatch.setattr(model_utils, "_INSIGHTFACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(model_utils, "_configured_root", str(tmp_path))
 
     # Fake snapshot dir containing the .onnx files at its root.
     snapshot_dir = tmp_path / "hf_snapshot"
@@ -156,7 +193,7 @@ def test_auraface_downloads_when_absent(tmp_path, monkeypatch):
 
 
 def test_auraface_not_downloaded_when_present(tmp_path, monkeypatch):
-    monkeypatch.setattr(model_utils, "_INSIGHTFACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(model_utils, "_configured_root", str(tmp_path))
     dest = tmp_path / "models" / "auraface"
     dest.mkdir(parents=True)
     (dest / "glintr100.onnx").write_bytes(b"onnx")
@@ -172,7 +209,7 @@ def test_auraface_not_downloaded_when_present(tmp_path, monkeypatch):
 
 
 def test_buffalo_l_never_downloads(tmp_path, monkeypatch):
-    monkeypatch.setattr(model_utils, "_INSIGHTFACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(model_utils, "_configured_root", str(tmp_path))
     fake_snapshot = mock.MagicMock()
     with mock.patch.dict(
         "sys.modules",
@@ -183,7 +220,7 @@ def test_buffalo_l_never_downloads(tmp_path, monkeypatch):
 
 
 def test_auraface_download_failure_raises_with_manual_hint(tmp_path, monkeypatch):
-    monkeypatch.setattr(model_utils, "_INSIGHTFACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(model_utils, "_configured_root", str(tmp_path))
 
     def _boom(*a, **k):
         raise OSError("network down")
@@ -197,7 +234,7 @@ def test_auraface_download_failure_raises_with_manual_hint(tmp_path, monkeypatch
 
 
 def test_auraface_download_backoff_suppresses_repeated_attempts(tmp_path, monkeypatch):
-    monkeypatch.setattr(model_utils, "_INSIGHTFACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(model_utils, "_configured_root", str(tmp_path))
 
     calls = {"n": 0}
 
@@ -222,7 +259,7 @@ def test_auraface_download_backoff_suppresses_repeated_attempts(tmp_path, monkey
 
 
 def test_auraface_download_backoff_expires_then_retries(tmp_path, monkeypatch):
-    monkeypatch.setattr(model_utils, "_INSIGHTFACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(model_utils, "_configured_root", str(tmp_path))
     # Simulate a failure that happened longer ago than the backoff window.
     model_utils._download_failures["auraface"] = (
         time.monotonic() - model_utils._DOWNLOAD_BACKOFF_SECONDS - 1.0

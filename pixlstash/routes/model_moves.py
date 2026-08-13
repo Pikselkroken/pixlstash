@@ -16,14 +16,22 @@ I/O-bound on one disk regardless. A second POST while one runs is a 409.
 moved. That is the ruling, and it is the only answer that does not need its own
 crash-window argument for the undo.
 
-**Relocating the managed store lives here too**, at
+**Relocating a PixlStash-owned folder lives here too**, at
 ``POST /model-folders/{folder_id}/relocate``, despite the path — because a
-relocation *is* a move, of every file one folder holds, and it runs the same
-plan/execute machinery and the same single job slot. Doing it any other way
-would mean a second implementation of the ordering.
+relocation *is* a move, of everything one folder holds, and it runs the same
+single job slot and the same job clients poll. Doing it any other way would mean
+a second implementation of the ordering.
 
-The relocation's own trick is how it keeps "exactly one ``managed`` folder"
-true throughout. The new location is registered as an ordinary ``user`` folder
+Two folders can be relocated and they are not the same operation. The **managed
+store** is a batch of files and reuses ``ModelMover`` whole. The **InsightFace
+packs** are directories — the shelf catalogues a pack, not the ``.onnx`` files
+inside it — so there is no per-file row to repoint and no ``sha256`` to verify
+against; that one moves directories with
+``model_mover.move_directory`` and persists its new root as a setting. What they
+share is :func:`_start_job`, which is everything except the work itself.
+
+The managed store's relocation has one trick of its own: how it keeps "exactly
+one ``managed`` folder" true throughout. The new location is registered as an ordinary ``user`` folder
 first; every file is moved into it with its ``model_file`` row repointed
 individually, so the per-file invariant is untouched; and only when every file
 has landed does **one** transaction promote the new row to ``managed`` and drop
@@ -48,17 +56,35 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.builtin_caches import (
+    insightface_models_dir,
+    insightface_models_dir_under,
+)
 from pixlstash.services.managed_model_store import (
     MANAGED_KIND,
     MANAGED_MOVABLE,
     MANAGED_OWNER,
 )
+from pixlstash.services.model_folder_scanner import STATE_PRESENT
 from pixlstash.services.model_mover import (
     SHELF_IO_LOCK,
+    STATUS_CANCELLED,
+    STATUS_FAILED,
+    STATUS_MOVED,
     ModelMover,
     MoveOutcome,
     MoveRefused,
+    MoveReport,
+    move_directory,
+    require_space,
+    same_device,
 )
+from pixlstash.utils.atomic_write import write_json_atomic
+from pixlstash.utils.insightface_model_utils import (
+    insightface_root,
+    set_insightface_root,
+)
+from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
 logger = get_logger(__name__)
@@ -127,13 +153,17 @@ class RelocateRequest(BaseModel):
 
     path: str = Field(
         description=(
-            "Absolute host path to move the store to. Created if it does not "
-            "exist. Symlinks are resolved before the path is checked against "
-            "the system-directory blocklist and before it is recorded, so the "
-            "store is registered at the location it really lands in — a link "
-            "into `/usr` is refused rather than followed. Owner-chosen and "
-            "therefore trusted, exactly as a reference folder is; the blocklist "
-            "is there to catch the accident, not an attacker."
+            "Absolute host path to move the folder to. Created if it does not "
+            "exist. For the managed store this is the store's new location; for "
+            "the InsightFace packs it is the new InsightFace **root**, and the "
+            "packs land in `<path>/models`, because that subdirectory is "
+            "InsightFace's own layout rather than ours to name. Symlinks are "
+            "resolved before the path is checked against the system-directory "
+            "blocklist and before it is recorded, so the folder is registered at "
+            "the location it really lands in — a link into `/usr` is refused "
+            "rather than followed. Owner-chosen and therefore trusted, exactly "
+            "as a reference folder is; the blocklist is there to catch the "
+            "accident, not an attacker."
         )
     )
 
@@ -250,6 +280,103 @@ def _finish_job(job: dict) -> None:
         job["status"] = STATUS_FINISHED
 
 
+def _start_job(
+    *,
+    destination_folder_id: int,
+    total: int,
+    bytes_to_copy: int,
+    run,
+    on_finished=None,
+) -> dict:
+    """Take the one job slot, run *run* on a thread, and return the job.
+
+    One slot machine-wide, and it is ``model_mover.SHELF_IO_LOCK``, the *same*
+    slot an ai-toolkit import takes: two file operations at once race for the
+    free space each of them checked and for the destination names each of them
+    found free. The loser is a 409 and never queues — see the lock's own note.
+
+    The work itself is a callback rather than a ``MovePlan`` because the shelf
+    has two shapes of relocation, and only one of them is a batch of files. An
+    InsightFace pack is a *directory* the shelf catalogues as one row, so its
+    relocation moves directories; everything around the work — the slot, the
+    job dict clients poll, the cancel flag, the release-on-failure — is
+    identical and is here rather than written twice.
+
+    Args:
+        destination_folder_id: What the client is watching this job move into.
+        total: Items this job will decide.
+        bytes_to_copy: Bytes that will actually be copied; zero for a rename.
+        run: Called on the worker thread with the job dict, returning a
+            :class:`MoveReport`. It is responsible for recording each item's
+            outcome with :func:`_record_result` as it is decided.
+        on_finished: Called with that report, on the worker thread, only when
+            ``run`` returned without raising. A relocation uses it to flip the
+            folder rows.
+
+    Returns:
+        The job dict, already running.
+    """
+    global _job
+    if not SHELF_IO_LOCK.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A move or an import is already running. Two at once would "
+                "race for the free space and the filenames each of them "
+                "checked before starting."
+            ),
+        )
+    with _job_lock:
+        job = {
+            "status": STATUS_RUNNING,
+            "destination_folder_id": destination_folder_id,
+            "total": total,
+            "bytes_to_copy": bytes_to_copy,
+            "results": [],
+            "cancel": threading.Event(),
+            "started_at": _utcnow(),
+            "finished_at": None,
+        }
+        _job = job
+
+    def _run() -> None:
+        try:
+            report = run(job)
+            if on_finished is not None:
+                on_finished(report)
+        except Exception as exc:
+            logger.error(
+                "Move into folder %s failed after %d of %d item(s): %s",
+                destination_folder_id,
+                _done_count(job),
+                total,
+                exc,
+                exc_info=True,
+            )
+        finally:
+            _finish_job(job)
+            # Released last, so a POST that wins the lock never observes a
+            # job still marked running.
+            SHELF_IO_LOCK.release()
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="model-move").start()
+    except BaseException:
+        # The worker's ``finally`` is the only other release, so a thread
+        # that never started would strand the lock and refuse every later
+        # move and import for the life of the process.
+        SHELF_IO_LOCK.release()
+        _finish_job(job)
+        logger.error(
+            "Could not start the move worker for folder %s; the job slot has "
+            "been released.",
+            destination_folder_id,
+            exc_info=True,
+        )
+        raise
+    return job
+
+
 def _register_or_reuse(hub, path: str) -> int:
     """Register the relocation target as an ordinary ``user`` folder.
 
@@ -338,14 +465,12 @@ def create_router(server) -> APIRouter:
     router = APIRouter()
 
     def _launch(mover: ModelMover, plan, on_finished=None) -> dict:
-        """Put one planned batch on the single move thread and return its job.
+        """Put one planned batch of *files* on the single move thread.
 
-        Shared by the plain move and by a relocation, because a relocation *is* a
-        move — of every file one folder holds. One slot machine-wide, and it is
-        ``model_mover.SHELF_IO_LOCK``, the *same* slot an ai-toolkit import
-        takes: two file operations at once race for the free space each of them
-        checked and for the destination filenames each of them found free. The
-        loser is a 409 and never queues — see the lock's own note.
+        Shared by the plain move and by the managed store's relocation, because
+        that relocation *is* a move — of every file one folder holds. The
+        InsightFace packs go through :func:`_start_job` directly instead: their
+        registered rows are directories, so there is no ``MovePlan`` to execute.
 
         Args:
             mover: The mover bound to this server's hub.
@@ -354,76 +479,26 @@ def create_router(server) -> APIRouter:
                 been decided, on the worker thread, only when the batch ran to
                 completion. A relocation uses it to flip the folder rows.
         """
-        global _job
-        if not SHELF_IO_LOCK.acquire(blocking=False):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "A move or an import is already running. Two at once would "
-                    "race for the free space and the filenames each of them "
-                    "checked before starting."
-                ),
+
+        def _run(job: dict) -> MoveReport:
+            report = mover.execute(
+                plan,
+                should_cancel=job["cancel"].is_set,
+                on_progress=lambda outcome: _record_result(job, outcome),
             )
-        with _job_lock:
-            job = {
-                "status": STATUS_RUNNING,
-                "destination_folder_id": plan.destination_folder_id,
-                "total": plan.total,
-                "bytes_to_copy": plan.bytes_to_copy,
-                "results": [],
-                "cancel": threading.Event(),
-                "started_at": _utcnow(),
-                "finished_at": None,
-            }
-            _job = job
+            # The cancelled tail is decided in one go rather than reported
+            # file by file, so append whatever `on_progress` did not see.
+            for outcome in report.outcomes[_done_count(job) :]:
+                _record_result(job, outcome)
+            return report
 
-        def _record(outcome: MoveOutcome) -> None:
-            _record_result(job, outcome)
-
-        def _run() -> None:
-            try:
-                report = mover.execute(
-                    plan,
-                    should_cancel=job["cancel"].is_set,
-                    on_progress=_record,
-                )
-                # The cancelled tail is decided in one go rather than reported
-                # file by file, so append whatever `on_progress` did not see.
-                for outcome in report.outcomes[_done_count(job) :]:
-                    _record(outcome)
-                if on_finished is not None:
-                    on_finished(report)
-            except Exception as exc:
-                logger.error(
-                    "Move into folder %s failed after %d of %d file(s): %s",
-                    plan.destination_folder_id,
-                    _done_count(job),
-                    len(plan.moves),
-                    exc,
-                    exc_info=True,
-                )
-            finally:
-                _finish_job(job)
-                # Released last, so a POST that wins the lock never observes a
-                # job still marked running.
-                SHELF_IO_LOCK.release()
-
-        try:
-            threading.Thread(target=_run, daemon=True, name="model-move").start()
-        except BaseException:
-            # The worker's ``finally`` is the only other release, so a thread
-            # that never started would strand the lock and refuse every later
-            # move and import for the life of the process.
-            SHELF_IO_LOCK.release()
-            _finish_job(job)
-            logger.error(
-                "Could not start the move worker for folder %s; the job slot has "
-                "been released.",
-                plan.destination_folder_id,
-                exc_info=True,
-            )
-            raise
-        return job
+        return _start_job(
+            destination_folder_id=plan.destination_folder_id,
+            total=plan.total,
+            bytes_to_copy=plan.bytes_to_copy,
+            run=_run,
+            on_finished=on_finished,
+        )
 
     @router.post(
         "/model-moves",
@@ -498,17 +573,251 @@ def create_router(server) -> APIRouter:
             )
             return _snapshot(_job)
 
+    def _validated_destination(payload: RelocateRequest) -> str:
+        """Canonicalize the owner's chosen path and refuse a system directory.
+
+        **Canonicalized before the blocklist runs, and the canonical form is
+        what gets registered.** Two reviews disagreed about this. The security
+        sign-off filed the lexical check under "explicitly not a finding" on
+        the owner-trust ruling — an owner who may name any destination directly
+        gains nothing by naming one through a symlink — and that is correct *as
+        a statement about boundaries*. It is not what this check is. There is no
+        non-owner principal to keep out, so the blocklist is not a boundary at
+        all: it is the guard that stops the owner relocating their models onto
+        ``/usr`` by accident, and the accident it has to catch is precisely the
+        one the owner cannot see by reading the path they typed. ``/mnt/models``
+        may be a symlink to ``/usr/share``; the owner named the former and this
+        route would create directories in, move every file into, and ``rmdir``
+        around the latter. A lexical check walks straight past that, which makes
+        it false assurance, and false assurance is worse than no check.
+
+        It also matches what the reference folders this route is modelled on
+        already do: ``validate_reference_folder_accessible`` realpaths before
+        validating. The precedent the sign-off cited points this way.
+
+        ``payload.path`` is validated first because ``realpath`` makes a
+        relative path absolute against the server's cwd, which would turn the
+        "must be absolute" refusal into an accidental acceptance.
+        """
+        destination_path = os.path.realpath(payload.path)
+        error = validate_reference_folder_path(
+            payload.path
+        ) or validate_reference_folder_path(destination_path)
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+        return destination_path
+
+    def _relocate_insightface_packs(folder: dict, payload: RelocateRequest) -> dict:
+        """Move the InsightFace packs to a new root and point the pipeline at it.
+
+        **The path names the InsightFace *root*, not the folder.** ``models`` is
+        the library's own layout — ``FaceAnalysis`` joins it onto whatever root
+        it is given — so the relocatable unit is the root and the shelf's folder
+        follows it to ``<path>/models``. Naming the folder directly would mean
+        accepting only paths whose last component is ``models``, which is a
+        worse thing to ask of the owner than one documented sentence.
+
+        **A pack is a directory**, not a file, so this does not go through
+        ``ModelMover``: there is no per-file row to repoint and no ``sha256`` to
+        verify against. :func:`~pixlstash.services.model_mover.move_directory`
+        keeps the equivalent guarantee — a complete pack survives at one end or
+        the other — and the shelf row moves with the folder rather than per item.
+
+        **The setting is what makes it stick.** ``insightface_root`` is persisted
+        and applied to the process-global reader every InsightFace caller goes
+        through, so the packs load, download and list from the new location
+        without a restart. The folder row is updated in the same step for the
+        running server's benefit; the *setting* is the authority, because the
+        declaration rewrites that row from it on every start.
+
+        Interrupted halfway, the packs that moved are at the new root, the rest
+        are at the old one, and the setting still names the old one — so face
+        extraction keeps working and re-running the relocation finishes the job.
+        """
+        new_root = _validated_destination(payload)
+        destination_dir = insightface_models_dir_under(new_root)
+        source_dir = folder["path"]
+        if os.path.realpath(source_dir) == os.path.realpath(destination_dir):
+            raise HTTPException(status_code=400, detail="The packs are already there.")
+        clash = server.hub.fetchone(
+            "SELECT id FROM model_folder WHERE path = ?", (destination_dir,)
+        )
+        if clash is not None and int(clash["id"]) != int(folder["id"]):
+            # ``model_folder.path`` is UNIQUE, so repointing this row onto an
+            # already-registered path would fail at the end of a completed move.
+            # Refused now, before anything is copied.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{destination_dir} is already a registered model folder. "
+                    "Pick a root the shelf does not already catalogue."
+                ),
+            )
+        try:
+            os.makedirs(destination_dir, exist_ok=True)
+        except OSError as exc:
+            logger.error(
+                "Could not create %s for the InsightFace relocation: %s",
+                destination_dir,
+                exc,
+            )
+            raise HTTPException(
+                status_code=409, detail=f"Could not create {destination_dir}: {exc}"
+            ) from exc
+
+        packs: list[tuple[str, str, str]] = []
+        bytes_to_copy = 0
+        for row in server.hub.fetchall(
+            "SELECT mf.relpath AS relpath, m.file_size AS file_size "
+            "FROM model_file mf JOIN model m ON m.id = mf.model_id "
+            "WHERE mf.model_folder_id = ? AND mf.state = ? ORDER BY mf.relpath",
+            (folder["id"], STATE_PRESENT),
+        ):
+            relpath = row["relpath"]
+            try:
+                # Containment, for the same reason the file mover contains its
+                # own paths (#776): this removes the source tree, so a relpath a
+                # faulty declaration put in the table must not be able to make it
+                # delete a directory outside the registered folder.
+                source = resolve_path_within(source_dir, relpath)
+                destination = resolve_path_within(destination_dir, relpath)
+            except ValueError as exc:
+                logger.error(
+                    "Refusing to relocate the InsightFace packs: %r resolves "
+                    "outside %s (%s). The row is wrong; nothing was touched.",
+                    relpath,
+                    source_dir,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{relpath!r} resolves outside its registered folder.",
+                ) from exc
+            if not os.path.isdir(source):
+                # Either an earlier run already moved it, or it was deleted
+                # outside PixlStash. Not an error and not something to move.
+                logger.info(
+                    "InsightFace pack %r is not at %s; skipping it in the "
+                    "relocation. An interrupted earlier relocation that already "
+                    "moved it is the usual reason.",
+                    relpath,
+                    source,
+                )
+                continue
+            if os.path.exists(destination):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{destination} already exists, so moving the pack there "
+                        "would overwrite it. Nothing was moved."
+                    ),
+                )
+            packs.append((relpath, source, destination))
+            if not same_device(source, destination_dir):
+                bytes_to_copy += int(row["file_size"] or 0)
+
+        try:
+            require_space(destination_dir, bytes_to_copy)
+        except MoveRefused as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+        def _run(job: dict) -> MoveReport:
+            outcomes: list[MoveOutcome] = []
+            for relpath, source, destination in packs:
+                if job["cancel"].is_set():
+                    outcome = MoveOutcome(
+                        int(folder["id"]),
+                        relpath,
+                        STATUS_CANCELLED,
+                        "Cancelled before this pack was moved.",
+                    )
+                else:
+                    try:
+                        move_directory(source, destination)
+                        outcome = MoveOutcome(int(folder["id"]), relpath, STATUS_MOVED)
+                    except OSError as exc:
+                        logger.error(
+                            "Could not move InsightFace pack %r from %s to %s: "
+                            "%s. The pack is left where it was.",
+                            relpath,
+                            source,
+                            destination,
+                            exc,
+                            exc_info=True,
+                        )
+                        outcome = MoveOutcome(
+                            int(folder["id"]), relpath, STATUS_FAILED, str(exc)
+                        )
+                outcomes.append(outcome)
+                _record_result(job, outcome)
+            return MoveReport(outcomes=outcomes, cancelled=job["cancel"].is_set())
+
+        def _promote(report: MoveReport) -> None:
+            failed = [o for o in report.outcomes if o.status != STATUS_MOVED]
+            if failed or report.cancelled:
+                logger.warning(
+                    "InsightFace relocation to %s stopped with %d pack(s) not "
+                    "moved. The configured root stays at %s, so face extraction "
+                    "keeps loading the packs that are still there; re-run to "
+                    "finish.",
+                    new_root,
+                    len(failed),
+                    insightface_root(),
+                )
+                return
+            server._server_config["insightface_root"] = new_root
+            config_path = getattr(server, "_server_config_path", None)
+            if config_path:
+                write_json_atomic(config_path, server._server_config)
+            set_insightface_root(new_root)
+            with server.hub.transaction() as conn:
+                conn.execute(
+                    "UPDATE model_folder SET path = ? WHERE id = ?",
+                    (destination_dir, int(folder["id"])),
+                )
+            _remove_if_empty(source_dir)
+            logger.info(
+                "InsightFace packs relocated from %s to %s (%d pack(s)).",
+                source_dir,
+                destination_dir,
+                len(packs),
+            )
+
+        return _start_job(
+            # The folder being moved, not a separate destination row: unlike the
+            # managed store's relocation this one has no second folder to
+            # register, because the row travels with the packs.
+            destination_folder_id=int(folder["id"]),
+            total=len(packs),
+            bytes_to_copy=bytes_to_copy,
+            run=_run,
+            on_finished=_promote,
+        )
+
     @router.post(
         "/model-folders/{folder_id}/relocate",
-        summary="Move the managed model store to another location",
+        summary="Move a PixlStash-owned model folder to another location",
         description=(
-            "Moves every file the managed store holds to a new host path and "
-            "points the store at it. This is a model move like any other — copy, "
-            "verify by SHA-256, repoint the row and commit, then unlink, per "
-            "file — so an interruption leaves duplicates rather than rows naming "
-            "files that are gone, and a move within one filesystem is a rename. "
-            "Only the managed store can be relocated: an ordinary folder is one "
-            "you registered, so if you move it yourself, register it again."
+            "Moves everything the folder holds to a new host path and points "
+            "PixlStash at it. Two folders can be relocated and they differ in "
+            "what the path means.\n\n"
+            "**The managed store**: the path is the store's new location. Every "
+            "file is a model move like any other — copy, verify by SHA-256, "
+            "repoint the row and commit, then unlink — so an interruption "
+            "leaves duplicates rather than rows naming files that are gone, and "
+            "a move within one filesystem is a rename.\n\n"
+            "**The InsightFace packs**: the path is the new InsightFace "
+            "*root*, and the packs land in `<path>/models`, which is the layout "
+            "InsightFace itself requires. Each pack is a directory and is copied "
+            "under a partial name and renamed into place, so a complete pack "
+            "always survives at one end or the other. The new root is persisted "
+            "and applied immediately — no restart, and face extraction, pack "
+            "downloads and the shelf all follow it.\n\n"
+            "Any other folder is refused: an ordinary folder is one you "
+            "registered, so if you move it yourself, register it again. The "
+            "HuggingFace cache cannot be relocated at all — its location is "
+            "`HF_HOME`, read at import by a library shared with your other "
+            "tools."
         ),
         status_code=202,
         tags=["model_shelf"],
@@ -523,6 +832,14 @@ def create_router(server) -> APIRouter:
         )
         if folder is None:
             raise HTTPException(status_code=404, detail="Model folder not found.")
+        if os.path.realpath(folder["path"]) == os.path.realpath(
+            insightface_models_dir()
+        ):
+            # Identified by path rather than by a marker column, because the
+            # path IS the thing being relocated: after a move the setting, the
+            # declaration and this comparison all name the new directory
+            # together, which is the property a separate marker could lose.
+            return _snapshot(_relocate_insightface_packs(dict(folder), payload))
         if folder["kind"] != MANAGED_KIND:
             # 409 for the same reason the managed store's DELETE is 409: the
             # caller is authorized and the request is well formed, and what
@@ -530,41 +847,13 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "Only the managed store can be relocated. A folder you "
-                    "registered is one you moved yourself; register it again at "
-                    "its new path."
+                    "Only the managed store and the InsightFace packs can be "
+                    "relocated. A folder you registered is one you moved "
+                    "yourself; register it again at its new path."
                 ),
             )
 
-        # **Canonicalized before the blocklist runs, and the canonical form is
-        # what gets registered.** Two reviews disagreed about this. The security
-        # sign-off filed the lexical check under "explicitly not a finding" on
-        # the owner-trust ruling — an owner who may name any destination
-        # directly gains nothing by naming one through a symlink — and that is
-        # correct *as a statement about boundaries*. It is not what this check
-        # is. There is no non-owner principal to keep out, so the blocklist is
-        # not a boundary at all: it is the guard that stops the owner relocating
-        # their model store onto ``/usr`` by accident, and the accident it has
-        # to catch is precisely the one the owner cannot see by reading the path
-        # they typed. ``/mnt/models`` may be a symlink to ``/usr/share``; the
-        # owner named the former and this route would create directories in,
-        # move every file of the store into, and ``rmdir`` around the latter. A
-        # lexical check walks straight past that, which makes it false
-        # assurance, and false assurance is worse than no check.
-        #
-        # It also matches what the reference folders this route is modelled on
-        # already do: ``validate_reference_folder_accessible`` realpaths before
-        # validating. The precedent the sign-off cited points this way.
-        #
-        # ``payload.path`` is validated first because ``realpath`` makes a
-        # relative path absolute against the server's cwd, which would turn the
-        # "must be absolute" refusal into an accidental acceptance.
-        destination_path = os.path.realpath(payload.path)
-        error = validate_reference_folder_path(
-            payload.path
-        ) or validate_reference_folder_path(destination_path)
-        if error:
-            raise HTTPException(status_code=400, detail=error)
+        destination_path = _validated_destination(payload)
         if os.path.realpath(folder["path"]) == destination_path:
             raise HTTPException(status_code=400, detail="The store is already there.")
         try:

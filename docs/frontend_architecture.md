@@ -2329,6 +2329,13 @@ Four states are designed rather than left to fail on click:
   missing is **rendered in the row**, not in a tooltip. Relocation itself is
   not built yet: the control ships blocked and described, so its absence is not
   mistaken for a design gap.
+- **The Relocate slot is keyed on `movable === 'root_only'`, not on `kind`.**
+  That column is the backend's own answer to the question this slot asks — "does
+  this folder relocate, whole?" — and since #906 the InsightFace packs answer yes
+  as well as the managed store, while the HuggingFace cache beside them is
+  `fixed` and answers no. Keying on `kind` would have offered Move on both
+  `foreign` rows and had to special-case the cache by path, which is exactly the
+  special case the fourth `movable` value exists to remove.
 - **Every action slot is reserved.** Three slots per row plus a trailing help
   mark, and an action a row does not have is hidden with `visibility`, never
   `v-if`: §5.1's glyph-gutter rule applied to the right edge, or the managed

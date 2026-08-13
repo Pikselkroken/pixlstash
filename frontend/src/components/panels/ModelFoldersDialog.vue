@@ -118,10 +118,17 @@
           />
 
           <!-- Slot two is Forget on a folder the owner associated and Relocate
-               on the managed store, which has no association to dissolve. One
-               element either way, so the column holds. -->
+               on a folder that relocates as a whole and has no association to
+               dissolve — the managed store and the InsightFace packs. One
+               element either way, so the column holds.
+
+               Keyed on `movable`, not on `kind`: `root_only` is the column that
+               says "this folder relocates, whole", which is exactly the
+               question this slot asks. `foreign` alone would offer it on the
+               HuggingFace cache too, which is `fixed` and cannot be moved at
+               all. -->
           <AppButton
-            v-if="folder.kind === MANAGED_KIND"
+            v-if="canRelocate(folder)"
             icon-only
             variant="ghost"
             icon-left="folder-move-outline"
@@ -289,6 +296,15 @@ function canForget(folder) {
   return folder.kind === "user" || folder.kind === "source";
 }
 
+/**
+ * Whether this folder moves as a whole — the managed store and the InsightFace
+ * packs. `fixed` (the HuggingFace cache) and `per_item` are both excluded, and
+ * the backend refuses them at `POST /model-folders/{id}/relocate` besides.
+ */
+function canRelocate(folder) {
+  return folder.movable === "root_only";
+}
+
 function scanVerb(folder) {
   return folder.last_checked ? "Rescan" : "Scan";
 }
@@ -315,7 +331,7 @@ function rowReason(folder) {
   else if (isScanning(folder) && canForget(folder)) {
     reasons.push("This folder is being scanned right now.");
   }
-  if (folder.kind === MANAGED_KIND) reasons.push(RELOCATE_REASON);
+  if (canRelocate(folder)) reasons.push(RELOCATE_REASON);
   return reasons.join(" ");
 }
 

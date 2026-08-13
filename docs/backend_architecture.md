@@ -511,7 +511,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/model-folders/devices                                                 | model_shelf     | Capacity of the drives the model folders sit on            |
 | PATCH  | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Update a registered model folder                           |
 | DELETE | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Forget a registered model folder                           |
-| POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move the managed model store to another location           |
+| POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a PixlStash-owned model folder to another location     |
 | POST   | /api/v1/model-folders/{folder_id}/rescan                                      | model_shelf     | Rescan a registered model folder                           |
 | GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder      |
 | GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview image from a training run                      |
@@ -1222,7 +1222,10 @@ the sentence above as covering them.
   here, as reference folders are, so the guard is deliberately narrow —
   `validate_reference_folder_path`: absolute, and not a system directory — and
   it is pinned in both directions by `tests/test_model_shelf_api.py` (`/etc/…`
-  and a relative path are 400; an ordinary absolute path still relocates).
+  and a relative path are 400; an ordinary absolute path still relocates). The
+  InsightFace branch runs the *same* guard on the same input, through the shared
+  `_validated_destination`, and contains every pack relpath with
+  `resolve_path_within` against both roots before it removes a source tree.
 
 ### The shelf's five verbs (shelf plan F3)
 
@@ -1366,7 +1369,7 @@ folder moves, not whether a route to move it is built yet:
 | Value | Meaning | Folders |
 |---|---|---|
 | `per_item` | files move one at a time | a folder the owner assembled |
-| `root_only` | relocates as a whole | the managed store, our downloads, the InsightFace packs |
+| `root_only` | relocates as a whole | the managed store and the InsightFace packs (both have a route), our downloads (#905 still owes one) |
 | `external` | taken *from*, never written into | an ai-toolkit output root |
 | `fixed` | **cannot relocate at all** — another tool owns where it lives | the HuggingFace cache |
 
@@ -1401,6 +1404,70 @@ so a concurrent declaration cannot have its rows swept by this one.
 cannot cost the shelf the other two, and every failure is logged and swallowed:
 a machine that has never run face detection has no InsightFace directory, and one
 that has downloaded nothing through the library has no cache. Both are normal.
+
+#### Relocating the InsightFace packs (#906)
+
+`root_only` said the packs relocate as a whole before anything could relocate
+them; #906 made the claim true, and deliberately after #902's vocabulary change
+rather than inside it, so a rename could not put face extraction in its blast
+radius.
+
+**The root is a setting**, `server_config["insightface_root"]`, empty meaning
+InsightFace's own `~/.insightface`. `Server.__init__` applies it — before the
+declaration reads it — to `insightface_model_utils.set_insightface_root`, and
+`insightface_root()` is then the **single reader** for all three callers: the
+`auraface` download (`_pack_dir`), the shelf's declaration
+(`builtin_caches.insightface_models_dir`) and the `FaceAnalysis(name=…, root=…)`
+the face pipeline constructs. That is the property the relocation rests on, and
+it is exactly what #905's folder still lacks: `builtin_model_dir()`'s own
+docstring rules its env override out for relocation because the path is computed
+independently in three modules, so a setting would move the shelf's row while the
+engines kept landing in the old directory. Here there is one expression, so there
+is nothing to drift. It is a process-global rather than a value threaded through
+vault → engine → task because it is a statement about this *machine's* disk, and
+two of the three callers are not on that chain.
+
+**The path names the root, not the folder.** `models` is InsightFace's own
+layout — the library joins it onto whatever root it is given — so the folder
+follows the root to `<path>/models`. Naming the folder directly would mean
+accepting only paths whose last component is `models`, which is a worse thing to
+ask of the owner than one documented sentence.
+
+**A pack is a directory, so this does not go through `ModelMover`.** There is no
+per-file row to repoint and no `sha256` to verify a copy against — the packs are
+declared from a listing, never hashed. `model_mover.move_directory` keeps the
+guarantee that matters instead: **copy under `.pixlstash-partial` → rename into
+place → then remove the source**, so a *complete* pack survives at one end or the
+other. That is the shape of the per-file ordering and it is load-bearing for a
+different reason: a half-populated `buffalo_l/` is worse than none at all,
+because the pipeline would start, find the directory and then fail on a model
+that is not in it. Same-filesystem is `os.rename` and copies nothing, as the file
+path already does.
+
+**What the two relocations share is `_start_job`** — the one machine-wide
+`SHELF_IO_LOCK` slot, the job dict clients poll, the cancel flag, the
+release-on-failure — and nothing else. Validation stays in the POST for both: an
+unusable destination, a pack that would overwrite one already at the target, a
+relpath escaping its folder, or a copy that would not fit are 4xx before a byte
+moves.
+
+**The setting is the authority; the folder row follows it.** On success the new
+root is persisted to `server-config.json`, applied to the process-global, and the
+`model_folder` row is repointed at `<new root>/models` in one statement — updated
+rather than replaced, so the pack rows travel with it. The row is for the running
+server's benefit; the declaration rewrites it from the setting on every start.
+Interrupted halfway, the moved packs are at the new root, the rest are at the old
+one, and the setting still names the old one — so face extraction keeps working
+and re-running the relocation finishes the job (a pack whose source is gone is
+skipped, not failed).
+
+**What is still refused, and why the negatives are asserted.** Widening the route
+from "the managed store only" is the kind of change that quietly opens it to
+everything, so `tests/test_insightface_relocation.py` pins the refusals beside
+the acceptance: the HuggingFace cache (`fixed` — its location is `HF_HOME`, read
+at import by a library shared with every other tool on the machine), a folder the
+owner registered, and an unknown id. The per-item move guard in
+`ModelMover._plan_one` is untouched and still names both `root_only` and `fixed`.
 
 ### The managed model store (shelf plan B7)
 
@@ -1969,7 +2036,7 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
     Arithmetic, not judgement.
 
-  - **Updated 2026-08-09 (fourth change the same day) — the locality total is now `29 = 24 local + 5 loopback`.** `POST /api/v1/model-folders/{folder_id}/relocate` moves the managed model store (§13) to a **caller-supplied host path**: it is the `reference-folders/{folder_id}/relocate` class *and* carries `POST /model-moves`' file movement, so it is the one shelf route on this tier for both reasons at once. It is refused with 409 for any folder that is not the managed store.
+  - **Updated 2026-08-09 (fourth change the same day) — the locality total is now `29 = 24 local + 5 loopback`.** `POST /api/v1/model-folders/{folder_id}/relocate` moves the managed model store (§13) to a **caller-supplied host path**: it is the `reference-folders/{folder_id}/relocate` class *and* carries `POST /model-moves`' file movement, so it is the one shelf route on this tier for both reasons at once. It is refused with 409 for any folder it does not relocate. **Updated 2026-08-13 (#906): the route now also relocates the InsightFace packs**, which changes no arithmetic — no route was added and the tier is unchanged — but does change what it refuses: the `409` sentence is "any folder that is not the managed store *or* the InsightFace models folder", identified by comparing its path against `insightface_models_dir()`. The authority is the same on both branches (a caller-supplied host path, plus file movement), the same `validate_reference_folder_path` runs on the same input through the shared `_validated_destination`, and the folders that must still be refused — the HuggingFace cache above all — are pinned by `tests/test_insightface_relocation.py` in the negative direction as well as the positive.
 
     Arithmetic, not judgement — pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_25_local_5_loopback`.
 
