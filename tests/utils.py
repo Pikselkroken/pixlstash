@@ -26,34 +26,50 @@ def wipe_tables(session, models):
     restoring ``ON`` must come *after* the commit. Issued before it (the shape
     every ``clean_db`` fixture used to have) it is silently ignored and the
     connection goes back to the pool with foreign keys off, for whichever test
-    picks it up next — see issue #712. The assertion is there because the
-    failure mode is that the restore *looks* like it happened.
+    picks it up next — see issue #712. The restore runs in a ``finally`` so a
+    delete that raises mid-wipe cannot leak enforcement off either, and it
+    raises rather than asserts because the whole point of the check is that a
+    no-opped pragma is silent (``python -O`` would drop an ``assert``).
 
     Args:
         session: SQLModel Session, as handed to ``db.run_task``.
         models: Table models to delete. FKs are off for the deletes, so the
             order is for readability only.
+
+    Raises:
+        RuntimeError: If foreign key enforcement is still off afterwards.
     """
-    session.exec(text("PRAGMA foreign_keys = OFF"))
-    for model in models:
-        session.exec(delete(model))
-    session.commit()
-    session.exec(text("PRAGMA foreign_keys = ON"))
-    assert session.exec(text("PRAGMA foreign_keys")).one()[0] == 1, (
-        "PRAGMA foreign_keys = ON no-opped; this connection would return to "
-        "the pool with foreign key enforcement off"
-    )
+    try:
+        session.exec(text("PRAGMA foreign_keys = OFF"))
+        for model in models:
+            session.exec(delete(model))
+        session.commit()
+    finally:
+        # The pragma needs no transaction pending: the commit above ends it on
+        # the happy path, this rollback ends a half-done wipe on the unhappy
+        # one (and is a no-op after a successful commit).
+        session.rollback()
+        session.exec(text("PRAGMA foreign_keys = ON"))
+        if session.exec(text("PRAGMA foreign_keys")).one()[0] != 1:
+            raise RuntimeError(
+                "PRAGMA foreign_keys = ON no-opped; this connection would "
+                "return to the pool with foreign key enforcement off"
+            )
 
 
 def delete_characters(session, character_ids=None):
-    """Delete characters the way ``DELETE /characters/{id}`` does.
+    """Remove characters, nulling the faces that reference them first.
 
-    ``face.character_id`` is a plain FK with no ``ON DELETE`` action, so the
-    live route nulls every referencing face before removing the row
-    (``routes/characters.py::clear_character_and_nullify_faces``). Deleting the
-    row straight out raises ``IntegrityError`` — it only ever worked in tests
-    while FK enforcement was leaking off (#712). ``CharacterProjectMember``
-    rows cascade on their own.
+    ``face.character_id`` is a plain FK with no ``ON DELETE`` action, so
+    deleting the character row on its own raises ``IntegrityError``; it only
+    ever worked in tests while FK enforcement was leaking off (#712). The live
+    route nulls those faces for the same reason
+    (``routes/characters.py::clear_character_and_nullify_faces``).
+    ``CharacterProjectMember`` rows cascade on their own.
+
+    This is only the FK-relevant part of ``DELETE /characters/{id}`` — it does
+    not delete the character's reference picture set, which the route also
+    does. Callers that need the full route semantics should call the route.
 
     Args:
         session: SQLModel Session, as handed to ``db.run_task``.
@@ -70,11 +86,18 @@ def delete_characters(session, character_ids=None):
 
 
 def delete_projects(session, project_ids):
-    """Delete projects the way ``DELETE /projects/{id}`` does.
+    """Remove projects, nulling the ``project_id`` pointers that reference them.
 
     Pictures, picture sets and characters carry a plain ``project_id`` FK, so
-    the live route nulls those pointers before removing the project; only the
-    membership tables cascade. See :func:`delete_characters` and #712.
+    it has to be nulled before the project row can go; only the membership
+    tables cascade. See :func:`delete_characters` and #712.
+
+    This is only the FK-relevant part of ``DELETE /projects/{id}``. The route
+    additionally re-derives each entity's primary ``project_id`` from the
+    memberships that survive, since an entity may belong to several projects
+    (#125); this helper nulls unconditionally, which is the same thing only
+    when every project the entity belongs to is being deleted. That holds for
+    its callers here, which delete the entity's sole project.
     """
     for model in (Picture, PictureSet, Character):
         session.exec(
