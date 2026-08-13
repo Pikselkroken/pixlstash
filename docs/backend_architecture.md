@@ -511,7 +511,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/model-folders/devices                                                 | model_shelf     | Capacity of the drives the model folders sit on            |
 | PATCH  | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Update a registered model folder                           |
 | DELETE | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Forget a registered model folder                           |
-| POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a PixlStash-owned model folder to another location     |
+| POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a PixlStash-owned model folder to another location    |
 | POST   | /api/v1/model-folders/{folder_id}/rescan                                      | model_shelf     | Rescan a registered model folder                           |
 | GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder      |
 | GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview image from a training run                      |
