@@ -609,6 +609,15 @@ export function bandUsage(band) {
  * that quietly stops looking wrong at 100%. `freeAfter` goes negative in that
  * case, which is how far short the drive is.
  *
+ * **Every** derived field is projected, not just the segments. `usedPct` and
+ * `lowFree` are recomputed from the free space that would be LEFT, because a
+ * replacement carrying two fields measured before the drop is a trap: they sit
+ * on the same object as segments drawn from after it, and the first caller to
+ * read `meter(band).lowFree` next to a projected bar gets an answer about a
+ * different drive state than the one on screen. Nothing reads them off this
+ * object today — the band's low treatment deliberately goes through `bandUsage`
+ * — and that is exactly why the inconsistency would be found late.
+ *
  * A drive that could not be measured returns `null`, exactly as `bandUsage`
  * does: a projection onto an unknown capacity is a guess, and the caller must
  * read that as "cannot say" rather than as "does not fit".
@@ -627,12 +636,19 @@ export function bandProjection(band, addedBytes) {
   const free = Math.min(Number(band.freeBytes), total);
   const added = Math.max(0, Number(addedBytes) || 0);
   const drawn = Math.min(added, free);
+  const freeAfter = free - added;
   return {
     ...use,
     addedPct: (drawn / total) * 100,
     freePct: ((free - drawn) / total) * 100,
+    // The drawn figure, so this stays `shelfPct + otherPct + addedPct` and the
+    // bar cannot claim to be more than full.
+    usedPct: ((total - free + drawn) / total) * 100,
+    // The unclamped one, so a drop that overruns the drive reports low rather
+    // than reporting the zero free space it was clamped to.
+    lowFree: freeAfter < LOW_FREE_BYTES,
     addedBytes: added,
-    freeAfter: free - added,
+    freeAfter,
     fits: added <= free,
   };
 }

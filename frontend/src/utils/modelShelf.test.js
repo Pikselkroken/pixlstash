@@ -422,6 +422,47 @@ describe("bandProjection", () => {
     expect(projected.freeAfter).toBe(200);
   });
 
+  it("projects every derived field, not only the segments", () => {
+    // The object REPLACES `bandUsage`'s, so a field measured before the drop
+    // riding along on it is a trap: it would be read next to segments drawn
+    // from after the drop and answer about a different drive state.
+    const GB = 1024 ** 3;
+    const projected = bandProjection(
+      { totalBytes: 1000 * GB, freeBytes: 400 * GB, shelfBytes: 300 * GB },
+      380 * GB,
+    );
+    // 20 GB left is well under the 50 GiB floor, though the drive was not low
+    // before the drop and `bandUsage` still says so.
+    expect(projected.lowFree).toBe(true);
+    expect(
+      bandUsage({
+        totalBytes: 1000 * GB,
+        freeBytes: 400 * GB,
+        shelfBytes: 300 * GB,
+      }).lowFree,
+    ).toBe(false);
+    // `usedPct` is what the three filled segments add up to, or a caller could
+    // read a fullness that contradicts the bar beside it.
+    expect(projected.usedPct).toBeCloseTo(
+      projected.shelfPct + projected.otherPct + projected.addedPct,
+      10,
+    );
+    expect(projected.usedPct + projected.freePct).toBeCloseTo(100, 10);
+  });
+
+  it("reports a drop that overruns the drive as low, not as freshly empty", () => {
+    // `freePct` is clamped to zero because a bar cannot draw past its track;
+    // `lowFree` must read the UNCLAMPED figure or the most over-full case on
+    // the shelf would be the one that stops reporting low.
+    const projected = bandProjection(
+      { totalBytes: 1000, freeBytes: 100, shelfBytes: 0 },
+      400,
+    );
+    expect(projected.freePct).toBe(0);
+    expect(projected.usedPct).toBe(100);
+    expect(projected.lowFree).toBe(true);
+  });
+
   it("clamps the bar but not the verdict when the drop does not fit", () => {
     // A bar cannot draw past its own track, so the segment stops at the free
     // space — but `fits` is decided on the unclamped figure, or an over-full
