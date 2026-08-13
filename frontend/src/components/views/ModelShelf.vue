@@ -177,6 +177,7 @@
       @rename="editVerb = 'rename'"
       @set-base-model="editVerb = 'base-model'"
       @set-kind="editVerb = 'kind'"
+      @stack="confirmStack"
       @move="openMove(store.selectedRows)"
       @set-icon="pickIcon"
       @clear-icons="confirmClearIcons"
@@ -624,9 +625,12 @@ import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
+import { createStack } from "../../api/modelStacks";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
+import { errorDetail } from "../../utils/apiError";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
   bandGroups,
@@ -636,6 +640,7 @@ import {
   GROUP_BY_LABELS,
   movableCopies,
   SORT_LABELS,
+  stackReceipt,
   trainingStep,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
@@ -909,6 +914,44 @@ async function confirmClearIcons() {
 const openStacks = ref(new Set());
 const stacksOpen = ref(false);
 const stacksBtnRef = ref(null);
+
+/**
+ * Group the selection into one run, the bar's manual counterpart to the sweep.
+ *
+ * A confirmation and not a dry run, unlike the toolbar's proposals dialog: the
+ * reader assembled this group themselves and is looking at it, so there is
+ * nothing to show them they have not already chosen. It is still a prompt,
+ * because there is no way back — nothing unstacks a model shelf run — and every
+ * verb afterwards acts on the whole run rather than the file that was clicked.
+ *
+ * The bar refuses anything the route would, so a failure here is the shelf
+ * having changed underneath (409) rather than a gesture that should not have
+ * been offered; it is reported and nothing local is guessed at.
+ */
+async function confirmStack() {
+  const ids = store.selectedModelIds;
+  if (ids.length < 2) return;
+  const ok = await confirm({
+    title: `Group ${ids.length} files into one run?`,
+    message:
+      "They become one row on the shelf — the bare final file, or the highest " +
+      "step, stands for the run — and every verb then acts on all of them.",
+    warning: "Nothing unstacks a run afterwards.",
+    confirmLabel: "Group them",
+  });
+  if (!ok) return;
+  const notices = useNoticeStore();
+  try {
+    await createStack(ids);
+    await store.fetchRows();
+    notices.push({ level: "success", text: stackReceipt(1, 0) });
+  } catch (err) {
+    notices.push({
+      level: "error",
+      text: errorDetail(err) || "Those files could not be grouped.",
+    });
+  }
+}
 
 async function closeStacks() {
   stacksOpen.value = false;

@@ -46,6 +46,15 @@ vi.mock("../../api/modelMoves", () => ({
   cancelModelMove: vi.fn(),
 }));
 
+// The manual stack verb's only write. Mocked here rather than left real
+// because the bar's button is what this suite drives, and the assertion worth
+// having is which ids reach the route.
+const createStack = vi.fn();
+vi.mock("../../api/modelStacks", () => ({
+  createStack: (...args) => createStack(...args),
+  listStackProposals: vi.fn(),
+}));
+
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
   listModelFolderDevices: (...args) => listModelFolderDevices(...args),
@@ -1303,6 +1312,47 @@ describe("the icon verb", () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const input = wrapper.find('input[type="file"]');
     expect(input.attributes("accept")).toBe("image/png,image/jpeg,image/webp");
+  });
+});
+
+describe("the manual stack verb", () => {
+  it("sends the selected models, and only after the prompt is answered", async () => {
+    // Two present adapters in one folder are the case the route accepts; the
+    // gate itself is asserted in the bar's own suite. What matters here is that
+    // nothing is written until the confirmation comes back, because there is no
+    // way to unstack a run afterwards.
+    const inFolder = (id, sha) =>
+      adapter({
+        id,
+        sha256: sha.repeat(64),
+        locations: [
+          {
+            state: "present",
+            folder_id: 1,
+            folder_path: "/m",
+            relpath: `${id}`,
+          },
+        ],
+      });
+    const wrapper = await mountShelf([inFolder(1, "a"), inFolder(2, "b")]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+    await wrapper.vm.$nextTick();
+    const stack = () =>
+      wrapper.findAll("button").find((b) => b.text().includes("Stack these"));
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await stack().trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(createStack).not.toHaveBeenCalled();
+
+    confirmSpy.mockReturnValue(true);
+    createStack.mockResolvedValue({ stack_id: 3, member_count: 2 });
+    await stack().trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(createStack).toHaveBeenCalledWith([1, 2]);
+    confirmSpy.mockRestore();
   });
 });
 
