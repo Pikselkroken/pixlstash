@@ -464,35 +464,33 @@ class ModelMover:
                 f"No registered copy at {relpath!r} in folder {folder_id}.",
                 status_code=404,
             )
-        # `root_only` means the folder relocates as a whole and its contents are
-        # NOT individually movable, so a per-item move out of one is refused
-        # here — at the single point every move funnels through — rather than by
-        # each caller remembering to ask.
+        # **Two values, and the pair is the point.** `root_only` says the folder
+        # relocates as a whole — PixlStash's own downloads and the InsightFace
+        # packs. `fixed` says it cannot relocate at all, because another tool
+        # owns where it lives — the HuggingFace cache. Neither permits a
+        # per-item move out, so keying on one would leave the other open, which
+        # is exactly how a rename of this vocabulary could silently drop the
+        # protection. Refused here, at the single point every move funnels
+        # through, rather than by each caller remembering to ask.
         #
-        # The HuggingFace cache is why this is a containment site and not a
-        # tidiness rule. It is not a folder of files: it is `blobs/` under content
-        # hashes with `snapshots/` symlinking names onto them, it is shared with
-        # every other HF tool on the machine, and a row's relpath there is a
-        # whole repo DIRECTORY. Moving one does not relocate a model, it breaks
-        # HuggingFace's bookkeeping for ComfyUI and everything else too. Its real
-        # control is `HF_HOME`, read at import: a restart and a re-download, not
-        # a move. The same applies to an InsightFace pack and to PixlStash's own
-        # engines, and it is why these roots are declared `root_only` or `fixed`.
-        # Both values, and the pair is the point. `root_only` says the folder
-        # relocates as a whole; `fixed` says it cannot relocate at all because
-        # another tool owns where it lives. Neither permits a per-item move out,
-        # so keying on one of them would have left the other open — which is
-        # exactly how a rename of this vocabulary could silently drop the
-        # protection.
+        # The cache is why this is a containment site and not a tidiness rule.
+        # It is not a folder of files: it is `blobs/` under content hashes with
+        # `snapshots/` symlinking names onto them, it is shared with every other
+        # HF tool on the machine, and a row's relpath there is a whole repo
+        # DIRECTORY. Moving one does not relocate a model, it breaks
+        # HuggingFace's bookkeeping for ComfyUI and everything else too. Its
+        # real control is `HF_HOME`, read at import: a restart and a
+        # re-download, not a move — which is the distinction `fixed` exists to
+        # record.
         if row["folder_movable"] in ("root_only", "fixed") and not relocating:
             raise MoveRefused(
-                f"{relpath!r} is inside a folder that moves as a whole, not one "
-                "file at a time, so nothing was moved. PixlStash's own model "
-                "folders, the InsightFace packs and the HuggingFace cache are "
-                "all listed so you can see what they cost on disk, not to be "
-                "rearranged: the cache in particular is a symlink store shared "
-                "with your other tools, and moving a file out of it corrupts it "
-                "for all of them rather than relocating anything.",
+                f"{relpath!r} is inside a folder whose files are not moved one "
+                "at a time, so nothing was moved. PixlStash's own model folders, "
+                "the InsightFace packs and the HuggingFace cache are listed so "
+                "you can see what they cost on disk, not to be rearranged: the "
+                "cache in particular is a symlink store shared with your other "
+                "tools, and moving a file out of it corrupts it for all of them "
+                "rather than relocating anything.",
                 status_code=409,
             )
         if folder_id == destination_folder_id:
