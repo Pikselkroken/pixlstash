@@ -27,8 +27,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 from fastapi.testclient import TestClient
-from sqlmodel import Session, delete, select
-from sqlalchemy import text
+from sqlmodel import Session, select
 
 from pixlstash.db_models import (
     Character,
@@ -57,6 +56,7 @@ from pixlstash.db_models import (
 from pixlstash.pixl_logging import get_logger
 from pixlstash.server import Server
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from tests.utils import wipe_tables
 
 logger = get_logger(__name__)
 
@@ -124,16 +124,9 @@ def reset_vault(server):
     - Reset auth in-memory caches.
     """
 
-    def _wipe(session: Session):
-        # Disable FK enforcement so wipe order doesn't matter; the test
-        # leaves the DB empty so referential integrity is preserved overall.
-        session.exec(text("PRAGMA foreign_keys = OFF"))
-        for model in _RESET_TABLES:
-            session.exec(delete(model))
-        session.commit()
-        session.exec(text("PRAGMA foreign_keys = ON"))
-
-    server.vault.db.run_task(_wipe)
+    # FK enforcement is off for the wipe so table order doesn't matter; the
+    # DB is left empty, so referential integrity is preserved overall.
+    server.vault.db.run_task(wipe_tables, _RESET_TABLES)
 
     image_root = server.vault.image_root
     db_basenames = {"vault.db", "vault.db-wal", "vault.db-shm", "vault.db-journal"}

@@ -24,8 +24,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from PIL import Image
 from fastapi.testclient import TestClient
-from sqlmodel import Session, delete, select
-from sqlalchemy import event, text
+from sqlmodel import Session, select
+from sqlalchemy import event
 
 from pixlstash.db_models import (
     DeletedFileLog,
@@ -47,6 +47,7 @@ from pixlstash.tasks.scrapheap_retention_purge_finder import (
 from pixlstash.tasks.scrapheap_retention_purge_task import ScrapheapRetentionPurgeTask
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from tests.authz_guard import no_spa_fallback  # noqa: F401
+from tests.utils import wipe_tables
 
 # The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
 # positive assertion vacuous. See tests/authz_guard.py.
@@ -100,20 +101,13 @@ def server():
 def reset_vault(server):
     """Wipe pictures/folders/ledger and reset retention config between tests."""
 
-    def _wipe(session: Session):
-        session.exec(text("PRAGMA foreign_keys = OFF"))
-        for model in _RESET_TABLES:
-            session.exec(delete(model))
-        session.commit()
-        session.exec(text("PRAGMA foreign_keys = ON"))
-
     def _wipe_identity(session: Session):
         session.exec(delete(User))
         session.commit()
 
     # Two databases now: pictures and the ledger live in the vault, the user
     # lives in the hub.
-    server.vault.db.run_task(_wipe)
+    server.vault.db.run_task(wipe_tables, _RESET_TABLES)
     server.hub_engine.run_task(_wipe_identity)
     image_root = server.vault.image_root
     db_basenames = {"vault.db", "vault.db-wal", "vault.db-shm", "vault.db-journal"}

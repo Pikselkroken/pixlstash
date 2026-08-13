@@ -8,8 +8,6 @@ import tempfile
 from contextlib import closing, contextmanager
 
 import pytest
-from sqlalchemy import text
-from sqlmodel import delete
 
 from pixlstash.db_models import Picture, User
 from pixlstash.db_models.picture_likeness import (
@@ -21,6 +19,7 @@ from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
 from pixlstash.services.snapshot_service import GFS_KEEP_MONTHLY, GFS_KEEP_WEEKLY
 from pixlstash.utils.snapshot_compression import materialize_snapshot
+from tests.utils import wipe_tables
 
 
 @contextmanager
@@ -57,17 +56,16 @@ def server():
 def clean_db(server):
     """Wipe DB rows and snapshot files before each test."""
 
-    def _wipe(session):
-        session.exec(text("PRAGMA foreign_keys = OFF"))
-        session.exec(delete(Snapshot))
-        session.exec(delete(PictureLikeness))
-        session.exec(delete(PictureLikenessQueue))
-        session.exec(delete(PictureLikenessFrontier))
-        session.exec(delete(Picture))
-        session.exec(text("PRAGMA foreign_keys = ON"))
-        session.commit()
-
-    server.vault.db.run_task(_wipe)
+    server.vault.db.run_task(
+        wipe_tables,
+        [
+            Snapshot,
+            PictureLikeness,
+            PictureLikenessQueue,
+            PictureLikenessFrontier,
+            Picture,
+        ],
+    )
 
     cp_dir = os.path.join(server.vault.image_root, "snapshots")
     if os.path.isdir(cp_dir):

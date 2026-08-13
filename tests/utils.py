@@ -1,14 +1,89 @@
 import time
 
-from sqlalchemy import func
-from sqlmodel import delete, select
+from sqlalchemy import func, update
+from sqlmodel import delete, select, text
 
+from pixlstash.db_models.character import Character
+from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
+from pixlstash.db_models.picture_set import PictureSet
+from pixlstash.db_models.project import Project
 
 API_PREFIX = "/api/v1"
 
 _DEFAULT_TIMEOUT_S = 180
+
+
+def wipe_tables(session, models):
+    """Delete every row of ``models`` with FK enforcement off, then restore it.
+
+    Pass this straight to ``db.run_task``, which supplies the session::
+
+        server.vault.db.run_task(wipe_tables, [Snapshot, Tag, Picture])
+
+    ``PRAGMA foreign_keys`` is a no-op while a transaction is pending, so the
+    restoring ``ON`` must come *after* the commit. Issued before it (the shape
+    every ``clean_db`` fixture used to have) it is silently ignored and the
+    connection goes back to the pool with foreign keys off, for whichever test
+    picks it up next — see issue #712. The assertion is there because the
+    failure mode is that the restore *looks* like it happened.
+
+    Args:
+        session: SQLModel Session, as handed to ``db.run_task``.
+        models: Table models to delete. FKs are off for the deletes, so the
+            order is for readability only.
+    """
+    session.exec(text("PRAGMA foreign_keys = OFF"))
+    for model in models:
+        session.exec(delete(model))
+    session.commit()
+    session.exec(text("PRAGMA foreign_keys = ON"))
+    assert session.exec(text("PRAGMA foreign_keys")).one()[0] == 1, (
+        "PRAGMA foreign_keys = ON no-opped; this connection would return to "
+        "the pool with foreign key enforcement off"
+    )
+
+
+def delete_characters(session, character_ids=None):
+    """Delete characters the way ``DELETE /characters/{id}`` does.
+
+    ``face.character_id`` is a plain FK with no ``ON DELETE`` action, so the
+    live route nulls every referencing face before removing the row
+    (``routes/characters.py::clear_character_and_nullify_faces``). Deleting the
+    row straight out raises ``IntegrityError`` — it only ever worked in tests
+    while FK enforcement was leaking off (#712). ``CharacterProjectMember``
+    rows cascade on their own.
+
+    Args:
+        session: SQLModel Session, as handed to ``db.run_task``.
+        character_ids: Ids to delete, or ``None`` for every character.
+    """
+    faces = update(Face).values(character_id=None)
+    characters = delete(Character)
+    if character_ids is not None:
+        faces = faces.where(Face.character_id.in_(character_ids))
+        characters = characters.where(Character.id.in_(character_ids))
+    session.exec(faces)
+    session.exec(characters)
+    session.commit()
+
+
+def delete_projects(session, project_ids):
+    """Delete projects the way ``DELETE /projects/{id}`` does.
+
+    Pictures, picture sets and characters carry a plain ``project_id`` FK, so
+    the live route nulls those pointers before removing the project; only the
+    membership tables cascade. See :func:`delete_characters` and #712.
+    """
+    for model in (Picture, PictureSet, Character):
+        session.exec(
+            update(model)
+            .where(model.project_id.in_(project_ids))
+            .values(project_id=None)
+        )
+    session.exec(delete(Project).where(Project.id.in_(project_ids)))
+    session.commit()
 
 
 def poll_until_zero(
