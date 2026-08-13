@@ -8,6 +8,7 @@ import { SET_COLORS } from "./setAppearance";
 import {
   assignmentMarks,
   bandGroups,
+  bandProjection,
   bandUsage,
   baseModelKey,
   collapseStacks,
@@ -396,6 +397,116 @@ describe("bandUsage", () => {
     });
     expect(usage.shelfPct).toBe(usage.usedPct);
     expect(usage.otherPct).toBe(0);
+  });
+});
+
+describe("bandProjection", () => {
+  it("carves the ghost out of the free segment rather than laying it over", () => {
+    // Four segments still summing to one track, which is what lets the caller
+    // keep the same flex row and the same no-clamp guarantee `bandUsage` has.
+    const projected = bandProjection(
+      { totalBytes: 1000, freeBytes: 400, shelfBytes: 300 },
+      200,
+    );
+    expect(projected.shelfPct).toBe(30);
+    expect(projected.otherPct).toBe(30);
+    expect(projected.addedPct).toBe(20);
+    expect(projected.freePct).toBe(20);
+    expect(
+      projected.shelfPct +
+        projected.otherPct +
+        projected.addedPct +
+        projected.freePct,
+    ).toBe(100);
+    expect(projected.fits).toBe(true);
+    expect(projected.freeAfter).toBe(200);
+  });
+
+  it("projects every derived field, not only the segments", () => {
+    // The object REPLACES `bandUsage`'s, so a field measured before the drop
+    // riding along on it is a trap: it would be read next to segments drawn
+    // from after the drop and answer about a different drive state.
+    const GB = 1024 ** 3;
+    const projected = bandProjection(
+      { totalBytes: 1000 * GB, freeBytes: 400 * GB, shelfBytes: 300 * GB },
+      380 * GB,
+    );
+    // 20 GB left is well under the 50 GiB floor, though the drive was not low
+    // before the drop and `bandUsage` still says so.
+    expect(projected.lowFree).toBe(true);
+    expect(
+      bandUsage({
+        totalBytes: 1000 * GB,
+        freeBytes: 400 * GB,
+        shelfBytes: 300 * GB,
+      }).lowFree,
+    ).toBe(false);
+    // `usedPct` is what the three filled segments add up to, or a caller could
+    // read a fullness that contradicts the bar beside it.
+    expect(projected.usedPct).toBeCloseTo(
+      projected.shelfPct + projected.otherPct + projected.addedPct,
+      10,
+    );
+    expect(projected.usedPct + projected.freePct).toBeCloseTo(100, 10);
+  });
+
+  it("reports a drop that overruns the drive as low, not as freshly empty", () => {
+    // `freePct` is clamped to zero because a bar cannot draw past its track;
+    // `lowFree` must read the UNCLAMPED figure or the most over-full case on
+    // the shelf would be the one that stops reporting low.
+    const projected = bandProjection(
+      { totalBytes: 1000, freeBytes: 100, shelfBytes: 0 },
+      400,
+    );
+    expect(projected.freePct).toBe(0);
+    expect(projected.usedPct).toBe(100);
+    expect(projected.lowFree).toBe(true);
+  });
+
+  it("clamps the bar but not the verdict when the drop does not fit", () => {
+    // A bar cannot draw past its own track, so the segment stops at the free
+    // space — but `fits` is decided on the unclamped figure, or an over-full
+    // drop would quietly stop looking wrong at exactly 100%.
+    const projected = bandProjection(
+      { totalBytes: 1000, freeBytes: 100, shelfBytes: 0 },
+      400,
+    );
+    expect(projected.addedPct).toBe(10);
+    expect(projected.freePct).toBe(0);
+    expect(projected.fits).toBe(false);
+    // How far short the drive is, which is what the label states.
+    expect(projected.freeAfter).toBe(-300);
+  });
+
+  it("treats a drop that exactly fills the drive as fitting", () => {
+    const projected = bandProjection(
+      { totalBytes: 1000, freeBytes: 250, shelfBytes: 0 },
+      250,
+    );
+    expect(projected.fits).toBe(true);
+    expect(projected.freeAfter).toBe(0);
+    expect(projected.freePct).toBe(0);
+  });
+
+  it("says nothing changes when the drop adds no bytes", () => {
+    // Every copy already on this drive: the move is a rename and the server
+    // reports `bytes_to_copy` of zero for it.
+    const projected = bandProjection(
+      { totalBytes: 1000, freeBytes: 400, shelfBytes: 300 },
+      0,
+    );
+    expect(projected.addedPct).toBe(0);
+    expect(projected.freePct).toBe(40);
+    expect(projected.fits).toBe(true);
+  });
+
+  it("cannot say for a drive it could not measure, which is not a refusal", () => {
+    // Null rather than `fits: false`. "We do not know" must not be drawn as
+    // "does not fit" — the drop is left to the server to judge.
+    expect(bandProjection({ totalBytes: null, freeBytes: null }, 100)).toBe(
+      null,
+    );
+    expect(bandProjection(undefined, 100)).toBe(null);
   });
 });
 
@@ -940,6 +1051,29 @@ describe("movableCopies", () => {
     );
     expect(items).toHaveLength(2);
     expect(totalBytes).toBe(1000);
+  });
+
+  it("splits the weight by where the bytes are now, for the projection", () => {
+    // A copy moved between two folders on one drive is a rename and adds
+    // nothing to it, so the drive a drop is aimed at nets out the copies
+    // already sitting on it (#894). Kept off `items`, which goes to the server
+    // verbatim.
+    const { items, bytesByFolderId } = movableCopies(
+      [
+        locRow([{ folder_id: 1, relpath: "a.st", state: "present" }], 500),
+        locRow(
+          [
+            { folder_id: 1, relpath: "b.st", state: "present" },
+            { folder_id: 4, relpath: "b.st", state: "present" },
+          ],
+          200,
+        ),
+      ],
+      folders,
+    );
+    expect(bytesByFolderId.get(1)).toBe(700);
+    expect(bytesByFolderId.get(4)).toBe(200);
+    expect(items.every((item) => !("bytes" in item))).toBe(true);
   });
 
   it("leaves PixlStash's own engines where they are", () => {
