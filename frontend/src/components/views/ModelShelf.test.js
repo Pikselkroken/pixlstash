@@ -1407,24 +1407,24 @@ describe("a registered folder holding no models", () => {
   });
 });
 
+/** A DataTransfer stand-in: jsdom's drag events carry none. */
+function transfer(types = []) {
+  return {
+    types,
+    setData: vi.fn(function (type) {
+      this.types = [...this.types, type];
+    }),
+    effectAllowed: "",
+    dropEffect: "",
+  };
+}
+
 describe("dragging models onto a folder", () => {
   const FOLDERS = [
     { id: 1, path: "/models/loras", kind: "user", movable: "per_item" },
     { id: 2, path: "/models/store", kind: "managed", movable: "root_only" },
     { id: 3, path: "/runs", kind: "source", movable: "per_item" },
   ];
-
-  /** A DataTransfer stand-in: jsdom's drag events carry none. */
-  function transfer(types = []) {
-    return {
-      types,
-      setData: vi.fn(function (type) {
-        this.types = [...this.types, type];
-      }),
-      effectAllowed: "",
-      dropEffect: "",
-    };
-  }
 
   async function shelfWithFolders(rows) {
     listModelFolders.mockResolvedValue(FOLDERS);
@@ -1573,6 +1573,193 @@ describe("dragging models onto a folder", () => {
     expect(dialog.props("open")).toBe(true);
     expect(dialog.props("destinationFolderId")).toBe(2);
     expect(dialog.props("items")).toEqual([{ folder_id: 1, relpath: "a" }]);
+  });
+});
+
+describe("dropping onto the capacity meter", () => {
+  const GB = 1024 ** 3;
+  const FOLDERS = [
+    { id: 1, path: "/mnt/fast/loras", kind: "user", movable: "per_item" },
+    { id: 2, path: "/mnt/slow/store", kind: "managed", movable: "root_only" },
+  ];
+
+  /**
+   * One 100 GB adapter on the Fast drive, and an empty folder on Slow.
+   *
+   * `slowFree` is the whole point of the fixture: it is what decides whether
+   * the drop fits, and every test here differs only in that number.
+   */
+  async function twoDrives({ slowFree, devices } = {}) {
+    listModelFolders.mockResolvedValue(FOLDERS);
+    listModelFolderDevices.mockResolvedValue(
+      devices ?? [
+        {
+          device_id: "fast",
+          mount_point: "/mnt/fast",
+          label: "Fast",
+          total_bytes: 4000 * GB,
+          free_bytes: 2000 * GB,
+          shelf_bytes: 500 * GB,
+          folder_ids: [1],
+        },
+        {
+          device_id: "slow",
+          mount_point: "/mnt/slow",
+          label: "Slow",
+          total_bytes: 1000 * GB,
+          free_bytes: slowFree,
+          shelf_bytes: 100 * GB,
+          folder_ids: [2],
+        },
+      ],
+    );
+    const wrapper = await mountShelf([
+      adapter({
+        id: 1,
+        file_size: 100 * GB,
+        locations: [
+          {
+            state: "present",
+            folder_id: 1,
+            folder_path: "/mnt/fast/loras",
+            relpath: "a.st",
+          },
+        ],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "folder", folderLayout: "drive" });
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  }
+
+  function bandFor(wrapper, label) {
+    return wrapper
+      .findAll(".shelf-band-heading")
+      .find((band) => band.text().includes(label));
+  }
+
+  /** Pick the row up, then hold the pointer over a band. */
+  async function dragOnto(wrapper, label, type = "dragover") {
+    const dt = transfer();
+    await wrapper.find(".shelf-row").trigger("dragstart", { dataTransfer: dt });
+    const event = Object.assign(new Event(type, { cancelable: true }), {
+      dataTransfer: dt,
+    });
+    bandFor(wrapper, label).element.dispatchEvent(event);
+    await wrapper.vm.$nextTick();
+    return event;
+  }
+
+  it("projects the drop as a hatched segment cut out of the free space", async () => {
+    // The consequence, drawn before the drop commits. Four segments now, still
+    // summing to the drive: 100 GB on the shelf, 500 GB of other files, the
+    // 100 GB ghost, and the 300 GB that would be left.
+    const wrapper = await twoDrives({ slowFree: 400 * GB });
+    const event = await dragOnto(wrapper, "Slow");
+    expect(event.defaultPrevented).toBe(true);
+
+    const band = bandFor(wrapper, "Slow");
+    expect(band.classes()).toContain("shelf-band-heading--drop");
+    expect(
+      band.findAll(".shelf-band-seg").map((s) => s.attributes("style")),
+    ).toEqual(["width: 10%;", "width: 50%;", "width: 10%;", "width: 30%;"]);
+    // Hatched rather than a fourth flat colour: a projection is provisional
+    // and a measurement is not, and the two must not be one reading apart.
+    expect(band.find(".shelf-band-seg--ghost").exists()).toBe(true);
+    expect(band.find(".shelf-band-seg--ghost-reject").exists()).toBe(false);
+    // The half that survives greyscale and is readable out loud.
+    expect(textOf(band)).toContain("100.0 GB fits · 300.0 GB free after");
+
+    // And only the band under the pointer: the other drive still reads as
+    // measured, because nothing is being dropped on it.
+    expect(bandFor(wrapper, "Fast").findAll(".shelf-band-seg")).toHaveLength(3);
+  });
+
+  it("refuses the drop while the pointer is still down, not after it", async () => {
+    // The honest place to refuse a move. `preventDefault()` is what ACCEPTS a
+    // drop, so not calling it leaves the browser's own "no drop here" cursor
+    // over a band already drawn in the error treatment.
+    const wrapper = await twoDrives({ slowFree: 40 * GB });
+    const event = await dragOnto(wrapper, "Slow");
+    expect(event.defaultPrevented).toBe(false);
+
+    const band = bandFor(wrapper, "Slow");
+    expect(band.classes()).toContain("shelf-band-heading--reject");
+    expect(band.classes()).not.toContain("shelf-band-heading--drop");
+    expect(band.find(".shelf-band-seg--ghost-reject").exists()).toBe(true);
+    expect(textOf(band)).toContain("100.0 GB will not fit · 60.0 GB short");
+  });
+
+  it("does not open the dialog for a drop the band refused", async () => {
+    const wrapper = await twoDrives({ slowFree: 40 * GB });
+    await dragOnto(wrapper, "Slow", "drop");
+    expect(
+      wrapper.findComponent({ name: "ShelfMoveDialog" }).props("open"),
+    ).toBe(false);
+  });
+
+  it("resolves a band drop to the first folder on that drive a move may go to", async () => {
+    // A band is a disk and a move needs a folder, so one is chosen — safely,
+    // because the drop does not move on release: the dialog states the
+    // destination and its select corrects it.
+    const wrapper = await twoDrives({ slowFree: 400 * GB });
+    await dragOnto(wrapper, "Slow", "drop");
+
+    const dialog = wrapper.findComponent({ name: "ShelfMoveDialog" });
+    expect(dialog.props("open")).toBe(true);
+    expect(dialog.props("destinationFolderId")).toBe(2);
+    expect(dialog.props("items")).toEqual([{ folder_id: 1, relpath: "a.st" }]);
+  });
+
+  it("counts a move within one drive as nothing to copy", async () => {
+    // Those are renames — the server reports `bytes_to_copy` of zero for them
+    // — so projecting 100 GB onto the disk the bytes are already on would
+    // refuse a move that costs nothing.
+    const wrapper = await twoDrives({ slowFree: 400 * GB });
+    await dragOnto(wrapper, "Fast");
+
+    const band = bandFor(wrapper, "Fast");
+    expect(band.classes()).toContain("shelf-band-heading--drop");
+    expect(textOf(band)).toContain("Already on this drive · nothing to copy");
+  });
+
+  it("refuses a folder header on a full drive too, not only its band", async () => {
+    // The refusal belongs to the DISK. A folder whose drive has no room cannot
+    // take the files either, so the header stops highlighting and the band
+    // above it is where the reader is told why.
+    const wrapper = await twoDrives({ slowFree: 40 * GB });
+    const dt = transfer();
+    await wrapper.find(".shelf-row").trigger("dragstart", { dataTransfer: dt });
+    const event = Object.assign(new Event("dragover", { cancelable: true }), {
+      dataTransfer: dt,
+    });
+    wrapper
+      .findAll(".shelf-group-btn")
+      .find((b) => b.text().includes("/mnt/slow/store"))
+      .element.dispatchEvent(event);
+    await wrapper.vm.$nextTick();
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(wrapper.find(".shelf-group-btn--drop").exists()).toBe(false);
+    expect(bandFor(wrapper, "Slow").classes()).toContain(
+      "shelf-band-heading--reject",
+    );
+  });
+
+  it("does not refuse a drive it could not measure", async () => {
+    // "We cannot say" must not be drawn as "does not fit". The band takes the
+    // drop and highlights for it; it simply has no ghost and no outcome to
+    // state, and the server still checks before it copies.
+    const wrapper = await twoDrives({ devices: [] });
+    const event = await dragOnto(wrapper, "/mnt/slow/store");
+    expect(event.defaultPrevented).toBe(true);
+
+    const band = bandFor(wrapper, "/mnt/slow/store");
+    expect(band.classes()).toContain("shelf-band-heading--drop");
+    expect(band.find(".shelf-band-seg--ghost").exists()).toBe(false);
+    expect(textOf(band)).toContain("Capacity unknown");
   });
 });
 

@@ -453,6 +453,23 @@ export function withFolderSignals(
  * @returns {Array<Object>} the same groups, reordered, each with `band` and
  *   `bandStart` (true on the first group of each band).
  */
+/**
+ * The band a folder belongs to.
+ *
+ * The drive when one was measured, the folder itself when none was — the same
+ * rule {@link bandGroups} keys on, exported so a caller asking "is this copy
+ * already on that drive?" cannot answer it with a second, drifting copy of the
+ * rule.
+ *
+ * @param {number} folderId - `model_folder.id`.
+ * @param {Map<number, Object>} deviceByFolderId - from `useModelFoldersStore`.
+ * @returns {string} the band key.
+ */
+export function bandKeyFor(folderId, deviceByFolderId) {
+  const device = deviceByFolderId?.get?.(Number(folderId)) || null;
+  return device?.device_id ? `d:${device.device_id}` : `f:${Number(folderId)}`;
+}
+
 export function bandGroups(groups, deviceByFolderId) {
   const byBand = new Map();
   // Not every folder group names a folder. A model whose folders have all been
@@ -467,7 +484,7 @@ export function bandGroups(groups, deviceByFolderId) {
     const folderId = Number(group.folderId);
     const device = deviceByFolderId?.get?.(folderId) || null;
     // Unmeasured folders band alone, keyed by folder rather than by device.
-    const key = device?.device_id ? `d:${device.device_id}` : `f:${folderId}`;
+    const key = bandKeyFor(folderId, deviceByFolderId);
     let band = byBand.get(key);
     if (!band) {
       band = {
@@ -571,6 +588,52 @@ export function bandUsage(band) {
     freePct: (free / total) * 100,
     usedPct: (used / total) * 100,
     lowFree: free < LOW_FREE_BYTES,
+  };
+}
+
+/**
+ * What a drive would hold after a drop, and whether the drop fits.
+ *
+ * The meter is the drop target (#894), so the consequence has to be drawable
+ * *before* the pointer is released — which means a fourth segment carved out of
+ * the free one rather than a fifth number in the label. `freePct` is therefore
+ * already reduced by the projection and the four still sum to exactly 100, so
+ * the caller lays them out in the same flex row with no rounding sliver at the
+ * right-hand end and needs no per-segment clamp. That is the whole reason this
+ * returns a REPLACEMENT for `bandUsage`'s object rather than something to draw
+ * alongside it.
+ *
+ * `added` is clamped into the free space for the SEGMENT, because a bar cannot
+ * draw past its own track; `fits` is decided on the unclamped figure, so the
+ * over-full case is a full-width hatch in the error treatment and not a bar
+ * that quietly stops looking wrong at 100%. `freeAfter` goes negative in that
+ * case, which is how far short the drive is.
+ *
+ * A drive that could not be measured returns `null`, exactly as `bandUsage`
+ * does: a projection onto an unknown capacity is a guess, and the caller must
+ * read that as "cannot say" rather than as "does not fit".
+ *
+ * @param {Object} band - a band from {@link bandGroups}.
+ * @param {number} addedBytes - bytes the drop would ADD to this drive. Copies
+ *   already on it are renames and add nothing, so the caller nets them out.
+ * @returns {{shelfPct: number, otherPct: number, addedPct: number,
+ *   freePct: number, usedPct: number, lowFree: boolean, addedBytes: number,
+ *   freeAfter: number, fits: boolean}|null}
+ */
+export function bandProjection(band, addedBytes) {
+  const use = bandUsage(band);
+  if (!use) return null;
+  const total = Number(band.totalBytes);
+  const free = Math.min(Number(band.freeBytes), total);
+  const added = Math.max(0, Number(addedBytes) || 0);
+  const drawn = Math.min(added, free);
+  return {
+    ...use,
+    addedPct: (drawn / total) * 100,
+    freePct: ((free - drawn) / total) * 100,
+    addedBytes: added,
+    freeAfter: free - added,
+    fits: added <= free,
   };
 }
 
@@ -715,10 +778,22 @@ export function importReceipt(report) {
  * @param {Map<number, Object>|null} foldersById - `model_folder.id` to the
  *   folder row, for the two folder-level exclusions. Omitted, only the
  *   `present` rule applies.
- * @returns {{items: Array<{folder_id: number, relpath: string}>, totalBytes: number}}
+ * `bytesByFolderId` is the same weight split by where the bytes are NOW, which
+ * is what the capacity projection needs: a copy moved between two folders on
+ * one drive is a rename and adds nothing to it, so the drive a drop is aimed at
+ * has to net out the copies already sitting on it (#894). It is deliberately
+ * kept off `items`, which is posted to `/model-moves` verbatim.
+ *
+ * @param {Array<Object>} rows - shelf rows, each with `locations`.
+ * @param {Map<number, Object>|null} foldersById - `model_folder.id` to the
+ *   folder row, for the two folder-level exclusions. Omitted, only the
+ *   `present` rule applies.
+ * @returns {{items: Array<{folder_id: number, relpath: string}>,
+ *   totalBytes: number, bytesByFolderId: Map<number, number>}}
  */
 export function movableCopies(rows, foldersById = null) {
   const items = [];
+  const bytesByFolderId = new Map();
   let totalBytes = 0;
   for (const row of Array.isArray(rows) ? rows : []) {
     for (const loc of row?.locations || []) {
@@ -726,11 +801,17 @@ export function movableCopies(rows, foldersById = null) {
       const folder = foldersById?.get(Number(loc.folder_id));
       if (folder?.owner === "pixlstash") continue;
       if (folder?.movable === "external") continue;
+      const bytes = Number(row.file_size) || 0;
+      const folderId = Number(loc.folder_id);
       items.push({ folder_id: loc.folder_id, relpath: loc.relpath });
-      totalBytes += Number(row.file_size) || 0;
+      bytesByFolderId.set(
+        folderId,
+        (bytesByFolderId.get(folderId) || 0) + bytes,
+      );
+      totalBytes += bytes;
     }
   }
-  return { items, totalBytes };
+  return { items, totalBytes, bytesByFolderId };
 }
 
 /**

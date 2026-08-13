@@ -320,10 +320,23 @@
                inside a row and not inside a header. Drawn on the first group of
                each band, never as a wrapper element, so the sticky folder
                headers below keep scrolling under it in one flow. -->
+          <!-- And the drop target for a move (#894). `dragover` carries no
+               `.prevent` here either — calling preventDefault() is what ACCEPTS
+               a drop, so a band with no room simply never calls it and the
+               browser draws its own refusal cursor over a band already in the
+               error treatment. -->
           <h3
             v-if="group.bandStart"
             class="shelf-band-heading"
-            :class="{ 'shelf-band-heading--unknown': !group.band.measured }"
+            :class="{
+              'shelf-band-heading--unknown': !group.band.measured,
+              'shelf-band-heading--drop': bandDropState(group.band) === 'drop',
+              'shelf-band-heading--reject':
+                bandDropState(group.band) === 'reject',
+            }"
+            @dragover="onBandDragOver(group.band, $event)"
+            @dragleave="onBandDragLeave(group.band)"
+            @drop="onBandDrop(group.band, $event)"
           >
             <span class="shelf-band-label" :title="group.band.mountPoint">
               <v-icon size="16" class="shelf-band-icon">mdi-harddisk</v-icon>
@@ -351,27 +364,51 @@
             >
               <span
                 class="shelf-band-seg shelf-band-seg--shelf"
-                :style="{ width: `${usage(group.band).shelfPct}%` }"
+                :style="{ width: `${meter(group.band).shelfPct}%` }"
               ></span>
               <span
                 class="shelf-band-seg shelf-band-seg--other"
-                :style="{ width: `${usage(group.band).otherPct}%` }"
+                :style="{ width: `${meter(group.band).otherPct}%` }"
+              ></span>
+              <!-- The ghost: what a drop would add, carved out of the free
+                   segment rather than laid over it, so the four still sum to
+                   the drive. Hatched, never a solid, because a projection is
+                   provisional and a measurement is not — and the two must not
+                   be one reading apart. -->
+              <span
+                v-if="projection(group.band)"
+                class="shelf-band-seg shelf-band-seg--ghost"
+                :class="{
+                  'shelf-band-seg--ghost-reject': !projection(group.band).fits,
+                }"
+                :style="{ width: `${projection(group.band).addedPct}%` }"
               ></span>
               <span
                 class="shelf-band-seg shelf-band-seg--free"
-                :style="{ width: `${usage(group.band).freePct}%` }"
+                :style="{ width: `${meter(group.band).freePct}%` }"
               ></span>
             </span>
             <span
               class="shelf-band-figures"
               :class="{
-                'shelf-band-figures--low': usage(group.band)?.lowFree,
+                'shelf-band-figures--low':
+                  !projection(group.band) && usage(group.band)?.lowFree,
+                'shelf-band-figures--reject':
+                  bandDropState(group.band) === 'reject',
               }"
             >
-              <!-- The non-colour half of the low state. Colour is additive
-                   here, never the carrier: the distinction has to survive
-                   greyscale, and the glyph and the word "Only" both do. -->
-              <v-icon v-if="usage(group.band)?.lowFree" size="16"
+              <!-- The non-colour half of the low and reject states. Colour is
+                   additive here, never the carrier: the distinction has to
+                   survive greyscale, and the glyph and the words ("Only", "will
+                   not fit") both do. A drop that fits gets the tray glyph
+                   rather than none, so the label under a hatched meter is
+                   marked as being about the drag and not about the disk. -->
+              <v-icon v-if="projection(group.band)" size="16">{{
+                projection(group.band).fits
+                  ? "mdi-tray-arrow-down"
+                  : "mdi-alert-circle-outline"
+              }}</v-icon>
+              <v-icon v-else-if="usage(group.band)?.lowFree" size="16"
                 >mdi-alert-outline</v-icon
               >
               <span>{{ meterLabel(group.band) }}</span>
@@ -394,7 +431,8 @@
             <button
               class="ps-row shelf-group-btn"
               :class="{
-                'shelf-group-btn--drop': dropTargetKey === group.key,
+                'shelf-group-btn--drop':
+                  dropTargetKey === group.key && dropFits(group.band),
                 'shelf-group-btn--offline': group.offline,
               }"
               :style="groupStyle(group)"
@@ -552,7 +590,7 @@
                 @keydown="onRowKeydown(row, $event)"
                 @focus="focusedRowKey = row.rowKey"
                 @dragstart="onRowDragStart(row, $event)"
-                @dragend="dropTargetKey = ''"
+                @dragend="clearDropState()"
               >
                 <!-- Column 1 stays the reserved glyph slot. The selection shows
                    as the row's own wash and a tick here, not as a checkbox: a
@@ -864,6 +902,8 @@ import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
   assignmentMarks,
   bandGroups,
+  bandKeyFor,
+  bandProjection,
   bandUsage,
   withEmptyFolders,
   withFolderSignals,
@@ -933,6 +973,17 @@ const moveItems = ref([]);
 const moveBytes = ref(0);
 /** The group header the pointer is currently over, for the drop affordance. */
 const dropTargetKey = ref("");
+/** The band the pointer is currently over, for its meter's projection (#894). */
+const dropBandKey = ref("");
+/**
+ * The dragged bytes, by the folder they are in NOW.
+ *
+ * Kept for the length of the drag because `dataTransfer`'s DATA is unreadable
+ * during `dragover` — only `types` is — and the projection has to be drawn
+ * while the pointer is still down. The drag always starts in this component, so
+ * this is a hand-off between two of its own handlers and not a guess.
+ */
+const dragBytesByFolder = shallowRef(new Map());
 const moveInvoker = shallowRef(null);
 
 /** `model_folder.id` to the folder row, for `movableCopies`' folder rules. */
@@ -1020,13 +1071,107 @@ function onRowDragStart(row, event) {
   if (!store.isSelected(row.id)) {
     store.selectFromClick(row.id, {}, orderedRowIds.value);
   }
-  const { items } = movableCopies(store.selectedRows, foldersById.value);
+  const { items, bytesByFolderId } = movableCopies(
+    store.selectedRows,
+    foldersById.value,
+  );
   if (!items.length) {
     event.preventDefault();
     return;
   }
+  dragBytesByFolder.value = bytesByFolderId;
   event.dataTransfer.effectAllowed = "move";
   setInternalDragPayload(event.dataTransfer, { type: "model-files", items });
+}
+
+/** Everything the pointer was saying, cleared however the drag ended. */
+function clearDropState() {
+  dropTargetKey.value = "";
+  dropBandKey.value = "";
+  dragBytesByFolder.value = new Map();
+}
+
+/**
+ * The bytes this drag would ADD to a drive.
+ *
+ * Copies already on it are excluded, because a move within one drive is a
+ * rename: the server reports `bytes_to_copy` of zero for exactly that case, and
+ * a meter projecting 438 GB onto the disk those bytes are already sitting on
+ * would refuse a move that costs nothing.
+ */
+function bytesLandingOn(band) {
+  if (!band) return 0;
+  let bytes = 0;
+  for (const [folderId, size] of dragBytesByFolder.value) {
+    if (bandKeyFor(folderId, foldersStore.deviceByFolderId) !== band.key) {
+      bytes += size;
+    }
+  }
+  return bytes;
+}
+
+/**
+ * The projection for the band under the pointer, and only for that one.
+ *
+ * A computed rather than a per-band call, so the arithmetic runs once per drag
+ * position however many times the template asks for it — the heading reads it
+ * for its own state, for the ghost segment, for the glyph and for the label.
+ */
+const dropProjection = computed(() => {
+  if (!dropBandKey.value) return null;
+  const group = shownGroups.value.find(
+    (item) => item.bandStart && item.band?.key === dropBandKey.value,
+  );
+  if (!group) return null;
+  return bandProjection(group.band, bytesLandingOn(group.band));
+});
+
+/** The projection if this band is the one being dragged over, else null. */
+function projection(band) {
+  return band && band.key === dropBandKey.value ? dropProjection.value : null;
+}
+
+/**
+ * Whether a drop aimed at this drive has room for it.
+ *
+ * A drive we could not measure answers **true**: "we cannot say" must not read
+ * as "does not fit", and refusing a drop on an unplugged-then-replugged disk
+ * because its capacity never came back would be a refusal with no cause the
+ * reader can see. The server still checks before it copies.
+ */
+function dropFits(band) {
+  const projected = bandProjection(band, bytesLandingOn(band));
+  return projected ? projected.fits : true;
+}
+
+/**
+ * What this band is saying to the drag right now: nothing, that it takes the
+ * drop, or that it refuses it.
+ *
+ * Keyed on the pointer and the fit rather than on the projection, so a drive
+ * whose capacity we could not read still highlights as a target. It has no
+ * ghost to draw and no outcome to state, but it does accept the drop — and a
+ * target that accepts without saying so is the one gap a projection-gated
+ * highlight would open.
+ */
+function bandDropState(band) {
+  if (!band || band.key !== dropBandKey.value) return "";
+  return dropFits(band) ? "drop" : "reject";
+}
+
+/**
+ * The folder a drop on the BAND resolves to: the first on that drive a move may
+ * be sent to, in the order the headers are drawn.
+ *
+ * A band is a disk and a move needs a folder, so one of them has to be chosen.
+ * Choosing the first is safe because a drop does not move on release — the
+ * dialog states the destination and its select corrects it — and it is kinder
+ * than refusing a drive holding two eligible folders, which would be a refusal
+ * the reject treatment does not mean.
+ */
+function bandDropFolderId(band) {
+  const group = (band?.groups || []).find((item) => isDropTarget(item));
+  return group ? Number(group.folderId) : null;
 }
 
 /** True when this group is a folder a move may be sent to. */
@@ -1050,20 +1195,75 @@ function isDropTarget(group) {
  */
 function onGroupDragOver(group, event) {
   if (!isModelFileDrag(event.dataTransfer) || !isDropTarget(group)) return;
+  // Recorded BEFORE the fit is judged, so a refused header still has something
+  // for `dragleave` to clear and the band above it keeps projecting for exactly
+  // as long as the pointer is there. The highlight is what the fit gates.
+  dropTargetKey.value = group.key;
+  dropBandKey.value = group.band?.key || "";
+  // A folder on a full drive cannot take the files either — the refusal belongs
+  // to the disk, not to the header, which is why the check lives here as well
+  // and the band above is where it is drawn.
+  if (!dropFits(group.band)) return;
   event.preventDefault();
   event.dataTransfer.dropEffect = "move";
-  dropTargetKey.value = group.key;
 }
 
 function onGroupDragLeave(group) {
-  if (dropTargetKey.value === group.key) dropTargetKey.value = "";
+  // Only when the pointer really left: moving header to header inside one band
+  // fires this AFTER `dragover` on the new one, so the key has already moved on
+  // and clearing here would blink the projection off between two targets.
+  if (dropTargetKey.value !== group.key) return;
+  dropTargetKey.value = "";
+  dropBandKey.value = "";
 }
 
 function onGroupDrop(group, event) {
-  dropTargetKey.value = "";
+  const fits = dropFits(group.band);
+  clearDropState();
   if (!isModelFileDrag(event.dataTransfer) || !isDropTarget(group)) return;
+  if (!fits) return;
   event.preventDefault();
   openMove(store.selectedRows, Number(group.folderId));
+}
+
+/**
+ * The meter is the drop target (#894).
+ *
+ * It is where "which disk has room" stops being informational, and it is the
+ * honest place to refuse: a drop that will not fit is refused while the pointer
+ * is still down, next to the projection saying why, rather than as a message
+ * after the release. The band is still marked as the target while it refuses —
+ * `preventDefault()` is simply not called, so the browser draws its own "no
+ * drop here" cursor over a band already in the error treatment.
+ */
+function onBandDragOver(band, event) {
+  if (!isModelFileDrag(event.dataTransfer)) return;
+  // Nothing on this drive takes a drop at all. No projection either: it would
+  // promise an outcome for a gesture that has no destination to resolve to.
+  if (bandDropFolderId(band) === null) return;
+  dropTargetKey.value = "";
+  dropBandKey.value = band.key;
+  if (!dropFits(band)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+}
+
+function onBandDragLeave(band) {
+  // `dropTargetKey` set means the pointer moved from the band DOWN onto one of
+  // its own folder headers, which is still inside this band's projection.
+  if (dropBandKey.value === band.key && !dropTargetKey.value) {
+    dropBandKey.value = "";
+  }
+}
+
+function onBandDrop(band, event) {
+  const folderId = bandDropFolderId(band);
+  const fits = dropFits(band);
+  clearDropState();
+  if (!isModelFileDrag(event.dataTransfer) || folderId === null) return;
+  if (!fits) return;
+  event.preventDefault();
+  openMove(store.selectedRows, folderId);
 }
 
 /**
@@ -1733,6 +1933,18 @@ function usage(band) {
 }
 
 /**
+ * The figures the meter draws: the projection while a drag is over this band,
+ * the measurement otherwise.
+ *
+ * One object either way, because `bandProjection` returns a REPLACEMENT for
+ * `bandUsage`'s — its `freePct` is already reduced by the ghost — so the three
+ * measured segments need no branch of their own and the row still sums to 100.
+ */
+function meter(band) {
+  return projection(band) || bandUsage(band);
+}
+
+/**
  * The meter's key, in the segments' own left-to-right order.
  *
  * The wording borrows `meterLabel`'s, so the key and the figures under it are
@@ -1758,6 +1970,8 @@ const showsBandLegend = computed(() =>
  * zero, which would draw an empty meter for a drive that may well be full.
  */
 function meterLabel(band) {
+  const projected = projection(band);
+  if (projected) return projectionLabel(projected);
   const use = bandUsage(band);
   if (!use) return "Capacity unknown";
   const free = formatModelSize(band.freeBytes);
@@ -1768,6 +1982,24 @@ function meterLabel(band) {
   // gets no action — the same register as the offline banner.
   const lead = use.lowFree ? "Only " : "";
   return `${lead}${free} free of ${total} · ${shelf} on the shelf`;
+}
+
+/**
+ * What a drop on this drive would do, said in words.
+ *
+ * The hatch says "provisional" and the colour says "refused", and neither is
+ * readable aloud or in greyscale — this is the half that is. It states the
+ * OUTCOME rather than the new total: the reader is deciding whether to release
+ * the pointer, and "8.1 GB short" answers that where "1.9 TB used" does not.
+ */
+function projectionLabel(projected) {
+  if (!projected.addedBytes) return "Already on this drive · nothing to copy";
+  const added = formatModelSize(projected.addedBytes);
+  if (!projected.fits) {
+    const short = formatModelSize(-projected.freeAfter);
+    return `${added} will not fit · ${short} short`;
+  }
+  return `${added} fits · ${formatModelSize(projected.freeAfter)} free after`;
 }
 
 /**
@@ -2135,6 +2367,30 @@ watch(
   font-style: italic;
 }
 
+/* The drop affordance, in the same inset ring the folder header below uses:
+   the shelf has one drop treatment and a second dialect on the outer level
+   would read as a different kind of target rather than the same one. The
+   radius is on the heading here because, unlike the header, the band is not
+   the full-bleed sticky strip. */
+.shelf-band-heading--drop,
+.shelf-band-heading--reject {
+  border-radius: var(--radius-sm);
+}
+
+.shelf-band-heading--drop {
+  background: rgba(var(--v-theme-primary), 0.12);
+  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-primary), 0.65);
+}
+
+/* The refusal, while the pointer is still down. `no-drop` is the same cursor
+   `.not-droppable` uses in the sidebar, and it is the third carrier after the
+   hue and the hatch — the state has to survive greyscale and forced-colors. */
+.shelf-band-heading--reject {
+  background: rgba(var(--v-theme-error), 0.1);
+  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-error), 0.65);
+  cursor: no-drop;
+}
+
 .shelf-band-label {
   display: inline-flex;
   align-items: center;
@@ -2198,6 +2454,35 @@ watch(
   background: var(--band-meter-free);
 }
 
+/* The projection. HATCHED, never a solid: the other three segments are things
+   that were measured and this one is a thing that has not happened, and a
+   fourth flat colour would have said "this is also on the disk". The same 45°
+   texture the sidebar's `.not-droppable` and the grid's ghosted tiles use, at
+   2px/4px because the track is 6px tall and the family's usual 4px/8px would
+   put barely one stripe in a narrow segment.
+
+   Both stops carry a visible alpha rather than one of them being transparent:
+   a hatch that let the free track show through would read as a lighter free
+   segment on a nearly-empty drive rather than as a texture. */
+.shelf-band-seg--ghost {
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(var(--v-theme-primary), 0.9) 0 var(--space-1),
+    rgba(var(--v-theme-primary), 0.4) var(--space-1) var(--space-2)
+  );
+}
+
+/* Does not fit. The segment is clamped to the free space it is drawing into —
+   a bar cannot run past its own track — so the hue and the hatch are what say
+   the drop was refused, and the label says by how much. */
+.shelf-band-seg--ghost-reject {
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(var(--v-theme-error), 0.9) 0 var(--space-1),
+    rgba(var(--v-theme-error), 0.4) var(--space-1) var(--space-2)
+  );
+}
+
 /* Track as well as segment, so a sub-pixel seam between two segments cannot
    show the neutral track through an amber bar. */
 .shelf-band-meter--low,
@@ -2217,6 +2502,17 @@ watch(
    dark, both over the 3:1 UI floor. */
 .shelf-band-figures--low .v-icon {
   color: rgb(var(--v-theme-warning));
+}
+
+/* Same split as `--low` and for the same measurement: weight on the --text-xs
+   body text, hue reserved for the 16px glyph, which is non-text and answers to
+   the 3:1 UI floor rather than the 4.5:1 body one. */
+.shelf-band-figures--reject {
+  font-weight: var(--weight-semibold);
+}
+
+.shelf-band-figures--reject .v-icon {
+  color: rgb(var(--v-theme-error));
 }
 
 .shelf-band-figures {

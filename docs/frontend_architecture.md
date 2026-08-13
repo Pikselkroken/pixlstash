@@ -1619,6 +1619,49 @@ models is thirty-six headers. Under `Folder` the second level is spent on the
   `mdi-alert-outline` glyph and semibold figures, with the warning hue additive
   on top; so it survives greyscale, and it gets no live region, because it is
   true of several bands at once and would fire a burst on every device refresh.
+- **The meter is the drop target, and it projects the consequence before the
+  drop commits (#894).** A drag over a band draws a **fourth, hatched segment**
+  carved *out of* the free one — `bandProjection` returns a replacement for
+  `bandUsage`'s object with `freePct` already reduced, so the four still sum to
+  100 and the flex row and the no-clamp guarantee both survive untouched. The
+  hatch is the point: three segments are things that were *measured* and this
+  one is a thing that *has not happened*, and a fourth flat colour would have
+  said it was already on the disk. It is the same 45° texture the sidebar's
+  `.not-droppable` and the grid's ghosted tiles use, at 2px/4px because the
+  track is 6px tall.
+  - **The projection nets out copies already on that drive.** A move inside one
+    drive is a rename — the server reports `bytes_to_copy` of zero for it — so
+    `movableCopies` returns `bytesByFolderId` alongside `items`, and the band
+    sums only the copies whose `bandKeyFor` differs from its own. Without that
+    a drive refuses a move onto itself that costs nothing. `bytesByFolderId` is
+    deliberately **not** on `items`, which is posted to `/model-moves` verbatim.
+  - **A band that has no room refuses, and so does every folder header on it.**
+    The refusal belongs to the *disk*: `dropFits` is checked in both handlers
+    and drawn in one place, the band, so the reader is told why while the
+    pointer is still down rather than by a message after the release. Refusing
+    is simply not calling `preventDefault()`, so the browser's own "no drop
+    here" cursor lands on a band already in the error treatment.
+  - **An unmeasurable drive does not refuse.** `bandProjection` returns `null`
+    and `dropFits` answers *true*: "we cannot say" must not be drawn as "does
+    not fit". The band still highlights as a target (`bandDropState` keys on the
+    pointer and the fit, never on a projection existing) — it simply has no
+    ghost and no outcome to state. The server checks before it copies.
+  - **A band drop resolves to the first folder on that drive a move may go to.**
+    A band is a disk and a move needs a folder, so one has to be chosen.
+    Choosing is safe because a drop still does not move on release — the dialog
+    states the destination and its select corrects it — and it is kinder than
+    refusing a drive holding two eligible folders, which would be a refusal the
+    reject treatment does not mean.
+  - **The outcome is stated in words** under the band ("100.0 GB fits · 300.0 GB
+    free after", "100.0 GB will not fit · 60.0 GB short", "Already on this drive
+    · nothing to copy"). The hatch and the hue are neither readable aloud nor in
+    greyscale; this is the half that is. It states the *outcome* rather than the
+    new total, because the reader is deciding whether to let go.
+  - **The drag's weight is held in the component for the drag's lifetime.**
+    `dataTransfer`'s *data* is unreadable during `dragover` — only `types` is —
+    and the projection has to be drawn while the pointer is down. `dragstart`
+    records it and `dragend` clears it, which is a hand-off between two of this
+    component's own handlers rather than a guess about the payload.
 - **The bands are decoration and fail alone.** `refreshDevices` is unawaited and
   swallows its own error into a `console.warn`, never into the folder store's
   `error`: the route stats the filesystem, so an offline mount can make it slow
@@ -1996,12 +2039,14 @@ same-drive move, because those are renames — a byte-based bar would sit at 0%
 through the entire fastest case and then jump.
 
 **Two ways in, one dialog, and a drop does not move on release.** The selection
-bar's Move button and a drag onto a folder header both resolve to the same list
-of copies and both open `ShelfMoveDialog`, which states the move in files, bytes
-and rename-versus-copy before anything starts. There is no undo behind a move,
-so a 438 GB copy across a USB drive must never be one slip of the pointer away.
-A drop seeds the destination it was aimed at; the select still lets it be
-corrected.
+bar's Move button and a drag onto a folder header **or onto a drive band's
+capacity meter** all resolve to the same list of copies and all open
+`ShelfMoveDialog`, which states the move in files, bytes and rename-versus-copy
+before anything starts. There is no undo behind a move, so a 438 GB copy across
+a USB drive must never be one slip of the pointer away. A drop seeds the
+destination it was aimed at; the select still lets it be corrected — which is
+also what makes a band drop safe, since a band is a disk and the folder on it
+has to be picked for the user (§9.1a, the meter as drop target).
 
 **`movableCopies` is the single gate**, per COPY rather than per model, because
 `model_file`'s key is `(folder_id, relpath)` and a model catalogued in three
