@@ -8,6 +8,7 @@ import tempfile
 from contextlib import closing, contextmanager
 
 import pytest
+from sqlalchemy import text
 
 from pixlstash.db_models import Picture, User
 from pixlstash.db_models.picture_likeness import (
