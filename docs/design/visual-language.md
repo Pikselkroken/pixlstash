@@ -378,6 +378,37 @@ Findings to honour:
   4.90 / 5.30. All clear the 3:1 UI floor. Light `success` and `info` were Material
   500s until 2026-07 and measured 2.64 / 2.97 — **below the floor** — which is the
   reason they were deepened to `#2e7d32` and `#1a6ec4`.
+- **A multi-segment meter steps its neutral to the extreme *away* from the canvas**,
+  never to a mid-grey between the accent and the track. The range between the accent
+  and the canvas is not wide enough for two 3:1 steps; the range *past* the accent is.
+  Proven on the model shelf's drive band (#893), whose three segments are `ours` /
+  `other` / `free` and therefore have two adjacencies to keep readable. Composited over
+  `background`, light on `#faf9f7` / dark on `#1b1f24`:
+
+  | pair | light | dark |
+  |---|---|---|
+  | `ours` `#567309` : `other` (`#1c160c` / `#d4c9c1`) | **3.29** | **3.36** |
+  | `other` : `free` (`#e5e3e1` / `#121518`) | **14.03** | **11.28** |
+  | `free` : canvas | 1.22 | 1.11 — *drawn*, not inferred (see below) |
+
+  Three things this pins down, each of which was got wrong first:
+  **(a)** The neutral is what steps per theme, not the accent — `primary` stays the
+  "ours" colour in both, because a legend swatch that is orange in one theme and olive
+  in the other is not one system. **(b)** Dark is stepped *independently*, never a
+  flipped alpha: on a dark canvas an ink alpha can only lighten, so the neutral cannot
+  pass below the olive, and the shipped `rgba(ink, .28)` measured **1.34:1** — the
+  deuteranopia failure that opened the issue. The neutral goes light and the *track*
+  takes the dark end via a `scrim` tint. **(c)** In light the neutral must go past the
+  ink itself: `on-background` tops out at L .0153 and measures 2.95, just under the
+  floor, so the fill is `shadow` `#1c160c` (L .0085).
+  Separating the segments with a hairline instead was rejected: the issue's requirement
+  is a *luminance* separation, and a drawn line is not one — with a quiet mid-grey
+  neutral the pair measures 1.73:1, so in greyscale you would see two segments and be
+  unable to tell which was which.
+  The track is only 1.22 / 1.11 against the canvas, which would make a nearly-empty
+  drive a ghost, so it carries a 1px `outline` at 4.24 / 5.67 rather than relying on a
+  colour step. A meter's own frame is a legitimate substitute for a fill boundary; a
+  line *between two fills* is not.
 - **The eight `on-<status>` values, on their solid fill:** light `on-error` #ffffff
   4.86 · `on-warning` #23211d 4.95 · `on-success` #ffffff 5.13 · `on-info` #ffffff
   5.16; dark, all four `#1b1b1b`: `on-error` 4.68 · `on-warning` 5.53 · `on-success`

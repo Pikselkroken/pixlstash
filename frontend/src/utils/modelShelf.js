@@ -509,25 +509,68 @@ export function bandGroups(groups, deviceByFolderId) {
 }
 
 /**
- * How full a drive is, as a percentage of its size.
+ * When a drive is close enough to full to say so.
  *
- * `used`, not `free`, because a meter fills from empty. Returns `null` when the
- * drive could not be measured, which the caller must draw as "unknown" rather
- * than as an empty bar: an empty bar reads as a drive with nothing on it.
+ * Bytes, not a proportion, because the question the band answers is "does the
+ * next checkpoint fit" and that is answered in bytes. A full SDXL or Flux
+ * checkpoint is 6–24 GB, so 50 GiB is two or three more files: close enough to
+ * warn, far enough not to nag.
+ *
+ * A percentage is wrong in both directions on exactly the hardware this
+ * feature targets. Ten per cent of a 4 TB model drive is 400 GB, which is not a
+ * problem and would cry wolf on the drive people actually keep models on; ten
+ * per cent of a 256 GB SSD is 25 GB, which IS a problem — but so is 60 GB free
+ * on that same disk, and the fraction calls that fine.
+ */
+export const LOW_FREE_BYTES = 50 * 1024 ** 3;
+
+/**
+ * How a drive's space divides into the three things a reader asks about.
+ *
+ * The meter answers two questions at once — "how full is this disk" and "how
+ * much of that is us" — and it can only answer the second if the shelf's share
+ * is drawn as its OWN segment rather than as a fill overlaid on the used one.
+ * Overlaying was the original shape and it made the two questions the same
+ * pixel: a reader could see one boundary and had no way to know which of the
+ * two it marked.
+ *
+ * The three add to exactly 100 by construction (`shelf + (used - shelf) + free
+ * === total`), which is what lets the caller lay them out in a row without a
+ * rounding sliver opening at the right-hand end. That identity is the whole
+ * reason the segments need no per-segment clamp, so BOTH inputs are clamped
+ * into range before it is relied on:
+ *
+ *   * `free` to `total`, because the two are separate reads of the device and
+ *     a filesystem can genuinely report more free than it holds — thin
+ *     provisioning and transparent compression (ZFS, btrfs) do it by design,
+ *     and a network mount's `statvfs` can simply be wrong. Unclamped that
+ *     yields `freePct > 100` and a segment running off the end of the track.
+ *   * `shelf` to `used`, because `shelf_bytes` is counted from the hub and the
+ *     capacity from the disk, so a scan mid-flight can briefly make the first
+ *     exceed the second.
+ *
+ * Returns `null` when the drive could not be measured, which the caller must
+ * draw as "unknown" rather than as an empty bar: an empty bar reads as a drive
+ * with nothing on it.
  *
  * @param {Object} band - a band from {@link bandGroups}.
- * @returns {{usedPct: number, shelfPct: number}|null}
+ * @returns {{shelfPct: number, otherPct: number, freePct: number,
+ *   usedPct: number, lowFree: boolean}|null}
  */
 export function bandUsage(band) {
   const total = Number(band?.totalBytes);
-  const free = Number(band?.freeBytes);
+  const reportedFree = Number(band?.freeBytes);
   if (!Number.isFinite(total) || total <= 0) return null;
-  if (!Number.isFinite(free) || free < 0) return null;
-  const used = Math.max(0, total - free);
+  if (!Number.isFinite(reportedFree) || reportedFree < 0) return null;
+  const free = Math.min(reportedFree, total);
+  const used = total - free;
   const shelf = Math.max(0, Math.min(used, Number(band?.shelfBytes) || 0));
   return {
-    usedPct: Math.min(100, (used / total) * 100),
-    shelfPct: Math.min(100, (shelf / total) * 100),
+    shelfPct: (shelf / total) * 100,
+    otherPct: ((used - shelf) / total) * 100,
+    freePct: (free / total) * 100,
+    usedPct: (used / total) * 100,
+    lowFree: free < LOW_FREE_BYTES,
   };
 }
 

@@ -290,6 +290,30 @@
            stops too, so Tab still moves group to group when nothing inside is
            reached. -->
       <template v-else>
+        <!-- The key to the meters, said ONCE for the view rather than once per
+             band: it is the same three segments every time, and repeating it
+             down the list would cost more room than the meters themselves.
+             Drawn only when a measured meter is actually on screen — an
+             unmeasured band renders no meter at all, so a shelf of offline
+             drives would otherwise key a picture nobody can see.
+
+             No ARIA and no `aria-describedby` back from the bands: each
+             heading already states its figures in words, so this is redundant
+             to a screen reader, and wiring it up would re-read all three
+             labels on every heading. -->
+        <p v-if="showsBandLegend" class="shelf-band-legend">
+          <span
+            v-for="item in BAND_LEGEND"
+            :key="item.key"
+            class="shelf-band-legend-item"
+          >
+            <span
+              class="shelf-band-swatch"
+              :class="`shelf-band-seg--${item.key}`"
+            ></span>
+            <span>{{ item.label }}</span>
+          </span>
+        </p>
         <div v-for="group in shownGroups" :key="group.key" class="shelf-group">
           <!-- The drive band: the OUTER of the two levels the plan allows, and
                the second one is spent here rather than on stacks, which nest
@@ -305,25 +329,53 @@
               <v-icon size="16" class="shelf-band-icon">mdi-harddisk</v-icon>
               <span>{{ group.band.label }}</span>
             </span>
-            <!-- Two fills in one track, not two bars: the shelf's share is a
-                 part of what is used, so drawing it separately would let the
-                 two add up past the drive. -->
+            <!-- Three segments carving up one track, not fills stacked on top
+                 of each other. The shelf's share is a PART of what is used, so
+                 `other` is the REST of the used space: laid end to end the
+                 three are the drive, and no boundary is ambiguous. Overlaying
+                 them was the original shape and it meant a reader could see a
+                 boundary without being able to tell which of the two questions
+                 — "how full is this disk" and "how much of that is us" — it
+                 answered (#893).
+
+                 `aria-hidden`, and no `role="img"`: `.shelf-band-figures`
+                 below already renders the identical string as visible text in
+                 this same heading, so labelling the meter made every band
+                 announce its figures twice. `role="meter"` would be worse —
+                 it carries one `aria-valuenow` and this is three numbers. -->
             <span
               v-if="usage(group.band)"
               class="shelf-band-meter"
-              role="img"
-              :aria-label="meterLabel(group.band)"
+              :class="{ 'shelf-band-meter--low': usage(group.band).lowFree }"
+              aria-hidden="true"
             >
               <span
-                class="shelf-band-fill"
-                :style="{ width: `${usage(group.band).usedPct}%` }"
-              ></span>
-              <span
-                class="shelf-band-fill shelf-band-fill--shelf"
+                class="shelf-band-seg shelf-band-seg--shelf"
                 :style="{ width: `${usage(group.band).shelfPct}%` }"
               ></span>
+              <span
+                class="shelf-band-seg shelf-band-seg--other"
+                :style="{ width: `${usage(group.band).otherPct}%` }"
+              ></span>
+              <span
+                class="shelf-band-seg shelf-band-seg--free"
+                :style="{ width: `${usage(group.band).freePct}%` }"
+              ></span>
             </span>
-            <span class="shelf-band-figures">{{ meterLabel(group.band) }}</span>
+            <span
+              class="shelf-band-figures"
+              :class="{
+                'shelf-band-figures--low': usage(group.band)?.lowFree,
+              }"
+            >
+              <!-- The non-colour half of the low state. Colour is additive
+                   here, never the carrier: the distinction has to survive
+                   greyscale, and the glyph and the word "Only" both do. -->
+              <v-icon v-if="usage(group.band)?.lowFree" size="16"
+                >mdi-alert-outline</v-icon
+              >
+              <span>{{ meterLabel(group.band) }}</span>
+            </span>
           </h3>
 
           <!-- The header IS the button, on the same four-column grid as the
@@ -1681,6 +1733,24 @@ function usage(band) {
 }
 
 /**
+ * The meter's key, in the segments' own left-to-right order.
+ *
+ * The wording borrows `meterLabel`'s, so the key and the figures under it are
+ * visibly the same vocabulary. Not "PixlStash" and not "used by other apps":
+ * the shelf knows which bytes are its own and knows nothing whatever about
+ * what put the rest there.
+ */
+const BAND_LEGEND = [
+  { key: "shelf", label: "On the shelf" },
+  { key: "other", label: "Other files" },
+  { key: "free", label: "Free" },
+];
+
+const showsBandLegend = computed(() =>
+  shownGroups.value.some((group) => group.bandStart && usage(group.band)),
+);
+
+/**
  * What a band's meter says in words.
  *
  * Free space leads, because it is the number that decides whether the next
@@ -1688,11 +1758,16 @@ function usage(band) {
  * zero, which would draw an empty meter for a drive that may well be full.
  */
 function meterLabel(band) {
-  if (!bandUsage(band)) return "Capacity unknown";
+  const use = bandUsage(band);
+  if (!use) return "Capacity unknown";
   const free = formatModelSize(band.freeBytes);
   const total = formatModelSize(band.totalBytes);
   const shelf = formatModelSize(band.shelfBytes);
-  return `${free} free of ${total} · ${shelf} on the shelf`;
+  // One word for the low state, and it states the fact and stops. Nothing is
+  // broken and there is nothing to click, so this is not the error voice and
+  // gets no action — the same register as the offline banner.
+  const lead = use.lowFree ? "Only " : "";
+  return `${lead}${free} free of ${total} · ${shelf} on the shelf`;
 }
 
 /**
@@ -2076,32 +2151,116 @@ watch(
   flex: none;
 }
 
-/* One track, two fills, the wider drawn first: the shelf's share is PART of
-   what is used, so two separate bars could add up past the drive. */
+/* One track, three segments laid end to end. They sum to exactly 100% by
+   construction in `bandUsage`, so the row needs no arithmetic here and no
+   sliver of bare track can open at the right-hand end.
+
+   The ROUNDING lives on the track and nowhere else, which is the point of
+   `overflow: hidden`: the outer ends curve because the track clips them, while
+   every inner boundary stays square. A radius on a segment would put a curve
+   mid-stack where the data has no end, and a rounded edge reads as "the bar
+   stops here" when the next segment carries straight on (#893). */
 .shelf-band-meter {
-  position: relative;
+  display: flex;
   height: 6px;
   border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-panel), 0.08);
+  background: var(--band-meter-free);
+  /* `outline`, not `border` or an inset shadow: both of those would eat 2 of
+     the 6 track pixels. An outline draws outside the box, costs no layout and
+     follows the radius. It exists because the track against the canvas is only
+     1.22:1 (light) / 1.11:1 (dark) — a nearly-empty drive would otherwise draw
+     a meter you cannot find. */
+  outline: 1px solid var(--band-meter-edge);
   overflow: hidden;
 }
 
-.shelf-band-fill {
-  position: absolute;
-  top: 0;
-  left: 0;
+.shelf-band-seg {
   height: 100%;
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-panel), 0.28);
+  /* Never rounded, never shrunk: a segment is the width it was given, and
+     flex would otherwise take space back off the small ones. */
+  border-radius: 0;
+  flex: none;
 }
 
-.shelf-band-fill--shelf {
+/* The three fills. Separated by LUMINANCE, not hue, so the meter survives
+   greyscale and deuteranopia: the ramp runs .0085 → .1426 → .7687 in light and
+   .1426 → .5962 → .0073 in dark, and no pair depends on colour vision.
+   Measurements and the per-theme reasoning live in style.css. */
+.shelf-band-seg--shelf {
   background: rgb(var(--v-theme-primary));
 }
 
+.shelf-band-seg--other {
+  background: var(--band-meter-other);
+}
+
+.shelf-band-seg--free {
+  background: var(--band-meter-free);
+}
+
+/* Track as well as segment, so a sub-pixel seam between two segments cannot
+   show the neutral track through an amber bar. */
+.shelf-band-meter--low,
+.shelf-band-meter--low .shelf-band-seg--free {
+  background: var(--band-meter-free-low);
+}
+
+/* The figures do NOT take the warning hue: they are --text-xs body text, and
+   light `warning` measures 3.09:1 on the canvas — the 3:1 UI floor, not the
+   4.5:1 body floor this size needs. Weight carries the rank instead, the same
+   way `--unknown` above ranks by style. */
+.shelf-band-figures--low {
+  font-weight: var(--weight-semibold);
+}
+
+/* The glyph is non-text at 16px, so it may carry the hue: 3.09 light, 6.72
+   dark, both over the 3:1 UI floor. */
+.shelf-band-figures--low .v-icon {
+  color: rgb(var(--v-theme-warning));
+}
+
 .shelf-band-figures {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   font-size: var(--text-xs);
   white-space: nowrap;
+}
+
+/* The key, once for the view. Wraps rather than scrolls: three short pairs at
+   a narrow width belong on two lines, not behind a scrollbar. */
+.shelf-band-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+.shelf-band-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Square, deliberately: `--radius-sm` is 4px and would turn an 8px swatch into
+   a dot, which is a second kind of mark. A square chip reads as a piece cut
+   out of the bar, which is what it is meant to identify. */
+.shelf-band-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 0;
+  flex: none;
+}
+
+/* The "Free" swatch is a chip of bare track sitting on the canvas at 1.22:1,
+   so it needs the frame the meter gets from its outline. `inset` here rather
+   than `outline`, because a legend chip has no overflow to protect. */
+.shelf-band-legend .shelf-band-seg--free {
+  box-shadow: inset 0 0 0 1px var(--band-meter-edge);
 }
 
 /* ── Group headers ─────────────────────────────────────────────────────────

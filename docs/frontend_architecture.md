@@ -1592,11 +1592,33 @@ models is thirty-six headers. Under `Folder` the second level is spent on the
   thereby one drive) and sorts after every measured band. Its meter is omitted
   rather than drawn empty, because an empty bar reads as a drive with nothing on
   it. `bandUsage` returns `null` for exactly this.
-- **The meter is one track with two fills, and free space leads the label.** The
-  shelf's share is *part* of what is used, so two separate bars could sum past
-  the drive; and free is the number that decides whether the next 24 GB
-  checkpoint fits. `shelf_bytes` counts `present` copies only, so a `missing`
-  row never reports space the drive does not agree is in use.
+- **The meter is one track with three segments, and free space leads the label.**
+  `ours | other | free`, laid end to end. The shelf's share is *part* of what is
+  used, so `other` is the *rest* of the used space and the three sum to exactly
+  100% by construction — which is what lets them be a flex row with no rounding
+  sliver at the right-hand end. They were originally two *overlaid* fills, which
+  summed correctly but meant a reader could see a boundary without being able to
+  tell which of the meter's two questions — "how full is this drive" and "how
+  much of that is ours" — it answered (#893). Free leads the label because it is
+  the number that decides whether the next 24 GB checkpoint fits. `shelf_bytes`
+  counts `present` copies only, so a `missing` row never reports space the drive
+  does not agree is in use.
+- **The key is drawn once for the view; the meters carry no ARIA.** Three
+  segments need naming, but naming them per band would cost more room than the
+  meters themselves, so the legend renders once and only when a *measured* band
+  is actually on screen (an unmeasured band has no meter to key). Each meter is
+  `aria-hidden`: `.shelf-band-figures` already states the identical string as
+  visible text in the same heading, so labelling the meter made every band
+  announce its figures twice. `role="meter"` is wrong here for a different
+  reason — it carries a single `aria-valuenow`, and this is three numbers.
+- **Low free space is a fact about a disk, not an event.** `bandUsage` flags it
+  from an absolute floor (`LOW_FREE_BYTES`, 50 GiB) and never a percentage: the
+  question is "does the next checkpoint fit", 10% of a 4 TB model drive is
+  400 GB and would cry wolf, and 10% of a 256 GB SSD is 25 GB — but so is 60 GB
+  free on that same disk. It is carried by the word "Only" leading the label, a
+  `mdi-alert-outline` glyph and semibold figures, with the warning hue additive
+  on top; so it survives greyscale, and it gets no live region, because it is
+  true of several bands at once and would fire a burst on every device refresh.
 - **The bands are decoration and fail alone.** `refreshDevices` is unawaited and
   swallows its own error into a `console.warn`, never into the folder store's
   `error`: the route stats the filesystem, so an offline mount can make it slow
