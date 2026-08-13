@@ -1349,11 +1349,19 @@ describe("the training step", () => {
         training_step: 2500,
       }),
     ]);
-    const text = wrapper.text();
     // `cleanAssetName` turns separators into spaces, so the derived name is
     // spaced — the point is that the step is no longer lost from it.
-    expect(text).toContain("clementine zib 3b");
-    expect(text).toContain("Step 2,500");
+    expect(wrapper.get(".shelf-row-name").text()).toContain(
+      "clementine zib 3b",
+    );
+    // `toLocaleString()` rather than a written-out "2,500": the separator
+    // follows the runtime locale, so hard-coding it fails on a machine that
+    // groups differently while the component is behaving correctly. Scoped to
+    // the element for the same reason the negatives below are — "Step" also
+    // appears in the shelf's own help paragraph.
+    expect(wrapper.get(".shelf-row-at-step").text()).toBe(
+      `Step ${(2500).toLocaleString()}`,
+    );
   });
 
   it("says nothing when the file records no step", async () => {
@@ -1361,7 +1369,10 @@ describe("the training step", () => {
     const wrapper = await mountShelf([
       adapter({ id: 602, display_name: "Portrait mix", training_step: null }),
     ]);
-    expect(wrapper.text()).not.toContain("Step");
+    // The element, not the page text: "Step" appears in the shelf's own help
+    // paragraph, so a substring check over everything would pass or fail for
+    // reasons that have nothing to do with this row.
+    expect(wrapper.find(".shelf-row-at-step").exists()).toBe(false);
   });
 
   it("never puts a single step on a stack cover", async () => {
@@ -1385,6 +1396,6 @@ describe("the training step", () => {
         stack_id: 7,
       }),
     ]);
-    expect(wrapper.text()).not.toContain("Step 2,500");
+    expect(wrapper.find(".shelf-row-at-step").exists()).toBe(false);
   });
 });
