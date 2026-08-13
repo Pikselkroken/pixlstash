@@ -69,6 +69,21 @@ vi.mock("../../api/modelFolders", async (importOriginal) => ({
   listModelFolders: (...args) => listModelFolders(...args),
 }));
 
+// The names, colours and thumbnails behind the `Assigned to` marks (#892).
+// Mocked for the same reason the folder reads are: unmocked they reach the
+// network from `onMounted`, and the rejection lands in a `console.warn` from a
+// promise no test awaits — which is the teardown race noted above.
+const listCharacters = vi.fn();
+const listPictureSets = vi.fn();
+vi.mock("../../api/characters", async (importOriginal) => ({
+  ...(await importOriginal()),
+  listCharacters: (...args) => listCharacters(...args),
+}));
+vi.mock("../../api/pictureSets", async (importOriginal) => ({
+  ...(await importOriginal()),
+  listPictureSets: (...args) => listPictureSets(...args),
+}));
+
 import ModelShelf from "./ModelShelf.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -151,6 +166,8 @@ beforeEach(() => {
   getModelMoveStatus.mockReset();
   getModelMoveStatus.mockResolvedValue({ status: "idle", results: [] });
   addModelFile.mockReset();
+  listCharacters.mockReset().mockResolvedValue([]);
+  listPictureSets.mockReset().mockResolvedValue([]);
 });
 
 describe("a row with nothing in its header", () => {
@@ -168,7 +185,7 @@ describe("a row with nothing in its header", () => {
     // is the guaranteed anchor when all else is null, and an absent base model
     // says so in words rather than leaving a cell that reads as a gap.
     const cells = row.findAll(".shelf-col").map((s) => textOf(s));
-    expect(cells).toEqual(["LoRA", "Not set", "—Not assigned", "342.1 MB"]);
+    expect(cells).toEqual(["LoRA", "Not set", "Not assigned", "342.1 MB"]);
   });
 
   it("marks the derived name by type, not by fading it", async () => {
@@ -1403,6 +1420,78 @@ describe("a run's disclosure", () => {
   });
 });
 
+describe("the Assigned to marks (#892)", () => {
+  it("names every attached entity, and never by colour alone", async () => {
+    listCharacters.mockResolvedValue([
+      { id: 7, name: "Ada", character_color: "#e91e63" },
+    ]);
+    listPictureSets.mockResolvedValue([
+      { id: 3, name: "Beach", set_color: "#3f51b5" },
+    ]);
+    const wrapper = await mountShelf([
+      adapter({
+        attachments: [
+          { entity_type: "character", entity_id: 7 },
+          { entity_type: "set", entity_id: 3 },
+        ],
+      }),
+    ]);
+    const cell = wrapper.find(".shelf-col--assigned");
+    const marks = cell.findAll(".emark");
+    expect(marks).toHaveLength(2);
+    // The accessible name is on the cell whether or not anything is hovered,
+    // and it says the TYPE — which is what keeps the mark off colour and off
+    // shape as the only carrier of what it is (WCAG 1.4.1).
+    expect(textOf(cell)).toBe("Character: Ada. Set: Beach.");
+    expect(marks[0].attributes("title")).toBe("Character: Ada");
+    expect(marks[1].attributes("title")).toBe("Set: Beach");
+    // Front-to-back: the first attachment paints over the ones behind it.
+    const z = marks.map((m) => Number(m.attributes("style").match(/\d+/)[0]));
+    expect(z[0]).toBeGreaterThan(z[1]);
+  });
+
+  it("counts the overflow rather than widening the column", async () => {
+    listCharacters.mockResolvedValue(
+      [1, 2, 3, 4].map((id) => ({ id, name: `Char ${id}` })),
+    );
+    const wrapper = await mountShelf([
+      adapter({
+        attachments: [1, 2, 3, 4].map((id) => ({
+          entity_type: "character",
+          entity_id: id,
+        })),
+      }),
+    ]);
+    const cell = wrapper.find(".shelf-col--assigned");
+    expect(cell.findAll(".emark")).toHaveLength(3);
+    // The counter names what it stands for: those marks cannot be hovered.
+    const last = cell.findAll(".emark")[2];
+    expect(last.text()).toContain("+2");
+    expect(last.attributes("title")).toBe(
+      "Character: Char 3, Character: Char 4",
+    );
+  });
+
+  it("shows an outlined slot for a model assigned to nothing", async () => {
+    const wrapper = await mountShelf([adapter({ attachments: [] })]);
+    const cell = wrapper.find(".shelf-col--assigned");
+    // A state, not a gap: the slot is drawn and the reader is told which it is.
+    expect(cell.find(".shelf-assigned-none").exists()).toBe(true);
+    expect(textOf(cell)).toBe("Not assigned");
+  });
+
+  it("still marks an attachment whose entity the lists do not answer", async () => {
+    // The vault is the authority on what is attached. Dropping the mark would
+    // say "not assigned", which is a different and wrong fact.
+    const wrapper = await mountShelf([
+      adapter({ attachments: [{ entity_type: "character", entity_id: 42 }] }),
+    ]);
+    const cell = wrapper.find(".shelf-col--assigned");
+    expect(cell.findAll(".emark")).toHaveLength(1);
+    expect(textOf(cell)).toBe("Character: #42.");
+  });
+});
+
 describe("the icon verb", () => {
   it("offers Set icon for one model and refuses it for two", async () => {
     const wrapper = await mountShelf([
@@ -1631,5 +1720,89 @@ describe("Add file", () => {
     const notices = useNoticeStore();
     expect(notices.notices[0].level).toBe("error");
     expect(notices.notices[0].text).toContain("already inside");
+  });
+});
+
+describe("the two kinds of absence", () => {
+  // The whole of #898: a registered file that is GONE and a drive that is
+  // simply not plugged in are different facts, and rendering them the same way
+  // trains the reader to ignore both. The offline case is the common one for
+  // anyone keeping adapters on an external disk.
+
+  const at = (folderId, state) => ({
+    folder_id: folderId,
+    folder_path: `/mnt/${folderId}`,
+    relpath: "a.safetensors",
+    state,
+  });
+
+  it("gives broken and offline rows different classes, not one 'absent' one", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1, locations: [at(7, "missing")] }),
+      adapter({ id: 2, locations: [at(8, "unreachable")] }),
+      adapter({ id: 3, locations: [at(9, "present")] }),
+    ]);
+    const rows = wrapper.findAll(".shelf-row");
+    expect(rows[0].classes()).toContain("shelf-row--broken");
+    expect(rows[0].classes()).not.toContain("shelf-row--offline");
+    expect(rows[1].classes()).toContain("shelf-row--offline");
+    expect(rows[1].classes()).not.toContain("shelf-row--broken");
+    expect(rows[2].classes()).not.toContain("shelf-row--broken");
+    expect(rows[2].classes()).not.toContain("shelf-row--offline");
+  });
+
+  it("keeps the error colour off the offline row", async () => {
+    // The status glyph is the one place a hue is spent on this column, and
+    // `unreachable` must not take it: nothing is wrong and nothing is lost.
+    const wrapper = await mountShelf([
+      adapter({ id: 1, locations: [at(7, "missing")] }),
+      adapter({ id: 2, locations: [at(8, "unreachable")] }),
+    ]);
+    const marks = wrapper.findAll(".shelf-row-loc");
+    expect(marks[0].classes()).toContain("shelf-row-loc--missing");
+    expect(marks[1].classes()).toContain("shelf-row-loc--unreachable");
+  });
+
+  it("states an offline mount's scope once, with its row count", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1, locations: [at(7, "unreachable")] }),
+      adapter({ id: 2, locations: [at(7, "unreachable")] }),
+    ]);
+    const banner = wrapper.find(".shelf-offline-banner");
+    expect(banner.exists()).toBe(true);
+    expect(textOf(banner)).toContain("/mnt/7 is offline — 2 models");
+    // Once, not once per row.
+    expect(wrapper.findAll(".shelf-offline-banner")).toHaveLength(1);
+  });
+
+  it("says nothing about a folder that was readable", async () => {
+    // `missing` means the folder WAS read. Calling that mount offline would be
+    // the same conflation the row treatment exists to undo.
+    const wrapper = await mountShelf([
+      adapter({ id: 1, locations: [at(7, "missing")] }),
+    ]);
+    expect(wrapper.find(".shelf-offline-banner").exists()).toBe(false);
+  });
+});
+
+describe("what a scan just added", () => {
+  it("badges only the rows the fetch brought in, and clears them next time", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const store = useModelShelfStore();
+    expect(wrapper.find(".shelf-row-new").exists()).toBe(false);
+
+    listAdapters.mockResolvedValue([adapter({ id: 1 }), adapter({ id: 2 })]);
+    await store.fetchRows({ markNew: true });
+    await wrapper.vm.$nextTick();
+    const badged = wrapper
+      .findAll(".shelf-row")
+      .filter((row) => row.find(".shelf-row-new").exists());
+    expect(badged).toHaveLength(1);
+    expect(textOf(badged[0])).toContain("New");
+
+    // An ordinary refresh is not an arrival, so the mark does not survive one.
+    await store.fetchRows();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-row-new").exists()).toBe(false);
   });
 });

@@ -228,6 +228,18 @@
       <!-- The visible half of the same statement. `inert` on the wrapper is
            what actually stops the interaction; this is what says so. -->
       <div v-if="moves.running" class="shelf-dim" aria-hidden="true"></div>
+      <!-- An unplugged drive states its scope ONCE, here, rather than through
+           300 rows each carrying the same mark. The rows still take the offline
+           treatment — that is what tells one row from its neighbour — but the
+           REASON is a fact about the mount and belongs to the mount. -->
+      <p
+        v-if="offlineNote"
+        class="shelf-offline-banner"
+        :title="offlineMountPaths"
+      >
+        <v-icon size="16">mdi-power-plug-off-outline</v-icon>
+        <span>{{ offlineNote }}</span>
+      </p>
       <p v-if="store.loading" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
         {{ store.error }}
@@ -438,7 +450,11 @@
             <template v-for="row in group.rows" :key="row.rowKey">
               <li
                 class="ps-row shelf-row"
-                :class="{ 'shelf-row--selected': store.isSelected(row.id) }"
+                :class="{
+                  'shelf-row--selected': store.isSelected(row.id),
+                  'shelf-row--offline': row.locState === 'unreachable',
+                  'shelf-row--broken': BROKEN_STATES.has(row.locState),
+                }"
                 :title="rowTitle(row)"
                 role="row"
                 aria-level="1"
@@ -534,6 +550,19 @@
                       >mdi-pencil-outline</v-icon
                     >
                   </template>
+                  <!-- What the scan you just ran brought in. The SUCCESS
+                       treatment, because an arrival is a good outcome — and
+                       nothing else on a row is green, so it reads without a
+                       key. A word rather than a dot: the shelf is a list of
+                       1,800 rows and a dot beside one name says nothing about
+                       what is different about it. Cleared by the next fetch,
+                       so it is never a stale mark from three refreshes ago.
+
+                       Outside the naming states' `v-else`: a row that just
+                       landed is still one that just landed while its name is
+                       being typed, and the arrival is the reason the reader
+                       went looking for the field in the first place. -->
+                  <span v-if="row.isNew" class="shelf-row-new">New</span>
                   <!-- The step, on any row that is not a stack cover.
                        `deriveModelName` strips the trailing step from the
                        filename on the stated grounds that "the step is parsed
@@ -596,20 +625,28 @@
                   <span v-if="row.base_model">{{ row.base_model }}</span>
                   <span v-else class="shelf-col-none">Not set</span>
                 </span>
-                <!-- The column exists here; the marks that belong in it are
-                     #892. Until then it states the fact `row.attachments`
-                     already carries — how many characters and sets a model is
-                     assigned to — rather than sitting blank under a header
-                     that promises something. `attachments` holds ids and no
-                     names, so naming the entities is not available without the
-                     lookup that issue owns. -->
+                <!-- One bordered mark per attached character or set, fanned
+                     with a fixed half-mark overlap (#892). The z-order is
+                     explicit and reversed against document order — see
+                     `assignmentMarks`, which stamps it — so the fan reads
+                     front-to-back rather than the last attachment painting on
+                     top of the first.
+
+                     Not assigned is a dashed outline rather than an empty cell,
+                     because a blank under a header that promises something
+                     reads as a rendering gap rather than as a state. -->
                 <span role="gridcell" class="shelf-col shelf-col--assigned">
-                  <template v-if="attachedCount(row)">
-                    {{ attachedCount(row)
-                    }}<span class="visually-hidden"> assigned</span>
+                  <template v-if="row.attachments?.length">
+                    <EntityMark
+                      v-for="mark in assignedMarks(row)"
+                      :key="mark.key"
+                      :mark="mark"
+                      class="shelf-assigned-mark"
+                      :style="{ zIndex: mark.z }"
+                    />
                   </template>
                   <template v-else>
-                    <span aria-hidden="true">—</span>
+                    <span class="shelf-assigned-none" aria-hidden="true"></span>
                     <span class="visually-hidden">Not assigned</span>
                   </template>
                 </span>
@@ -718,12 +755,14 @@ import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
+import EntityMark from "../widgets/EntityMark.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
 import { createStack } from "../../api/modelStacks";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
@@ -731,6 +770,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
+  assignmentMarks,
   bandGroups,
   bandUsage,
   withEmptyFolders,
@@ -744,6 +784,7 @@ import {
 } from "../../utils/modelShelf";
 
 const store = useModelShelfStore();
+const entityLists = useEntityListsStore();
 const foldersStore = useModelFoldersStore();
 const moves = useModelMovesStore();
 const rootEl = ref(null);
@@ -1165,7 +1206,10 @@ async function onFilePicked(path) {
   adding.value = true;
   try {
     const added = await addModelFile(path);
-    await Promise.all([store.fetchRows(), foldersStore.refresh({ quiet: true })]);
+    await Promise.all([
+      store.fetchRows(),
+      foldersStore.refresh({ quiet: true }),
+    ]);
     notices.push({
       level: "success",
       text: `Added ${added?.filename || "the file"} to the shelf. The original is still where it was.`,
@@ -1224,9 +1268,18 @@ const LOC_ICON = {
 const LOC_TITLE = {
   present: "",
   missing: "The file is not where it was",
-  unreachable: "Could not check this location",
+  // Not "the drive is unplugged", however common that is: a subdirectory the
+  // scan could not list lands here too, and naming a cause we did not observe
+  // is the same overclaim the muted glyph exists to avoid.
+  unreachable: "Out of reach: this location could not be read",
   forgotten: "Every registered copy has been forgotten",
 };
+
+// The two states that mean SOMETHING IS WRONG, as against `unreachable`, which
+// means nothing is. Both are a registered file that is not there: `missing` was
+// looked for in a readable folder and not found, `forgotten` has no registered
+// copy left at all. They share the row treatment because they share the fact.
+const BROKEN_STATES = new Set(["missing", "forgotten"]);
 
 // Trainers spell these however they like; the shelf spells them one way.
 const ALGO_LABEL = {
@@ -1474,14 +1527,17 @@ function onRenameKeydown(event) {
 }
 
 /**
- * How many characters and sets a model is assigned to.
+ * The marks the `Assigned to` column draws for one row (#892).
  *
- * The count only, because `attachments` carries `entity_type` and `entity_id`
- * and no names: saying WHICH ones needs the character and set stores, which is
- * what #892 brings when it replaces this cell with marks.
+ * The lists are read from the shared entity store rather than fetched per row:
+ * `attachments` comes back on the list read already, so the whole shelf costs
+ * the two list reads the sidebar makes anyway, not one lookup per attachment.
  */
-function attachedCount(row) {
-  return (row.attachments ?? []).length;
+function assignedMarks(row) {
+  return assignmentMarks(row.attachments, {
+    characters: entityLists.characters,
+    sets: entityLists.pictureSets,
+  });
 }
 
 /**
@@ -1545,6 +1601,36 @@ function meterLabel(band) {
   const shelf = formatModelSize(band.shelfBytes);
   return `${free} free of ${total} · ${shelf} on the shelf`;
 }
+
+/**
+ * The offline mounts, said once, with the number of rows they take with them.
+ *
+ * One sentence however many folders are out: the reader's question is "is
+ * something wrong or is a disk just unplugged", and a list of paths is the
+ * answer to a question they have not asked yet. The paths ride in the `title`
+ * for when they have.
+ *
+ * Deliberately NOT the error voice. Nothing here is lost and nothing needs
+ * fixing — the models come back the moment the drive does — so the line states
+ * the fact and stops.
+ */
+const offlineNote = computed(() => {
+  const mounts = store.offlineMounts;
+  if (!mounts.length) return "";
+  const models = modelCount(
+    mounts.reduce((total, mount) => total + mount.count, 0),
+  );
+  if (mounts.length === 1) {
+    return `${mounts[0].path} is offline — ${models} on it cannot be read.`;
+  }
+  const folders = `${mounts.length.toLocaleString()} model folders`;
+  return `${folders} are offline — ${models} on them cannot be read.`;
+});
+
+/** The offline paths, for the banner's tooltip. */
+const offlineMountPaths = computed(() =>
+  store.offlineMounts.map((mount) => mount.path).join("\n"),
+);
 
 /**
  * The count under the title.
@@ -1646,6 +1732,12 @@ onMounted(() => {
   // Unawaited already means it does not hold up the shelf.
   foldersStore.refreshDevices();
   foldersStore.refresh();
+  // The names, colours and thumbnails behind the `Assigned to` marks. Cached
+  // and shared with the sidebar, so on a warm cache this repaints the marks
+  // without a request; unawaited, because a row whose marks read `#12` for a
+  // moment is a better shelf than one that waits for two list reads to draw.
+  entityLists.refresh("characters");
+  entityLists.refresh("sets");
   // A move is machine-wide and outlives this component, so one may already be
   // running: started before a reload, or from another tab. Adopting it is what
   // puts the progress back rather than leaving the list live over files that
@@ -1772,6 +1864,76 @@ watch(
    it by a pixel, and 200 selected rows would shimmer as the list scrolls. */
 .shelf-row--selected {
   background: rgba(var(--v-theme-primary), 0.12);
+}
+
+/* ── The two kinds of absence ──────────────────────────────────────────────
+   BROKEN is a fault: the file was registered and is gone. It takes the error
+   rail and the error mark in the status column.
+
+   OFFLINE is not a fault: the drive is simply not plugged in, nothing is lost,
+   and the models come back with it. It takes a DASHED rail and muted ink, and
+   deliberately NEVER the error colour — the offline case is the common one for
+   anyone keeping adapters on an external disk, and painting it as a failure is
+   what trains a reader to ignore both.
+
+   They are told apart in GREYSCALE, which is what makes this a treatment and
+   not a hue: solid rail, dashed rail, no rail, plus two different glyphs. The
+   colours only reinforce what the shapes already say.
+
+   Both ride `.ps-row`'s own rail (`border-left: 3px solid transparent`,
+   §5.1) — always present, always transparent, only its colour and style
+   change — so a row that flips state does not move a pixel. */
+.shelf-row--broken {
+  border-left-color: rgb(var(--v-theme-error));
+}
+
+.shelf-row--offline {
+  border-left-style: dashed;
+  border-left-color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* Muted ink, not faded ink. 0.7 is the alpha the figure columns already carry
+   and the one #836 measured as clearing contrast at this size; 0.6 does not.
+   The NAME is what recedes, because on an offline row the row's own content is
+   what is out of reach, where a broken row's name is still perfectly true and
+   only its file is gone. */
+.shelf-row--offline .shelf-row-name {
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* What the last scan added, in the success treatment: `success` as a
+   foreground and a border on the canvas, which is the tier it is for (§4) and
+   measures 4.87:1 light / 5.96:1 dark. The outline-pill shape rather than the
+   filled count pill — that one is reserved for picture counts, and this is a
+   word. Beside the name in the same inline slot as the step count, so nothing
+   gains a column that is empty on 1,800 rows. */
+.shelf-row-new {
+  flex: none;
+  padding: 0 var(--space-2);
+  border: 1px solid rgba(var(--v-theme-success), 0.5);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: rgb(var(--v-theme-success));
+}
+
+/* The offline mount's one statement. A quiet strip in the same muted ink and
+   the same dashed rail as the rows it accounts for, so the two read as one
+   fact rather than two — and never the error surface, for the reason the row
+   treatment is not the error colour either. */
+.shelf-offline-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px dashed rgba(var(--v-theme-on-background), 0.7);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: var(--hover-wash);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-background), 0.7);
 }
 
 /* ── Drive bands ───────────────────────────────────────────────────────────
@@ -2081,9 +2243,41 @@ watch(
   white-space: nowrap;
 }
 
+/* The fan. `overflow: visible` against `.shelf-col`'s hidden, because the marks
+   are the content rather than text to ellipsise, and `assignmentMarks` already
+   caps them at what the track holds. */
 .shelf-col--assigned {
-  text-align: center;
-  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: visible;
+}
+
+/* The fixed overlap: half a mark, so three fit the two-mark track exactly and a
+   fan of two still shows a whole mark and a half. The `z-index` bound on each
+   mark takes effect because `.emark` is positioned; without that the stacking
+   order would fall back to document order and the fan would read back-to-front. */
+.shelf-assigned-mark + .shelf-assigned-mark {
+  margin-left: calc(var(--entity-thumb) / -2);
+}
+
+/* Assigned to nothing, as a state rather than as a gap: the same footprint a
+   mark has, outlined dashed so it reads as an empty slot and not as a mark that
+   failed to load. Dashed and not merely faint, because the distinction has to
+   survive greyscale as well as a glance. */
+.shelf-assigned-none {
+  display: inline-block;
+  box-sizing: border-box;
+  width: var(--entity-thumb);
+  height: var(--entity-thumb);
+  /* 0.5, not the fainter alpha this would like to be: the outline is the only
+     visible carrier of the state, so it is a non-text UI component and owes
+     3:1 (WCAG 1.4.11). Measured with the shipped `contrastRatio`: 0.35 gives
+     2.13:1 on the light canvas and 0.5 gives 3.15:1 (4.36:1 dark). Not
+     `divider` either — that is a hairline BETWEEN things, and far below the
+     floor for something that has to be seen on its own. */
+  border: 1px dashed rgba(var(--v-theme-on-background), 0.5);
+  border-radius: var(--radius-sm);
 }
 
 .shelf-col--size {

@@ -4,7 +4,7 @@
 // (`/picture_sets/{id}/members/{pictureId}`), so bulk actions are the caller's
 // loop over these calls, not a bulk endpoint.
 
-import { apiClient} from "../utils/apiClient";
+import { apiClient, appendShareToken} from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
@@ -14,6 +14,27 @@ import { unwrap } from "../utils/unwrap";
  */
 function setsUrl(path = "") {
   return `/picture_sets${path}`;
+}
+
+/**
+ * The URL of a set's thumbnail, for an `<img src>`.
+ *
+ * The list row carries a `thumbnail_url` too, and the sidebar uses that because
+ * it also wants the row's `top_picture_ids` as a cache-versioning key. This is
+ * the plain form for a caller that has only an id — the model shelf's
+ * `Assigned to` marks, which resolve from an attachment rather than a row.
+ *
+ * The route is cookie-authenticated, so a share token has to ride in the query
+ * — an `<img>` sends no header.
+ *
+ * @param {number|string} id
+ * @returns {string}
+ */
+export function pictureSetThumbnailUrl(id) {
+  const base = apiClient.defaults.baseURL || "";
+  return appendShareToken(
+    `${base}${setsUrl(`/${encodeURIComponent(id)}/thumbnail`)}`,
+  );
 }
 
 /**

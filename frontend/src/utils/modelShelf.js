@@ -389,6 +389,58 @@ export function locationState(locations) {
 }
 
 /**
+ * The registered folders whose every copy is out of reach, and how many rows
+ * each one takes with it.
+ *
+ * This is what lets an unplugged drive state its scope ONCE. `unreachable` is
+ * the common case for anyone keeping adapters on an external disk — the whole
+ * folder flips together (`ModelFolderScanner._mark_unreachable`) — and 300 rows
+ * each carrying their own mark is 300 statements of one fact.
+ *
+ * A folder qualifies only when NOTHING under it was readable. One `present`
+ * copy means the drive is plugged in and this is a per-row story again, and one
+ * `missing` copy means the folder WAS readable, which is a different fact and
+ * not one to fold into "offline".
+ *
+ * Counted per ROW rather than per copy, because a row is what the reader sees
+ * and a model registered twice in one folder is still one line on the shelf.
+ *
+ * @param {Array<Object>} rows - shelf rows, each with `locations`.
+ * @returns {Array<{folderId: number, path: string, count: number}>} sorted by
+ *   path, so the banner reads the same on every render.
+ */
+export function offlineFolders(rows) {
+  const byFolder = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const seen = new Set();
+    for (const loc of row?.locations || []) {
+      const id = Number(loc?.folder_id);
+      if (!Number.isInteger(id)) continue;
+      let folder = byFolder.get(id);
+      if (!folder) {
+        folder = {
+          folderId: id,
+          path: String(loc?.folder_path || ""),
+          count: 0,
+          offline: true,
+        };
+        byFolder.set(id, folder);
+      }
+      if (loc?.state !== "unreachable") folder.offline = false;
+      // One row, one tally, however many copies of it this folder holds.
+      else if (!seen.has(id)) {
+        seen.add(id);
+        folder.count += 1;
+      }
+    }
+  }
+  return [...byFolder.values()]
+    .filter((folder) => folder.offline && folder.count)
+    .map(({ folderId, path, count }) => ({ folderId, path, count }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
  * Say what an ai-toolkit import produced, naming the failures rather than
  * swallowing them.
  *
@@ -685,4 +737,101 @@ export function generatedMark(row) {
     ink: markForeground(),
     initials: initialsOf(name.text),
   };
+}
+
+/**
+ * How many marks the `Assigned to` column fans before it starts counting.
+ *
+ * Three, because the column is two marks wide and the overlap is half a mark:
+ * 24 + 12 + 12 lands exactly on `calc(var(--entity-thumb) * 2)`. A fourth would
+ * push the column wide and step every column right of it sideways, which is the
+ * alignment #891 exists to hold.
+ */
+const ASSIGNMENT_FAN_MAX = 3;
+
+/** Which entity list answers an attachment's `entity_type`. */
+const ATTACHMENT_KIND = {
+  character: {
+    list: "characters",
+    noun: "Character",
+    colorKey: "character_color",
+  },
+  set: { list: "sets", noun: "Set", colorKey: "set_color" },
+};
+
+/**
+ * The marks the `Assigned to` column draws for one row (#892).
+ *
+ * `attachments` carries `entity_type` and `entity_id` and nothing else, so the
+ * names, colours and thumbnails come from the shared entity lists the sidebar
+ * already fetches. An id the lists do not answer still gets a mark — the vault
+ * is the authority on what is attached, and dropping the mark would say "not
+ * assigned", which is a different and wrong fact. It reads `#12` until the list
+ * lands, which is a loading state rather than a lie.
+ *
+ * **Colour is a grouping hint and never the meaning.** Every mark carries the
+ * entity's thumbnail or its initials and an accessible name, so the row still
+ * reads in greyscale (WCAG 1.4.1); the hue only helps the eye tell two
+ * overlapping marks apart. It is the entity's OWN colour where it has one, so a
+ * character wears the same hue here as in the sidebar, and a hash of its id
+ * otherwise — never the position in the fan, which would repaint every mark
+ * when one attachment is removed.
+ *
+ * **Type is never carried by shape.** A character and a set take one radius;
+ * which is which lives in the label (`Character: Ada` / `Set: Beach`).
+ *
+ * @param {Array<{entity_type: string, entity_id: number}>} attachments
+ * @param {Object} [lists]
+ * @param {Array<Object>} [lists.characters] - `useEntityListsStore().characters`.
+ * @param {Array<Object>} [lists.sets] - `useEntityListsStore().pictureSets`.
+ * @returns {Array<Object>} up to {@link ASSIGNMENT_FAN_MAX} descriptors, the
+ *   last of which is a `{more}` counter when there were more than that. Each
+ *   carries `label`, `z`, and either `initials` + `tile` + `ink`, or `more`.
+ */
+export function assignmentMarks(
+  attachments,
+  { characters = [], sets = [] } = {},
+) {
+  const byId = {
+    characters: new Map((characters || []).map((row) => [String(row.id), row])),
+    sets: new Map((sets || []).map((row) => [String(row.id), row])),
+  };
+  const marks = (attachments ?? []).map((att) => {
+    const type = att.entity_type === "character" ? "character" : "set";
+    const kind = ATTACHMENT_KIND[type];
+    const entity = byId[kind.list].get(String(att.entity_id));
+    const name = entity?.name || `#${att.entity_id}`;
+    const hex =
+      entity?.[kind.colorKey] ||
+      SET_COLORS[hash32(`${type}:${att.entity_id}`) % SET_COLORS.length].value;
+    return {
+      key: `${type}:${att.entity_id}`,
+      type,
+      id: att.entity_id,
+      label: `${kind.noun}: ${name}`,
+      hue: hex,
+      tile: markBackground(hex),
+      ink: markForeground(),
+      initials: initialsOf(name),
+    };
+  });
+  let fan = marks;
+  if (marks.length > ASSIGNMENT_FAN_MAX) {
+    const rest = marks.slice(ASSIGNMENT_FAN_MAX - 1);
+    fan = [
+      ...marks.slice(0, ASSIGNMENT_FAN_MAX - 1),
+      {
+        key: "more",
+        more: rest.length,
+        // The counter names what it stands for rather than only saying "+4":
+        // the reader cannot hover the marks that are not there.
+        label: rest.map((mark) => mark.label).join(", "),
+      },
+    ];
+  }
+  // Painted front-to-back, which is the reverse of document order: the first
+  // attachment is the whole mark and the ones behind it show the sliver that
+  // says how many there are. Stamped here rather than in the template so the
+  // order is one decision with one test, not an expression in a `v-for`.
+  return fan.map((mark, index) => ({ ...mark, z: fan.length - index }));
 }

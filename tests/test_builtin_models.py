@@ -496,3 +496,110 @@ def test_a_fixed_folder_refuses_a_per_item_move_the_same_as_root_only(tmp_path):
             ModelMover(hub).plan([(1, "models--org--thing")], 2)
     finally:
         hub.close()
+
+
+# --- Which feature a cached repo powers ---------------------------------------
+
+
+def _repo(repo_id, snapshot=None):
+    """A stand-in for `scan_cache_dir()`'s CachedRepoInfo."""
+
+    class _Rev:
+        snapshot_path = snapshot or "/nonexistent"
+
+    class _Repo:
+        pass
+
+    r = _Repo()
+    r.repo_id = repo_id
+    r.repo_type = "model"
+    # A frozenset, like the real one — the ordering trap this code had to fix.
+    r.revisions = frozenset({_Rev()}) if snapshot else frozenset()
+    return r
+
+
+def test_our_own_downloaders_repos_are_facts_not_guesses():
+    """Restated here for the same reason `builtin_models` restates filenames, so
+    the duplicate is pinned against the modules that own the real constants —
+    imported in the test, where the torch/onnxruntime cost is free."""
+    from pixlstash.services.model_features import OUR_REPOS, feature_for_repo
+    from pixlstash.tagger_plugins.wd14 import WD14_HF_REPO
+    from pixlstash.tagger_plugins.pixlstash_tagger import PIXLSTASH_TAGGER_HF_REPO
+
+    assert WD14_HF_REPO in OUR_REPOS
+    assert PIXLSTASH_TAGGER_HF_REPO in OUR_REPOS
+    assert feature_for_repo(_repo(WD14_HF_REPO)) == "tagger"
+
+
+def test_a_base_model_in_the_shipped_table_needs_no_guess():
+    """43 curated entries already map a repo id to a base model, so the shelf
+    does not get to have a second opinion about it."""
+    from pixlstash.services.model_features import feature_for_repo
+
+    assert feature_for_repo(_repo("Tongyi-MAI/Z-Image-Turbo")) == "checkpoint"
+
+
+def test_a_text_encoder_is_not_labelled_a_captioner(tmp_path):
+    """The trap that made this measurable rather than assumed.
+
+    `T5ForConditionalGeneration` shares its suffix with every vision-language
+    captioner, so matching the suffix alone put "Captioning" on
+    `google/flan-t5-base` — a text encoder that captions nothing — in the column
+    a reader uses to decide what is safe to delete. A vision tower is required.
+    """
+    from pixlstash.services.model_features import feature_for_repo
+
+    snap = tmp_path / "t5"
+    snap.mkdir()
+    (snap / "config.json").write_text(
+        '{"architectures": ["T5ForConditionalGeneration"], "model_type": "t5"}'
+    )
+    assert feature_for_repo(_repo("google/flan-t5-base", str(snap))) == "other"
+
+    # The positive control: the same suffix WITH a vision tower is the real
+    # thing, so the guard must not have closed the door on captioners.
+    vlm = tmp_path / "vlm"
+    vlm.mkdir()
+    (vlm / "config.json").write_text(
+        '{"architectures": ["Qwen2_5_VLForConditionalGeneration"], '
+        '"vision_config": {"depth": 32}}'
+    )
+    assert feature_for_repo(_repo("Qwen/Qwen2.5-VL-7B", str(vlm))) == "captioner"
+
+
+def test_a_repo_with_nothing_to_go_on_says_other_rather_than_guessing(tmp_path):
+    """`other` is a real state. A VAE and a bare weight file are components of
+    somebody else's pipeline, and forcing them into a feature label would be a
+    confident wrong answer where an honest blank costs nothing."""
+    from pixlstash.services.model_features import feature_for_repo
+
+    snap = tmp_path / "vae"
+    snap.mkdir()
+    (snap / "raw.safetensors").write_bytes(b"\x00")
+    assert feature_for_repo(_repo("ai-toolkit/flux2_vae", str(snap))) == "other"
+
+
+def test_every_readable_revision_is_consulted_not_one_at_random(tmp_path):
+    """`repo.revisions` is a frozenset, so "the first snapshot" was whatever the
+    set iterated to that run. A repo holding a complete revision beside a
+    half-downloaded one classified differently on different runs off the same
+    disk."""
+    from pixlstash.services.model_features import feature_for_repo
+
+    empty = tmp_path / "aaa-partial"
+    empty.mkdir()
+    (empty / "tokenizer.json").write_text("{}")
+    full = tmp_path / "bbb-complete"
+    full.mkdir()
+    (full / "config.json").write_text(
+        '{"architectures": ["BlipForConditionalGeneration"], "model_type": "blip"}'
+    )
+
+    class _Rev:
+        def __init__(self, p):
+            self.snapshot_path = p
+
+    repo = _repo("Salesforce/blip-image-captioning-base")
+    repo.revisions = frozenset({_Rev(str(empty)), _Rev(str(full))})
+    # Deterministic whichever way the set iterates.
+    assert feature_for_repo(repo) == "captioner"

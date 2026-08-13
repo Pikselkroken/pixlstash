@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import { contrastRatio } from "./contrastAudit.js";
 import { SET_COLORS } from "./setAppearance";
 import {
+  assignmentMarks,
   bandGroups,
   bandUsage,
   baseModelKey,
@@ -21,6 +22,7 @@ import {
   locationState,
   modelName,
   movableCopies,
+  offlineFolders,
   stackReceipt,
   trainingStep,
 } from "./modelShelf";
@@ -130,6 +132,76 @@ describe("locationState", () => {
   it("reports no copies at all as its own state", () => {
     expect(locationState([])).toBe("forgotten");
     expect(locationState(undefined)).toBe("forgotten");
+  });
+});
+
+describe("offlineFolders", () => {
+  const at = (folderId, state, folderPath = `/mnt/${folderId}`) => ({
+    folder_id: folderId,
+    folder_path: folderPath,
+    relpath: "a.safetensors",
+    state,
+  });
+
+  it("names a wholly unreachable folder and counts its rows", () => {
+    expect(
+      offlineFolders([
+        { id: 1, locations: [at(7, "unreachable", "/mnt/usb")] },
+        { id: 2, locations: [at(7, "unreachable", "/mnt/usb")] },
+      ]),
+    ).toEqual([{ folderId: 7, path: "/mnt/usb", count: 2 }]);
+  });
+
+  it("is silent about a folder that was readable", () => {
+    // One `present` copy means the drive IS plugged in, and one `missing` copy
+    // means the folder WAS read — a different fact, and not one to fold into
+    // "offline". Either disqualifies the whole folder.
+    expect(
+      offlineFolders([
+        { id: 1, locations: [at(7, "unreachable")] },
+        { id: 2, locations: [at(7, "present")] },
+      ]),
+    ).toEqual([]);
+    expect(
+      offlineFolders([
+        { id: 1, locations: [at(7, "unreachable")] },
+        { id: 2, locations: [at(7, "missing")] },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("counts a row once however many copies of it a folder holds", () => {
+    const twice = {
+      id: 1,
+      locations: [
+        at(7, "unreachable"),
+        { ...at(7, "unreachable"), relpath: "b" },
+      ],
+    };
+    expect(offlineFolders([twice])[0].count).toBe(1);
+  });
+
+  it("leaves a row alone whose other folder is fine", () => {
+    // The offline folder is still named — the copy on it genuinely cannot be
+    // read — but the row is usable, which is the reader's actual question and
+    // the reason this is a mount-level statement rather than a row-level one.
+    const rows = [
+      { id: 1, locations: [at(7, "unreachable"), at(8, "present")] },
+    ];
+    expect(offlineFolders(rows)).toEqual([
+      { folderId: 7, path: "/mnt/7", count: 1 },
+    ]);
+  });
+
+  it("orders by path, so the banner reads the same every render", () => {
+    const rows = [
+      { id: 1, locations: [at(9, "unreachable", "/mnt/zed")] },
+      { id: 2, locations: [at(8, "unreachable", "/mnt/alpha")] },
+    ];
+    expect(offlineFolders(rows).map((f) => f.path)).toEqual([
+      "/mnt/alpha",
+      "/mnt/zed",
+    ]);
   });
 });
 
@@ -662,5 +734,65 @@ describe("movableCopies", () => {
       locRow([{ folder_id: 2, relpath: "tagger.onnx", state: "present" }]),
     ]);
     expect(items).toHaveLength(1);
+  });
+});
+
+describe("assignmentMarks", () => {
+  const attach = (type, id) => ({ entity_type: type, entity_id: id });
+
+  it("takes the entity's own colour, so a character is one hue app-wide", () => {
+    const [mark] = assignmentMarks([attach("character", 7)], {
+      characters: [{ id: 7, name: "Ada", character_color: "#e91e63" }],
+    });
+    expect(mark.hue).toBe("#e91e63");
+    expect(mark.label).toBe("Character: Ada");
+    expect(mark.initials).toBe("AD");
+  });
+
+  it("keys a colourless entity on its id, never on its place in the fan", () => {
+    // Positional colour would repaint every remaining mark when one attachment
+    // is removed, which is the failure `generatedMark` documents for models.
+    const lists = {
+      sets: [
+        { id: 4, name: "Beach" },
+        { id: 9, name: "Studio" },
+      ],
+    };
+    const pair = assignmentMarks([attach("set", 4), attach("set", 9)], lists);
+    const alone = assignmentMarks([attach("set", 9)], lists);
+    expect(alone[0].hue).toBe(pair[1].hue);
+    expect(SET_COLORS.map((c) => c.value)).toContain(alone[0].hue);
+  });
+
+  it("gives every mark an identity beside its colour", () => {
+    // The greyscale test, as arithmetic: strip the hue and each mark still
+    // carries a name and a glyph, so nothing is distinguished by colour alone.
+    const marks = assignmentMarks(
+      [attach("character", 1), attach("set", 1)],
+      {},
+    );
+    expect(marks.map((m) => m.label)).toEqual(["Character: #1", "Set: #1"]);
+    expect(marks.every((m) => m.initials)).toBe(true);
+    // The type is in the noun, never in the hue — two entities can and do
+    // collide on a colour, which is exactly why colour is only a hint.
+    expect(marks.every((m) => SET_COLORS.some((c) => c.value === m.hue))).toBe(
+      true,
+    );
+  });
+
+  it("fans three and then counts, front-to-back", () => {
+    const marks = assignmentMarks(
+      [1, 2, 3, 4, 5].map((id) => attach("character", id)),
+      {},
+    );
+    expect(marks).toHaveLength(3);
+    expect(marks[2].more).toBe(3);
+    expect(marks[2].label).toBe("Character: #3, Character: #4, Character: #5");
+    expect(marks.map((m) => m.z)).toEqual([3, 2, 1]);
+  });
+
+  it("returns nothing for a model assigned to nothing", () => {
+    expect(assignmentMarks([], {})).toEqual([]);
+    expect(assignmentMarks(undefined)).toEqual([]);
   });
 });
