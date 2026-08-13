@@ -1263,7 +1263,8 @@ costs an existence check at start-up.
 text (`lora`, `lokr`) and already renders as the row's label, so `tagger` /
 `captioner` / `scorer` / `face` ride there and `file_kind` stays four values
 wide instead of growing one entry per role. No schema change: the `model` CHECK
-constraints bind only `adapter`.
+constraints bind only `adapter`. `kind` holds the **primary** label only; the
+full set lives in `model_capability` (below).
 
 **The scanner must skip these folders**, which is what `model_folder.owner`
 marks. It yields only `.safetensors` and sweeps whatever it did not see to
@@ -1339,6 +1340,56 @@ downloaded a pack from sits beside it and gets no row, the same judgement
 **HuggingFace declares a repo, not a file.** A per-file listing would show the
 same weights once per revision and mean nothing; `repo_id` is the unit a person
 recognises and `size_on_disk` the number they came for.
+
+### What a cached model is FOR: the feature classifier and `model_capability`
+
+**A cached repo is labelled by the feature it powers, not by its file format and
+not by its ML task.** `repo_type` is `model` for all 26 repos on a real machine
+and therefore says nothing. `services/model_features.py` answers from four
+sources, in order, the first one that answers winning outright: repos our own
+downloaders name (a fact, not a guess); the shipped `KNOWN_BASE_MODELS` table;
+the snapshot's own `model_index.json` / `config.json`; and then **`other`**,
+which is the part that matters — a VAE, a T5 encoder and a BERT are components
+of somebody else's pipeline, and forcing one into a feature label would put a
+confident wrong word in the column a reader uses to decide what is safe to
+delete. `…ForConditionalGeneration` is the documented trap: it is the class of
+every vision-language captioner *and* of `T5ForConditionalGeneration`, so it
+only counts as a captioner when the config also describes a vision tower.
+
+**A model that serves several features appears under each, which needs a set.**
+`features_for_repo` returns an ordered tuple, and the shelf lists the model once
+per entry. Two worked examples, and both are the reason: Florence-2 is one set
+of weights driving `get_captions` *and* `detect_objects` (what `DetectionTask`
+runs), and the CLIP the embedder loads is both the search encoder and the
+aesthetic predictor's backbone — `ImageEmbeddingTask` runs one forward pass and
+uses the result twice. A single label answers "what breaks if I delete this"
+wrongly for exactly the rows a reader is deciding about, which is the question
+the column exists for.
+
+**The set lives in `model_capability(model_id, capability)`**, the same
+one-model-many-rows idiom as `model_file` and read the same way — one whole-page
+query grouped in Python (`fetch_capabilities`), never a join onto the row SELECT
+that would fan every model row out once per capability. `model.kind` is left
+alone and keeps the **first** entry: it is the adapter-algorithm column, it
+carries a CHECK that says so, and every existing reader was written against one
+string. Only declared engines carry capabilities; a scanned adapter has none,
+because its `kind` is an algorithm and an algorithm is not a capability.
+
+**It is a child of `model` with foreign keys ON**, so every site that deletes a
+`model` row deletes its capabilities first — `forget_models` and the
+`CHECKPOINT_HASH` merge (which carries them across to the survivor, since the
+two rows are the same bytes). A forgotten child here does not leak quietly; it
+**aborts the delete**. The same rule is why `_rebuild_model_with_kind_check`
+does not have to carry this table: its guard is false forever once the rebuild
+has run, and the `CREATE TABLE` follows it. A third child would have to join
+that dance.
+
+**No index on `capability`, deliberately.** The shelf facets and filters
+client-side over rows it has already fetched, so nothing asks SQL "which models
+can X". The declaration restates the set wholesale rather than diffing it — at
+most two rows, and the declaration is the authority, so a capability it no
+longer claims has to go or the model stays listed under a feature it stopped
+serving.
 
 **`provenance` stays `builtin` on every row here.** It is a claim about how the
 row was *written* — declared by PixlStash's registration rather than scanned out

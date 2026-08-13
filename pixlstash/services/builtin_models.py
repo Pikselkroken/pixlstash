@@ -118,6 +118,10 @@ class DeclaredEntry:
             size already recorded.
         present: Whether it is on disk now. False writes ``missing``, which is a
             normal state here and not a warning.
+        capabilities: Every feature these weights serve, primary first, written
+            to ``model_capability``. Empty means "just the role", which is what
+            all but one caller means: a model that does one thing does not have
+            to say it twice.
     """
 
     relpath: str
@@ -125,6 +129,12 @@ class DeclaredEntry:
     role: str
     size: Optional[int]
     present: bool
+    capabilities: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def declared_capabilities(self) -> tuple[str, ...]:
+        """The capability set to write — never empty, `role` first."""
+        return self.capabilities or (self.role,)
 
 
 # Mirrors `pixlstash_tagger.PIXLSTASH_TAGGER_FILENAME` /
@@ -395,21 +405,31 @@ def declare_folder(
                     "state, seen_at) VALUES (?, ?, ?, ?, ?)",
                     (model_id, folder_id, entry.relpath, state, now),
                 )
-                continue
+            else:
+                model_id = int(existing[0])
+                # The declaration is the authority for what this row IS, so it
+                # is written outright rather than COALESCE'd: unlike a scanned
+                # row there is no owner curation here to preserve.
+                conn.execute(
+                    "UPDATE model SET file_kind = ?, kind = ?, display_name = ?, "
+                    "file_size = COALESCE(?, file_size) WHERE id = ?",
+                    (FILE_ENGINE, entry.role, entry.display_name, size, model_id),
+                )
+                conn.execute(
+                    "UPDATE model_file SET state = ?, seen_at = ? "
+                    "WHERE model_folder_id = ? AND relpath = ?",
+                    (state, now, folder_id, entry.relpath),
+                )
 
-            model_id = int(existing[0])
-            # The declaration is the authority for what this row IS, so it is
-            # written outright rather than COALESCE'd: unlike a scanned row
-            # there is no owner curation here to preserve.
-            conn.execute(
-                "UPDATE model SET file_kind = ?, kind = ?, display_name = ?, "
-                "file_size = COALESCE(?, file_size) WHERE id = ?",
-                (FILE_ENGINE, entry.role, entry.display_name, size, model_id),
-            )
-            conn.execute(
-                "UPDATE model_file SET state = ?, seen_at = ? "
-                "WHERE model_folder_id = ? AND relpath = ?",
-                (state, now, folder_id, entry.relpath),
+            # Both branches, and restated wholesale for the same reason `kind`
+            # is: a capability the declaration no longer claims must go, or a
+            # model that stopped serving a feature would still be listed under
+            # it. Two rows at most, so a diff would be more code than the
+            # rewrite it saves.
+            conn.execute("DELETE FROM model_capability WHERE model_id = ?", (model_id,))
+            conn.executemany(
+                "INSERT INTO model_capability (model_id, capability) VALUES (?, ?)",
+                [(model_id, capability) for capability in entry.declared_capabilities],
             )
         # The sweep, and these folders have nowhere else to get one. The folder
         # scanner does this pass for every folder it walks — anything it did not

@@ -25,13 +25,18 @@ about a quarter of a working cache is not a feature-model at all and gets
    decide what is safe to delete. "We know our own manifest; we do not know what
    else you put here" is the same epistemics as ``unclaimed_files``.
 
-**One label per row, for now.** A model can genuinely serve several features —
-the laion CLIP repos are both the search embedder and the aesthetic scorer's
-backbone — and the design calls for such a model to appear under each. That
-needs somewhere to put a list, which ``model.kind`` is not.
+**A model can serve several features, and says so.** Florence-2 both captions
+and detects; the CLIP the embedder loads is both the search encoder and the
+aesthetic scorer's backbone. Filing either under one heading answers "what
+breaks if I delete this" wrongly, which is the question the column exists for,
+so :func:`features_for_repo` returns the whole set and the shelf lists the model
+under each. The set lives in the ``model_capability`` join table.
 
-ponytail: single label per row, keyed on `model.kind`; a `model_capability`
-join table is the upgrade when the shelf starts listing capabilities per row.
+``model.kind`` still holds the **first** of them, and only that. It is the
+adapter-algorithm column, it carries a CHECK that says so, and every existing
+reader — the Kind column, the curation verbs — was written against one string.
+The first entry is therefore the one a reader sees when they see only one, which
+is why these tuples are ordered by what the model is *primarily* for.
 """
 
 from __future__ import annotations
@@ -54,6 +59,10 @@ FEATURE_TAGGER = "tagger"
 FEATURE_FACE = "face"
 FEATURE_SEARCH = "search"
 FEATURE_SCORER = "scorer"
+# `DetectionTask` / `InferenceEngine.detect_objects`, which is Florence-2's
+# `<OD>` and grounding heads — the same weights that caption, which is the
+# worked example this module's multi-capability set exists for.
+FEATURE_DETECTOR = "detector"
 FEATURE_CHECKPOINT = "checkpoint"
 FEATURE_OTHER = "other"
 
@@ -62,22 +71,38 @@ FEATURE_OTHER = "other"
 # florence2 and wd14 import torch and onnxruntime at module level, and this runs
 # at start-up. `tests/test_builtin_models.py` imports the real constants, where
 # the cost is free, and asserts the two agree.
-OUR_REPOS: dict[str, str] = {
+OUR_REPOS: dict[str, tuple[str, ...]] = {
     # `joycaption._MODEL_NAME`
-    "fancyfeast/llama-joycaption-beta-one-hf-llava": FEATURE_CAPTIONER,
-    # `florence2.FLORENCE_MODEL_VARIANTS[*]["model"]`. One setting drives both
-    # captioning and Segment, so the row says captioner and the multi-capability
-    # listing is the deferred piece above.
-    "florence-community/Florence-2-base": FEATURE_CAPTIONER,
-    "florence-community/Florence-2-large-ft": FEATURE_CAPTIONER,
+    "fancyfeast/llama-joycaption-beta-one-hf-llava": (FEATURE_CAPTIONER,),
+    # `florence2.FLORENCE_MODEL_VARIANTS[*]["model"]`. ONE setting and one set of
+    # weights drive two features: `FlorenceService.get_captions` and
+    # `.detect_objects`, the latter being what `DetectionTask` runs. Deleting
+    # this repo takes both with it, so the row has to say both.
+    "florence-community/Florence-2-base": (FEATURE_CAPTIONER, FEATURE_DETECTOR),
+    "florence-community/Florence-2-large-ft": (FEATURE_CAPTIONER, FEATURE_DETECTOR),
     # `wd14.WD14_HF_REPO`
-    "SmilingWolf/wd-convnext-tagger-v3": FEATURE_TAGGER,
+    "SmilingWolf/wd-convnext-tagger-v3": (FEATURE_TAGGER,),
     # `pixlstash_tagger.PIXLSTASH_TAGGER_HF_REPO`
-    "PersonalJeebus/pixlvault-anomaly-tagger": FEATURE_TAGGER,
+    "PersonalJeebus/pixlvault-anomaly-tagger": (FEATURE_TAGGER,),
     # `insightface_model_utils._AURAFACE_REPO`
-    "fal/AuraFace-v1": FEATURE_FACE,
+    "fal/AuraFace-v1": (FEATURE_FACE,),
     # `sbert.SBERT_MODEL_NAME`, which resolves under this org.
-    "sentence-transformers/all-MiniLM-L6-v2": FEATURE_SEARCH,
+    "sentence-transformers/all-MiniLM-L6-v2": (FEATURE_SEARCH,),
+    # What open_clip fetches for `clip_service.CLIP_MODEL_NAME` /
+    # `CLIP_MODEL_WEIGHTS` ("ViT-B-32" / "laion2b_s34b_b79k"), and the second
+    # worked example. `ImageEmbeddingTask` runs ONE forward pass through these
+    # weights and uses the result twice: it is written as the search embedding
+    # AND fed to the aesthetic predictor. `BUILTIN_ENGINES` already declares the
+    # predictor itself as a `scorer`, but that is a 4 MB linear head — the
+    # ~600 MB a reader is actually deciding about is this repo, and deleting it
+    # stops search and quality scores together while leaving a scorer on the
+    # shelf that has nothing left to score.
+    #
+    # Named here and not inferred from the CLIP architecture hint below, which
+    # stays `search` alone: some *other* cached CLIP is somebody else's encoder
+    # and is not this scorer's backbone. `tests/test_builtin_models.py` pins the
+    # id against those two constants so a model switch cannot leave it stale.
+    "laion/CLIP-ViT-B-32-laion2B-s34B-b79K": (FEATURE_SEARCH, FEATURE_SCORER),
 }
 
 # Architecture class -> feature, read out of `config.json`. Substring matched
@@ -200,14 +225,22 @@ def _feature_from_files(snapshot: str) -> Optional[str]:
     return None
 
 
-def feature_for_repo(repo) -> str:
-    """The PixlStash feature a cached HuggingFace repo powers.
+def features_for_repo(repo) -> tuple[str, ...]:
+    """Every PixlStash feature a cached HuggingFace repo powers.
+
+    The four sources answer in order and the **first one that answers wins
+    outright**: they are ranked by how much they know, so a repo our own
+    downloader named is not then also guessed at from its architecture. Only
+    ``OUR_REPOS`` returns more than one capability today, because it is the only
+    source that knows what PixlStash actually does with the weights — a
+    ``config.json`` describes an architecture, and an architecture cannot say
+    whether this machine's copy backs one feature or two.
 
     Args:
         repo: A ``CachedRepoInfo`` from ``scan_cache_dir()``.
 
     Returns:
-        One of the ``FEATURE_*`` values. ``other`` when nothing above answers,
+        Ordered, non-empty, primary first. ``(other,)`` when nothing answers,
         which is a truthful state and not a failure.
     """
     repo_id = str(getattr(repo, "repo_id", "") or "")
@@ -216,15 +249,26 @@ def feature_for_repo(repo) -> str:
         return ours
 
     if repo_id.lower() in _base_model_aliases():
-        return FEATURE_CHECKPOINT
+        return (FEATURE_CHECKPOINT,)
 
     for snapshot in _snapshot_dirs(repo):
         found = _feature_from_files(snapshot)
         if found:
-            return found
+            return (found,)
 
     lowered = repo_id.lower()
     for needle, feature in _NAME_HINTS:
         if needle in lowered:
-            return feature
-    return FEATURE_OTHER
+            return (feature,)
+    return (FEATURE_OTHER,)
+
+
+def feature_for_repo(repo) -> str:
+    """The one feature to show when there is room for one word.
+
+    The first of :func:`features_for_repo`, which is what lands in
+    ``model.kind``. Kept as its own function because "the primary label" is a
+    distinct question from "everything this serves", and the callers that want
+    one string should not each be reaching into a tuple for element zero.
+    """
+    return features_for_repo(repo)[0]

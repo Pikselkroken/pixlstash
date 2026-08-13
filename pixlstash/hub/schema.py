@@ -377,6 +377,29 @@ CREATE TABLE IF NOT EXISTS model_file (
 )
 """
 
+# One model, many capabilities — the same idiom as ``model_file`` one table up,
+# and for the same reason. A model that serves several features genuinely cannot
+# be filed under one heading: Florence-2 both captions and detects, and the CLIP
+# the embedder loads is both the search encoder and the aesthetic scorer's
+# backbone. The shelf lists such a model under *each* feature it serves, which
+# needs somewhere to hold the set.
+#
+# ``model.kind`` is not that place and is left alone: it is the adapter
+# algorithm, it carries a CHECK that says so, and it holds the *primary* label
+# for a declared engine so the Kind column and every existing reader keep
+# working. This table is additive — a row with no capabilities declared simply
+# has none, which is what every scanned adapter and checkpoint is.
+#
+# No index on ``capability``: the shelf faces and filters client-side over the
+# rows it already fetched, so nothing queries "which models can X" in SQL.
+_V2_MODEL_CAPABILITY = """
+CREATE TABLE IF NOT EXISTS model_capability (
+    model_id    INTEGER NOT NULL REFERENCES model(id),
+    capability  TEXT NOT NULL,
+    PRIMARY KEY (model_id, capability)
+)
+"""
+
 # One subject, many runs, many steps per run. Mirrors PictureStack exactly
 # (id, name, created_at, updated_at) so the shelf can reuse the picture-stack
 # presentation rather than invent a second stacking idiom.
@@ -409,6 +432,8 @@ _V2_MODEL_SHELF_TABLES = (
     _V2_MODEL_FOLDER,
     _V2_MODEL,
     _V2_MODEL_FILE,
+    # After `model`: it references `model(id)`.
+    _V2_MODEL_CAPABILITY,
     *_V2_MODEL_SHELF_INDEXES,
 )
 
@@ -466,6 +491,12 @@ def _rebuild_model_with_kind_check(conn: sqlite3.Connection) -> None:
     One SAVEPOINT around the lot, because this runs both inside the migration's
     transaction and (via the tail re-run) outside one. That is the difference
     between a crash mid-rebuild and a hub whose ``model_file`` rows are gone.
+
+    ``model_capability`` is the *other* child of ``model`` and is deliberately
+    not carried here, because it cannot exist yet when this runs: its
+    ``CREATE TABLE`` is in the statement loop that follows the caller's rebuild
+    guard, and that guard is false forever after the rebuild. **A third child
+    table would have to join the dance above** — the drop aborts otherwise.
 
     Raises:
         sqlite3.IntegrityError: A stored adapter row has no ``kind`` and the new

@@ -43,7 +43,7 @@ from pixlstash.services.builtin_models import (
     DeclaredEntry,
     declare_folder,
 )
-from pixlstash.services.model_features import feature_for_repo
+from pixlstash.services.model_features import features_for_repo
 from pixlstash.utils.insightface_model_utils import (
     KNOWN_MODEL_PACKS,
     insightface_root,
@@ -235,18 +235,26 @@ def declare_huggingface_cache(hub, folder_path: str) -> Optional[int]:
         )
         return None
 
-    entries = [
-        DeclaredEntry(
-            # The repo's own directory name (`models--org--name`), which is what
-            # it is called inside this folder. `repo_id` is the display name.
-            relpath=os.path.basename(str(repo.repo_path)),
-            display_name=repo.repo_id,
-            # The feature it powers, not `repo_type` — which is `model` for all
-            # 26 repos on a real machine and therefore says nothing.
-            role=feature_for_repo(repo),
-            size=int(repo.size_on_disk),
-            present=True,
+    entries = []
+    for repo in info.repos:
+        # The features it powers, not `repo_type` — which is `model` for all 26
+        # repos on a real machine and therefore says nothing. Classified once
+        # per repo: the primary label goes in `model.kind` for the Kind column
+        # and the whole set goes to `model_capability`, because Florence-2 and
+        # the embedder's CLIP each serve two and a reader deciding what is safe
+        # to delete has to see both.
+        capabilities = features_for_repo(repo)
+        entries.append(
+            DeclaredEntry(
+                # The repo's own directory name (`models--org--name`), which is
+                # what it is called inside this folder. `repo_id` is the display
+                # name.
+                relpath=os.path.basename(str(repo.repo_path)),
+                display_name=repo.repo_id,
+                role=capabilities[0],
+                size=int(repo.size_on_disk),
+                present=True,
+                capabilities=capabilities,
+            )
         )
-        for repo in info.repos
-    ]
     return declare_folder(hub, folder_path, entries, movable=MOVABLE_FIXED)
