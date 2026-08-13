@@ -1400,6 +1400,69 @@ describe("Escape", () => {
   });
 });
 
+describe("the training step", () => {
+  it("shows the step on a row whose name had it stripped", async () => {
+    // `deriveModelName` drops the trailing step on the stated grounds that it
+    // "is parsed into its own field" — and nothing rendered that field outside
+    // an expanded stack, so two checkpoints of one run read identically.
+    const wrapper = await mountShelf([
+      adapter({
+        id: 601,
+        display_name: null,
+        filename: "clementine-zib-3b_000002500.safetensors",
+        training_step: 2500,
+      }),
+    ]);
+    // `cleanAssetName` turns separators into spaces, so the derived name is
+    // spaced — the point is that the step is no longer lost from it.
+    expect(wrapper.get(".shelf-row-name").text()).toContain(
+      "clementine zib 3b",
+    );
+    // `toLocaleString()` rather than a written-out "2,500": the separator
+    // follows the runtime locale, so hard-coding it fails on a machine that
+    // groups differently while the component is behaving correctly. Scoped to
+    // the element for the same reason the negatives below are — "Step" also
+    // appears in the shelf's own help paragraph.
+    expect(wrapper.get(".shelf-row-at-step").text()).toBe(
+      `Step ${(2500).toLocaleString()}`,
+    );
+  });
+
+  it("says nothing when the file records no step", async () => {
+    // A hand-made adapter has no step, and "Step —" would invent one.
+    const wrapper = await mountShelf([
+      adapter({ id: 602, display_name: "Portrait mix", training_step: null }),
+    ]);
+    // The element, not the page text: "Step" appears in the shelf's own help
+    // paragraph, so a substring check over everything would pass or fail for
+    // reasons that have nothing to do with this row.
+    expect(wrapper.find(".shelf-row-at-step").exists()).toBe(false);
+  });
+
+  it("never puts a single step on a stack cover", async () => {
+    // A cover stands for every step in the run, so naming one would be false.
+    // The member count is what belongs there.
+    // Two rows sharing a stack fold into one cover; a lone row with a
+    // `stack_id` is not a cover and correctly keeps its own step.
+    const wrapper = await mountShelf([
+      adapter({
+        id: 603,
+        display_name: null,
+        filename: "clementine-zib-3b_000002500.safetensors",
+        training_step: 2500,
+        stack_id: 7,
+      }),
+      adapter({
+        id: 604,
+        display_name: null,
+        filename: "clementine-zib-3b_000005000.safetensors",
+        training_step: 5000,
+        stack_id: 7,
+      }),
+    ]);
+    expect(wrapper.find(".shelf-row-at-step").exists()).toBe(false);
+  });
+});
 
 describe("Add file", () => {
   // F6's remainder: the way one adapter that belongs to no training run gets
@@ -1413,9 +1476,7 @@ describe("Add file", () => {
 
   it("offers the verb in the toolbar, with a name a reader can hear", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
-    expect(
-      wrapper.find('[aria-label="Add a model file"]').exists(),
-    ).toBe(true);
+    expect(wrapper.find('[aria-label="Add a model file"]').exists()).toBe(true);
   });
 
   it("sends the picked path and refreshes the shelf, so no rescan is needed", async () => {
@@ -1433,7 +1494,9 @@ describe("Add file", () => {
 
     await pick(wrapper, "/home/u/Downloads/loose.safetensors");
 
-    expect(addModelFile).toHaveBeenCalledWith("/home/u/Downloads/loose.safetensors");
+    expect(addModelFile).toHaveBeenCalledWith(
+      "/home/u/Downloads/loose.safetensors",
+    );
     expect(listAdapters.mock.calls.length).toBeGreaterThan(before);
     const notices = useNoticeStore();
     expect(notices.notices[0].level).toBe("success");
