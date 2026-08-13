@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.model_folder_scanner import MODEL_SUFFIX
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 from pixlstash.utils.path_utils import resolve_path_within
@@ -46,6 +47,9 @@ class FilesystemEntry(BaseModel):
     name: str
     path: str
     is_dir: bool
+    # Files are listed only when the caller asks for them, so this is False on
+    # every entry of a plain folder listing rather than merely absent.
+    is_file: bool = False
     image_count: int = 0
 
 
@@ -126,6 +130,14 @@ def create_router(server) -> APIRouter:
         show_hidden: bool = Query(
             default=False, description="Include hidden (dot-prefixed) entries."
         ),
+        include_model_files: bool = Query(
+            default=False,
+            description=(
+                "Also list model files, for the shelf's `Add file` picker. Off "
+                "by default: every other caller is choosing a directory, and a "
+                "folder of 1,800 adapters would bury the subfolders in them."
+            ),
+        ),
     ):
         _require_owner_filesystem_request(request)
 
@@ -183,6 +195,23 @@ def create_router(server) -> APIRouter:
                 continue
             if is_file and _is_supported_media_file(entry.name):
                 image_count += 1
+            if (
+                is_file
+                and include_model_files
+                and entry.name.lower().endswith(MODEL_SUFFIX)
+            ):
+                entries.append(
+                    FilesystemEntry(
+                        name=entry.name,
+                        path=safe_entry_path,
+                        is_dir=False,
+                        is_file=True,
+                    )
+                )
+
+        # Directories first, then files, each by name. A no-op for a listing that
+        # holds only directories, which is every listing but the picker's.
+        entries.sort(key=lambda item: (not item.is_dir, item.name.lower()))
 
         parent = (
             str(os.path.dirname(safe_browse_path)) if safe_browse_path != "/" else None
