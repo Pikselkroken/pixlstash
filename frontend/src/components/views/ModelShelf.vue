@@ -553,20 +553,28 @@
                   <span v-if="row.base_model">{{ row.base_model }}</span>
                   <span v-else class="shelf-col-none">Not set</span>
                 </span>
-                <!-- The column exists here; the marks that belong in it are
-                     #892. Until then it states the fact `row.attachments`
-                     already carries — how many characters and sets a model is
-                     assigned to — rather than sitting blank under a header
-                     that promises something. `attachments` holds ids and no
-                     names, so naming the entities is not available without the
-                     lookup that issue owns. -->
+                <!-- One bordered mark per attached character or set, fanned
+                     with a fixed half-mark overlap (#892). The z-order is
+                     explicit and reversed against document order — see
+                     `assignmentMarks`, which stamps it — so the fan reads
+                     front-to-back rather than the last attachment painting on
+                     top of the first.
+
+                     Not assigned is a dashed outline rather than an empty cell,
+                     because a blank under a header that promises something
+                     reads as a rendering gap rather than as a state. -->
                 <span role="gridcell" class="shelf-col shelf-col--assigned">
-                  <template v-if="attachedCount(row)">
-                    {{ attachedCount(row)
-                    }}<span class="visually-hidden"> assigned</span>
+                  <template v-if="row.attachments?.length">
+                    <EntityMark
+                      v-for="mark in assignedMarks(row)"
+                      :key="mark.key"
+                      :mark="mark"
+                      class="shelf-assigned-mark"
+                      :style="{ zIndex: mark.z }"
+                    />
                   </template>
                   <template v-else>
-                    <span aria-hidden="true">—</span>
+                    <span class="shelf-assigned-none" aria-hidden="true"></span>
                     <span class="visually-hidden">Not assigned</span>
                   </template>
                 </span>
@@ -675,12 +683,14 @@ import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
+import EntityMark from "../widgets/EntityMark.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
 import { createStack } from "../../api/modelStacks";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
@@ -688,6 +698,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
+  assignmentMarks,
   bandGroups,
   bandUsage,
   withEmptyFolders,
@@ -701,6 +712,7 @@ import {
 } from "../../utils/modelShelf";
 
 const store = useModelShelfStore();
+const entityLists = useEntityListsStore();
 const foldersStore = useModelFoldersStore();
 const moves = useModelMovesStore();
 const rootEl = ref(null);
@@ -1336,14 +1348,17 @@ function onRowKeydown(row, event) {
 }
 
 /**
- * How many characters and sets a model is assigned to.
+ * The marks the `Assigned to` column draws for one row (#892).
  *
- * The count only, because `attachments` carries `entity_type` and `entity_id`
- * and no names: saying WHICH ones needs the character and set stores, which is
- * what #892 brings when it replaces this cell with marks.
+ * The lists are read from the shared entity store rather than fetched per row:
+ * `attachments` comes back on the list read already, so the whole shelf costs
+ * the two list reads the sidebar makes anyway, not one lookup per attachment.
  */
-function attachedCount(row) {
-  return (row.attachments ?? []).length;
+function assignedMarks(row) {
+  return assignmentMarks(row.attachments, {
+    characters: entityLists.characters,
+    sets: entityLists.pictureSets,
+  });
 }
 
 /**
@@ -1508,6 +1523,12 @@ onMounted(() => {
   // Unawaited already means it does not hold up the shelf.
   foldersStore.refreshDevices();
   foldersStore.refresh();
+  // The names, colours and thumbnails behind the `Assigned to` marks. Cached
+  // and shared with the sidebar, so on a warm cache this repaints the marks
+  // without a request; unawaited, because a row whose marks read `#12` for a
+  // moment is a better shelf than one that waits for two list reads to draw.
+  entityLists.refresh("characters");
+  entityLists.refresh("sets");
   // A move is machine-wide and outlives this component, so one may already be
   // running: started before a reload, or from another tab. Adopting it is what
   // puts the progress back rather than leaving the list live over files that
@@ -1943,9 +1964,41 @@ watch(
   white-space: nowrap;
 }
 
+/* The fan. `overflow: visible` against `.shelf-col`'s hidden, because the marks
+   are the content rather than text to ellipsise, and `assignmentMarks` already
+   caps them at what the track holds. */
 .shelf-col--assigned {
-  text-align: center;
-  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: visible;
+}
+
+/* The fixed overlap: half a mark, so three fit the two-mark track exactly and a
+   fan of two still shows a whole mark and a half. The `z-index` bound on each
+   mark takes effect because `.emark` is positioned; without that the stacking
+   order would fall back to document order and the fan would read back-to-front. */
+.shelf-assigned-mark + .shelf-assigned-mark {
+  margin-left: calc(var(--entity-thumb) / -2);
+}
+
+/* Assigned to nothing, as a state rather than as a gap: the same footprint a
+   mark has, outlined dashed so it reads as an empty slot and not as a mark that
+   failed to load. Dashed and not merely faint, because the distinction has to
+   survive greyscale as well as a glance. */
+.shelf-assigned-none {
+  display: inline-block;
+  box-sizing: border-box;
+  width: var(--entity-thumb);
+  height: var(--entity-thumb);
+  /* 0.5, not the fainter alpha this would like to be: the outline is the only
+     visible carrier of the state, so it is a non-text UI component and owes
+     3:1 (WCAG 1.4.11). Measured with the shipped `contrastRatio`: 0.35 gives
+     2.13:1 on the light canvas and 0.5 gives 3.15:1 (4.36:1 dark). Not
+     `divider` either — that is a hairline BETWEEN things, and far below the
+     floor for something that has to be seen on its own. */
+  border: 1px dashed rgba(var(--v-theme-on-background), 0.5);
+  border-radius: var(--radius-sm);
 }
 
 .shelf-col--size {

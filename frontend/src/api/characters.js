@@ -8,7 +8,7 @@
 //
 // See docs/frontend_architecture.md §8 ("The `src/api/` resource layer").
 
-import { apiClient} from "../utils/apiClient";
+import { apiClient, appendShareToken} from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
@@ -18,6 +18,28 @@ import { unwrap } from "../utils/unwrap";
  */
 function charactersUrl(path = "") {
   return `/characters${path}`;
+}
+
+/**
+ * The URL of a character's thumbnail, for an `<img src>`.
+ *
+ * The other half of {@link getCharacterThumbnail}, for callers that draw MANY
+ * of them: a blob costs a request and an object URL per character, while a
+ * `src` lets the browser fetch and cache one response however many marks name
+ * that character (the model shelf's `Assigned to` column, #892). The blob form
+ * stays for the sidebar, which wants the failure as a rejection.
+ *
+ * The route is cookie-authenticated, so a share token has to ride in the query
+ * — an `<img>` sends no header.
+ *
+ * @param {number|string} id
+ * @returns {string}
+ */
+export function characterThumbnailUrl(id) {
+  const base = apiClient.defaults.baseURL || "";
+  return appendShareToken(
+    `${base}${charactersUrl(`/${encodeURIComponent(id)}/thumbnail`)}`,
+  );
 }
 
 /**

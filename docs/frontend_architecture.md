@@ -1412,6 +1412,40 @@ undo by accident:
   is in neither list by default and is fetched only from the *adapters* block
   under `?file_kind=unknown`.
 
+**The `Assigned to` marks** (`EntityMark.vue`, `assignmentMarks` in
+`utils/modelShelf.js`) draw one bordered thumbnail per attached character or
+set. `attachments` carries `entity_type` and `entity_id` and no names, so the
+names, colours and thumbnails come from `useEntityListsStore` — the two list
+reads the sidebar already makes, shared and cached, never a lookup per
+attachment; the thumbnail is an `<img src>` from `characterThumbnailUrl` /
+`pictureSetThumbnailUrl` rather than a blob, so one response is cached however
+many rows name that character. Four rules hold it together and are each easy to
+undo:
+
+- **Colour is a grouping hint and never the meaning.** Every mark carries the
+  entity's thumbnail (or its initials when the entity has no picture) and an
+  accessible name saying its type, so the column reads in greyscale (WCAG
+  1.4.1). Distinguishing a character from a set *by colour* is explicitly
+  rejected. The hue is the entity's own where it has one, so a character wears
+  the same colour here as in the sidebar, and a hash of its id otherwise —
+  never its position in the fan, which would repaint every mark when one
+  attachment is removed.
+- **One radius for every entity mark.** `--radius-sm`, because §6 reserves
+  `--radius-pill` for avatar rings and half of these are picture sets. Type
+  lives in the label, never in the shape.
+- **Unassigned is a dashed outline, not a blank cell**, so "assigned to
+  nothing" reads as a state rather than as a rendering gap.
+- **The fan is capped at three with an explicit z-order.** Three marks at a
+  half-mark overlap land exactly on the two-mark track, so a fourth would step
+  every column right of it sideways; beyond that the last slot becomes a `+N`
+  counter whose title names the entities it stands for. `assignmentMarks`
+  stamps `z` descending, so the fan paints front-to-back rather than the last
+  attachment covering the first.
+
+An attachment whose entity the lists do not answer still gets a mark, reading
+`#12`: the vault is the authority on what is attached, and dropping the mark
+would say "not assigned", which is a different and wrong fact.
+
 Rows are built on the shared row system (`SideBar.global.css`, §5.1) through
 the neutral `.ps-row` / `.ps-row-glyph` aliases, so the shelf consumes those
 rules rather than keeping a second copy of them. Column 1 is reserved and empty
