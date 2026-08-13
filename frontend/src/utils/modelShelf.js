@@ -375,9 +375,18 @@ export const LOW_FREE_BYTES = 50 * 1024 ** 3;
  *
  * The three add to exactly 100 by construction (`shelf + (used - shelf) + free
  * === total`), which is what lets the caller lay them out in a row without a
- * rounding sliver opening at the right-hand end. Clamping the shelf to `used`
- * keeps that identity true when a mid-scan `shelf_bytes` briefly exceeds what
- * the disk reports as used.
+ * rounding sliver opening at the right-hand end. That identity is the whole
+ * reason the segments need no per-segment clamp, so BOTH inputs are clamped
+ * into range before it is relied on:
+ *
+ *   * `free` to `total`, because the two are separate reads of the device and
+ *     a filesystem can genuinely report more free than it holds — thin
+ *     provisioning and transparent compression (ZFS, btrfs) do it by design,
+ *     and a network mount's `statvfs` can simply be wrong. Unclamped that
+ *     yields `freePct > 100` and a segment running off the end of the track.
+ *   * `shelf` to `used`, because `shelf_bytes` is counted from the hub and the
+ *     capacity from the disk, so a scan mid-flight can briefly make the first
+ *     exceed the second.
  *
  * Returns `null` when the drive could not be measured, which the caller must
  * draw as "unknown" rather than as an empty bar: an empty bar reads as a drive
@@ -389,10 +398,11 @@ export const LOW_FREE_BYTES = 50 * 1024 ** 3;
  */
 export function bandUsage(band) {
   const total = Number(band?.totalBytes);
-  const free = Number(band?.freeBytes);
+  const reportedFree = Number(band?.freeBytes);
   if (!Number.isFinite(total) || total <= 0) return null;
-  if (!Number.isFinite(free) || free < 0) return null;
-  const used = Math.max(0, total - free);
+  if (!Number.isFinite(reportedFree) || reportedFree < 0) return null;
+  const free = Math.min(reportedFree, total);
+  const used = total - free;
   const shelf = Math.max(0, Math.min(used, Number(band?.shelfBytes) || 0));
   return {
     shelfPct: (shelf / total) * 100,

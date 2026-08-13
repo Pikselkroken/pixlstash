@@ -357,6 +357,23 @@ describe("bandUsage", () => {
     ).toBe(false);
   });
 
+  it("never lets a drive report more free space than it holds", () => {
+    // Thin provisioning and transparent compression (ZFS, btrfs) report this
+    // by design, and a network mount's statvfs can simply be wrong. `free` and
+    // `total` are two separate reads, so nothing upstream reconciles them.
+    // Unclamped this gives freePct 150 and a segment running off the track.
+    const usage = bandUsage({
+      totalBytes: 1000,
+      freeBytes: 1500,
+      shelfBytes: 0,
+    });
+    expect(usage.freePct).toBe(100);
+    expect(usage.usedPct).toBe(0);
+    expect(usage.otherPct).toBe(0);
+    expect(usage.shelfPct).toBe(0);
+    expect(usage.shelfPct + usage.otherPct + usage.freePct).toBe(100);
+  });
+
   it("refuses to draw a meter for a drive it could not measure", () => {
     // Null rather than zero: an empty bar reads as a drive with nothing on it,
     // which is the opposite of "we do not know".
