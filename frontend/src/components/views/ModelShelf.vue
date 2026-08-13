@@ -861,16 +861,23 @@
       @close="closeAddFile"
     />
 
-    <ProgressOverlay
-      :visible="moves.running"
-      :status="moves.running ? 'running' : 'idle'"
-      :message="moveProgressMessage"
-      :percent="moves.percent"
-      :count="moves.done"
-      :total="moves.total"
-      :abort-label="moves.cancelRequested ? null : 'Stop'"
-      @abort="moves.cancel()"
-    />
+    <!-- Corner-anchored inside the panel that is busy, never a centred modal:
+         a move concerns THIS list, and a card in the middle of the window
+         claims the whole product for it. This wrapper is the corner and
+         `.shelf` is what it is measured from, because `ProgressOverlay` is
+         multi-root and silently drops a class handed to it. -->
+    <div class="shelf-progress">
+      <ProgressOverlay
+        :visible="moves.running || Boolean(moves.failure)"
+        :status="moveProgressStatus"
+        :message="moves.failure || moveProgressMessage"
+        :percent="moves.failure ? 100 : moves.percent"
+        :count="moves.failure ? null : moves.done"
+        :total="moves.failure ? null : moves.total"
+        :abort-label="moveProgressAction"
+        @abort="moves.failure ? dismissMoveFailure() : moves.cancel()"
+      />
+    </div>
   </div>
 </template>
 
@@ -997,6 +1004,39 @@ const moveProgressMessage = computed(() =>
     ? "Stopping after the file in flight…"
     : "Moving model files…",
 );
+
+/**
+ * What the corner card is saying: progress, or the failure it ended in.
+ *
+ * A failed run keeps the card rather than handing its news to a notice that
+ * clears itself, so the error is read in the place the progress was (#900).
+ * The bar fills to 100% under it, which is what makes the failure take the
+ * bar's whole width instead of freezing part-way like an interrupted run.
+ */
+const moveProgressStatus = computed(() => {
+  if (moves.failure) return "failed";
+  return moves.running ? "running" : "idle";
+});
+
+/** The card's one button: stop a run, or put a read failure away. */
+const moveProgressAction = computed(() => {
+  if (moves.failure) return "Dismiss";
+  return moves.cancelRequested ? null : "Stop";
+});
+
+/**
+ * Put the failure away and catch the focus it was holding.
+ *
+ * Dismiss destroys the element the keyboard is standing on, and focus would
+ * fall to `<body>` — the next Tab restarts at the top of the document, which is
+ * how a user who just cleared a card loses their place in a 1,800-row list. The
+ * shelf root is the same landing the move dialog returns to.
+ */
+async function dismissMoveFailure() {
+  moves.dismissFailure();
+  await nextTick();
+  rootEl.value?.focus();
+}
 
 /**
  * Open the move dialog for a set of rows.
@@ -2177,6 +2217,11 @@ watch(
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  /* The positioning context for `.shelf-progress`. Without it the corner card
+     resolves against whatever ancestor happens to be positioned — today the
+     grid column, tomorrow anything — and a bar that is meant to say "this
+     panel is busy" would be pinned to something else's corner. */
+  position: relative;
   background: rgb(var(--v-theme-background));
   color: rgb(var(--v-theme-on-background));
   outline: none;
@@ -2625,6 +2670,23 @@ watch(
 .shelf-group-btn--drop {
   background: rgba(var(--v-theme-primary), 0.12);
   box-shadow: inset 0 0 0 2px rgba(var(--v-theme-primary), 0.65);
+}
+
+/* The bar's corner. `.shelf` rather than `.shelf-body` is what it hangs from:
+   the body is the scroller, and a card inside it would scroll away from the
+   work it is reporting. --z-floating is "chrome anchored to the content area",
+   which is what this is, and it clears the veil below. */
+.shelf-progress {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: var(--z-floating);
+}
+
+/* The wrapper owns the corner, so the card lays out in flow inside it rather
+   than re-anchoring to the same ancestor with its own grid-shaped offsets. */
+.shelf-progress :deep(.progress-overlay) {
+  position: static;
 }
 
 /* Paired with `inert` on `.shelf-body`, which is what actually stops the

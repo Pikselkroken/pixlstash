@@ -657,7 +657,11 @@ Both people modes take the opt-in `allowCreate` prop (default false; set by `Ima
 5-star score widget. Props: `score`, `readonly`. Emits: `set-score`. Used in `ImageOverlay` and `ImageGrid` cells.
 
 #### `ProgressOverlay.vue`
-Task progress overlay, shared by export, plugin runs and smart-score sorts (all three mounted in `ImageGrid`). Props: `visible`, `status`, `message`, `percent`, `count`, `total`, `abortLabel`, `anchor`, `indeterminate`. Emits: `abort`. Terminal statuses: `completed`, `failed`, `cancelled`.
+Task progress overlay, shared by export, plugin runs and smart-score sorts (all three mounted in `ImageGrid`) and by the model shelf's move (§9.1a). Props: `visible`, `status`, `message`, `percent`, `count`, `total`, `abortLabel`, `anchor`, `indeterminate`. Emits: `abort`. Terminal statuses: `completed`, `failed`, `cancelled`.
+
+**The button is gated on the label alone**, terminal status included (#900), so a card *held up* to report a failure can carry its own dismissal rather than needing a second prop for a second word. A caller that wants no button at the end nulls the label, which is what the export already does; the plugin and smart-score callers pass none at all.
+
+**Positioning is the caller's, in practice.** `anchor` only picks `top: 10px` or `bottom: 88px` against the nearest positioned ancestor, and 88px is the grid's bottom bar, not a universal offset. A host whose corner is somewhere else wraps the component in its own absolutely positioned box and resets the card to `position: static` — the shelf's `.shelf-progress` is the worked example. Wrapping (rather than passing a class) is also forced by the multi-root note above.
 
 **Multi-root by design (#758).** The card is behind `v-if="visible"`, but the `role="status"` live region is a second root *outside* it: a live region inserted at the same moment as its first text is not reliably announced, so hosting it inside the `v-if` loses the run's opening line. Consequence for callers: attribute fallthrough does not apply — `class`/`style`/`id` are silently dropped (with a dev-only Vue warning) and `ref.$el` resolves to a text node, not the card. Pass anything positional through props, or wrap the component.
 
@@ -2070,6 +2074,33 @@ happens inside the handler and only for a payload the target takes (#757).
 that is about to be wrong; a veil that only *looks* disabled leaves every row
 clickable and in the tab order, which is worse than none. The toolbar stays
 live, because Show and Sort still answer correctly while files are in flight.
+
+**The panel dims, not the app (#900).** `.shelf-dim` is inside `.shelf-body`
+and `inert` is on the same wrapper, so the sidebar, the title bar and the
+shelf's own toolbar are all untouched — a move concerns one list, and a veil
+over the product would say otherwise. The bar is the third caller of
+`ProgressOverlay` and is pinned to **that panel's** corner: `.shelf` carries
+`position: relative` and `.shelf-progress` is the corner box, at
+`--z-floating` so it clears the veil. Explicitly not a centred modal, and
+explicitly not left to resolve against whichever ancestor happens to be
+positioned (before this it was the grid column's, by accident).
+
+**A failure keeps the card instead of handing its news to a notice.**
+`useModelMovesStore.failure` holds the receipt of any finished run with a
+`failed` item, and the card stays up as `status="failed"` with the bar filled
+to 100% — the abort takes the bar's whole width rather than freezing part-way
+like an interrupted run — with **Dismiss** as its one button. Only a run that
+landed cleanly still pushes a notice. The reason is durability, not aesthetics:
+a `warning` notice clears itself after six seconds, and "some of your models did
+not arrive" is the outcome that must not scroll past while the owner is looking
+elsewhere. Holding it in the *store* is what makes it survive leaving the shelf
+— it is put back in the same corner on every mount until dismissed, and a new
+move clears it so a stale red card can never sit on live progress. A refusal to
+*start* is unchanged: the POST plans the whole batch before the first byte, so a
+4xx is a notice and no job, not a failed one. **Dismiss returns focus to the
+shelf root**, the same landing `closeMove` uses: the button destroys the element
+the keyboard is standing on, and focus falling to `<body>` restarts the next Tab
+at the top of an 1,800-row document.
 
 #### The icon verb, on the shelf
 

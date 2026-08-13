@@ -31,7 +31,7 @@
       {{ count }} / {{ total }}
     </div>
     <button
-      v-if="abortLabel && !isTerminal"
+      v-if="abortLabel"
       class="progress-overlay__abort"
       type="button"
       @click="emit('abort')"
@@ -71,7 +71,11 @@
  *   percent    - Progress percentage (0-100).
  *   count      - Processed/current item count (optional).
  *   total      - Total item count (optional).
- *   abortLabel - Label for the abort button. No button rendered if falsy.
+ *   abortLabel - Label for the card's one button. No button rendered if falsy.
+ *                The label alone gates it, terminal status included, so a card
+ *                held up to report a failure can carry its own dismissal. A
+ *                caller that wants no button at the end nulls the label, which
+ *                the export already does.
  *   anchor     - 'top' | 'bottom'. Controls vertical position.
  *   indeterminate - When true, show animated indeterminate progress.
  *
@@ -128,7 +132,11 @@ const clampedPercent = computed(() => {
  * presence, so nothing is re-read until the next run moves it.
  */
 const announcement = computed(() => {
-  const label = props.message || "Progress";
+  // Every branch below appends its own sentence, so a message that already ends
+  // one produces "…stayed put.: failed." The shelf's held failure card carries
+  // a whole receipt as its title, and "Moving model files…" has an ellipsis for
+  // the same reason; both read as one sentence once the tail comes off.
+  const label = (props.message || "").replace(/[.…\s]+$/u, "") || "Progress";
   if (props.status === "failed") return `${label}: failed.`;
   if (props.status === "cancelled") return `${label}: cancelled.`;
   if (props.status === "completed") return `${label}: complete.`;
@@ -249,5 +257,18 @@ const announcement = computed(() => {
 
 .progress-overlay__abort:hover {
   background: rgba(var(--v-theme-error), 0.85);
+}
+
+/* On the failed card the button's own error fill sits on an error background
+   and all but disappears — which would hide the only way out of a card that is
+   held until it is dismissed. A wash of the card's own ink delineates it, and
+   the ink itself is the pair the theme already contrast-checks. */
+.progress-overlay--error .progress-overlay__abort {
+  background: rgba(var(--v-theme-on-error), 0.16);
+  color: rgb(var(--v-theme-on-error));
+}
+
+.progress-overlay--error .progress-overlay__abort:hover {
+  background: rgba(var(--v-theme-on-error), 0.28);
 }
 </style>

@@ -85,6 +85,7 @@ vi.mock("../../api/pictureSets", async (importOriginal) => ({
 }));
 
 import ModelShelf from "./ModelShelf.vue";
+import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 
@@ -2269,5 +2270,48 @@ describe("what a scan just added", () => {
     await store.fetchRows();
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".shelf-row-new").exists()).toBe(false);
+  });
+});
+
+describe("a long move, in the panel that is running it", () => {
+  it("dims and inerts the list without touching the toolbar", async () => {
+    // #900: the panel dims, not the app. The veil is INSIDE `.shelf-body`, so
+    // Show and Sort still answer while files are in flight, and `inert` is
+    // what actually stops the rows — a veil that only looks disabled leaves
+    // every one of them clickable and in the tab order.
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const moves = useModelMovesStore();
+    expect(wrapper.find(".shelf-dim").exists()).toBe(false);
+
+    moves.job = { status: "running", total: 4, done: 1, results: [] };
+    await wrapper.vm.$nextTick();
+    const body = wrapper.find(".shelf-body");
+    expect(body.find(".shelf-dim").exists()).toBe(true);
+    expect(body.attributes("inert")).toBeDefined();
+    expect(wrapper.find(".shelf-toolbar").attributes("inert")).toBeUndefined();
+  });
+
+  it("anchors the bar in the shelf and leaves the failure in its place", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const moves = useModelMovesStore();
+    const card = () => wrapper.find(".shelf-progress progress-overlay-stub");
+    expect(card().attributes("visible")).toBe("false");
+
+    moves.job = { status: "running", total: 4, done: 1, results: [] };
+    await wrapper.vm.$nextTick();
+    expect(card().attributes("visible")).toBe("true");
+    expect(card().attributes("status")).toBe("running");
+    expect(card().attributes("abortlabel")).toBe("Stop");
+
+    // The run ends badly: the card stays where the progress was rather than
+    // handing the news to a notice that clears itself, and the bar fills.
+    moves.job = { status: "finished", total: 4, done: 4, results: [] };
+    moves.failure = "Moved 3 files. 1 file could not be moved and stayed put.";
+    await wrapper.vm.$nextTick();
+    expect(card().attributes("visible")).toBe("true");
+    expect(card().attributes("status")).toBe("failed");
+    expect(card().attributes("percent")).toBe("100");
+    expect(card().attributes("message")).toContain("could not be moved");
+    expect(card().attributes("abortlabel")).toBe("Dismiss");
   });
 });
