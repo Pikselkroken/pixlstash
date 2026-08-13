@@ -15,8 +15,7 @@ import json
 import tempfile
 
 import pytest
-from sqlalchemy import text
-from sqlmodel import delete, select
+from sqlmodel import select
 
 from pixlstash.db_models import (
     Character,
@@ -30,6 +29,7 @@ from pixlstash.db_models import (
 from pixlstash.db_models.tag import Tag
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
+from tests.utils import wipe_tables
 
 
 @pytest.fixture(scope="module")
@@ -44,21 +44,20 @@ def server():
 
 @pytest.fixture(autouse=True)
 def clean_db(server):
-    def _wipe(session):
-        session.exec(text("PRAGMA foreign_keys = OFF"))
-        session.exec(delete(Snapshot))
-        session.exec(delete(Tag))
-        session.exec(delete(Face))
-        session.exec(delete(PictureSetMember))
-        session.exec(delete(PictureProjectMember))
-        session.exec(delete(PictureSet))
-        session.exec(delete(Project))
-        session.exec(delete(Character))
-        session.exec(delete(Picture))
-        session.exec(text("PRAGMA foreign_keys = ON"))
-        session.commit()
-
-    server.vault.db.run_task(_wipe)
+    server.vault.db.run_task(
+        wipe_tables,
+        [
+            Snapshot,
+            Tag,
+            Face,
+            PictureSetMember,
+            PictureProjectMember,
+            PictureSet,
+            Project,
+            Character,
+            Picture,
+        ],
+    )
     yield
 
 

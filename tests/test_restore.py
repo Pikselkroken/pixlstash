@@ -44,6 +44,7 @@ from pixlstash.utils.snapshot_compression import (
     compress_snapshot,
     materialize_snapshot,
 )
+from tests.utils import delete_characters, delete_projects, wipe_tables
 
 
 @pytest.fixture(scope="module")
@@ -62,32 +63,31 @@ def server():
 def clean_db(server):
     """Wipe all relevant tables and snapshot files before each test."""
 
-    def _wipe(session):
-        session.exec(text("PRAGMA foreign_keys = OFF"))
-        session.exec(delete(Snapshot))
-        # Likeness pipeline rows are populated by restore_full (via
-        # ensure_all), so they accumulate across tests. Without an
-        # explicit wipe — FKs are OFF here, so CASCADE doesn't fire —
-        # they orphan and collide with the next test's replay.
-        session.exec(delete(PictureLikeness))
-        session.exec(delete(PictureLikenessQueue))
-        session.exec(delete(PictureLikenessFrontier))
-        session.exec(delete(PictureProjectMember))
-        session.exec(delete(CharacterProjectMember))
-        session.exec(delete(PictureSetProjectMember))
-        session.exec(delete(PictureSetMember))
-        session.exec(delete(Face))
-        session.exec(delete(Tag))
-        session.exec(delete(DeletedFileLog))
-        session.exec(delete(Picture))
-        session.exec(delete(ReferenceFolder))
-        session.exec(delete(PictureSet))
-        session.exec(delete(Project))
-        session.exec(delete(Character))
-        session.exec(text("PRAGMA foreign_keys = ON"))
-        session.commit()
-
-    server.vault.db.run_task(_wipe)
+    server.vault.db.run_task(
+        wipe_tables,
+        [
+            Snapshot,
+            # Likeness pipeline rows are populated by restore_full (via
+            # ensure_all), so they accumulate across tests. Without an
+            # explicit wipe — FKs are OFF for the wipe, so CASCADE doesn't
+            # fire — they orphan and collide with the next test's replay.
+            PictureLikeness,
+            PictureLikenessQueue,
+            PictureLikenessFrontier,
+            PictureProjectMember,
+            CharacterProjectMember,
+            PictureSetProjectMember,
+            PictureSetMember,
+            Face,
+            Tag,
+            DeletedFileLog,
+            Picture,
+            ReferenceFolder,
+            PictureSet,
+            Project,
+            Character,
+        ],
+    )
 
     cp_dir = os.path.join(server.vault.image_root, "snapshots")
     if os.path.isdir(cp_dir):
@@ -727,16 +727,7 @@ def test_root_entity_membership_projects_are_restore_dependencies(server):
     char_id, project_id = server.vault.db.run_task(_setup)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    def _delete_project(session):
-        session.exec(
-            delete(CharacterProjectMember).where(
-                CharacterProjectMember.character_id == char_id
-            )
-        )
-        session.exec(delete(Project).where(Project.id == project_id))
-        session.commit()
-
-    server.vault.db.run_task(_delete_project)
+    server.vault.db.run_task(delete_projects, [project_id])
 
     with pytest.raises(MissingDependenciesError) as exc_info:
         server.vault.restore_service.restore_resource(cp.id, "character", char_id)
@@ -1213,13 +1204,9 @@ def test_restore_resource_picture_with_missing_character_raises_without_confirm(
     alice_id = server.vault.db.run_task(_setup_snapshot_state)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    # Live: user deletes the character (Face.character_id cascades to NULL
-    # in the live DB but the snapshot still has the reference).
-    def _delete_char(session):
-        session.exec(delete(Character).where(Character.id == alice_id))
-        session.commit()
-
-    server.vault.db.run_task(_delete_char)
+    # Live: user deletes the character (the delete route nulls Face.character_id
+    # in the live DB, but the snapshot still has the reference).
+    server.vault.db.run_task(delete_characters, [alice_id])
 
     # Default call refuses with MissingDependenciesError.
     with pytest.raises(MissingDependenciesError) as exc_info:
@@ -1267,11 +1254,7 @@ def test_restore_resource_picture_confirm_restores_missing_character(server):
     bob_id = server.vault.db.run_task(_setup_snapshot_state)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    def _delete_char(session):
-        session.exec(delete(Character).where(Character.id == bob_id))
-        session.commit()
-
-    server.vault.db.run_task(_delete_char)
+    server.vault.db.run_task(delete_characters, [bob_id])
 
     report = server.vault.restore_service.restore_resource(
         cp.id,
@@ -1338,11 +1321,7 @@ def test_restore_batch_unions_missing_dependencies_across_items(server):
     c1_id, c2_id = server.vault.db.run_task(_setup)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    def _delete_both(session):
-        session.exec(delete(Character))
-        session.commit()
-
-    server.vault.db.run_task(_delete_both)
+    server.vault.db.run_task(delete_characters)
 
     resources = [
         {"type": "picture", "id": pa.id},
@@ -1397,11 +1376,7 @@ def test_restore_batch_confirm_restores_all_missing_parents_once(server):
     c1_id, c2_id = server.vault.db.run_task(_setup)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    def _delete_both(session):
-        session.exec(delete(Character))
-        session.commit()
-
-    server.vault.db.run_task(_delete_both)
+    server.vault.db.run_task(delete_characters)
 
     resources = [
         {"type": "picture", "id": pc.id},
@@ -1920,11 +1895,7 @@ def test_missing_deps_refusal_emits_started_then_failed(server):
     char_id = server.vault.db.run_task(_setup)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    def _del(session):
-        session.exec(delete(Character).where(Character.id == char_id))
-        session.commit()
-
-    server.vault.db.run_task(_del)
+    server.vault.db.run_task(delete_characters, [char_id])
 
     events = _capture_restore_events(server)
     with pytest.raises(MissingDependenciesError):
@@ -3931,16 +3902,7 @@ def test_restore_resource_rebuilds_entity_project_membership(server):
     char_id, project_ids = server.vault.db.run_task(_setup_snapshot_state)
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
 
-    def _delete_char(session):
-        session.exec(
-            delete(CharacterProjectMember).where(
-                CharacterProjectMember.character_id == char_id
-            )
-        )
-        session.exec(delete(Character).where(Character.id == char_id))
-        session.commit()
-
-    server.vault.db.run_task(_delete_char)
+    server.vault.db.run_task(delete_characters, [char_id])
 
     report = server.vault.restore_service.restore_resource(
         cp.id,
