@@ -49,6 +49,16 @@ logger = get_logger(__name__)
 BUILTIN_KIND = "foreign"
 BUILTIN_OWNER = "pixlstash"
 
+# How a declared folder moves, which is a statement about the folder rather than
+# a permission. `root_only` means "if it relocates, it relocates whole" — true of
+# PixlStash's own downloads and of the InsightFace packs, whichever of them has a
+# relocate route yet. `fixed` means it cannot be relocated at all because
+# something else owns where it lives: the HuggingFace cache's location is
+# `HF_HOME`, read at import by a library shared with every other tool on the
+# machine, so "moving" it is a restart and a re-download rather than a move.
+MOVABLE_ROOT_ONLY = "root_only"
+MOVABLE_FIXED = "fixed"
+
 # Everything in this folder arrived because PixlStash fetched it.
 BUILTIN_PROVENANCE = "builtin"
 
@@ -298,7 +308,9 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
     return declare_folder(hub, folder_path, entries)
 
 
-def declare_folder(hub, folder_path: str, entries) -> Optional[int]:
+def declare_folder(
+    hub, folder_path: str, entries, movable: str = MOVABLE_ROOT_ONLY
+) -> Optional[int]:
     """Upsert one PixlStash-owned folder and a row per declared entry.
 
     Shared by all three roots PixlStash owns: the engines it downloads, the
@@ -313,6 +325,8 @@ def declare_folder(hub, folder_path: str, entries) -> Optional[int]:
         hub: The open hub database.
         folder_path: The root being declared.
         entries: The :class:`DeclaredEntry` rows to write under it.
+        movable: :data:`MOVABLE_ROOT_ONLY` (the default) or
+            :data:`MOVABLE_FIXED` for a root whose location another tool owns.
 
     Returns:
         The ``model_folder.id``, or ``None`` if the row could not be written.
@@ -321,7 +335,7 @@ def declare_folder(hub, folder_path: str, entries) -> Optional[int]:
     with hub.transaction() as conn:
         conn.execute(
             "INSERT INTO model_folder (path, kind, owner, movable, created_at) "
-            "VALUES (?, ?, ?, 'root_only', ?) "
+            "VALUES (?, ?, ?, ?, ?) "
             # `movable` is re-asserted with the rest. A path the owner had
             # already registered as a `user` folder keeps its own
             # `movable` otherwise, so claiming it for PixlStash would
@@ -330,7 +344,7 @@ def declare_folder(hub, folder_path: str, entries) -> Optional[int]:
             # protection exists to prevent.
             "ON CONFLICT(path) DO UPDATE SET kind = excluded.kind, "
             "owner = excluded.owner, movable = excluded.movable",
-            (folder_path, BUILTIN_KIND, BUILTIN_OWNER, now),
+            (folder_path, BUILTIN_KIND, BUILTIN_OWNER, movable, now),
         )
         row = conn.execute(
             "SELECT id FROM model_folder WHERE path = ?", (folder_path,)

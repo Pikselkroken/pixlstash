@@ -1360,6 +1360,32 @@ displayed one. The fourth block (`filters.engines`, on by default) is what makes
 that sentence true. A row's block comes from `blockOf`, so engines refetch and
 are replaced independently of the other three.
 
+**`movable` describes the folder, and gains a fourth value.** It says how a
+folder moves, not whether a route to move it is built yet:
+
+| Value | Meaning | Folders |
+|---|---|---|
+| `per_item` | files move one at a time | a folder the owner assembled |
+| `root_only` | relocates as a whole | the managed store, our downloads, the InsightFace packs |
+| `external` | taken *from*, never written into | an ai-toolkit output root |
+| `fixed` | **cannot relocate at all** — another tool owns where it lives | the HuggingFace cache |
+
+`fixed` exists because `root_only` would be a lie about the cache. Its location
+is `HF_HOME`, read at import by a library shared with every other tool on the
+machine, so "moving" it is a restart and a re-download rather than a move — and
+the design requires that row to render with no drag handle and no Move, its one
+action being an explanation. A value the UI can read is what makes that possible
+without special-casing a path.
+
+**The move guard names both `root_only` and `fixed`.** Neither permits a
+per-item move out, so keying on one would leave the other open — which is
+precisely how renaming this vocabulary could silently drop the protection. The
+plan originally said `external` for these two roots; that would have overloaded
+a word already meaning "ai-toolkit output root" *and*, because the guard is
+keyed on values rather than on `owner`, would have removed the protection on the
+way past. Recorded here rather than in the plan because this is the shipped
+behaviour.
+
 **A declaration sweeps what it no longer names**, and these folders have nowhere
 else to get that. The scanner marks anything it did not see on a walk `missing`,
 and it skips these precisely because they carry an `owner` — so without a sweep

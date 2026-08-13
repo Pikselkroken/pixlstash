@@ -70,6 +70,61 @@ Test at: ~/Projects/pixlstash/worktrees/<name>   (branch <branch>, based on <bas
 If the work is already merged, say `develop/` instead and say to pull. "It's on
 the branch" is not a test path.
 
+### Say what to test, not only where — and say it in the session, never in the PR
+
+**A path is not a handoff.** The session that wrote the change is the only party
+that knows which screen it lands on, what number should appear, and which of its
+own steps it is least sure about. Ending at "test at `<path>`" leaves the person
+testing to reverse-engineer all three from a diff, and the honest answer they
+give back is *"I don't know what to test."*
+
+**The handoff goes to the person, in the session. It does not go in the PR.**
+A test plan written against the machine the work was done on is made of that
+machine's absolute paths, its library, its folder names and its disk figures —
+`/home/<user>/...`, the models they happen to own, how full their drive is. A PR
+is published, permanent and public, and none of that belongs in one. This was
+learned by doing it: a `## Test this` section went into a PR body carrying the
+owner's home directory and an inventory of their private model collection, and
+had to be edited back out. **Do not put a test plan, a path under `$HOME`, a
+listing of the owner's library, or their disk usage into a PR body, a commit
+message or a PR comment.** The PR describes the change; the session describes
+how to try it.
+
+Aggregate engineering figures that justify a decision are fine and already house
+style — "0.01 s to read the index", "a 339 MB tagger". The line is between *this
+mechanism costs this much* and *here is what is on that person's disk*.
+
+**So end the session with the plan, and always name a folder to run it from.**
+Five parts, and the last two are the ones that get skipped:
+
+1. **Where** — the worktree block above, always, even when the answer is
+   `develop/`. Plus any step that has to happen first: *"restart the backend,
+   the declaration runs at start-up"* is the difference between a working
+   feature and a bug report.
+2. **What to look at**, as numbered checks against a named screen or control.
+   "Model folders dialog, toolbar folder icon", not "the folders UI".
+3. **The expected values, concretely** — the row count, the size, *"no size at
+   all rather than `0 B`"*. Read off the machine and written down, because a
+   tester cannot confirm a number nobody stated and a wrong one is invisible
+   next to a vague one. This is exactly the part that must not be published.
+4. **What "wrong" looks like**, per check. State the failure, not only the pass:
+   *"wrong if a locked row offers scan or forget"*. That is what lets someone
+   who does not know the design spot a regression rather than assume the screen
+   is meant to look that way.
+5. **What you could not test yourself**, named and separated. Cold-boot cost,
+   whether a long list is pleasant, anything needing hardware or a judgement
+   call. This is the part actually being handed off — the rest is verification —
+   and folding it into the checks above buries the only items that genuinely
+   require a human.
+
+**Order the checks by risk, and say which one matters.** If a change opens a
+path that could destroy data, that check goes near the top, says so, and tells
+the tester to stop rather than complete the gesture: *"the drag must never
+start; if the row picks up, say so and do not drop it."*
+
+**Automated coverage is not a test-this item.** If a suite already proves it,
+say so in a line and spend the human's attention on what the suite cannot see.
+
 ## Patch Reliability Policy
 
 - **Read before you edit.** Read enough surrounding context (at least 50 lines before and after the target) to understand structure, logic, and dependencies before generating a patch. If placement is ambiguous, read more until it is certain.

@@ -891,7 +891,7 @@ def test_a_root_only_folder_refuses_a_per_item_move(tmp_path):
         mover = ModelMover(hub)
         with pytest.raises(MoveRefused) as refused:
             mover.plan([(1, "models--org--thing")], 2)
-        assert "moves as a whole" in str(refused.value)
+        assert "not moved one at a time" in str(refused.value)
 
         # The positive control: over-blocking is its own regression, so a
         # per_item folder must still move out in the same environment.

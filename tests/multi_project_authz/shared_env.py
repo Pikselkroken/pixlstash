@@ -421,7 +421,19 @@ def _assert_fixture_shape(owner, ids, pic_a, pic_b):
         )
 
 
-def _wait_faces_extracted(server, picture_ids, timeout_s=60.0):
+# Generous on purpose, and the number is evidence-led. CI runs the whole suite
+# `--force-cpu` on a shared runner, so this waits on a face pass that has no GPU
+# and may still be fetching its model pack. At 60 s it timed out on two separate
+# PRs whose diffs could not touch face extraction — one of them frontend-only —
+# reporting `rows per picture: {}`, i.e. the pass had produced nothing at all
+# rather than being partway through. The same suite takes ~98 s end to end
+# locally WITH a GPU. `test_likeness_and_face_search` already allows 120 s for an
+# ML wait, so this is the suite's own scale rather than a new one.
+#
+# It is a ceiling on a poll loop, not a sleep: a pass that finishes in two
+# seconds still returns in two seconds, and only a genuine hang pays the full
+# budget before failing.
+def _wait_faces_extracted(server, picture_ids, timeout_s=180.0):
     """Block until background face extraction has finished with *picture_ids*.
 
     Uploading a picture queues an extraction pass that ends by writing either

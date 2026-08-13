@@ -38,7 +38,11 @@ import os
 from typing import Optional
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.builtin_models import DeclaredEntry, declare_folder
+from pixlstash.services.builtin_models import (
+    MOVABLE_FIXED,
+    DeclaredEntry,
+    declare_folder,
+)
 from pixlstash.utils.insightface_model_utils import (
     KNOWN_MODEL_PACKS,
     insightface_root,
@@ -242,4 +246,4 @@ def declare_huggingface_cache(hub, folder_path: str) -> Optional[int]:
         )
         for repo in info.repos
     ]
-    return declare_folder(hub, folder_path, entries)
+    return declare_folder(hub, folder_path, entries, movable=MOVABLE_FIXED)
