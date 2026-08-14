@@ -1438,9 +1438,17 @@ undo by accident:
   field stops its own keys, or Arrow, Space and Escape would walk and clear the
   list from under it.
 - **`unknown` is never rendered as a checkpoint.** `file_kind='unknown'` is a
-  first-class stored value with its own glyph and the word "Unclassified". It
-  is in neither list by default and is fetched only from the *adapters* block
-  under `?file_kind=unknown`.
+  first-class stored value with its own glyph and the word "Unclassified". It is
+  never folded into either other list and is fetched only from the *adapters*
+  block under `?file_kind=unknown` — but it **is** fetched by default, for the
+  reason `engines` is: a file nothing could classify is still on the disk the
+  shelf accounts for, and opt-in is how a 339 MB leftover in PixlStash's own
+  download folder stayed invisible once the backend started declaring it
+  (#927, backend §*The unclaimed readout*). `activeCount` therefore counts
+  turning it **off**, the way it counts `checkpoints`. A remembered selection
+  would have defeated the change on exactly the machines that had used the shelf
+  longest, so `pixlstash:modelShelfFilters` gained `FILTERS_SCHEMA_VERSION` and
+  a blob from another `v` is discarded whole — the same trade `storedView` makes.
 
 **The `Assigned to` marks** (`EntityMark.vue`, `assignmentMarks` in
 `utils/modelShelf.js`) draw one bordered thumbnail per attached character or

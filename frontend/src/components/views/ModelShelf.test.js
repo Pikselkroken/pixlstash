@@ -16,13 +16,17 @@ const listCheckpoints = vi.fn();
 // result set. Its own double, or every `listAdapters.mockResolvedValue` here
 // would answer it with adapter rows and the shelf would render each one twice.
 const listEngines = vi.fn();
+// And the unclassified block, for the same reason, now that it is on by
+// default (#927): one route, one more result set, its own double.
+const listUnclassified = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
-  listAdapters: (...args) =>
-    args[0]?.fileKind === "engine"
-      ? listEngines(...args)
-      : listAdapters(...args),
+  listAdapters: (...args) => {
+    if (args[0]?.fileKind === "engine") return listEngines(...args);
+    if (args[0]?.fileKind === "unknown") return listUnclassified(...args);
+    return listAdapters(...args);
+  },
   listCheckpoints: (...args) => listCheckpoints(...args),
 }));
 
@@ -136,10 +140,11 @@ function adapter(overrides = {}) {
   };
 }
 
-async function mountShelf(rows, checkpoints = []) {
+async function mountShelf(rows, checkpoints = [], unclassified = []) {
   listAdapters.mockResolvedValue(rows);
   listCheckpoints.mockResolvedValue(checkpoints);
   listEngines.mockResolvedValue([]);
+  listUnclassified.mockResolvedValue(unclassified);
   const wrapper = mount(ModelShelf, globalOpts);
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
@@ -157,6 +162,7 @@ beforeEach(() => {
   listAdapters.mockReset();
   listCheckpoints.mockReset();
   listEngines.mockReset().mockResolvedValue([]);
+  listUnclassified.mockReset().mockResolvedValue([]);
   listModelFolderDevices.mockReset();
   listModelFolderDevices.mockResolvedValue([]);
   listModelFolders.mockReset();
@@ -324,16 +330,18 @@ describe("renaming a row in place", () => {
 
 describe("file kinds", () => {
   it("never renders an unclassified file as a checkpoint", async () => {
-    // `unknown` is in neither default list (see api/modelShelf.js), so the row
-    // only reaches the shelf when the Unclassified box asks for its block.
+    // `unknown` is in neither of the other two lists (see api/modelShelf.js),
+    // so the row reaches the shelf only through the Unclassified block.
     useModelShelfStore().setFilters({
       adapters: false,
       checkpoints: false,
       unclassified: true,
     });
-    const wrapper = await mountShelf([
-      adapter({ file_kind: "unknown", kind: null, display_name: "aurora" }),
-    ]);
+    const wrapper = await mountShelf(
+      [],
+      [],
+      [adapter({ file_kind: "unknown", kind: null, display_name: "aurora" })],
+    );
     const kind = textOf(wrapper.find(".shelf-row .shelf-col"));
     expect(kind).toContain("Unclassified");
     expect(kind).not.toContain("Checkpoint");

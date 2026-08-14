@@ -15,6 +15,11 @@ const listCheckpoints = vi.fn();
 // below would answer the engines request with adapter rows too, and the store
 // would look like it had duplicated the shelf.
 const listEngines = vi.fn();
+// Same split, same reason, now that `Unclassified` is on by default: it is one
+// more result set behind the one route, and folding it into `listAdapters`
+// would answer the unclassified request with adapter rows and make every list
+// here look duplicated.
+const listUnclassified = vi.fn();
 
 const editModels = vi.fn();
 const forgetModels = vi.fn();
@@ -24,10 +29,11 @@ const clearModelIcons = vi.fn();
 
 vi.mock("../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
-  listAdapters: (...args) =>
-    args[0]?.fileKind === "engine"
-      ? listEngines(...args)
-      : listAdapters(...args),
+  listAdapters: (...args) => {
+    if (args[0]?.fileKind === "engine") return listEngines(...args);
+    if (args[0]?.fileKind === "unknown") return listUnclassified(...args);
+    return listAdapters(...args);
+  },
   listCheckpoints: (...args) => listCheckpoints(...args),
   editModels: (...args) => editModels(...args),
   forgetModels: (...args) => forgetModels(...args),
@@ -71,18 +77,21 @@ beforeEach(() => {
   listAdapters.mockReset().mockResolvedValue([]);
   listCheckpoints.mockReset().mockResolvedValue([]);
   listEngines.mockReset().mockResolvedValue([]);
+  listUnclassified.mockReset().mockResolvedValue([]);
 });
 
 describe("defaults", () => {
-  it("shows adapters and checkpoints but not unclassified files", async () => {
-    // `unknown` is first-class, not a bucket to hide things in — but a file we
-    // could not identify is not what someone came to the shelf to find, so it
-    // is opt-in and never folded into either other list.
+  it("shows adapters, checkpoints and unclassified files", async () => {
+    // `unknown` is first-class and never folded into either other list — and it
+    // is asked for by default: a file nothing could classify is still on the
+    // disk the shelf accounts for, and opt-in is how a 339 MB leftover in
+    // PixlStash's own download folder stayed invisible (#927).
     const store = useModelShelfStore();
     await store.fetchRows();
     expect(listAdapters).toHaveBeenCalledTimes(1);
     expect(listAdapters).toHaveBeenCalledWith();
     expect(listCheckpoints).toHaveBeenCalledTimes(1);
+    expect(listUnclassified).toHaveBeenCalledWith({ fileKind: "unknown" });
     expect(store.activeCount).toBe(0);
   });
 
@@ -122,12 +131,18 @@ describe("defaults", () => {
 
   it("asks the adapters block for the unclassified files", async () => {
     const store = useModelShelfStore();
-    await store.setFilters({ unclassified: true }, { refetch: true });
-    expect(listAdapters).toHaveBeenCalledWith({ fileKind: "unknown" });
+    await store.fetchRows();
+    expect(listUnclassified).toHaveBeenCalledWith({ fileKind: "unknown" });
     // Never /checkpoints: an unknown must not render as a checkpoint.
     expect(listCheckpoints).not.toHaveBeenCalledWith(
       expect.objectContaining({ fileKind: "unknown" }),
     );
+  });
+
+  it("stops asking for the unclassified files when the box is unticked", async () => {
+    const store = useModelShelfStore();
+    await store.setFilters({ unclassified: false }, { refetch: true });
+    expect(listUnclassified).not.toHaveBeenCalled();
   });
 });
 
@@ -302,9 +317,9 @@ describe("the badge", () => {
     expect(store.activeCount).toBe(2);
   });
 
-  it("counts turning unclassified on, because off is the default", async () => {
+  it("counts turning unclassified off, because on is the default", async () => {
     const store = useModelShelfStore();
-    await store.setFilters({ unclassified: true }, { refetch: true });
+    await store.setFilters({ unclassified: false }, { refetch: true });
     expect(store.activeCount).toBe(1);
   });
 });
@@ -324,10 +339,10 @@ describe("empty states", () => {
 describe("persistence", () => {
   it("remembers the selection and restores it next visit", () => {
     const store = useModelShelfStore();
-    store.setFilters({ unclassified: true, baseModels: ["UNASSIGNED"] });
+    store.setFilters({ unclassified: false, baseModels: ["UNASSIGNED"] });
     setActivePinia(createPinia());
     const restored = useModelShelfStore();
-    expect(restored.filters.unclassified).toBe(true);
+    expect(restored.filters.unclassified).toBe(false);
     expect(restored.filters.baseModels).toEqual(["UNASSIGNED"]);
   });
 
@@ -335,7 +350,22 @@ describe("persistence", () => {
     window.localStorage.setItem("pixlstash:modelShelfFilters", "{not json");
     const store = useModelShelfStore();
     expect(store.filters.adapters).toBe(true);
-    expect(store.filters.unclassified).toBe(false);
+    expect(store.filters.unclassified).toBe(true);
+  });
+
+  it("discards a blob an older build wrote, so a changed default applies", () => {
+    // The regression this pins is #927 in its second half. `Unclassified`
+    // shipped off, so every blob written before this carries
+    // `unclassified: false` whether or not anyone chose it — and honouring it
+    // would keep the leftovers hidden from precisely the people who have used
+    // the shelf longest.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfFilters",
+      JSON.stringify({ adapters: false, unclassified: false }),
+    );
+    const store = useModelShelfStore();
+    expect(store.filters.unclassified).toBe(true);
+    expect(store.filters.adapters).toBe(true);
   });
 });
 
@@ -625,9 +655,9 @@ describe("the view is remembered", () => {
     // and losing your sort order to it would be a different promise.
     const store = useModelShelfStore();
     store.setView({ sortKey: "name" });
-    store.setFilters({ unclassified: true });
+    store.setFilters({ unclassified: false });
     await store.resetFilters();
-    expect(store.filters.unclassified).toBe(false);
+    expect(store.filters.unclassified).toBe(true);
     expect(store.view.sortKey).toBe("name");
   });
 
