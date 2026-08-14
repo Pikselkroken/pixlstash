@@ -188,7 +188,10 @@ _SEED_MODELS = (
 def _seed_hub(server) -> dict[str, int]:
     """Write the shelf tables from scratch. Returns filename -> model.id."""
     with server.hub.transaction() as conn:
+        # Both children of `model` before the parent: foreign keys are on for
+        # the hub, so a leftover row aborts the wipe rather than lingering.
         conn.execute("DELETE FROM model_file")
+        conn.execute("DELETE FROM model_capability")
         conn.execute("DELETE FROM model")
         conn.execute("DELETE FROM model_folder")
         conn.execute("DELETE FROM adapter_stack")
@@ -1479,8 +1482,14 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
     # An allowlist cannot go stale that way: Starlette serves the handler on its
     # own threadpool, whose threads are named "AnyIO worker thread", and nothing
     # else in this process is. It also cannot rot into a dead assertion — the
-    # tally is asserted to be exactly 2, so a naming change that matched nothing
-    # would fail loudly rather than pass silently.
+    # tally is asserted to be an exact number, so a naming change that matched
+    # nothing would fail loudly rather than pass silently.
+    #
+    # That number is three: the rows, the locations, and the capabilities. What
+    # this test actually guards is that the tally does not MOVE WITH THE ROW
+    # COUNT, which is why both sides are compared as well as pinned — a whole-
+    # page query added on purpose changes the constant, a per-row lookup breaks
+    # the equality.
     request_thread_prefix = "AnyIO worker thread"
 
     def counting(sql, params=()):
@@ -1528,7 +1537,7 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
         r = shelf_env.owner.get(f"{API}/adapters", params={"sort": "size"})
         assert r.status_code == 200, r.text
         assert len(r.json()["adapters"]) == 24
-        assert len(calls) == with_four_rows == 2, (
+        assert len(calls) == with_four_rows == 3, (
             f"{len(calls)} hub queries for 24 rows vs {with_four_rows} for 4 — "
             "the list has grown a per-row lookup"
         )
@@ -3997,3 +4006,52 @@ def test_a_checkpoint_added_this_way_keeps_the_digest_rather_than_deferring_it(
     )
     assert row["file_kind"] == "checkpoint"
     assert row["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+
+
+# --- Capabilities on the wire (#903) ----------------------------------------
+
+
+def test_a_row_carries_every_feature_it_serves_not_just_the_first(shelf_env):
+    """The contract the shelf's feature axis and capability filter are built on.
+
+    `kind` keeps the primary label so every existing reader is unchanged, and
+    `capabilities` carries the whole ordered set beside it — primary first, so
+    the two agree rather than telling a reader two different stories.
+    """
+    server = shelf_env.server
+    model_id = shelf_env.model_ids["alice.safetensors"]
+    with server.hub.transaction() as conn:
+        for capability in ("captioner", "detector"):
+            conn.execute(
+                "INSERT INTO model_capability (model_id, capability) VALUES (?, ?)",
+                (model_id, capability),
+            )
+
+    r = shelf_env.owner.get(f"{API}/adapters")
+    assert r.status_code == 200, r.text
+    rows = {row["filename"]: row for row in r.json()["adapters"]}
+    assert rows["alice.safetensors"]["capabilities"] == ["captioner", "detector"]
+    assert rows["alice.safetensors"]["kind"] == "lora"
+    # A row that declares none says so with an empty list, never a null: an
+    # adapter's `kind` is an algorithm, which is not a capability.
+    assert rows["bob.safetensors"]["capabilities"] == []
+
+
+def test_the_detail_route_answers_with_the_same_set_as_the_list(shelf_env):
+    """The two shapes cannot drift apart — the list is what the shelf renders
+    and the detail route is what a client fetching one model reads."""
+    server = shelf_env.server
+    model_id = shelf_env.model_ids["alice.safetensors"]
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_capability (model_id, capability) VALUES (?, 'search')",
+            (model_id,),
+        )
+
+    listed = {
+        row["filename"]: row
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }["alice.safetensors"]
+    detail = shelf_env.owner.get(f"{API}/adapters/{listed['sha256']}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["capabilities"] == listed["capabilities"] == ["search"]

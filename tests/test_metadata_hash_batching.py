@@ -35,8 +35,7 @@ from datetime import datetime
 
 import numpy as np
 import pytest
-from sqlalchemy import event, inspect as sa_inspect, select as sa_select, text
-from sqlmodel import delete
+from sqlalchemy import event, inspect as sa_inspect, select as sa_select
 
 from pixlstash.database import (
     _HASH_SKIP_COLS,
@@ -55,6 +54,7 @@ from pixlstash.db_models import (
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.db_models.tag import Tag
 from pixlstash.server import Server
+from tests.utils import wipe_tables
 
 
 # ---------------------------------------------------------------------------
@@ -150,21 +150,20 @@ def server():
 
 @pytest.fixture(autouse=True)
 def clean_db(server):
-    def _wipe(session):
-        session.exec(text("PRAGMA foreign_keys = OFF"))
-        session.exec(delete(Snapshot))
-        session.exec(delete(Tag))
-        session.exec(delete(Face))
-        session.exec(delete(PictureSetMember))
-        session.exec(delete(PictureProjectMember))
-        session.exec(delete(PictureSet))
-        session.exec(delete(Project))
-        session.exec(delete(Character))
-        session.exec(delete(Picture))
-        session.exec(text("PRAGMA foreign_keys = ON"))
-        session.commit()
-
-    server.vault.db.run_task(_wipe)
+    server.vault.db.run_task(
+        wipe_tables,
+        [
+            Snapshot,
+            Tag,
+            Face,
+            PictureSetMember,
+            PictureProjectMember,
+            PictureSet,
+            Project,
+            Character,
+            Picture,
+        ],
+    )
     yield
 
 

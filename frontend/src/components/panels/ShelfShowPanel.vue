@@ -107,6 +107,7 @@
         <input
           type="checkbox"
           :checked="filters.engines"
+          :indeterminate="enginesIndeterminate"
           @change="
             store.setFilters(
               { engines: $event.target.checked },
@@ -118,6 +119,27 @@
         />
         Engines
       </label>
+      <!-- Capabilities, nested under Engines exactly as the algorithms nest
+           under Adapters, and greyed rather than cleared the same way.
+           These match "HAS this capability", not "IS this kind": one model can
+           serve several features and is listed under each, so ticking
+           `Captioning` keeps Florence-2 — which also detects — in view. -->
+      <div v-if="store.capabilityOptions.length" class="shelf-show-nested">
+        <label
+          v-for="capability in store.capabilityOptions"
+          :key="capability"
+          class="tbm-check"
+          :class="{ 'shelf-show-check--off': !filters.engines }"
+        >
+          <input
+            type="checkbox"
+            :disabled="!filters.engines"
+            :checked="filters.capabilities.includes(capability)"
+            @change="toggleCapability(capability, $event.target.checked)"
+          />
+          {{ capabilityLabel(capability) }}
+        </label>
+      </div>
     </div>
 
     <!-- Base model. "Not set" is an option, not an omission: a null base model
@@ -146,6 +168,7 @@
 <script setup>
 import { computed } from "vue";
 import { BASE_MODEL_UNASSIGNED } from "../../api/modelShelf";
+import { capabilityLabel } from "../../utils/modelShelf";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
 const store = useModelShelfStore();
@@ -165,10 +188,25 @@ const adaptersIndeterminate = computed(
     filters.adapterKinds.length < store.adapterKindOptions.length,
 );
 
+const enginesIndeterminate = computed(
+  () =>
+    filters.engines &&
+    filters.capabilities.length > 0 &&
+    filters.capabilities.length < store.capabilityOptions.length,
+);
+
 function toggleKind(kind, checked) {
   const current = filters.adapterKinds;
   const next = checked ? [...current, kind] : current.filter((k) => k !== kind);
   store.setFilters({ adapterKinds: next });
+}
+
+function toggleCapability(capability, checked) {
+  const current = filters.capabilities;
+  const next = checked
+    ? [...current, capability]
+    : current.filter((c) => c !== capability);
+  store.setFilters({ capabilities: next });
 }
 
 function toggleBaseModel(option, checked) {

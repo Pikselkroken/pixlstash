@@ -98,6 +98,17 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
   const job = ref(null);
   const starting = ref(false);
   const error = ref("");
+  /**
+   * The receipt of a finished run that lost files, held until it is dismissed.
+   *
+   * Held HERE rather than pushed as a notice (#900). A `warning` card clears
+   * itself after six seconds, and what it is saying is that some of the
+   * owner's models did not arrive — which is the one outcome that must not
+   * scroll past while they are looking elsewhere. Living in the store, it goes
+   * back into the shelf's corner, where the progress was, every time the shelf
+   * is mounted.
+   */
+  const failure = ref("");
   let pollHandle = null;
   let epoch = 0;
   // Set the moment a job is started or observed running, cleared when its
@@ -167,11 +178,11 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     if (!watching) return;
     watching = false;
     const results = snapshot?.results || [];
-    const failed = results.some((r) => r.status === "failed");
-    useNoticeStore().push({
-      level: failed ? "warning" : "success",
-      text: moveReceipt(results, Boolean(snapshot?.cancel_requested)),
-    });
+    const receipt = moveReceipt(results, Boolean(snapshot?.cancel_requested));
+    // Two surfaces for two kinds of news: a run that landed says so in passing,
+    // a run that lost files holds the panel until it is read.
+    if (results.some((r) => r.status === "failed")) failure.value = receipt;
+    else useNoticeStore().push({ level: "success", text: receipt });
     await Promise.all([
       useModelShelfStore().fetchRows(),
       useModelFoldersStore().refresh({ quiet: true }),
@@ -222,6 +233,9 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     const notices = useNoticeStore();
     starting.value = true;
     error.value = "";
+    // The new run owns the corner from here; the last one's failure has had its
+    // chance to be read and must not sit on top of live progress.
+    failure.value = "";
     try {
       job.value = await request();
       watching = true;
@@ -257,6 +271,11 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     }
   }
 
+  /** Put the held failure away. The only way out of it, by design. */
+  function dismissFailure() {
+    failure.value = "";
+  }
+
   /**
    * Pick up a move already running, e.g. one started before a reload.
    *
@@ -284,6 +303,7 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     job.value = null;
     starting.value = false;
     error.value = "";
+    failure.value = "";
   }
 
   const unsubscribeSessionReset = onSessionReset(resetForSession);
@@ -299,6 +319,7 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     busy,
     starting,
     error,
+    failure,
     total,
     done,
     percent,
@@ -306,6 +327,7 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     start,
     relocate,
     cancel,
+    dismissFailure,
     adopt,
     poll,
     resetForSession,

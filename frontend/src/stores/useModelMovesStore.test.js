@@ -128,6 +128,38 @@ describe("watching one to its end", () => {
     expect(store.running).toBe(true);
   });
 
+  it("holds a run that lost files instead of letting a notice expire", async () => {
+    // #900: the failure is the one outcome that must not clear itself after
+    // six seconds. It is held so the shelf can put it back in the corner the
+    // progress came from, and only a dismissal takes it away.
+    const store = useModelMovesStore();
+    await store.start(2, ITEMS);
+    getModelMoveStatus.mockResolvedValue(
+      snapshot({
+        status: "finished",
+        done: 2,
+        results: [{ status: "moved" }, { status: "failed" }],
+      }),
+    );
+
+    await store.poll();
+    expect(store.failure).toBe(
+      "Moved 1 file. 1 file could not be moved and stayed put.",
+    );
+    expect(useNoticeStore().notices).toHaveLength(0);
+
+    store.dismissFailure();
+    expect(store.failure).toBe("");
+  });
+
+  it("clears a held failure when the next move starts", async () => {
+    // A stale red card on top of live progress would report the wrong run.
+    const store = useModelMovesStore();
+    store.failure = "Moved 1 file. 1 file could not be moved and stayed put.";
+    await store.start(2, ITEMS);
+    expect(store.failure).toBe("");
+  });
+
   it("does not turn a failed poll into a failed move", async () => {
     // The move is still running on the server. Reporting an outcome we never
     // read would be inventing one.

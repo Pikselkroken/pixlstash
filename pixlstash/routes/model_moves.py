@@ -705,12 +705,15 @@ def create_router(server) -> APIRouter:
                     # pointer by hand or re-run the relocation.
                     logger.error(
                         "Moved PixlStash's downloads to %s but could not record "
-                        "the new location (%s). The shelf will show them there, "
-                        "but the next start will download to the default folder "
-                        "again. Re-run the relocation once %s is writable.",
+                        "the new location: %s. The shelf will show them there, "
+                        "but the next start will resolve the default folder "
+                        "again and download into it. What failed is the write "
+                        "of the pointer file named in that error — it lives in "
+                        "the platform user data directory, NOT under %s — so "
+                        "make that file writable and re-run the relocation.",
                         destination_path,
                         exc,
-                        os.path.dirname(destination_path),
+                        destination_path,
                     )
             _finish_relocation(server.hub, folder_id, destination_id, identity)
             _remove_if_empty(folder["path"])

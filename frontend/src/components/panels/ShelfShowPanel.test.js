@@ -89,4 +89,53 @@ describe("ShelfShowPanel", () => {
     expect(kindBox.attributes("disabled")).toBeDefined();
     expect(kindBox.element.checked).toBe(true);
   });
+
+  // The capability boxes hang under Engines the way the kinds hang under
+  // Adapters. Mocked per request kind, because the store asks the SAME route
+  // twice and a single `mockResolvedValue` would answer both with these rows.
+  async function mountWithEngines(engineRows) {
+    listAdapters.mockImplementation((opts) =>
+      Promise.resolve(opts?.fileKind === "engine" ? engineRows : []),
+    );
+    listCheckpoints.mockResolvedValue([]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    const wrapper = mount(ShelfShowPanel, globalOpts);
+    await wrapper.vm.$nextTick();
+    return { wrapper, store };
+  }
+
+  it("names each capability in the screen's words, not the database's", async () => {
+    const { wrapper } = await mountWithEngines([
+      adapter({
+        id: 900,
+        file_kind: "engine",
+        kind: "scorer",
+        capabilities: ["scorer", "search"],
+      }),
+    ]);
+    expect(wrapper.text()).toContain("Quality score");
+    expect(wrapper.text()).toContain("Search");
+    // The stored vocabulary stays stored.
+    expect(wrapper.text()).not.toContain("scorer");
+  });
+
+  it("disables the capabilities when Engines is off, keeping the selection", async () => {
+    const { wrapper, store } = await mountWithEngines([
+      adapter({
+        id: 900,
+        file_kind: "engine",
+        kind: "captioner",
+        capabilities: ["captioner", "detector"],
+      }),
+    ]);
+    store.setFilters({ capabilities: ["detector"] });
+    await store.setFilters({ engines: false }, { refetch: true });
+    await wrapper.vm.$nextTick();
+
+    const boxes = wrapper.findAll(".shelf-show-nested input");
+    expect(boxes.length).toBe(2);
+    expect(boxes[1].attributes("disabled")).toBeDefined();
+    expect(boxes[1].element.checked).toBe(true);
+  });
 });

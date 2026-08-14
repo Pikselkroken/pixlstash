@@ -608,6 +608,226 @@ def test_every_readable_revision_is_consulted_not_one_at_random(tmp_path):
     assert feature_for_repo(repo) == "captioner"
 
 
+# --- Everything a model can do, not just the first thing --------------------
+
+
+def test_a_model_that_serves_two_features_declares_both():
+    """The rule this table exists for: a multi-capability model genuinely cannot
+    be filed under one heading, so it says both and the shelf lists it twice.
+
+    Florence-2 is the worked example — ONE setting and one set of weights drive
+    `FlorenceService.get_captions` and `.detect_objects`, the latter being what
+    `DetectionTask` runs. A single label answers "what breaks if I delete this"
+    wrongly for exactly the rows a reader is deciding about.
+    """
+    from pixlstash.services.model_features import (
+        feature_for_repo,
+        features_for_repo,
+    )
+    from pixlstash.tagger_plugins.florence2 import FLORENCE_MODEL_VARIANTS
+
+    for variant in FLORENCE_MODEL_VARIANTS.values():
+        repo = _repo(variant["model"])
+        assert features_for_repo(repo) == ("captioner", "detector")
+        # Primary first, and `model.kind` still holds exactly that one word.
+        assert feature_for_repo(repo) == "captioner"
+
+
+def test_the_clip_the_embedder_loads_is_both_encoder_and_scorer_backbone():
+    """`ImageEmbeddingTask` runs ONE forward pass through these weights and uses
+    the result twice: as the search embedding and as the aesthetic predictor's
+    input. Deleting the repo stops search AND quality scores.
+
+    The repo id is pinned against the two constants that choose the model, so a
+    switch to another CLIP cannot leave this entry quietly naming the old one.
+    `open_clip` itself is not imported: it pulls torch, and the pin is a string
+    fact rather than a resolution.
+    """
+    from pixlstash.services.model_features import OUR_REPOS, features_for_repo
+    from pixlstash.tagger_plugins.clip_service import (
+        CLIP_MODEL_NAME,
+        CLIP_MODEL_WEIGHTS,
+    )
+
+    named = [
+        repo_id
+        for repo_id, caps in OUR_REPOS.items()
+        if "scorer" in caps and "search" in caps
+    ]
+    assert len(named) == 1, "exactly one cached repo is the embedder's CLIP"
+    repo_id = named[0].lower().replace("_", "-")
+    assert CLIP_MODEL_NAME.lower() in repo_id
+    assert CLIP_MODEL_WEIGHTS.lower().replace("_", "-") in repo_id
+    assert features_for_repo(_repo(named[0])) == ("search", "scorer")
+
+
+def test_a_model_that_does_one_thing_says_it_once(tmp_path):
+    """The common case stays a one-element tuple rather than growing a list of
+    near-synonyms. A single label is right for most rows and honest for the
+    rest, which is why `other` is still reachable."""
+    from pixlstash.services.model_features import features_for_repo
+    from pixlstash.tagger_plugins.wd14 import WD14_HF_REPO
+
+    assert features_for_repo(_repo(WD14_HF_REPO)) == ("tagger",)
+
+    vae = tmp_path / "vae"
+    vae.mkdir()
+    (vae / "raw.safetensors").write_bytes(b"\x00")
+    assert features_for_repo(_repo("ai-toolkit/flux2_vae", str(vae))) == ("other",)
+
+
+def _capabilities_by_name(hub, folder_id):
+    """`display_name -> [capability, …]` for one declared folder."""
+    grouped: dict[str, list[str]] = {}
+    for row in hub.fetchall(
+        "SELECT m.display_name, c.capability FROM model m "
+        "JOIN model_file mf ON mf.model_id = m.id "
+        "JOIN model_capability c ON c.model_id = m.id "
+        "WHERE mf.model_folder_id = ? ORDER BY c.rowid",
+        (folder_id,),
+    ):
+        grouped.setdefault(row["display_name"], []).append(row["capability"])
+    return grouped
+
+
+def _hf_cache(monkeypatch, repos):
+    """Point `scan_cache_dir` at a fake cache holding *repos*."""
+
+    class _Repo:
+        def __init__(self, repo_id):
+            self.repo_id = repo_id
+            self.repo_type = "model"
+            self.repo_path = "models--" + repo_id.replace("/", "--")
+            self.size_on_disk = 4_096
+            self.revisions = frozenset()
+
+    class _Info:
+        pass
+
+    info = _Info()
+    info.repos = tuple(_Repo(repo_id) for repo_id in repos)
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "scan_cache_dir", lambda _path: info)
+
+
+def test_declaring_a_cache_writes_the_whole_capability_set(
+    server_hub, tmp_path, monkeypatch
+):
+    """The join table is what the shelf reads to list a model under each feature
+    it serves, so the declaration has to fill it — and `model.kind` keeps the
+    primary label so the Kind column and the curation verbs are unchanged."""
+    _hf_cache(
+        monkeypatch,
+        ("florence-community/Florence-2-base", "SmilingWolf/wd-convnext-tagger-v3"),
+    )
+    folder_id = declare_huggingface_cache(server_hub, str(tmp_path))
+    assert folder_id is not None
+
+    assert _capabilities_by_name(server_hub, folder_id) == {
+        "florence-community/Florence-2-base": ["captioner", "detector"],
+        "SmilingWolf/wd-convnext-tagger-v3": ["tagger"],
+    }
+    kinds = {
+        row["display_name"]: row["kind"]
+        for row in server_hub.fetchall(
+            "SELECT m.display_name, m.kind FROM model m "
+            "JOIN model_file mf ON mf.model_id = m.id "
+            "WHERE mf.model_folder_id = ?",
+            (folder_id,),
+        )
+    }
+    assert kinds["florence-community/Florence-2-base"] == "captioner"
+
+
+def test_a_capability_the_declaration_drops_stops_being_listed(
+    server_hub, tmp_path, monkeypatch
+):
+    """The declaration is the authority, so the set is restated wholesale rather
+    than merged. Without that, a model that stopped serving a feature would
+    still be listed under it forever — and re-declaring is what every start-up
+    does, so the leak would be permanent rather than rare."""
+    from pixlstash.services import builtin_caches
+
+    _hf_cache(monkeypatch, ("florence-community/Florence-2-base",))
+    folder_id = declare_huggingface_cache(server_hub, str(tmp_path))
+    assert _capabilities_by_name(server_hub, folder_id) == {
+        "florence-community/Florence-2-base": ["captioner", "detector"]
+    }
+
+    # The same repo, now classified as serving one feature.
+    monkeypatch.setattr(
+        builtin_caches, "features_for_repo", lambda _repo: ("captioner",)
+    )
+    assert declare_huggingface_cache(server_hub, str(tmp_path)) == folder_id
+    assert _capabilities_by_name(server_hub, folder_id) == {
+        "florence-community/Florence-2-base": ["captioner"]
+    }
+
+
+def test_forgetting_a_model_takes_its_capabilities_with_it(server_hub, tmp_path):
+    """Foreign keys are on for the hub, so `model_capability` is not a row that
+    leaks quietly if it is forgotten — it ABORTS the delete. Both directions
+    matter: the delete must succeed, and nothing must be left behind."""
+    from pixlstash.services.model_shelf_service import forget_models
+
+    with server_hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (id, path, kind, movable, created_at) "
+            "VALUES (7, '/models/x', 'user', 'per_item', '2026-08-13T00:00:00Z')"
+        )
+        cursor = conn.execute(
+            "INSERT INTO model (file_kind, kind, sha256, filename, provenance) "
+            "VALUES ('adapter', 'lora', 'a' * 64, 'x.safetensors', 'external')"
+        )
+        model_id = int(cursor.lastrowid)
+        conn.execute(
+            "INSERT INTO model_capability (model_id, capability) VALUES (?, 'search')",
+            (model_id,),
+        )
+
+    forgotten, refused = forget_models(server_hub, [model_id])
+    assert forgotten == [model_id], refused
+    assert not server_hub.fetchall(
+        "SELECT 1 FROM model_capability WHERE model_id = ?", (model_id,)
+    )
+
+
+def test_re_declaring_an_unchanged_set_writes_nothing(
+    server_hub, tmp_path, monkeypatch
+):
+    """Every root here is re-declared on every server start, and the set changes
+    about never — so an unchanged declaration must not rewrite the rows.
+
+    This is not only churn. Rewriting ~35 entries' capabilities on every Server
+    a process builds was enough extra hub write traffic to take the Windows CI
+    shard down with a SIGSEGV during interpreter teardown, seconds after a fully
+    green test run (PR #922). Asserted on `rowid`, which is what a
+    delete-and-reinsert changes and a no-op leaves alone.
+    """
+    _hf_cache(
+        monkeypatch,
+        ("florence-community/Florence-2-base", "SmilingWolf/wd-convnext-tagger-v3"),
+    )
+    folder_id = declare_huggingface_cache(server_hub, str(tmp_path))
+    assert folder_id is not None
+
+    def rowids():
+        return [
+            (row["rowid"], row["capability"])
+            for row in server_hub.fetchall(
+                "SELECT rowid, capability FROM model_capability ORDER BY rowid"
+            )
+        ]
+
+    before = rowids()
+    assert [cap for _, cap in before] == ["captioner", "detector", "tagger"]
+
+    assert declare_huggingface_cache(server_hub, str(tmp_path)) == folder_id
+    assert rowids() == before, "an unchanged declaration rewrote the rows"
+
+
 # ===========================================================================
 # Where the folder is: one accessor, and a location that can be recorded (#905)
 # ===========================================================================
