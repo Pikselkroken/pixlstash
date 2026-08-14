@@ -24,6 +24,7 @@ from pixlstash.utils.insightface_batched import BatchedFaceRunner
 from pixlstash.utils.insightface_model_utils import (
     DEFAULT_MODEL_PACK,
     ensure_model_pack_available,
+    insightface_root,
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
@@ -348,6 +349,13 @@ class FaceExtractionTask(BaseTask):
         model_pack = getattr(engine, "insightface_model_pack", DEFAULT_MODEL_PACK)
         ensure_model_pack_available(model_pack)
 
+        # Passed explicitly rather than left to FaceAnalysis's own
+        # ``~/.insightface`` default: the root is a setting, so the owner can
+        # keep several gigabytes of packs off the system drive. It is the same
+        # value `ensure_model_pack_available` just downloaded into, which is the
+        # whole point of both going through `insightface_root()`.
+        root = insightface_root()
+
         if cpu_spillover:
             with cls._cpu_insightface_lock:
                 if cls._global_cpu_insightface_app is None:
@@ -357,7 +365,9 @@ class FaceExtractionTask(BaseTask):
                         model_pack,
                     )
                     app = FaceAnalysis(
-                        name=model_pack, providers=["CPUExecutionProvider"]
+                        name=model_pack,
+                        root=root,
+                        providers=["CPUExecutionProvider"],
                     )
                     app.prepare(ctx_id=-1, det_thresh=0.25, det_size=(256, 256))
                     cls._global_cpu_insightface_app = app
@@ -378,12 +388,13 @@ class FaceExtractionTask(BaseTask):
             else ["CPUExecutionProvider"]
         )
         logger.debug(
-            "Initialising InsightFace with providers=%s (ctx_id=%d, pack=%s)",
+            "Initialising InsightFace with providers=%s (ctx_id=%d, pack=%s, root=%s)",
             providers,
             0 if use_cuda else -1,
             model_pack,
+            root,
         )
-        app = FaceAnalysis(name=model_pack, providers=providers)
+        app = FaceAnalysis(name=model_pack, root=root, providers=providers)
         app.prepare(
             ctx_id=0 if use_cuda else -1,
             det_thresh=0.25,

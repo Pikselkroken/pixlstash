@@ -162,16 +162,23 @@ class ModelFolderResponse(BaseModel):
         default=None,
         description="Which subsystem owns the folder; null for a folder the user chose.",
     )
-    movable: str = Field(description="`per_item`, `root_only` or `external`.")
+    movable: str = Field(
+        description=(
+            "`per_item` (files move one at a time), `root_only` (relocates as a "
+            "whole), `external` (taken from, never written into) or `fixed` "
+            "(cannot relocate at all; another tool owns where it lives). What "
+            "the folder *is*; read `relocatable` for what can be done to it."
+        )
+    )
     relocatable: bool = Field(
         default=False,
         description=(
             "Whether `POST /model-folders/{id}/relocate` will move this folder "
             "whole. Reported rather than derived by the client, because "
-            "`movable=root_only` does not settle it: the InsightFace packs say "
-            "the same and have no relocate route yet (#906), and the folder "
-            "PixlStash downloads into is told apart from them by its path. Offer "
-            "Move on exactly the rows that carry this."
+            "`movable=root_only` does not settle it: it is also what the "
+            "HuggingFace cache's neighbours say, and the two roots PixlStash "
+            "records a location for are told apart from each other by path, not "
+            "by any column. Offer Move on exactly the rows that carry this."
         ),
     )
     host_path: Optional[str] = None

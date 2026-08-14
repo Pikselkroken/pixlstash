@@ -51,17 +51,43 @@ from pixlstash.utils.insightface_model_utils import (
 
 logger = get_logger(__name__)
 
-# The same test seam as `BUILTIN_MODEL_DIR_ENV`, and for the same reason: a
-# Server built on a temp config dir must not declare rows about the developer's
-# real home, or the shelf's contents depend on which packs and repos that
-# machine happens to have downloaded.
-INSIGHTFACE_DIR_ENV = "PIXLSTASH_INSIGHTFACE_DIR"
+# Lets a deployment point the HuggingFace listing somewhere else. It is the last
+# of these left, and it is safe because that cache is `fixed`: it cannot be
+# relocated, so there is nothing for an override to disagree with.
+#
+# **InsightFace had one and no longer does (#906).** `PIXLSTASH_INSIGHTFACE_DIR`
+# named the *models* directory, one level below the root that is now recorded, so
+# the two could disagree — inert while nothing could relocate, a bug the moment
+# something could: the shelf would declare the override path while downloads and
+# `FaceAnalysis` used the root, and a relocation identified by
+# `insightface_models_dir()` would repoint the row at a directory the next start
+# would not declare. It had no callers, in the product or the suite.
 HUGGINGFACE_CACHE_DIR_ENV = "PIXLSTASH_HUGGINGFACE_CACHE_DIR"
+
+# InsightFace's own layout: it joins this onto whatever root it is given.
+INSIGHTFACE_MODELS_SUBDIR = "models"
 
 # InsightFace stores each pack as a directory. The zip it downloaded to build
 # one sits beside it and is the tool's own leftover, not a model — the same
 # judgement `TOOLING_DIRS` makes about `.cache`.
 _PACK_ARCHIVE_SUFFIX = ".zip"
+
+
+def insightface_models_dir_under(root: str) -> str:
+    """The directory ``FaceAnalysis`` loads packs from, given an InsightFace root.
+
+    ``models`` is InsightFace's own layout and is not ours to choose: the
+    library joins it onto whatever ``root`` it is given. That is why relocating
+    the packs is a change of *root* rather than of this folder — see
+    ``POST /model-folders/{id}/relocate``.
+
+    Args:
+        root: An InsightFace root.
+
+    Returns:
+        The absolute models directory under it.
+    """
+    return os.path.join(root, INSIGHTFACE_MODELS_SUBDIR)
 
 
 def insightface_models_dir() -> str:
@@ -72,13 +98,28 @@ def insightface_models_dir() -> str:
     the tool's own state and would be a less honest thing to call a model
     folder.
 
+    **Derived from :func:`~pixlstash.utils.insightface_model_utils.insightface_root`
+    and from nothing else**, so this and the two callers that resolve pack paths
+    for themselves cannot name different directories. There is deliberately no
+    environment override beside it (see the note above): a second source for
+    this one path is exactly what makes a relocation move the shelf's row away
+    from where the packs actually load.
+
     Returns:
-        The absolute path, or the override when one is set.
+        The absolute path.
     """
-    override = os.environ.get(INSIGHTFACE_DIR_ENV, "").strip()
-    if override:
-        return override
-    return os.path.join(insightface_root(), "models")
+    return insightface_models_dir_under(insightface_root())
+
+
+def is_insightface_models_dir(path: str) -> bool:
+    """Whether *path* is the folder the InsightFace packs live in.
+
+    By path rather than by ``kind``/``owner``/``movable``, for the reason
+    :func:`~pixlstash.services.builtin_models.is_builtin_model_dir` gives about
+    its own folder: ``declare_folder`` writes the same three values for every
+    root PixlStash declares, so those columns cannot tell them apart.
+    """
+    return os.path.realpath(path) == os.path.realpath(insightface_models_dir())
 
 
 def huggingface_cache_dir() -> Optional[str]:

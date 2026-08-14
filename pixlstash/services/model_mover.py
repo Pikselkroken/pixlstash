@@ -279,6 +279,74 @@ def discard_partial(partial: str) -> None:
         )
 
 
+def discard_partial_tree(partial: str) -> None:
+    """Remove a directory copy that never completed. Never raises.
+
+    The directory counterpart of :func:`discard_partial`, and quiet for the same
+    reason: the caller is already reporting a failure and a cleanup error must
+    not replace it. Whatever is left behind is inert — it carries the
+    ``.pixlstash-partial`` suffix, so no row names it and nothing loads it — but
+    it is occupying disk, which is why the failure is logged rather than passed.
+    """
+
+    try:
+        shutil.rmtree(partial)
+    except FileNotFoundError:
+        # The copy never got as far as creating it. Nothing to clean up.
+        logger.debug("No partial copy at %s to discard.", partial)
+    except OSError as exc:
+        logger.warning(
+            "Could not remove the partial copy %s: %s. It is inert — no row "
+            "names it and nothing loads it — but it is occupying disk.",
+            partial,
+            exc,
+        )
+
+
+def move_directory(source_path: str, destination_path: str) -> None:
+    """Move a whole directory so that a *complete* copy survives any interruption.
+
+    The pack-shaped counterpart of this module's per-file ordering, for the one
+    root whose registered rows are directories rather than files: an InsightFace
+    pack is ``scrfd_10g_bnkps.onnx`` plus ``glintr100.onnx`` and the shelf
+    catalogues the pack, not the files. The ordering is the same shape and has
+    the same property — **copy → rename into place → then remove the source** —
+    so every interruption leaves the pack loadable at the source, at the
+    destination, or (harmlessly) at both. The intermediate copy carries
+    :data:`PARTIAL_SUFFIX`, so a crash mid-copy can never leave a
+    half-populated directory under the name ``FaceAnalysis`` loads, which would
+    be a face pipeline that starts and then fails on a missing model.
+
+    **No SHA-256 verify, unlike a model file.** These rows have no ``sha256`` to
+    compare against — the packs are declared from a directory listing, never
+    hashed — so there is nothing to verify against, and ``copytree`` raises on
+    the I/O errors a digest would be catching. Re-running the relocation is the
+    repair, and the packs are re-downloadable besides.
+
+    Args:
+        source_path: The directory to move. Removed once the copy has landed.
+        destination_path: Where it goes. Must not exist; its parent must.
+
+    Raises:
+        OSError: The copy or the removal failed. Nothing is left under
+            *destination_path* itself when it does.
+    """
+    if same_device(source_path, os.path.dirname(destination_path)):
+        # A rename, exactly as the file path does it: atomic, nothing copied,
+        # no space needed.
+        os.rename(source_path, destination_path)
+        return
+
+    partial = destination_path + PARTIAL_SUFFIX
+    try:
+        shutil.copytree(source_path, partial)
+        os.rename(partial, destination_path)
+    except BaseException:
+        discard_partial_tree(partial)
+        raise
+    shutil.rmtree(source_path)
+
+
 def require_space(destination_path: str, bytes_to_copy: int) -> None:
     """Check free space **before the first byte**, for the whole batch.
 

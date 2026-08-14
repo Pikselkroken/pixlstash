@@ -2329,15 +2329,22 @@ Four states are designed rather than left to fail on click:
   **rendered in the row**, not in a tooltip.
 - **Move is offered on `relocatable`, never on `movable`.** The server says which
   rows relocate, because the client cannot work it out: PixlStash's own download
-  folder (#905) and the InsightFace packs both read `kind: foreign`,
-  `owner: pixlstash`, `movable: root_only`, and only the first has a route — the
-  backend tells them apart by path. Move reuses `FolderBrowser` as its picker,
-  the same one Add uses, so the dialog remembers which verb opened it. The job
-  itself belongs to `useModelMovesStore`, not to this dialog: a relocation of
-  438 GB outlives the panel, the shelf behind it already draws that progress, and
-  there is **one move at a time machine-wide**, so a second is blocked in the row
-  with its reason rather than reported as a 409 afterwards. The dialog closes when
-  the job is accepted.
+  folder (#905) and the InsightFace packs (#906) both read `kind: foreign`,
+  `owner: pixlstash`, `movable: root_only`, and the HuggingFace cache beside them
+  is `foreign` too — the backend tells all three apart by path and by `movable`,
+  and reports the one boolean that answers this slot's question. Since #906 the
+  first two both carry it and the cache still does not. Move reuses
+  `FolderBrowser` as its picker, the same one Add uses, so the dialog remembers
+  which verb opened it. The job itself belongs to `useModelMovesStore`, not to
+  this dialog: a relocation of 438 GB outlives the panel, the shelf behind it
+  already draws that progress, and there is **one move at a time machine-wide**,
+  so a second is blocked in the row with its reason rather than reported as a 409
+  afterwards. The dialog closes when the job is accepted.
+- **What the picked path means is the server's business, not the dialog's.** For
+  the InsightFace packs it names the InsightFace *root* and the packs land in
+  `<path>/models`; for the other two it is the folder's own new location. The row
+  sends what the owner picked either way, so this asymmetry has no presence in
+  the client at all.
 - **Every action slot is reserved.** Three slots per row plus a trailing help
   mark, and an action a row does not have is hidden with `visibility`, never
   `v-if`: §5.1's glyph-gutter rule applied to the right edge, or the managed

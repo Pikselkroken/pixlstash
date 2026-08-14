@@ -104,8 +104,24 @@ const INSIGHTFACE = folder({
   kind: "foreign",
   owner: "pixlstash",
   movable: "root_only",
-  relocatable: false,
+  // Relocatable since #906. It reads identically to DOWNLOADS above, which is
+  // the point: the two are told apart by path on the server and by nothing at
+  // all here, so the row can only ever ask.
+  relocatable: true,
   file_count: 2,
+});
+
+// The HuggingFace cache: `fixed`, because its location is `HF_HOME` and another
+// tool owns it. The row that must never carry Move, and the reason the verb is
+// read from the server rather than derived from `kind` — this is `foreign` too.
+const HF_CACHE = folder({
+  id: 6,
+  path: "/home/g/.cache/huggingface/hub",
+  kind: "foreign",
+  owner: "pixlstash",
+  movable: "fixed",
+  relocatable: false,
+  file_count: 26,
 });
 
 async function open(rows, { canManage = true, inDocker = false } = {}) {
@@ -175,19 +191,22 @@ describe("relocation", () => {
   }
 
   it("offers Move on the folders the server says relocate", async () => {
-    const wrapper = await open([MANAGED, DOWNLOADS]);
+    const wrapper = await open([MANAGED, DOWNLOADS, INSIGHTFACE]);
     const labels = wrapper
       .findAll("button")
       .map((b) => b.attributes("aria-label") || "")
       .filter((l) => l.startsWith("Move"));
-    expect(labels).toHaveLength(2);
+    expect(labels).toHaveLength(3);
     expect(labels.join(" ")).toContain("downloaded_models");
+    expect(labels.join(" ")).toContain(".insightface");
   });
 
-  it("offers none on a root_only folder that has no relocate route", async () => {
-    // The InsightFace packs say `root_only` and answer 409 (#906). Deriving the
-    // verb from `movable` would put a button there that can only ever fail.
-    const wrapper = await open([INSIGHTFACE]);
+  it("offers none on a root_only folder that cannot relocate", async () => {
+    // The HuggingFace cache reads `foreign` and sits beside two folders that do
+    // relocate, so nothing in the row itself distinguishes it. Deriving the verb
+    // from `kind` or from `movable` would put a button there that can only ever
+    // 409, which is why the server is asked.
+    const wrapper = await open([HF_CACHE]);
     expect(moveButton(wrapper)).toBeUndefined();
   });
 
@@ -223,6 +242,19 @@ describe("relocation", () => {
     expect(move.attributes("aria-describedby")).toBe("mf-remote-note");
     await move.trigger("click");
     expect(relocate).not.toHaveBeenCalled();
+  });
+
+  it("sends the picked path for the InsightFace packs like any other row", async () => {
+    // The one row whose path means something different on the server — it names
+    // the InsightFace *root*, not the folder — which is deliberately invisible
+    // here: the dialog sends what the owner picked and the server does the rest.
+    const wrapper = await open([INSIGHTFACE]);
+    await moveButton(wrapper).trigger("click");
+    wrapper
+      .getComponent({ name: "FolderBrowser" })
+      .vm.$emit("select", "/mnt/big/.insightface");
+    await wrapper.vm.$nextTick();
+    expect(relocate).toHaveBeenCalledWith(INSIGHTFACE.id, "/mnt/big/.insightface");
   });
 });
 
