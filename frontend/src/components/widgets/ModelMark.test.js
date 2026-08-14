@@ -67,11 +67,23 @@ describe("ModelMark", () => {
     expect(first).toBe(again);
   });
 
-  it("does not announce itself, because the row already says the name", () => {
-    // Found by class rather than through the wrapper root: `attributes()` on
-    // the wrapper read undefined here, so a bare `.toContain("aria-hidden")`
-    // would have been a substring match on the whole subtree rather than a
-    // statement about this element.
-    expect(mountMark().find(".mmark").attributes("aria-hidden")).toBe("true");
+  it("does not announce the PICTURE, because the row already says the name", () => {
+    // The face is hidden and the ring's label is not: the row's own name says
+    // which model this is, but nothing else on it says what the model is
+    // assigned to now that the column is gone (#904). Found by class rather
+    // than through the wrapper root: `attributes()` on the wrapper read
+    // undefined here, so a bare `.toContain("aria-hidden")` would have been a
+    // substring match on the whole subtree rather than a statement about this
+    // element.
+    const mark = mountMark();
+    expect(mark.find(".mmark-face").attributes("aria-hidden")).toBe("true");
+    expect(mark.find(".mmark").attributes("aria-hidden")).toBeUndefined();
+  });
+
+  it("draws no ring at all where nothing hands it one", () => {
+    // Distinct from the `none` style, which is the dashed grey "assigned to
+    // nothing" and belongs on a shelf row. A mark in a picker or a dialog is
+    // not making a statement about assignment either way.
+    expect(mountMark().find(".mmark").classes()).not.toContain("mmark--ring");
   });
 });
