@@ -250,13 +250,12 @@ function defaultView() {
 /**
  * The default `Show` selection, and therefore what "no active filter" means.
  *
- * `unclassified` is off because a file we could not identify is not something
- * to put in front of someone who came to find a LoRA; it is a first-class
- * state with its own checkbox, never folded into either other bucket.
- * `engines` is on for the opposite reason: they are the answer to "where did
- * my disk go", and on a measured machine they are 118 GB against the adapters'
- * few — invisible by default is how they came to be missing from the shelf for
- * three releases while the architecture note claimed they were on it.
+ * `unclassified` is on, and it is a first-class state with its own checkbox,
+ * never folded into either other bucket. `engines` is on for the same reason:
+ * they are the answer to "where did my disk go", and on a measured machine
+ * they are 118 GB against the adapters' few — invisible by default is how they
+ * came to be missing from the shelf for three releases while the architecture
+ * note claimed they were on it.
  * `adapterKinds: []` means *every* kind, not *no* kind — an empty multi-select
  * is unconstrained, the standard convention, and the only reading under which
  * a fresh install shows anything. `capabilities` reads the same way.

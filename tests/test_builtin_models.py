@@ -204,6 +204,34 @@ def test_an_unclaimed_file_gets_a_row_the_owner_can_actually_reach(
     assert engines["n"] == len(BUILTIN_ENGINES)
 
 
+def test_a_sizing_failure_leaves_the_size_a_previous_run_read(
+    server_hub, tmp_path, monkeypatch
+):
+    """The size is COALESCE'd onto the row, so an unsizeable file must report
+    `None` and not `0`.
+
+    A zero would win the COALESCE and overwrite a figure a previous start read
+    correctly, and the shelf would then say a 339 MB leftover takes no disk —
+    from a `stat` that failed for a moment on the one folder the downloaders
+    are actively writing into.
+    """
+    (tmp_path / "best.pt").write_bytes(b"y" * 20)
+    declare_builtin_models(server_hub, str(tmp_path))
+
+    real_getsize = os.path.getsize
+
+    def failing_getsize(path):
+        if os.path.basename(path) == "best.pt":
+            raise OSError("file is being replaced")
+        return real_getsize(path)
+
+    monkeypatch.setattr(os.path, "getsize", failing_getsize)
+    declare_builtin_models(server_hub, str(tmp_path))
+
+    row = server_hub.fetchone("SELECT file_size FROM model WHERE filename = 'best.pt'")
+    assert row["file_size"] == 20
+
+
 def test_declaring_again_does_not_wipe_a_name_the_owner_gave_a_leftover(
     server_hub, tmp_path
 ):

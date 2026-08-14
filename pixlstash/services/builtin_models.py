@@ -393,9 +393,10 @@ def unclaimed_files(folder_path: str) -> list[dict]:
         folder_path: The built-in folder to inspect.
 
     Returns:
-        ``{"relpath", "size"}`` per unclaimed file, smallest path first. Empty
-        when the folder does not exist, which is the normal state before the
-        first download.
+        ``{"relpath", "size"}`` per unclaimed file, smallest path first, with
+        ``size`` ``None`` when the file could not be sized. Empty when the
+        folder does not exist, which is the normal state before the first
+        download.
     """
     declared = declared_paths()
     found: list[dict] = []
@@ -417,7 +418,12 @@ def unclaimed_files(folder_path: str) -> list[dict]:
                     absolute,
                     exc,
                 )
-                size = 0
+                # `None`, never `0`. The declaration COALESCEs the size onto the
+                # row, so a zero from a transient `stat` failure would overwrite
+                # a size a previous run read correctly — the shelf would then
+                # claim a 339 MB leftover takes no disk. `None` leaves the
+                # stored figure alone and matches "without one".
+                size = None
             found.append({"relpath": relpath, "size": size})
     return sorted(found, key=lambda item: item["relpath"])
 
