@@ -1521,6 +1521,67 @@ Resolution order, first hit wins:
    the default;
 3. `user_data_dir("pixlstash")/downloaded_models`.
 
+**A record naming a folder that is not there is still obeyed, and said so once
+per start.** Obeyed, because the folder is normally on a drive and a drive may
+be away for an afternoon; the alternative was tried and withdrawn under review,
+since falling back to the default makes a vanished folder unrelocatable
+(`relocatable_identity` recognises it by path) and leaves two copies once it
+returns. Said, because the next download re-creates the recorded path and pulls
+~750 MB into it, and nothing anywhere used to mention that — which is what made
+one stale record an investigation rather than a `grep`.
+
+The line is `_warn_if_the_recorded_folder_looks_wrong`, called from
+`declare_builtin_models` at start-up. **Not from the accessor**, which was the
+second withdrawn attempt: `builtin_model_dir()` is read on every call and sits
+behind `relocatable_identity` on the per-row path of `GET /model-folders`, which
+the frontend polls every three seconds, so a line there is a flood and its
+`stat` is a syscall against a drive that may be gone.
+
+**Two symptoms, because either alone goes quiet.** "The recorded folder cannot
+be read" is what a start sees while the drive is away — but where the record
+merely went stale, the download that follows creates the path, so that symptom
+lasts one start. The second says the same thing from the other side and does not
+heal itself: **engines still in the default folder, which a relocation should
+have emptied**. Before the re-download that is a fetch about to be repeated;
+after it, two copies with the recorded folder still filling. It is checked
+whatever the recorded folder holds, for exactly that reason — stopping at "the
+recorded folder has something in it" would report the accident only inside the
+window its own download closes. Silent when the default is empty, which is a
+relocation that worked: the files went with it.
+
+It fires only for the folder **a relocation recorded**, matched against the
+record itself. Not "anything that is not the default": the owner who symlinked
+the default folder at their big drive and then relocated onto it has a default
+that *resolves to* the recorded location, so a path test goes quiet for the
+person who did the most to move their models. And not at all while
+`PIXLSTASH_BUILTIN_MODEL_DIR` is set, since that names the folder over the
+record's head — a volume that has not mounted yet is a first start, nothing was
+ever fetched, and "delete the pointer" would be advice that does nothing. The
+record is read by a quiet reader beside `_configured_model_dir()`, which reports
+its own failures and has already been called by the time the declaration runs.
+
+It reports what `stat` says rather than asserting the folder is missing, so a
+permission error reads as one. An unmounted mount point that still exists as an
+empty directory is indistinguishable from an empty folder and is not claimed.
+
+`declare_insightface_packs` says the **first** of those about a recorded pack
+root that cannot be listed, in place of the "normal on a machine that has not
+run face detection" it logs otherwise — which is exactly wrong for a machine
+that has a recorded root, since having one means it ran face detection. A root
+recorded back onto `~/.insightface` itself falls through to that ordinary line,
+because the remedy would name the directory it starts from.
+
+It deliberately does **not** say the second, and the asymmetry is the point:
+`downloaded_models` is PixlStash's alone, so engines still sitting in it can
+only mean a relocation that did not take. `~/.insightface` is the *library's*
+root, shared with every other InsightFace tool on the host — ComfyUI's face
+nodes among them — so packs under it are just as likely to be another tool's,
+and the two states are byte-identical on disk. A line claiming a failed
+relocation there would fire forever on an ordinary machine, and its remedy would
+tell the owner to abandon the packs they moved in favour of somebody else's
+directory. Where a claim cannot be told apart from an innocent state, the claim
+is not made.
+
 **The recorded location is a file, not a hub row**, because the folder is
 machine-global — one download serves every library and every server instance on
 the host — while a hub belongs to one deployment. In the hub, a second deployment
@@ -1550,6 +1611,52 @@ being an option the moment the downloaders started reading it: a fresh temp
 directory means every engine is downloaded again on every shard, against the model
 cache CI restores. `tests/test_builtin_models.py` covers the declaration directly
 against a `tmp_path`.
+
+**Writing the recorded locations is off in the test suite too**, and by
+construction rather than by convention: the session-scoped autouse
+`sandbox_the_recorded_model_locations` in `tests/conftest.py` redirects
+`builtin_models._pointer_path` and `insightface_model_utils._pointer_path` into a
+session temp directory, leaving a test's own redirection of `_pixlstash_data_dir`
+untouched. Both records are machine-global and outlive the process that writes
+them, so a test that writes one has changed where the real PixlStash on that
+machine downloads its engines — which is not hypothetical: a record naming a
+finished run's `tmp_path` had every later start re-create the deleted directory
+and fetch ~750 MB of engines into it, silently, while the real ones sat in the
+default folder. Per-test redirection of the seam was the previous protection and
+it is the remembered kind: it lapses when a relocation's worker thread finishes
+after the redirection is undone, and it never existed for a module that did not
+think to add it. `test_no_test_can_name_the_machines_own_recorded_locations`
+fails if the fixture goes away.
+
+Two details of that fixture are load-bearing. The redirected name carries the
+**writing test's id**, so one test's record cannot change where a later test in
+the same shard downloads — one shared file would be a flake the sharder
+reshuffles between runs. And nothing is **restored** at the end: a relocation
+records its location from a daemon worker thread the suite leaves unjoined, so
+putting the original `_pointer_path` back would reopen the machine's file for
+exactly that write. The empty-sandbox assertion is a tripwire rather than a
+census — it sees a write made while no test had redirected the seam, and a late
+thread write that lands during a test which *has* redirected it goes to that
+test's `tmp_path` instead: safe, but unreported.
+
+The write that poisoned a real machine has **not** been reproduced, and nothing
+here should be read as naming it. What was found alongside the fixture is a
+shape that lets any of this escape a test: `test_relocate_is_owner_only_and_local_only`
+ended on a real `202` relocation it never awaited, so that job's ending ran
+inside whichever test came next. **A `202` from this route is awaited, always**,
+and `no_model_move_outlives_its_test` in `tests/conftest.py` fails any test that
+leaves a move running, suite-wide — which is why a module fixture may clear
+`model_moves._job` when it sets up but never when it tears down: an autouse
+fixture tears down last, so clearing it there hides the leak from the guard.
+
+**Note what that identity rests on.** The route decides whether it is relocating
+the download folder with `is_builtin_model_dir(folder["path"])`, which compares
+against `builtin_model_dir()` — the recorded location itself. Identity is
+therefore held in a mutable file rather than in the row, so a folder whose path
+comes to equal the recorded value inherits it, including the right to rewrite
+the record when relocated. That is worth closing; it is also the loose end of
+the investigation this fixture came from, which never established which process
+wrote the record it found.
 
 #### Relocating the InsightFace packs (#906)
 

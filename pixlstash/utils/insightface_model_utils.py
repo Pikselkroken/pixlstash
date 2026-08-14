@@ -132,6 +132,31 @@ def _configured_root() -> Optional[str]:
     return configured
 
 
+def recorded_insightface_root() -> tuple[Optional[str], str]:
+    """The root a relocation recorded and the file it is recorded in.
+
+    Both, because the one caller outside this module needs both and neither is
+    worth reaching into the privates for: the shelf's declaration asks whether
+    the directory it failed to read is the *recorded* one — which is what tells
+    a relocated root that has gone apart from a machine that has simply never
+    run face detection — and then names the file to delete.
+
+    Quiet on purpose, unlike :func:`_configured_root`, which reports its own
+    failures and is called on every resolution: a second caller that only wants
+    to know whether a root was recorded would double every line it logs.
+
+    Returns:
+        ``(recorded root or None, pointer path)``.
+    """
+    pointer = _pointer_path()
+    try:
+        with open(pointer, encoding="utf-8") as handle:
+            return (handle.read().strip() or None), pointer
+    except OSError:
+        # Already reported by the reader that resolves the root for real.
+        return None, pointer
+
+
 def insightface_root() -> str:
     """Where InsightFace keeps its packs.
 

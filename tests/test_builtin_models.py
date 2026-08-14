@@ -15,6 +15,7 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.services.builtin_models import (
     BUILTIN_DIRNAME,
     BUILTIN_ENGINES,
+    BUILTIN_MODEL_DIR_POINTER,
     BUILTIN_OWNER,
     TOOLING_DIRS,
     builtin_model_dir,
@@ -453,11 +454,38 @@ def test_the_zip_insightface_downloaded_a_pack_from_is_not_a_pack(server_hub, tm
 
 
 def test_a_machine_that_has_never_run_face_detection_declares_nothing(
-    server_hub, tmp_path
+    server_hub, tmp_path, caplog
 ):
     """InsightFace creates the directory on its first download, so an absent one
-    is a normal machine and must not raise on the start-up path."""
-    assert declare_insightface_packs(server_hub, str(tmp_path / "nope")) is None
+    is a normal machine and must not raise on the start-up path — nor warn."""
+    with caplog.at_level("WARNING"):
+        assert declare_insightface_packs(server_hub, str(tmp_path / "nope")) is None
+    assert "should have emptied" not in caplog.text, caplog.text
+
+
+def test_a_relocated_pack_root_that_is_gone_is_not_called_normal(
+    server_hub, tmp_path, data_dir, caplog
+):
+    """The same silence as the download folder, in the folder beside it.
+
+    "Normal on a machine that has not run face detection" is exactly wrong for a
+    root a relocation recorded: that machine *has* run face detection, which is
+    why it has a record, and what the absence means is that the packs will be
+    fetched again into a directory PixlStash re-creates.
+    """
+    from pixlstash.services.builtin_caches import insightface_models_dir_under
+    from pixlstash.utils import insightface_model_utils as model_utils
+
+    gone = str(tmp_path / "unplugged" / ".insightface")
+    model_utils.set_insightface_root(gone)
+
+    with caplog.at_level("WARNING"):
+        assert (
+            declare_insightface_packs(server_hub, insightface_models_dir_under(gone))
+            is None
+        )
+    assert gone in caplog.text, caplog.text
+    assert "downloaded again" in caplog.text, caplog.text
 
 
 def test_the_huggingface_cache_is_declared_per_repo_not_per_file(
@@ -1049,6 +1077,187 @@ def test_an_unreadable_record_names_the_default_rather_than_nothing(
     with caplog.at_level("ERROR"):
         assert builtin_model_dir() == os.path.join(str(data_dir), BUILTIN_DIRNAME)
     assert "permission denied" in caplog.text
+
+
+def test_a_start_up_declaration_says_when_the_recorded_folder_cannot_be_read(
+    server_hub, data_dir, tmp_path, caplog
+):
+    """Half of the line whose absence made a stale record an investigation.
+
+    The unplugged-drive moment, and the two silences that keep it worth
+    reading: the folder being there is not news, and neither is a machine that
+    never relocated anything, whose default folder does not exist yet because it
+    has downloaded nothing.
+    """
+    gone = str(tmp_path / "unplugged" / "models")
+    set_builtin_model_dir(gone)
+
+    with caplog.at_level("WARNING"):
+        declare_builtin_models(server_hub, gone)
+    assert gone in caplog.text, caplog.text
+    assert "cannot be read" in caplog.text, caplog.text
+
+    caplog.clear()
+    os.makedirs(gone)
+    with caplog.at_level("WARNING"):
+        declare_builtin_models(server_hub, gone)
+    assert caplog.text == "", caplog.text
+
+    caplog.clear()
+    os.remove(data_dir / BUILTIN_MODEL_DIR_POINTER)
+    with caplog.at_level("WARNING"):
+        declare_builtin_models(server_hub, str(tmp_path / "never-downloaded"))
+    assert caplog.text == "", caplog.text
+
+
+def test_a_start_up_declaration_says_when_the_engines_stayed_where_they_were(
+    server_hub, data_dir, tmp_path, caplog
+):
+    """The other half, and the one that lasts.
+
+    "The recorded folder cannot be read" is true for a single start: the
+    download that follows creates the path, and every start after that sees a
+    perfectly readable directory with nothing in it. The steady state of the
+    accident — which is the state the machine that reported it was found in — is
+    a recorded folder holding none of the engines while the default still holds
+    them. Silent when the default is empty too, because that is a machine that
+    has downloaded nothing rather than one that lost track of what it has.
+    """
+    default = data_dir / BUILTIN_DIRNAME
+    default.mkdir()
+    elsewhere = tmp_path / "big-drive" / "models"
+    elsewhere.mkdir(parents=True)
+    set_builtin_model_dir(str(elsewhere))
+
+    with caplog.at_level("WARNING"):
+        declare_builtin_models(server_hub, str(elsewhere))
+    assert caplog.text == "", "nothing has been downloaded anywhere yet"
+
+    (default / "pixlstash-anomaly-tagger.safetensors").write_bytes(b"x" * 8)
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        declare_builtin_models(server_hub, str(elsewhere))
+    assert str(elsewhere) in caplog.text, caplog.text
+    assert str(default) in caplog.text, caplog.text
+    assert "should have emptied" in caplog.text, caplog.text
+
+    # And it keeps saying so after the re-download has filled the recorded
+    # folder, which is the state that lasts: two copies, and every start still
+    # fetching into the wrong one. Stopping here would report the accident only
+    # inside the window its own download closes.
+    (elsewhere / "pixlstash-anomaly-tagger.safetensors").write_bytes(b"x" * 8)
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        declare_builtin_models(server_hub, str(elsewhere))
+    assert "should have emptied" in caplog.text, caplog.text
+
+    # It stops when the default really is empty, which is a relocation that
+    # worked: the files went with it.
+    os.remove(default / "pixlstash-anomaly-tagger.safetensors")
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        declare_builtin_models(server_hub, str(elsewhere))
+    assert caplog.text == "", caplog.text
+
+
+def test_a_volume_the_environment_names_is_not_reported_as_a_lost_relocation(
+    server_hub, data_dir, tmp_path, monkeypatch, caplog
+):
+    """The override exists for a deployment that points the folder at a volume
+    *without moving anything into it*, so a volume that has not mounted yet is a
+    first start and nothing was ever fetched. Warning there would be a false
+    alarm on the override's primary use, and it would name a remedy — delete the
+    pointer file — that does nothing while the environment wins.
+    """
+    from pixlstash.services.builtin_models import BUILTIN_MODEL_DIR_ENV
+
+    volume = str(tmp_path / "model-volume" / "models")
+    # A record as well, because the override wins over one and the warning has
+    # to stay quiet anyway: recording alone would make this pass for having
+    # nothing to report.
+    set_builtin_model_dir(volume)
+    monkeypatch.setenv(BUILTIN_MODEL_DIR_ENV, volume)
+
+    with caplog.at_level("WARNING"):
+        declare_builtin_models(server_hub, builtin_model_dir())
+    assert caplog.text == "", caplog.text
+
+
+def test_a_recorded_folder_reached_through_a_symlinked_default_still_reports(
+    server_hub, data_dir, tmp_path, caplog
+):
+    """Recognised by the record, not by "this is not the default path".
+
+    The owner who symlinked the default folder at their big drive and then
+    relocated onto it has a default that *resolves to* the recorded location, so
+    a "not the default" test goes quiet exactly for the person who did the most
+    to move their models.
+    """
+    recorded = tmp_path / "big-drive" / "models"
+    recorded.mkdir(parents=True)
+    os.symlink(str(recorded), os.path.join(str(data_dir), BUILTIN_DIRNAME))
+    set_builtin_model_dir(str(recorded))
+    os.rmdir(recorded)
+
+    with caplog.at_level("WARNING"):
+        declare_builtin_models(server_hub, builtin_model_dir())
+    assert str(recorded) in caplog.text, caplog.text
+    assert "fetched again" in caplog.text, caplog.text
+
+    # And the other half of the same shape: with the drive back, the engines in
+    # it are reached through the link as well, so a "still in the default
+    # folder" count would report every one of them as left behind, for ever.
+    # One directory has nothing to have left behind in the other.
+    recorded.mkdir()
+    (recorded / "pixlstash-anomaly-tagger.safetensors").write_bytes(b"x" * 8)
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        declare_builtin_models(server_hub, builtin_model_dir())
+    assert caplog.text == "", caplog.text
+
+
+def test_a_record_naming_the_default_folder_says_nothing(
+    server_hub, data_dir, tmp_path, caplog
+):
+    """Relocated away and then back again. Both remedies would name the folder
+    they start from, and there is no second place for anything to be left in."""
+    default = os.path.join(str(data_dir), BUILTIN_DIRNAME)
+    set_builtin_model_dir(default)
+
+    with caplog.at_level("WARNING"):
+        declare_builtin_models(server_hub, builtin_model_dir())
+    assert caplog.text == "", caplog.text
+
+
+def test_no_test_can_name_the_machines_own_recorded_locations():
+    """The suite must not be able to write either machine-global pointer.
+
+    Both records outlive the process that writes them and are read by the real
+    product on the same machine, so a test that writes one has changed where
+    PixlStash downloads its engines for good. That is not hypothetical: a record
+    left naming a finished run's ``tmp_path`` had every later start re-create
+    the deleted directory and download ~750 MB into it.
+
+    Asserted on the *path* rather than by writing, because the path is what
+    ``set_builtin_model_dir`` and ``set_insightface_root`` open — sandbox the
+    name and the write follows it. No fixture: the session-scoped redirection in
+    ``conftest`` is exactly what is under test, and a per-test ``data_dir``
+    would hide it. Drop that fixture and this goes red.
+    """
+    from platformdirs import user_data_dir
+
+    from pixlstash.services import builtin_models
+    from pixlstash.utils import insightface_model_utils
+
+    machine = user_data_dir("pixlstash")
+    for pointer in (
+        builtin_models._pointer_path(),
+        insightface_model_utils._pointer_path(),
+    ):
+        assert not pointer.startswith(machine), (
+            f"{pointer} is the machine's own record; a test that writes it "
+            "changes where the real PixlStash downloads its engines"
+        )
 
 
 def test_the_environment_override_still_wins(data_dir, monkeypatch):

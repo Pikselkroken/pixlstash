@@ -45,8 +45,10 @@ from pixlstash.services.builtin_models import (
 )
 from pixlstash.services.model_features import features_for_repo
 from pixlstash.utils.insightface_model_utils import (
+    DEFAULT_INSIGHTFACE_ROOT,
     KNOWN_MODEL_PACKS,
     insightface_root,
+    recorded_insightface_root,
 )
 
 logger = get_logger(__name__)
@@ -208,6 +210,41 @@ def declare_insightface_packs(hub, folder_path: str) -> Optional[int]:
             and os.path.isdir(os.path.join(folder_path, name))
         }
     except OSError as exc:
+        recorded, pointer = recorded_insightface_root()
+        recorded_is_this_folder = recorded is not None and os.path.realpath(
+            folder_path
+        ) == os.path.realpath(insightface_models_dir_under(recorded))
+        if recorded_is_this_folder and os.path.normpath(
+            folder_path
+        ) == os.path.normpath(insightface_models_dir_under(DEFAULT_INSIGHTFACE_ROOT)):
+            # Recorded back onto the root InsightFace uses anyway. The warning
+            # would tell the owner to delete the record to go back to the
+            # directory they are already on, so it falls through to the ordinary
+            # line below instead of saying nothing at all.
+            recorded_is_this_folder = False
+        if recorded_is_this_folder:
+            # A relocation put the packs here and they are not here, which is
+            # the download folder's failure in the folder beside it: they are
+            # re-fetched into a path PixlStash re-creates, and until this line
+            # nothing said so. Not "normal" — the machine has run face
+            # detection, which is why it has a recorded root at all. Recognised
+            # by the record rather than by "not the default", because the owner
+            # who symlinked `~/.insightface` at their big drive and then
+            # recorded it has a default that resolves to the same place.
+            logger.warning(
+                "A relocation recorded %s as the InsightFace root and %s cannot "
+                "be read (%s), so every pack will be downloaded again into a "
+                "re-created path. Restore, mount or re-permission it. If it is "
+                "gone for good, deleting %s sends face detection back to %s — "
+                "but nothing is moved back, and PixlStash stops recognising the "
+                "old root as one it can relocate.",
+                recorded,
+                folder_path,
+                exc,
+                pointer,
+                DEFAULT_INSIGHTFACE_ROOT,
+            )
+            return None
         # InsightFace creates this the first time it downloads a pack, so an
         # absent directory is a machine that has not used face detection yet.
         logger.info(

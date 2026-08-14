@@ -281,6 +281,23 @@ def _pointer_path() -> str:
     return os.path.join(_pixlstash_data_dir(), BUILTIN_MODEL_DIR_POINTER)
 
 
+def _recorded_model_dir_quietly() -> Optional[str]:
+    """The recorded location, or None, reporting nothing about either answer.
+
+    :func:`_configured_model_dir` is the one that speaks up, and it is called on
+    every resolution — so a second caller wanting only to *know* whether a
+    location was recorded would double every line it logs. This reads the same
+    file and says nothing, which is what a caller checking the record against a
+    path needs.
+    """
+    try:
+        with open(_pointer_path(), encoding="utf-8") as handle:
+            return handle.read().strip() or None
+    except OSError:
+        # Already reported by the reader that resolves the folder for real.
+        return None
+
+
 def _configured_model_dir() -> Optional[str]:
     """The location a relocation recorded, or None if it never happened.
 
@@ -446,6 +463,117 @@ def unclaimed_files(folder_path: str) -> list[dict]:
     return sorted(found, key=lambda item: item["relpath"])
 
 
+def _warn_if_the_recorded_folder_looks_wrong(folder_path: str, present: int) -> None:
+    """Say so at start-up when a relocation's record has gone stale.
+
+    A stale record costs a full re-download and says nothing while it does it:
+    the downloaders ``makedirs`` their destination, so a record left naming a
+    directory that has been deleted — or a drive that is not plugged in — has
+    every start re-create the path and fetch every engine into it again, while
+    the real ones sit untouched in the folder they were moved out of. That is
+    the accident this exists to make legible; it took an investigation precisely
+    because nothing anywhere said a word.
+
+    **Two symptoms, because either one alone goes quiet.** The recorded folder
+    being unreadable is what a start sees while the drive is away — but the
+    download that follows creates the path, so on a machine where the record
+    merely went stale that symptom lasts exactly one start. The second is
+    **engines in the default folder that a relocation should have emptied**,
+    which says the same thing from the other side and does not heal itself:
+    before the re-download it is a fetch about to be repeated, and afterwards it
+    is two copies with the folder still filling. Checked whatever the recorded
+    folder holds, for that reason — a check that stopped at "the recorded folder
+    has something in it" would report the accident only in the window its own
+    download closes.
+
+    **Here rather than in the accessor**, which is read on every call and on the
+    per-row path behind ``GET /model-folders`` — the frontend polls it — so a
+    line there is a flood and its ``stat`` is a syscall against a drive that may
+    be gone. This runs once per start, beside the declaration that is already
+    reading the folder.
+
+    Deliberately narrow. It fires only for a folder a **relocation recorded**,
+    matched against the record itself rather than by "not the default": an owner
+    who symlinked the default folder at their big drive and then relocated onto
+    it has a default that resolves to the recorded path, and a path test would
+    go quiet for exactly the person who did the most to move their models. It
+    does not fire at all while :data:`BUILTIN_MODEL_DIR_ENV` is set, because
+    that names the folder over the record's head — a volume that has not mounted
+    yet is a first start, nothing was ever fetched, and "delete the pointer"
+    would be advice that does nothing. And it says what ``stat`` said rather
+    than asserting the folder is missing, so a permission error reads as one.
+
+    Args:
+        folder_path: The folder the declaration is about to describe.
+        present: How many declared engines were found in it.
+    """
+    if os.environ.get(BUILTIN_MODEL_DIR_ENV, "").strip():
+        return
+    recorded = _recorded_model_dir_quietly()
+    if recorded is None or os.path.realpath(folder_path) != os.path.realpath(recorded):
+        return
+    pointer = _pointer_path()
+    default = os.path.join(_pixlstash_data_dir(), BUILTIN_DIRNAME)
+    if os.path.normpath(default) == os.path.normpath(folder_path):
+        # Recorded back onto the default, which nothing below has anything to
+        # say about. `normpath` and not `realpath`: a default that is a SYMLINK
+        # to the recorded folder is still a real relocation onto a real drive,
+        # and it can still go away — silencing that would lose the case for the
+        # owner who moved their models the hard way.
+        return
+    try:
+        os.stat(folder_path)
+    except OSError as exc:
+        logger.warning(
+            "A relocation recorded %s as the folder PixlStash downloads its "
+            "engines into, and it cannot be read (%s), so every engine will be "
+            "fetched again into a re-created path. Restore, mount or "
+            "re-permission it. If it is gone for good, deleting %s sends the "
+            "downloads back to %s — but nothing is moved back, and PixlStash "
+            "stops recognising the old folder as one it can relocate.",
+            folder_path,
+            exc,
+            pointer,
+            default,
+        )
+        return
+    if os.path.realpath(default) == os.path.realpath(folder_path):
+        # One directory reached by two names — a default symlinked at the
+        # recorded folder. `os.path.exists` follows the link, so every engine
+        # that IS in the recorded folder would also be counted as left behind,
+        # for ever. The `stat` branch above still applies to this shape (the
+        # drive can still go away); this one has nothing to compare.
+        return
+    left_behind = [
+        engine.relpath
+        for engine in BUILTIN_ENGINES
+        if os.path.exists(os.path.join(default, engine.relpath))
+    ]
+    if left_behind:
+        # Whether or not the recorded folder holds engines of its own. A
+        # relocation *moves* the files, so engines in both places mean the
+        # record and the disk disagree — before the re-download that is a fetch
+        # about to be repeated, and after it, two copies and a folder still
+        # filling. Stopping at `present` would report the accident only in the
+        # window before its own download closed it, which is the one state the
+        # owner is least likely to be reading the log in.
+        logger.warning(
+            "A relocation recorded %s as the folder PixlStash downloads its "
+            "engines into: it holds %d of them and %d are also in %s, which a "
+            "relocation should have emptied. Downloads go to the recorded "
+            "folder, so anything missing there is fetched again rather than "
+            "found. If that is not where you meant them to go, deleting %s "
+            "sends the downloads back to the ones you already have — nothing "
+            "is moved, and the recorded folder stops being one PixlStash can "
+            "relocate.",
+            folder_path,
+            present,
+            len(left_behind),
+            default,
+            pointer,
+        )
+
+
 def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
     """Register the built-in folder and write a row per engine present.
 
@@ -496,6 +624,9 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
                 present=present,
             )
         )
+    _warn_if_the_recorded_folder_looks_wrong(
+        folder_path, sum(1 for entry in entries if entry.present)
+    )
     for leftover in unclaimed_files(folder_path):
         # `present` unconditionally: the walk just saw the file. One that goes
         # away is swept to `missing` by `declare_folder` like any other row,
