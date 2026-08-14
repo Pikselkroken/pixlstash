@@ -199,6 +199,39 @@ def test_a_file_that_disappears_stops_claiming_to_be_present(server_hub, tmp_pat
     assert state["state"] == "not_downloaded"
 
 
+def test_a_file_we_could_not_look_at_is_unreachable_not_undownloaded(
+    server_hub, tmp_path, monkeypatch
+):
+    """ENOENT is the only absence that means "nobody fetched this yet".
+
+    A permission denial or an IO error is us being unable to LOOK, and reporting
+    that as `not_downloaded` would hide a real filesystem fault behind a
+    download glyph — the same false reassurance #926 fixed, in the other
+    direction.
+    """
+    real_stat = os.stat
+
+    def refuse(path, *args, **kwargs):
+        if str(path).endswith("sa_0_4_vit_b_32_linear.pth"):
+            raise PermissionError(13, "Permission denied")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", refuse)
+    folder_id = declare_builtin_models(server_hub, str(tmp_path))
+
+    states = {
+        row["relpath"]: row["state"]
+        for row in server_hub.fetchall(
+            "SELECT relpath, state FROM model_file WHERE model_folder_id = ?",
+            (folder_id,),
+        )
+    }
+    assert states["sa_0_4_vit_b_32_linear.pth"] == "unreachable"
+    # Every other engine is absent for the ordinary reason and keeps the
+    # ordinary word: one unreadable file does not repaint the folder.
+    assert states["pixlstash-anomaly-tagger.safetensors"] == "not_downloaded"
+
+
 def test_the_checkpoint_hash_worker_never_picks_up_an_engine(server_hub, tmp_path):
     """Engines carry no `sha256` by design — we know what they are without one —
     so they match the finder's plain `sha256 IS NULL` like any unhashed

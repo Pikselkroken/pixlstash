@@ -41,6 +41,7 @@ from typing import Optional
 from platformdirs import user_data_dir
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.model_folder_scanner import STATE_PRESENT, STATE_UNREACHABLE
 from pixlstash.utils.adapter_header import FILE_ENGINE
 
 logger = get_logger(__name__)
@@ -137,9 +138,11 @@ class DeclaredEntry:
         role: Stored in ``model.kind``; see :class:`BuiltinEngine.role`.
         size: Bytes, or None when it could not be read. None never overwrites a
             size already recorded.
-        present: Whether it is on disk now. False writes
-            :data:`STATE_NOT_DOWNLOADED`, which is a normal state here and not a
-            warning.
+        state: What the row's ``model_file.state`` becomes —
+            ``STATE_PRESENT``, :data:`STATE_NOT_DOWNLOADED` (declared and simply
+            not fetched yet, which is normal here and not a warning) or
+            ``STATE_UNREACHABLE`` (we could not look). The caller resolves it,
+            because only the caller knows which of the three its own root means.
         capabilities: Every feature these weights serve, primary first, written
             to ``model_capability``. Empty means "just the role", which is what
             all but one caller means: a model that does one thing does not have
@@ -150,7 +153,7 @@ class DeclaredEntry:
     display_name: str
     role: str
     size: Optional[int]
-    present: bool
+    state: str
     capabilities: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -408,19 +411,37 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
         # file that arrives or is replaced between the two calls makes
         # `getsize` raise `OSError` on a path `isfile` just confirmed, and
         # that would abort the declaration for every engine after it.
+        #
+        # ENOENT is the only absence that means "not fetched yet". A permission
+        # error or an IO error is us not being able to LOOK, which is
+        # `unreachable` — reporting that as the non-fault state would hide a
+        # real filesystem problem behind a download glyph.
         try:
             size = os.stat(absolute).st_size
-            present = True
-        except OSError:
+            state = STATE_PRESENT
+        except FileNotFoundError:
             size = None
-            present = False
+            state = STATE_NOT_DOWNLOADED
+        except OSError as exc:
+            logger.warning(
+                "Could not stat the built-in engine %r at %r (%s); declaring it "
+                "%s rather than %s, because we could not look rather than "
+                "looked and found nothing.",
+                engine.key,
+                absolute,
+                exc,
+                STATE_UNREACHABLE,
+                STATE_NOT_DOWNLOADED,
+            )
+            size = None
+            state = STATE_UNREACHABLE
         entries.append(
             DeclaredEntry(
                 relpath=engine.relpath,
                 display_name=engine.display_name,
                 role=engine.role,
                 size=size,
-                present=present,
+                state=state,
             )
         )
     return declare_folder(hub, folder_path, entries)
@@ -478,7 +499,7 @@ def declare_folder(
 
         for entry in entries:
             size = entry.size
-            state = "present" if entry.present else STATE_NOT_DOWNLOADED
+            state = entry.state
             # An engine that has not been downloaded yet is NOT an error and not
             # a warning: the ViT-L/14 scorer is fetched only for the CLIP model
             # that needs it, so "declared and absent" is the normal state for
