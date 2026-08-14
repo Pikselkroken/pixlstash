@@ -188,6 +188,17 @@ class CheckpointHashTask(BaseTask):
             "UPDATE model_file SET model_id = ? WHERE model_id = ?",
             (survivor["id"], doomed["id"]),
         ).rowcount
+        # The other child of `model`, and the same FK rule. Carried across
+        # rather than dropped: the two rows are the same bytes, so whatever the
+        # doomed one was declared to serve, the survivor serves. `OR IGNORE`
+        # because the survivor may already claim it, and the leftovers then go
+        # — an orphan here would abort the delete below, not leak quietly.
+        conn.execute(
+            "INSERT OR IGNORE INTO model_capability (model_id, capability) "
+            "SELECT ?, capability FROM model_capability WHERE model_id = ?",
+            (survivor["id"], doomed["id"]),
+        )
+        conn.execute("DELETE FROM model_capability WHERE model_id = ?", (doomed["id"],))
         conn.execute("DELETE FROM model WHERE id = ?", (doomed["id"],))
         conn.execute(
             "UPDATE model SET sha256 = ?, hashed_at = ?, file_size = ?, "

@@ -118,6 +118,10 @@ class DeclaredEntry:
             size already recorded.
         present: Whether it is on disk now. False writes ``missing``, which is a
             normal state here and not a warning.
+        capabilities: Every feature these weights serve, primary first, written
+            to ``model_capability``. Empty means "just the role", which is what
+            all but one caller means: a model that does one thing does not have
+            to say it twice.
     """
 
     relpath: str
@@ -125,6 +129,12 @@ class DeclaredEntry:
     role: str
     size: Optional[int]
     present: bool
+    capabilities: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def declared_capabilities(self) -> tuple[str, ...]:
+        """The capability set to write — never empty, `role` first."""
+        return self.capabilities or (self.role,)
 
 
 # Mirrors `pixlstash_tagger.PIXLSTASH_TAGGER_FILENAME` /
@@ -395,22 +405,54 @@ def declare_folder(
                     "state, seen_at) VALUES (?, ?, ?, ?, ?)",
                     (model_id, folder_id, entry.relpath, state, now),
                 )
-                continue
+            else:
+                model_id = int(existing[0])
+                # The declaration is the authority for what this row IS, so it
+                # is written outright rather than COALESCE'd: unlike a scanned
+                # row there is no owner curation here to preserve.
+                conn.execute(
+                    "UPDATE model SET file_kind = ?, kind = ?, display_name = ?, "
+                    "file_size = COALESCE(?, file_size) WHERE id = ?",
+                    (FILE_ENGINE, entry.role, entry.display_name, size, model_id),
+                )
+                conn.execute(
+                    "UPDATE model_file SET state = ?, seen_at = ? "
+                    "WHERE model_folder_id = ? AND relpath = ?",
+                    (state, now, folder_id, entry.relpath),
+                )
 
-            model_id = int(existing[0])
-            # The declaration is the authority for what this row IS, so it is
-            # written outright rather than COALESCE'd: unlike a scanned row
-            # there is no owner curation here to preserve.
-            conn.execute(
-                "UPDATE model SET file_kind = ?, kind = ?, display_name = ?, "
-                "file_size = COALESCE(?, file_size) WHERE id = ?",
-                (FILE_ENGINE, entry.role, entry.display_name, size, model_id),
-            )
-            conn.execute(
-                "UPDATE model_file SET state = ?, seen_at = ? "
-                "WHERE model_folder_id = ? AND relpath = ?",
-                (state, now, folder_id, entry.relpath),
-            )
+            # Restated wholesale when it differs, and NOT TOUCHED when it does
+            # not. The declaration is still the authority — a capability it no
+            # longer claims has to go, or a model that stopped serving a feature
+            # would stay listed under it — but every root here is re-declared on
+            # every server start, and the set changes about never. Rewriting it
+            # each boot was pure write amplification: ~35 declared entries per
+            # start (engines, InsightFace packs, every cached HuggingFace repo)
+            # rewritten by every Server this process builds, for rows that were
+            # already correct.
+            #
+            # The read is one indexed lookup on the primary key's leading
+            # column, against two rows at most, and it replaces two writes.
+            # Ordered by `rowid` so the comparison sees the stored ORDER too:
+            # primary-first is what `model.kind` agrees with and what the shelf
+            # renders, so a reordered set is a real difference, not a no-op.
+            declared = list(entry.declared_capabilities)
+            stored = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT capability FROM model_capability "
+                    "WHERE model_id = ? ORDER BY rowid",
+                    (model_id,),
+                ).fetchall()
+            ]
+            if stored != declared:
+                conn.execute(
+                    "DELETE FROM model_capability WHERE model_id = ?", (model_id,)
+                )
+                conn.executemany(
+                    "INSERT INTO model_capability (model_id, capability) VALUES (?, ?)",
+                    [(model_id, capability) for capability in declared],
+                )
         # The sweep, and these folders have nowhere else to get one. The folder
         # scanner does this pass for every folder it walks — anything it did not
         # see this run goes `missing` — and it skips these precisely because

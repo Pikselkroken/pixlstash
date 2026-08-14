@@ -80,6 +80,7 @@ from pixlstash.services.model_shelf_service import (
     UnknownAttachmentEntityError,
     attached_hashes,
     fetch_attachments,
+    fetch_capabilities,
     fetch_locations,
     fetch_model_by_hash,
     fetch_models,
@@ -202,7 +203,27 @@ class ModelResponse(BaseModel):
     )
     kind: Optional[str] = Field(
         default=None,
-        description="Adapter algorithm (``lora``, ``lokr``, …). Null for a checkpoint.",
+        description=(
+            "Adapter algorithm (``lora``, ``lokr``, …). Null for a checkpoint. "
+            "For an engine it is the PRIMARY entry of `capabilities` — the one "
+            "word to show where there is room for one."
+        ),
+    )
+    capabilities: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Every PixlStash feature these weights serve, primary first: "
+            "`captioner`, `tagger`, `detector`, `face`, `search`, `scorer`, "
+            "`checkpoint`, `other`.\n\n"
+            "A list because a model can genuinely serve several and filing it "
+            "under one heading answers 'what breaks if I delete this' wrongly "
+            "— Florence-2 both captions and detects, and the CLIP the embedder "
+            "loads is both the search encoder and the aesthetic scorer's "
+            "backbone. The shelf lists such a model under **each** feature.\n\n"
+            "Empty for a scanned adapter or checkpoint: `kind` there is an "
+            "adapter algorithm, which is not a capability. Only the engines "
+            "PixlStash declares for itself carry these."
+        ),
     )
     display_name: Optional[str] = None
     filename: Optional[str] = None
@@ -448,6 +469,7 @@ def _to_response(
     row: dict,
     locations: dict[int, list[dict]],
     attachments: dict[str, list[dict]],
+    capabilities: dict[int, list[str]],
 ) -> ModelResponse:
     return ModelResponse(
         id=int(row["id"]),
@@ -478,6 +500,7 @@ def _to_response(
         attachments=[
             ModelAttachment(**att) for att in attachments.get(row["sha256"] or "", [])
         ],
+        capabilities=capabilities.get(int(row["id"]), []),
     )
 
 
@@ -532,11 +555,13 @@ def create_router(server) -> APIRouter:
 
         if not rows:
             return []
-        # Hoisted deliberately: both are whole-page lookups, so calling them
-        # inside the comprehension would be the N+1 this route exists to avoid.
+        # Hoisted deliberately: all three are whole-page lookups, so calling
+        # them inside the comprehension would be the N+1 this route exists to
+        # avoid.
         locations = fetch_locations(server.hub)
         attachments = fetch_attachments(server.vault)
-        return [_to_response(row, locations, attachments) for row in rows]
+        capabilities = fetch_capabilities(server.hub)
+        return [_to_response(row, locations, attachments, capabilities) for row in rows]
 
     @router.get(
         "/adapters",
@@ -639,6 +664,7 @@ def create_router(server) -> APIRouter:
             row,
             fetch_locations(server.hub, int(row["id"])),
             fetch_attachments(server.vault, sha256=sha256),
+            fetch_capabilities(server.hub, int(row["id"])),
         )
 
     @router.get(

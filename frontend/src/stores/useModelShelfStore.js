@@ -15,6 +15,7 @@ import { errorDetail } from "../utils/apiError";
 import {
   baseModelKey,
   collapseStacks,
+  capabilityLabel,
   compareGroups,
   locationState,
   modelName,
@@ -46,8 +47,14 @@ const VIEW_SCHEMA_VERSION = 1;
  */
 const MAX_COLLAPSED_KEYS = 200;
 
-/** The axes the shelf can group by. `none` is the flat F1 list. */
-export const GROUP_BY_KEYS = ["none", "base_model", "folder"];
+/**
+ * The axes the shelf can group by. `none` is the flat F1 list.
+ *
+ * `feature` is the axis the multi-capability rule needs: a model that serves
+ * several features is listed under EACH of them, which `groupsOf` already
+ * supports because `folder` needed the same fan-out for a file copied twice.
+ */
+export const GROUP_BY_KEYS = ["none", "base_model", "folder", "feature"];
 
 /**
  * How folder groups are laid out, which is a sub-choice of `Folder` rather than
@@ -241,7 +248,7 @@ function defaultView() {
  * three releases while the architecture note claimed they were on it.
  * `adapterKinds: []` means *every* kind, not *no* kind — an empty multi-select
  * is unconstrained, the standard convention, and the only reading under which
- * a fresh install shows anything.
+ * a fresh install shows anything. `capabilities` reads the same way.
  */
 function defaultFilters() {
   return {
@@ -251,6 +258,7 @@ function defaultFilters() {
     unclassified: false,
     engines: true,
     baseModels: [],
+    capabilities: [],
   };
 }
 
@@ -290,7 +298,7 @@ function storedFilters() {
   for (const key of ["adapters", "checkpoints", "unclassified", "engines"]) {
     if (typeof parsed[key] === "boolean") filters[key] = parsed[key];
   }
-  for (const key of ["adapterKinds", "baseModels"]) {
+  for (const key of ["adapterKinds", "baseModels", "capabilities"]) {
     if (Array.isArray(parsed[key])) {
       filters[key] = parsed[key].filter((v) => typeof v === "string");
     }
@@ -353,8 +361,35 @@ function storedCollapsed() {
  * makes the storage answer wrong: a file copied into two folders occupies both.
  * `labelKind` is `path` for a literal filesystem path, which is set in the mono
  * face and never uppercased, because uppercasing a path misstates the string.
+ *
+ * `feature` is the second axis to fan out, and for the same kind of reason:
+ * Florence-2 captions AND detects, and the embedder's CLIP is both the search
+ * encoder and the aesthetic scorer's backbone. Filing either under one heading
+ * answers "what breaks if I delete this" wrongly, which is the question this
+ * axis exists to answer, so the row appears under each.
  */
 function groupsOf(row, axis) {
+  if (axis === "feature") {
+    const capabilities = Array.isArray(row.capabilities) ? row.capabilities : [];
+    if (!capabilities.length) {
+      // Every scanned adapter and checkpoint lands here, which is most of the
+      // shelf: `kind` on those rows is an adapter algorithm, not a capability,
+      // and calling a LoRA's `lokr` a feature would be the confident wrong
+      // answer the classifier already refuses to give.
+      return [
+        {
+          key: UNSET_GROUP_KEY,
+          label: "No feature recorded",
+          labelKind: "name",
+        },
+      ];
+    }
+    return capabilities.map((capability) => ({
+      key: String(capability),
+      label: capabilityLabel(capability),
+      labelKind: "name",
+    }));
+  }
   if (axis === "base_model") {
     // Grouped by the FOLDED value, so four spellings of one base make one
     // header. The label is that canonical string: a header reading
@@ -526,6 +561,24 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   );
 
   /**
+   * Every capability present, for the nested feature checkboxes.
+   *
+   * Ordered by the label a reader sees rather than by the stored word, because
+   * the list is read as labels: sorting on `scorer` would file "Quality score"
+   * under S. Faceted over every row's whole set, so a model serving two
+   * features contributes to both boxes — the same rule as the group axis.
+   */
+  const capabilityOptions = computed(() =>
+    [
+      ...new Set(
+        rows.value.flatMap((r) =>
+          (Array.isArray(r.capabilities) ? r.capabilities : []).map(String),
+        ),
+      ),
+    ].sort((a, b) => capabilityLabel(a).localeCompare(capabilityLabel(b))),
+  );
+
+  /**
    * Every base model present, with `UNASSIGNED` last.
    *
    * A null base model is explicit, not absent: it is a bulk state (37% of real
@@ -547,6 +600,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const visibleRows = computed(() => {
     const kinds = filters.adapterKinds;
     const bases = filters.baseModels;
+    const capabilities = filters.capabilities;
     const shown = rows.value
       .filter((row) => {
         // The type checkboxes narrow here as well as choosing what to fetch:
@@ -554,6 +608,17 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         if (!filters[blockOf(row)]) return false;
         if (row.file_kind === "adapter" && kinds.length) {
           if (!kinds.includes(String(row.kind))) return false;
+        }
+        // "HAS this capability", not "IS this kind" — the whole point of the
+        // set. A model serving two features survives a tick of either.
+        //
+        // Scoped to the engines block for the same reason the kind boxes are
+        // scoped to adapters: a nested filter narrows the block it hangs under
+        // and leaves the others alone, so ticking `Captioning` no longer hides
+        // every LoRA on the shelf than ticking `lora` hides every checkpoint.
+        if (blockOf(row) === "engines" && capabilities.length) {
+          const own = Array.isArray(row.capabilities) ? row.capabilities : [];
+          if (!own.some((c) => capabilities.includes(String(c)))) return false;
         }
         if (bases.length) {
           // Matched against the same key the facet list was built from.
@@ -637,9 +702,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           };
           byKey.set(group.key, bucket);
         }
-        // Under `folder` a row is listed once per copy and reports THAT copy's
-        // state rather than the merged one, or a file present here and missing
-        // there would claim to be fine in the folder it is absent from.
+        // `rowKey` carries the GROUP on every grouped axis, not only on the
+        // ones that can draw a row twice. Two axes fan out now — a file copied
+        // into two folders, a model serving two features — and both drew the
+        // same model under two headers with one key, which is the collision
+        // that put `tabindex="0"` on several draws at once and made `indexOf`
+        // return the first. Under `base_model` a row is in exactly one group,
+        // so the suffix is redundant there and costs nothing; the key is opaque
+        // to every reader of it.
+        //
+        // Under `folder` a row also reports THAT copy's state rather than the
+        // merged one, or a file present here and missing there would claim to
+        // be fine in the folder it is absent from.
         bucket.rows.push(
           group.location
             ? {
@@ -647,7 +721,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
                 rowKey: `${row.id}:${group.key}`,
                 locState: locationState([group.location]),
               }
-            : { ...row, rowKey: String(row.id) },
+            : { ...row, rowKey: `${row.id}:${group.key}` },
         );
       }
     }
@@ -725,6 +799,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (!filters.checkpoints) n += 1;
     if (filters.unclassified) n += 1;
     if (filters.baseModels.length) n += 1;
+    if (filters.capabilities.length) n += 1;
     return n;
   });
 
@@ -1201,6 +1276,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     error,
     fetchRows,
     adapterKindOptions,
+    capabilityOptions,
     baseModelOptions,
     visibleRows,
     groups,
