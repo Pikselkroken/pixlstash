@@ -26,7 +26,7 @@ function charactersUrl(path = "") {
  * The other half of {@link getCharacterThumbnail}, for callers that draw MANY
  * of them: a blob costs a request and an object URL per character, while a
  * `src` lets the browser fetch and cache one response however many marks name
- * that character (the model shelf's `Assigned to` column, #892). The blob form
+ * that character (the model shelf's assignment ring, #892/#904). The blob form
  * stays for the sidebar, which wants the failure as a rejection.
  *
  * The route is cookie-authenticated, so a share token has to ride in the query

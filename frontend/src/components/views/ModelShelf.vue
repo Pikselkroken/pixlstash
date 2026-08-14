@@ -12,12 +12,13 @@
     @keydown.escape="onShelfEscape"
   >
     <p id="shelf-help" class="visually-hidden">
-      Every adapter and checkpoint PixlStash has found on this machine. Show
-      chooses which kinds are listed and which base models. Sort chooses the
-      order and whether the list is cut into groups. A name in a monospaced face
-      was taken from the filename, because nobody has named that file yet. A row
-      that stands for a training run says how many files it holds; Right and
-      Left open and close it. Escape clears the selection.
+      Every adapter and checkpoint PixlStash has found on this machine. Group
+      and Sort choose the order and whether the list is cut into groups; Show
+      chooses which kinds are listed and which base models. A ring around a
+      model's mark says who it is assigned to. A name in italics has not been
+      given one. A row that stands for a training run says how many files it
+      holds; Right and Left open and close it. Right-click a row for everything
+      that can be done to it. Escape clears the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -26,15 +27,138 @@
          header already says it and a second announcer double-speaks. -->
     <p class="visually-hidden" role="status">{{ sortAnnouncement }}</p>
 
+    <!-- The toolbar changes the VIEW. The two things on it that are not view
+         controls are the ones with no selection to hang on — Add, which makes a
+         row that does not exist yet, and the stack sweep, which proposes over
+         the whole shelf — so they sit together on the left, apart from the view
+         controls, and both open something before they write anything. Every
+         other verb lives on the row or in the selection pill (#904). -->
     <div class="shelf-toolbar">
       <span class="shelf-title">Models</span>
       <span class="shelf-sub">{{ countLabel }}</span>
+
+      <!-- The one accented, labelled button in the bar, because it is the only
+           thing here with a result behind it. Three ways in, one menu: a
+           folder, a loose file, or a training run somebody else's tool wrote. -->
+      <v-menu
+        v-model="addMenuOpen"
+        location="bottom start"
+        origin="top start"
+        :offset="8"
+        transition="scale-transition"
+      >
+        <template #activator="{ props: menuProps }">
+          <button
+            ref="addBtnRef"
+            v-bind="menuProps"
+            class="bar-btn bar-btn--accent"
+            type="button"
+            aria-haspopup="menu"
+            :aria-expanded="addMenuOpen"
+            :aria-busy="adding || undefined"
+            title="Add models to the shelf"
+          >
+            <!-- A copy of a 6 GB checkpoint is not instant, and this button is
+                 the only thing on screen that knows one is running. -->
+            <v-icon v-if="adding" size="19" class="mdi-spin"
+              >mdi-loading</v-icon
+            >
+            <v-icon v-else size="19">mdi-plus</v-icon>
+            <span>Add</span>
+            <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
+          </button>
+        </template>
+        <div class="shelf-menu" role="menu">
+          <button
+            class="shelf-mi"
+            type="button"
+            role="menuitem"
+            @click="openFolders()"
+          >
+            <v-icon size="16">mdi-folder-plus-outline</v-icon>
+            <span>Add folder…</span>
+          </button>
+          <button
+            class="shelf-mi"
+            type="button"
+            role="menuitem"
+            @click="openAddFile"
+          >
+            <v-icon size="16">mdi-file-plus-outline</v-icon>
+            <span>Add file…</span>
+          </button>
+          <!-- Shown only once an ai-toolkit output root is registered. Hidden
+               rather than disabled, unlike the selection pill's verbs: those
+               are about a selection the reader just made and owe an
+               explanation, and this is about a folder they have not set up,
+               which the folders dialog is the place to say. -->
+          <template v-if="hasSourceFolder">
+            <span class="shelf-mi-sep"></span>
+            <button
+              class="shelf-mi"
+              type="button"
+              role="menuitem"
+              @click="openImport"
+            >
+              <v-icon size="16">mdi-import</v-icon>
+              <span>Import from ai-toolkit</span>
+            </button>
+          </template>
+        </div>
+      </v-menu>
+
+      <!-- The sweep, and the shelf's one verb with no selection to act on: it
+           proposes over every row. Icon-only beside Add rather than among the
+           view controls, because it is a verb and they are not — and it opens a
+           dry run, so nothing is written by the press itself. -->
+      <button
+        ref="stacksBtnRef"
+        class="bar-btn bar-btn--boxed"
+        :class="{ 'bar-btn--open': stacksOpen }"
+        type="button"
+        title="Stack training runs — review proposed stacks"
+        aria-label="Stack training runs"
+        @click="stacksOpen = true"
+      >
+        <v-icon size="19">mdi-layers-plus</v-icon>
+      </button>
+
       <span class="shelf-spacer"></span>
 
       <!-- The bar's own cluster gap. `.shelf-toolbar` separates the title from
            its controls at --space-4; the controls separate from each other at
            --space-3, which is what every other bar in the app uses. -->
       <div class="shelf-bar-cluster">
+        <!-- Group and Sort carry their current VALUE as the label, because
+             their glyphs are abstract and their state is the reason the list
+             looks the way it does. Filter keeps the universal funnel and says
+             the rest with a count. -->
+        <v-menu
+          v-model="groupMenuOpen"
+          :close-on-content-click="false"
+          location="bottom end"
+          origin="top end"
+          :offset="8"
+          transition="scale-transition"
+        >
+          <template #activator="{ props: menuProps }">
+            <button
+              v-bind="menuProps"
+              class="bar-btn bar-btn--boxed"
+              :class="{ 'bar-btn--open': groupMenuOpen }"
+              type="button"
+              aria-haspopup="dialog"
+              :aria-expanded="groupMenuOpen"
+              :title="groupButtonTitle"
+            >
+              <v-icon size="19">{{ activeGroup.icon }}</v-icon>
+              <span class="bar-btn-value">{{ activeGroup.label }}</span>
+              <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
+            </button>
+          </template>
+          <ShelfSortPanel section="group" />
+        </v-menu>
+
         <v-menu
           v-model="sortMenuOpen"
           :close-on-content-click="false"
@@ -76,14 +200,13 @@
                 :aria-expanded="sortMenuOpen"
                 :title="sortButtonTitle"
               >
-                <span class="bar-btn-prefix">Sort:</span>
                 <v-icon size="19">{{ activeSort.icon }}</v-icon>
-                <span class="bar-btn-sort-type">{{ activeSort.label }}</span>
+                <span class="bar-btn-value">{{ activeSort.label }}</span>
                 <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
               </button>
             </div>
           </template>
-          <ShelfSortPanel />
+          <ShelfSortPanel section="sort" />
         </v-menu>
 
         <v-menu
@@ -97,7 +220,11 @@
           <!-- The boxed bar button, its badge and the panel shell are the
              toolbar's shipped filter pattern; v-menu is also what returns
              focus to this button on Escape and on an outside click, so none
-             of that is hand-rolled. -->
+             of that is hand-rolled.
+
+             The badge counts ACTIVE FILTERS, never results: it is the answer to
+             "why is this list short", and the result counts are already on the
+             group headers. -->
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
@@ -107,10 +234,10 @@
                 'bar-btn--open': showMenuOpen,
               }"
               type="button"
-              title="Show"
+              :title="showButtonTitle"
             >
               <span class="bar-icon-badge-wrap">
-                <v-icon size="19">mdi-eye-outline</v-icon>
+                <v-icon size="19">mdi-filter-outline</v-icon>
                 <span v-if="store.activeCount > 0" class="bar-filter-badge">{{
                   store.activeCount
                 }}</span>
@@ -120,96 +247,14 @@
           </template>
           <ShelfShowPanel />
         </v-menu>
-
-        <!-- The loose-file path (F6). Beside Import rather than in the folders
-             dialog, because it is not a folder operation: it is the way one
-             adapter that belongs to no training run gets onto the shelf without
-             a folder being registered for it. The file is copied into the
-             managed store; the original stays where the owner put it. -->
-        <button
-          ref="addFileBtnRef"
-          class="bar-btn bar-btn--boxed"
-          :class="{ 'bar-btn--open': addFileOpen }"
-          type="button"
-          title="Add a model file"
-          aria-label="Add a model file"
-          :aria-busy="adding || undefined"
-          @click="openAddFile"
-        >
-          <!-- A copy of a 6 GB checkpoint is not instant, and this button is
-               the only thing on screen that knows one is running. -->
-          <v-icon v-if="adding" size="19" class="mdi-spin">mdi-loading</v-icon>
-          <v-icon v-else size="19">mdi-file-plus-outline</v-icon>
-        </button>
-
-        <!-- Shown only once an ai-toolkit output root is registered. Hidden
-             rather than disabled, unlike the selection bar's verbs: those are
-             about a selection the reader just made and owe an explanation, and
-             this is about a folder they have not set up, which the folders
-             dialog is the place to say. -->
-        <button
-          v-if="hasSourceFolder"
-          ref="importBtnRef"
-          class="bar-btn bar-btn--boxed"
-          :class="{ 'bar-btn--open': importOpen }"
-          type="button"
-          title="Import from ai-toolkit"
-          aria-label="Import from ai-toolkit"
-          @click="openImport"
-        >
-          <v-icon size="19">mdi-import</v-icon>
-        </button>
-
-        <!-- Grouping is a sweep over the whole shelf rather than something done
-             to a selection, so it lives in the toolbar and not in the selection
-             bar. It opens a dry run; nothing is written until that is
-             confirmed. -->
-        <button
-          ref="stacksBtnRef"
-          class="bar-btn bar-btn--boxed"
-          :class="{ 'bar-btn--open': stacksOpen }"
-          type="button"
-          title="Group training runs"
-          aria-label="Group training runs"
-          @click="stacksOpen = true"
-        >
-          <v-icon size="19">mdi-layers-outline</v-icon>
-        </button>
-
-        <!-- No count badge: `bar-filter-badge` counts a deviation from a default
-           the user set, and a folder count never returns to zero (the managed
-           store always exists), so a permanent number 8px from the Show
-           button's identical pill would mean something else entirely. -->
-        <button
-          ref="foldersBtnRef"
-          class="bar-btn bar-btn--boxed"
-          :class="{ 'bar-btn--open': foldersOpen }"
-          type="button"
-          title="Model folders"
-          aria-label="Model folders"
-          @click="openFolders"
-        >
-          <v-icon size="19">mdi-folder-multiple-outline</v-icon>
-        </button>
       </div>
     </div>
 
-    <ShelfSelectionBar
-      @rename="editVerb = 'rename'"
-      @set-base-model="editVerb = 'base-model'"
-      @set-kind="editVerb = 'kind'"
-      @stack="confirmStack"
-      @move="openMove(store.selectedRows)"
-      @set-icon="pickIcon"
-      @clear-icons="confirmClearIcons"
-      @forget="confirmForget"
-    />
-
-    <!-- The file picker the Set icon button drives. A real <input type=file>
+    <!-- The file picker the Set icon verb drives. A real <input type=file>
          rather than a drop zone or a dialog: it is the platform's own chooser,
          it is keyboard-accessible for free, and picking a file is the whole
-         interaction. Hidden rather than styled, because the button beside it
-         is already the affordance. -->
+         interaction. Hidden rather than styled, because the verb beside it is
+         already the affordance. -->
     <input
       ref="iconInputRef"
       class="visually-hidden"
@@ -231,14 +276,29 @@
       <!-- An unplugged drive states its scope ONCE, here, rather than through
            300 rows each carrying the same mark. The rows still take the offline
            treatment — that is what tells one row from its neighbour — but the
-           REASON is a fact about the mount and belongs to the mount. -->
+           REASON is a fact about the mount and belongs to the mount.
+
+           One line, one verb, dismissible: nothing here is broken and nothing
+           needs fixing, so the reader who has read it once gets to put it
+           away. It comes back when the shelf is refetched, because a drive that
+           is still unplugged is still worth saying once. -->
       <p
-        v-if="offlineNote"
-        class="shelf-offline-banner"
+        v-if="offlineNote && !offlineDismissed"
+        class="shelf-banner"
         :title="offlineMountPaths"
       >
         <v-icon size="16">mdi-power-plug-off-outline</v-icon>
-        <span>{{ offlineNote }}</span>
+        <span class="shelf-banner-text">{{ offlineNote }}</span>
+        <span class="shelf-spacer"></span>
+        <button
+          class="shelf-banner-dismiss"
+          type="button"
+          title="Dismiss"
+          aria-label="Dismiss the offline notice"
+          @click="offlineDismissed = true"
+        >
+          <v-icon size="15">mdi-close</v-icon>
+        </button>
       </p>
       <p v-if="store.loading" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
@@ -267,7 +327,7 @@
         <button
           class="tbm-action tbm-action--primary"
           type="button"
-          @click="openFolders($event)"
+          @click="openFolders()"
         >
           Add a model folder
         </button>
@@ -283,12 +343,10 @@
         </button>
       </div>
 
-      <!-- The row itself is still not a focus stop; its checkbox is. That is
-           the change F3 made and the reason the old rule existed: a row with no
-           verb and no selection would have been 1,800 empty tab stops, and a
-           row with a selection has exactly one thing to do. Group headers stay
-           stops too, so Tab still moves group to group when nothing inside is
-           reached. -->
+      <!-- The row itself is not a focus stop unless it holds the roving one:
+           1,800 tab stops would be a trap, and a row's verbs are on its context
+           menu rather than inside it. Group headers stay stops too, so Tab
+           still moves group to group. -->
       <template v-else>
         <!-- The key to the meters, said ONCE for the view rather than once per
              band: it is the same three segments every time, and repeating it
@@ -301,17 +359,17 @@
              heading already states its figures in words, so this is redundant
              to a screen reader, and wiring it up would re-read all three
              labels on every heading. -->
-        <p v-if="showsBandLegend" class="shelf-band-legend">
-          <span
-            v-for="item in BAND_LEGEND"
-            :key="item.key"
-            class="shelf-band-legend-item"
-          >
+        <p v-if="showsBandLegend" class="shelf-keys">
+          <span v-for="item in BAND_LEGEND" :key="item.key" class="shelf-key">
             <span
-              class="shelf-band-swatch"
+              class="shelf-key-swatch"
               :class="`shelf-band-seg--${item.key}`"
             ></span>
             <span>{{ item.label }}</span>
+          </span>
+          <span class="shelf-key">
+            <v-icon size="14">mdi-cursor-move</v-icon>
+            <span>drag a selection onto a drive or folder to move it</span>
           </span>
         </p>
         <div v-for="group in shownGroups" :key="group.key" class="shelf-group">
@@ -327,21 +385,21 @@
                error treatment. -->
           <h3
             v-if="group.bandStart"
-            class="shelf-band-heading"
+            class="shelf-band"
             :class="{
-              'shelf-band-heading--unknown': !group.band.measured,
-              'shelf-band-heading--drop': bandDropState(group.band) === 'drop',
-              'shelf-band-heading--reject':
-                bandDropState(group.band) === 'reject',
+              'shelf-band--unknown': !group.band.measured,
+              'shelf-band--drop': bandDropState(group.band) === 'drop',
+              'shelf-band--reject': bandDropState(group.band) === 'reject',
             }"
             @dragover="onBandDragOver(group.band, $event)"
             @dragleave="onBandDragLeave(group.band)"
             @drop="onBandDrop(group.band, $event)"
           >
-            <span class="shelf-band-label" :title="group.band.mountPoint">
-              <v-icon size="16" class="shelf-band-icon">mdi-harddisk</v-icon>
-              <span>{{ group.band.label }}</span>
-            </span>
+            <v-icon size="15" class="shelf-band-icon">mdi-harddisk</v-icon>
+            <span class="shelf-band-name">{{ group.band.label }}</span>
+            <span v-if="group.band.mountPoint" class="shelf-band-path">{{
+              group.band.mountPoint
+            }}</span>
             <!-- Three segments carving up one track, not fills stacked on top
                  of each other. The shelf's share is a PART of what is used, so
                  `other` is the REST of the used space: laid end to end the
@@ -415,11 +473,9 @@
             </span>
           </h3>
 
-          <!-- The header IS the button, on the same four-column grid as the
-               rows, so its label starts at their left edge. Column 2 stays
-               reserved and empty exactly as a row with no thumbnail reserves it
-               (§5.1). A heading as well as a button, so a screen reader can
-               jump group to group by heading. -->
+          <!-- The header IS the button, so its whole width is the drop target
+               and the collapse control. A heading as well as a button, so a
+               screen reader can jump group to group by heading. -->
           <h3 v-if="grouped" class="shelf-group-heading">
             <!-- A folder header is also the drop target for a drag, which is
                  why the drag handlers sit on the button and not on a wrapper:
@@ -429,12 +485,16 @@
                  ACCEPTS a drop, so it happens inside the handler and only for
                  a payload this target takes (#757). -->
             <button
-              class="ps-row shelf-group-btn"
-              :class="{
-                'shelf-group-btn--drop':
-                  dropTargetKey === group.key && dropFits(group.band),
-                'shelf-group-btn--offline': group.offline,
-              }"
+              class="shelf-group-btn"
+              :class="[
+                `shelf-group-btn--${group.tier || 'plain'}`,
+                {
+                  'shelf-group-btn--drop':
+                    dropTargetKey === group.key && dropFits(group.band),
+                  'shelf-group-btn--offline': group.offline,
+                  'shelf-group-btn--nested': group.nested,
+                },
+              ]"
               :style="groupStyle(group)"
               type="button"
               :aria-expanded="!store.isCollapsed(group.key)"
@@ -444,54 +504,41 @@
               @dragleave="onGroupDragLeave(group)"
               @drop="onGroupDrop(group, $event)"
             >
-              <span
-                class="ps-row-glyph shelf-group-chevron"
+              <v-icon
+                size="16"
+                class="shelf-group-chevron"
                 :class="{
                   'shelf-group-chevron--open': !store.isCollapsed(group.key),
                 }"
+                >mdi-chevron-right</v-icon
               >
-                <v-icon size="16">mdi-chevron-right</v-icon>
+              <!-- Under `Folder` the glyph is the TIER's — one mdi folder
+                   family, never a hand-drawn box — and an unreachable folder
+                   wears the disconnected mark instead, which is the shape half
+                   of the offline treatment. -->
+              <v-icon size="16" class="shelf-group-mark">{{
+                group.icon || GROUP_BY_LABELS[store.view.groupBy].icon
+              }}</v-icon>
+              <!-- The label and everything that qualifies it. The chips are
+                   WORDS on purpose: the rail's hue groups the folders on one
+                   disk and the tier's glyph gives it a shape, but neither
+                   survives greyscale on its own, and only the chip is readable
+                   out loud. -->
+              <span
+                class="shelf-group-label"
+                :class="`shelf-group-label--${group.labelKind}`"
+                >{{ group.label }}</span
+              >
+              <span v-if="group.chip" class="shelf-chip">{{ group.chip }}</span>
+              <!-- Only where no band names the drive already: under `Drive,
+                   then folder` the band above IS this chip, and repeating it on
+                   every folder under it is noise rather than a signal. -->
+              <span v-if="!group.band && group.drive" class="shelf-chip">
+                <v-icon size="12">mdi-harddisk</v-icon>
+                {{ group.drive.label }}
               </span>
-              <!-- Column 2 carries the axis glyph rather than sitting empty:
-                   the reserved width is there either way, and a folder header
-                   with a gap where the row thumbnails are reads as a missing
-                   image rather than as alignment. Under `Folder` the glyph is
-                   the TIER's — one mdi folder family, never a hand-drawn box —
-                   and an unreachable folder wears the disconnected mark
-                   instead, which is the shape half of the offline treatment. -->
-              <span class="shelf-group-mark">
-                <v-icon size="18">{{
-                  group.icon || GROUP_BY_LABELS[store.view.groupBy].icon
-                }}</v-icon>
-              </span>
-              <!-- Column 3 holds the label and everything that qualifies it.
-                   The chips are WORDS on purpose: the rail's hue groups the
-                   folders on one disk and the tier's glyph gives it a shape,
-                   but neither survives greyscale on its own, and only the chip
-                   is readable out loud. -->
-              <span class="shelf-group-id">
-                <span
-                  class="shelf-group-label"
-                  :class="`shelf-group-label--${group.labelKind}`"
-                  >{{ group.label }}</span
-                >
-                <span v-if="group.chip" class="shelf-group-chip">{{
-                  group.chip
-                }}</span>
-                <!-- Only where no band names the drive already: under `Drive,
-                     then folder` the band above IS this chip, and repeating it
-                     on every folder under it is noise rather than a signal. -->
-                <span
-                  v-if="!group.band && group.drive"
-                  class="shelf-group-chip"
-                >
-                  <v-icon size="12">mdi-harddisk</v-icon>
-                  {{ group.drive.label }}
-                </span>
-                <span v-if="group.offline" class="shelf-group-chip"
-                  >Offline</span
-                >
-              </span>
+              <span v-if="group.offline" class="shelf-chip">Offline</span>
+              <span class="shelf-spacer"></span>
               <span class="shelf-group-count">{{
                 modelCount(group.rows.length)
               }}</span>
@@ -506,11 +553,7 @@
                `aria-multiselectable` + `aria-selected` still say what is
                picked. A run's other steps are CHILD rows, which is the "tree"
                half: they carry `aria-level="2"` because the DOM draws them as
-               siblings of their cover rather than nesting them.
-
-               A grid also lifts the old ban on controls inside a row — that
-               was a listbox rule. Nothing here takes advantage of it yet, and
-               `.shelf-row-steps` deliberately stays a span. -->
+               siblings of their cover rather than nesting them. -->
           <ul
             v-if="!grouped || !store.isCollapsed(group.key)"
             class="shelf-list"
@@ -518,41 +561,19 @@
             aria-multiselectable="true"
             :aria-label="grouped ? group.label : 'Models'"
           >
-            <!-- The header row. One per grid, because columnheaders only name
-                 the columns of the grid they are in and grouping makes one
-                 grid per group; drawn ONCE, because a strip of column names
-                 under every folder header is noise rather than information.
-                 The other groups keep theirs `visually-hidden`, so the names
-                 are still on every grid for a reader while the eye sees the
-                 single line the design shows.
-
-                 The two glyph columns are headed too — a grid row must have a
-                 cell for every column — with names only a reader gets. -->
-            <li
-              class="ps-row shelf-head-row"
-              :class="{ 'visually-hidden': group.key !== headGroupKey }"
-              role="row"
-            >
-              <span role="columnheader" class="shelf-head-cell">
-                <span class="visually-hidden">Selected</span>
-              </span>
-              <span role="columnheader" class="shelf-head-cell">
-                <span class="visually-hidden">Icon</span>
-              </span>
-              <span role="columnheader" class="shelf-head-cell">Name</span>
-              <span role="columnheader" class="shelf-head-cell">Kind</span>
-              <span role="columnheader" class="shelf-head-cell">Base</span>
-              <span role="columnheader" class="shelf-head-cell"
-                >Assigned to</span
-              >
-              <span
-                role="columnheader"
-                class="shelf-head-cell shelf-head-cell--size"
-                >Size</span
-              >
-              <span role="columnheader" class="shelf-head-cell">
-                <span class="visually-hidden">Status</span>
-              </span>
+            <!-- The column names, on every grid and drawn on none of them.
+                 `columnheader`s head the grid they are in and nothing else, so
+                 grouping needs one strip per group — and the resolved design
+                 has no visible header strip, because the kind is a chip, the
+                 base is a word and the size is right-aligned, which is what
+                 makes the columns readable without being named. The names stay
+                 for the reader who cannot see that. -->
+            <li class="visually-hidden" role="row">
+              <span role="columnheader">Model</span>
+              <span role="columnheader">Name</span>
+              <span role="columnheader">Kind</span>
+              <span role="columnheader">Base</span>
+              <span role="columnheader">Size</span>
             </li>
             <!-- A row with one spanning cell, because a grid takes nothing but
                  rows: not selectable, because there is nothing here to select.
@@ -569,13 +590,12 @@
                  the same iteration and still see `row`. -->
             <template v-for="row in group.rows" :key="row.rowKey">
               <li
-                class="ps-row shelf-row"
+                class="shelf-row"
                 :class="{
                   'shelf-row--selected': store.isSelected(row.id),
                   'shelf-row--offline': row.locState === 'unreachable',
                   'shelf-row--broken': BROKEN_STATES.has(row.locState),
                 }"
-                :title="rowTitle(row)"
                 role="row"
                 aria-level="1"
                 :aria-expanded="
@@ -587,39 +607,55 @@
                 :data-row-key="row.rowKey"
                 :draggable="canDrag(row) && editingRowKey !== row.rowKey"
                 @click="pickRow(row, $event)"
+                @contextmenu.prevent="openRowMenu(row, $event)"
                 @keydown="onRowKeydown(row, $event)"
                 @focus="focusedRowKey = row.rowKey"
                 @dragstart="onRowDragStart(row, $event)"
                 @dragend="clearDropState()"
               >
-                <!-- Column 1 stays the reserved glyph slot. The selection shows
-                   as the row's own wash and a tick here, not as a checkbox: a
-                   checkbox is a second, contradictory way to select in a list
-                   whose click already selects, and it was the shelf teaching a
-                   dialect the rest of the app does not speak. -->
-                <span role="gridcell" class="ps-row-glyph shelf-row-pick">
-                  <v-icon v-if="store.isSelected(row.id)" size="16"
-                    >mdi-check</v-icon
-                  >
-                </span>
+                <!-- The identity slot, and the assignment (#904). The RING is
+                     the assignment: its hue is the entity's own and its style
+                     is hashed off the entity, so the pair survives greyscale
+                     where the hue alone would not, and the mark's own label
+                     names every attachment out loud. That is what replaced the
+                     `Assigned to` column — one mark, two axes, no track that is
+                     empty on most rows. -->
                 <span role="gridcell" class="shelf-row-ident">
                   <!-- Deck ticks behind the mark say "this is more than one
-                     file" before the count is read, exactly as they do on a
-                     picture tile. Count-only, so the component reuses cleanly
-                     here even though a model has no thumbnail. -->
+                       file" before the count is read, exactly as they do on a
+                       picture tile. Count-only, so the component reuses cleanly
+                       here even though a model has no thumbnail. -->
                   <StackEdgeTicks
                     v-if="row.memberCount > 1"
                     :count="row.memberCount"
                   />
-                  <!-- The identity slot: the model's icon if it has one, else a
-                       generated mark. Never the bare kind glyph on its own —
-                       every checkpoint row and 37% of adapter rows would then
-                       be visually identical, which is the blank column the
-                       icon verb exists to fill. The kind now has a column of
-                       its own, so nothing is lost by the swap. -->
-                  <ModelMark :row="row" />
+                  <!-- The hue is bound as a custom property rather than a
+                       class, because it is per-entity DATA and there is no
+                       bounded set of them to name. Bound only when there IS
+                       one: an unassigned ring has no hue, and a custom
+                       property set to an empty string is a different thing
+                       from an unset one — `var(--mmark-ring, transparent)`
+                       would resolve to nothing rather than to its fallback,
+                       and an invalid-at-computed-value-time `border` takes the
+                       whole shorthand down with it, including the 2px. -->
+                  <ModelMark
+                    :row="row"
+                    :ring="ringFor(row)"
+                    :style="ringStyle(row)"
+                  />
                 </span>
                 <span role="gridcell" class="shelf-row-label">
+                  <!-- The absence glyph leads the line, because it changes what
+                       everything after it means: the name is still true, the
+                       file behind it is not there. -->
+                  <v-icon
+                    v-if="row.locState !== 'present'"
+                    size="14"
+                    class="shelf-row-loc"
+                    :class="`shelf-row-loc--${row.locState}`"
+                    :title="LOC_TITLE[row.locState]"
+                    >{{ LOC_ICON[row.locState] }}</v-icon
+                  >
                   <!-- The name is a FIELD, and it has four states, because
                        naming is the commonest fix on this shelf and the reader
                        has to be able to tell "somebody chose this" from "we
@@ -644,6 +680,7 @@
                     <span
                       class="shelf-row-name"
                       :class="`shelf-row-name--${row.name.state}`"
+                      @dblclick.stop="startRename(row)"
                       >{{ row.name.text || "Name this model" }}</span
                     >
                     <span
@@ -653,46 +690,28 @@
                       :title="NAME_TAG[row.name.state].title"
                       >{{ NAME_TAG[row.name.state].label }}</span
                     >
-                    <!-- Named but deliberately not a tab stop: the row is the
-                         control on this grid, so the keyboard path is F2 on the
-                         row (announced by `aria-keyshortcuts`) rather than a
-                         tab stop per row across 1,800 of them.
-
-                         `tabindex="-1"` is what buys that, NOT `aria-hidden`,
-                         which is what this used to carry. Hiding a click target
-                         from the accessibility tree is invalid ARIA and it cost
-                         something real: voice control ("click Rename") and the
-                         AT element list both need a role and a name, and a
-                         pointer-free-but-sighted user had no way to reach the
-                         pencil at all. -->
-                    <v-icon
-                      class="shelf-name-pencil"
-                      :class="{
-                        'shelf-name-pencil--persistent':
-                          row.name.state === 'needs-a-name',
-                      }"
-                      size="14"
-                      title="Rename (F2)"
-                      role="button"
-                      tabindex="-1"
-                      aria-label="Rename (F2)"
-                      @click.stop="startRename(row)"
-                      >mdi-pencil-outline</v-icon
-                    >
                   </template>
-                  <!-- What the scan you just ran brought in. The SUCCESS
-                       treatment, because an arrival is a good outcome — and
-                       nothing else on a row is green, so it reads without a
-                       key. A word rather than a dot: the shelf is a list of
-                       1,800 rows and a dot beside one name says nothing about
-                       what is different about it. Cleared by the next fetch,
-                       so it is never a stale mark from three refreshes ago.
-
-                       Outside the naming states' `v-else`: a row that just
-                       landed is still one that just landed while its name is
-                       being typed, and the arrival is the reason the reader
-                       went looking for the field in the first place. -->
-                  <span v-if="row.isNew" class="shelf-row-new">New</span>
+                  <!-- Beside the name rather than in a column of its own: the
+                       count belongs to the run's identity, and only stacked
+                       rows carry one, so a track for it would be empty on
+                       nearly every row. -->
+                  <button
+                    v-if="row.memberCount > 1"
+                    class="shelf-stack-badge"
+                    type="button"
+                    :aria-expanded="isStackOpen(row.stack_id)"
+                    :title="`${row.memberCount} files in this run`"
+                    @click.stop="toggleStack(row.stack_id)"
+                  >
+                    {{ row.memberCount }}
+                    <v-icon
+                      size="13"
+                      :class="{
+                        'shelf-stack-chevron--open': isStackOpen(row.stack_id),
+                      }"
+                      >mdi-chevron-right</v-icon
+                    >
+                  </button>
                   <!-- The step, on any row that is not a stack cover.
                        `deriveModelName` strips the trailing step from the
                        filename on the stated grounds that "the step is parsed
@@ -701,104 +720,47 @@
                        checkpoints of one run that the stack detector did not
                        fold both read `clementine-zib-3b`, with nothing on the
                        row telling them apart: exactly the outcome stripping it
-                       was meant to prevent.
-
-                       Not on a cover: a stack stands for many steps and naming
-                       one of them would be a lie. The cover carries its member
-                       count instead, which is the next element along. -->
+                       was meant to prevent. -->
                   <span
                     v-if="stepLabel(row)"
-                    class="shelf-row-at-step"
-                    :title="`Saved at training step ${row.training_step.toLocaleString()}`"
+                    class="shelf-chip shelf-chip--step"
                     >{{ stepLabel(row) }}</span
                   >
-                  <!-- Beside the name rather than in a column of its own: the
-                       count belongs to the run's identity, and only stacked
-                       rows carry one, so a track for it would be empty on
-                       nearly every row.
-
-                       A plain span, NOT `StackBadge`, which renders a real
-                       <button>. The grid role would now permit one, but the
-                       row is still the disclosure — Right/Left expand and
-                       collapse — and a second, focusable way to do the same
-                       thing is the dialect this list stopped speaking. No
-                       longer `aria-hidden`: the count is a fact about the row
-                       and a grid cell can simply say it, which is what the
-                       row's hand-built `aria-label` used to do instead. -->
-                  <span
-                    v-if="row.memberCount > 1"
-                    class="shelf-row-steps"
-                    @click.stop="toggleStack(row.stack_id)"
-                  >
-                    <v-icon
-                      size="14"
-                      class="shelf-row-steps-chevron"
-                      :class="{
-                        'shelf-row-steps-chevron--open': isStackOpen(
-                          row.stack_id,
-                        ),
-                      }"
-                      >mdi-chevron-right</v-icon
+                  <!-- What the scan you just ran brought in. The SUCCESS
+                       treatment, because an arrival is a good outcome — and
+                       nothing else on a row is green, so it reads without a
+                       key. Cleared by the next fetch, so it is never a stale
+                       mark from three refreshes ago. -->
+                  <span v-if="row.isNew" class="shelf-row-new">New</span>
+                  <!-- The filename, on its own line under the name. It is what
+                       the file is actually called, which the name above it may
+                       well not be, and it is the string the reader pastes into
+                       a ComfyUI node — so it is monospaced and it is always
+                       there rather than living in a tooltip. -->
+                  <span class="shelf-row-file">
+                    {{ row.filename
+                    }}<template v-if="LOC_NOTE[row.locState]">
+                      · {{ LOC_NOTE[row.locState] }}</template
                     >
-                    {{ row.memberCount }}
                   </span>
                 </span>
-                <!-- `title` because `.shelf-col` ellipsises and a
-                     multi-capability row is the one that overflows: the
-                     column's width is owed to the app-wide consistency pass,
-                     so the full list is reachable on hover rather than by
-                     widening one column ahead of it. -->
-                <span
-                  role="gridcell"
-                  class="shelf-col"
-                  :title="kindLabel(row)"
-                  >{{ kindLabel(row) }}</span
-                >
+                <span role="gridcell" class="shelf-col shelf-col--kind">
+                  <span class="shelf-chip" :title="kindLabel(row)">{{
+                    kindLabel(row)
+                  }}</span>
+                </span>
                 <!-- Base is a COLUMN, not a phrase on a metadata line: it is
                      the field a reader scans a shelf for, and it can only be
-                     scanned if it aligns. The header names it, so the empty
-                     case is "Not set" rather than the sentence the meta line
-                     had to carry. -->
-                <span role="gridcell" class="shelf-col">
+                     scanned if it aligns. -->
+                <span role="gridcell" class="shelf-col shelf-col--base">
                   <span v-if="row.base_model">{{ row.base_model }}</span>
-                  <span v-else class="shelf-col-none">Not set</span>
-                </span>
-                <!-- One bordered mark per attached character or set, fanned
-                     with a fixed half-mark overlap (#892). The z-order is
-                     explicit and reversed against document order — see
-                     `assignmentMarks`, which stamps it — so the fan reads
-                     front-to-back rather than the last attachment painting on
-                     top of the first.
-
-                     Not assigned is a dashed outline rather than an empty cell,
-                     because a blank under a header that promises something
-                     reads as a rendering gap rather than as a state. -->
-                <span role="gridcell" class="shelf-col shelf-col--assigned">
-                  <template v-if="row.attachments?.length">
-                    <EntityMark
-                      v-for="mark in assignedMarks(row)"
-                      :key="mark.key"
-                      :mark="mark"
-                      class="shelf-assigned-mark"
-                      :style="{ zIndex: mark.z }"
-                    />
-                  </template>
-                  <template v-else>
-                    <span class="shelf-assigned-none" aria-hidden="true"></span>
-                    <span class="visually-hidden">Not assigned</span>
-                  </template>
+                  <span v-else class="shelf-chip shelf-chip--none"
+                    >not set</span
+                  >
                 </span>
                 <span role="gridcell" class="shelf-col shelf-col--size">{{
                   row.file_size ? formatModelSize(row.file_size) : ""
                 }}</span>
-                <span
-                  role="gridcell"
-                  class="shelf-row-loc"
-                  :class="`shelf-row-loc--${row.locState}`"
-                  :title="LOC_TITLE[row.locState]"
-                >
-                  <v-icon size="16">{{ LOC_ICON[row.locState] }}</v-icon>
-                </span>
               </li>
 
               <!-- The run's other steps, rendered as ROWS rather than through
@@ -812,11 +774,10 @@
                 <li
                   v-for="member in row.members.slice(1)"
                   :key="`${row.rowKey}:${member.id}`"
-                  class="ps-row shelf-row shelf-row--member"
+                  class="shelf-row shelf-row--member"
                   role="row"
                   aria-level="2"
                 >
-                  <span role="gridcell" class="ps-row-glyph"></span>
                   <span role="gridcell" class="shelf-row-ident">
                     <v-icon size="14">mdi-subdirectory-arrow-right</v-icon>
                   </span>
@@ -824,24 +785,49 @@
                     <span class="shelf-row-name">{{
                       memberLabel(member)
                     }}</span>
+                    <span class="shelf-row-file">{{ member.filename }}</span>
                   </span>
-                  <!-- A step of a run has no kind, base or assignment of its
-                       own — those are the run's, one row up — but a grid row
-                       still owes a cell per column, and an empty one is the
-                       honest way to say "same as the run". -->
-                  <span role="gridcell" class="shelf-col"></span>
-                  <span role="gridcell" class="shelf-col"></span>
-                  <span role="gridcell" class="shelf-col"></span>
+                  <!-- A step of a run has no kind or base of its own — those
+                       are the run's, one row up — but a grid row still owes a
+                       cell per column, and an empty one is the honest way to
+                       say "same as the run". -->
+                  <span
+                    role="gridcell"
+                    class="shelf-col shelf-col--kind"
+                  ></span>
+                  <span
+                    role="gridcell"
+                    class="shelf-col shelf-col--base"
+                  ></span>
                   <span role="gridcell" class="shelf-col shelf-col--size">{{
                     member.file_size ? formatModelSize(member.file_size) : ""
                   }}</span>
-                  <span role="gridcell" class="shelf-row-loc"></span>
                 </li>
               </template>
             </template>
           </ul>
         </div>
       </template>
+    </div>
+
+    <!-- The pill floats bottom-centre OVER the list, exactly like the photo
+         grid's: the list is what the selection was made in, and a docked strip
+         between the toolbar and the rows pushed the whole list down every time
+         a row was clicked. This wrapper is the float; the pill owns its own
+         shape. `pointer-events` is off on the strip and back on for the pill,
+         so the rows underneath it stay clickable. -->
+    <div class="shelf-selbar-float">
+      <ShelfSelectionBar
+        ref="selBarRef"
+        @rename="startRenameSelected"
+        @set-base-model="editVerb = 'base-model'"
+        @set-kind="editVerb = 'kind'"
+        @stack="confirmStack"
+        @move="openMove(store.selectedRows)"
+        @set-icon="pickIcon"
+        @clear-icons="confirmClearIcons"
+        @forget="confirmForget"
+      />
     </div>
 
     <ShelfEditDialog :verb="editVerb" @close="editVerb = ''" />
@@ -900,7 +886,6 @@ import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
-import EntityMark from "../widgets/EntityMark.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
@@ -915,7 +900,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
-  assignmentMarks,
+  assignmentRing,
   bandGroups,
   bandKeyFor,
   bandProjection,
@@ -940,7 +925,15 @@ const rootEl = ref(null);
 const showMenuOpen = ref(false);
 const sortMenuOpen = ref(false);
 const foldersOpen = ref(false);
-const foldersBtnRef = ref(null);
+const addMenuOpen = ref(false);
+const groupMenuOpen = ref(false);
+// One button behind every dialog the toolbar's left half opens, so focus has
+// one place to come back to however the reader got there. The menu item that
+// opened it is gone by then — it unmounts with the menu.
+const addBtnRef = ref(null);
+const selBarRef = ref(null);
+/** Read once, dismissed for this visit; a refetch says it again. */
+const offlineDismissed = ref(false);
 /** Which edit verb owns the dialog: `rename` | `base-model` | `kind` | "". */
 const editVerb = ref("");
 const { confirm } = useConfirm();
@@ -1484,7 +1477,6 @@ function stepLabel(row) {
 // ── Import from ai-toolkit (shelf plan F6) ──────────────────────────────────
 
 const importOpen = ref(false);
-const importBtnRef = ref(null);
 
 /** Whether any ai-toolkit output root is registered at all. */
 const hasSourceFolder = computed(() =>
@@ -1501,10 +1493,7 @@ async function closeImport() {
   // The button can unmount under us: the import may have been the last run in
   // the only source folder, and `delete_after_import` then empties it. Falling
   // back to the shelf root beats dropping focus to <body>.
-  (importBtnRef.value?.isConnected
-    ? importBtnRef.value
-    : rootEl.value
-  )?.focus();
+  (addBtnRef.value?.isConnected ? addBtnRef.value : rootEl.value)?.focus();
 }
 
 // ── Add file (shelf plan F6's remainder) ────────────────────────────────────
@@ -1521,7 +1510,6 @@ async function closeImport() {
 // does, and it does it better, with the folder in front of you.
 
 const addFileOpen = ref(false);
-const addFileBtnRef = ref(null);
 const adding = ref(false);
 
 function openAddFile() {
@@ -1532,7 +1520,7 @@ function openAddFile() {
 async function closeAddFile() {
   addFileOpen.value = false;
   await nextTick();
-  addFileBtnRef.value?.focus();
+  addBtnRef.value?.focus();
 }
 
 /**
@@ -1584,17 +1572,8 @@ async function closeFolders() {
   await nextTick();
   // The empty-state button unmounts the moment the first folder is scanned in,
   // so fall back to the toolbar control rather than dropping focus to <body>.
-  (returnTo?.isConnected ? returnTo : foldersBtnRef.value)?.focus();
+  (returnTo?.isConnected ? returnTo : addBtnRef.value)?.focus();
 }
-
-// A closed vocabulary gets a glyph, an open one a word. `unknown` gets a plain
-// file rather than a question mark (an unclassified file is a fact about our
-// parser, not the user's mistake) and never the checkpoint cube.
-const KIND_ICON = {
-  adapter: "mdi-layers-outline",
-  checkpoint: "mdi-cube-outline",
-  unknown: "mdi-file-outline",
-};
 
 // `missing` is a fact (the folder was readable, the file was not in it);
 // `unreachable` is the absence of one (we could not look). Only the fact wears
@@ -1610,6 +1589,17 @@ const LOC_ICON = {
   not_downloaded: "mdi-cloud-download-outline",
   unreachable: "mdi-help-circle-outline",
   forgotten: "mdi-folder-off-outline",
+};
+
+// What the file line says after the filename, per absence state. On the line
+// rather than only in a tooltip, because the reader's next question after "the
+// name is fine" is "so where is the file", and a tooltip is not an answer you
+// can scan a column for.
+const LOC_NOTE = {
+  present: "",
+  missing: "file is not where it was",
+  unreachable: "out of reach",
+  forgotten: "every registered copy forgotten",
 };
 
 const LOC_TITLE = {
@@ -1831,6 +1821,44 @@ function startRename(row) {
   });
 }
 
+/**
+ * The pill's Rename, which is the inline field and not a dialog.
+ *
+ * The row is where a name is edited — the dashed rule under it is what says so
+ * — so the pill's button opens that field rather than a second, contradictory
+ * way to do the same thing. Gated on one row by the pill; this finds the DRAWN
+ * row for it, because a model with copies in two folders is two draws and the
+ * field belongs to whichever one is on screen.
+ */
+function startRenameSelected() {
+  const id = store.selectedRows[0]?.id;
+  if (id == null) return;
+  for (const group of shownGroups.value) {
+    const row = group.rows.find((candidate) => candidate.id === id);
+    if (row) {
+      startRename(row);
+      return;
+    }
+  }
+}
+
+/**
+ * Right-click a row: the full verb inventory, at the pointer.
+ *
+ * The file-manager rule, which is also the grid's: right-clicking a row that is
+ * NOT selected selects it and acts on it alone; right-clicking one that is
+ * leaves the selection alone, so a menu opened on any of forty selected rows
+ * acts on all forty. Without that, the commonest gesture in a bulk edit —
+ * select, then right-click one of them — would silently drop the other 39.
+ */
+function openRowMenu(row, event) {
+  focusedRowKey.value = row.rowKey;
+  if (!store.isSelected(row.id)) {
+    store.selectFromClick(row.id, {}, orderedRowIds.value);
+  }
+  selBarRef.value?.openContextMenu(event.clientX, event.clientY);
+}
+
 function endRename() {
   editingRow = null;
   editingRowKey.value = "";
@@ -1876,25 +1904,40 @@ function onRenameKeydown(event) {
 }
 
 /**
- * The marks the `Assigned to` column draws for one row (#892).
+ * The ring one row's mark wears (#892, redrawn for #904).
  *
  * The lists are read from the shared entity store rather than fetched per row:
  * `attachments` comes back on the list read already, so the whole shelf costs
  * the two list reads the sidebar makes anyway, not one lookup per attachment.
  */
-function assignedMarks(row) {
-  return assignmentMarks(row.attachments, {
+function ringFor(row) {
+  return assignmentRing(row.attachments, {
     characters: entityLists.characters,
     sets: entityLists.pictureSets,
   });
 }
 
 /**
- * Cells per row, so the header row, the rows and the empty-folder row's
+ * The ring's hue, as an inline custom property, or nothing at all.
+ *
+ * `{}` and not `{ "--mmark-ring": "" }` for the unassigned ring: the dashed
+ * grey treatment is drawn by `.mmark--none`, which needs the pseudo-element's
+ * `border` shorthand to have applied first, and a custom property that is set
+ * but empty makes `var(--mmark-ring, transparent)` resolve to nothing rather
+ * than to its fallback. That is invalid at computed-value time, which drops the
+ * whole shorthand — the 2px width with it.
+ */
+function ringStyle(row) {
+  const { hue } = ringFor(row);
+  return hue ? { "--mmark-ring": hue } : {};
+}
+
+/**
+ * Cells per row, so the rows, the column names and the empty-folder row's
  * `aria-colspan` cannot drift apart. A grid where one row has a different cell
  * count is a grid a reader is lied to about.
  */
-const COLUMN_COUNT = 8;
+const COLUMN_COUNT = 5;
 
 /**
  * What an empty folder group says, per reason.
@@ -2106,24 +2149,37 @@ const countLabel = computed(() => {
 /** True while the list is cut into groups, i.e. headers are drawn. */
 const grouped = computed(() => store.view.groupBy !== "none");
 
-/**
- * The one group whose column-header row is drawn rather than only announced.
- *
- * The first group that has rows and is not collapsed: a header names columns,
- * and columns the reader cannot see are not worth a line. Every other group
- * still carries its own copy `visually-hidden`, because a `columnheader` heads
- * the grid it is in and nothing else — grouping makes one grid per group.
- */
-const headGroupKey = computed(
-  () =>
-    shownGroups.value.find(
-      (group) =>
-        group.rows.length && (!grouped.value || !store.isCollapsed(group.key)),
-    )?.key ?? "",
-);
-
 const activeSort = computed(
   () => SORT_LABELS[store.view.sortKey] || SORT_LABELS.added_at,
+);
+
+const activeGroup = computed(
+  () => GROUP_BY_LABELS[store.view.groupBy] || GROUP_BY_LABELS.none,
+);
+
+/**
+ * What the Group button says on hover.
+ *
+ * The layout is a sub-choice of Folder rather than a fourth axis, so it rides
+ * in the tooltip beside the axis it belongs to instead of widening the label:
+ * "Folder" is what the reader picked and "by drive" is how it is drawn.
+ */
+const groupButtonTitle = computed(() => {
+  const axis = `Group: ${activeGroup.value.label}`;
+  if (store.view.groupBy !== "folder") return axis;
+  return store.view.folderLayout === "drive"
+    ? `${axis} · by drive`
+    : `${axis} · flat`;
+});
+
+// The badge already says HOW MANY sections deviate; the tooltip says what the
+// button is and nothing more, because naming the sections would be a sentence
+// that grows with the filter. The GLYPH is the design's funnel; the word stays
+// `Show`, which is what this panel is called everywhere else in the product.
+const showButtonTitle = computed(() =>
+  store.activeCount > 0
+    ? `Show: ${store.activeCount} filters active`
+    : "Show: what is listed",
 );
 
 const directionLabel = computed(() =>
@@ -2174,14 +2230,6 @@ function kindLabel(row) {
   return ALGO_LABEL[kind] || kind || "Adapter";
 }
 
-/** Filename and folder live in the tooltip; the row shows the name. */
-function rowTitle(row) {
-  const where = (row.locations || [])
-    .map((loc) => `${loc.folder_path}/${loc.relpath}`)
-    .join("\n");
-  return [row.filename, where].filter(Boolean).join("\n");
-}
-
 onMounted(() => {
   // Tab out of the sidebar lands in the shelf, the same contract the duplicate
   // queue has. Synchronously, like DuplicateQueue: taking focus one round trip
@@ -2199,7 +2247,7 @@ onMounted(() => {
   // Unawaited already means it does not hold up the shelf.
   foldersStore.refreshDevices();
   foldersStore.refresh();
-  // The names, colours and thumbnails behind the `Assigned to` marks. Cached
+  // The names, colours and thumbnails behind the assignment rings. Cached
   // and shared with the sidebar, so on a warm cache this repaints the marks
   // without a request; unawaited, because a row whose marks read `#12` for a
   // moment is a better shelf than one that waits for two list reads to draw.
@@ -2244,14 +2292,21 @@ watch(
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  /* The positioning context for `.shelf-progress`. Without it the corner card
-     resolves against whatever ancestor happens to be positioned — today the
-     grid column, tomorrow anything — and a bar that is meant to say "this
-     panel is busy" would be pinned to something else's corner. */
+  /* The positioning context for `.shelf-progress` AND for the floating
+     selection pill. Without it either resolves against whatever ancestor
+     happens to be positioned — today the grid column, tomorrow anything. */
   position: relative;
   background: rgb(var(--v-theme-background));
   color: rgb(var(--v-theme-on-background));
   outline: none;
+  /* The three data columns, stated once. FIXED widths, not `auto`: grouping
+     makes one list per group, so `auto` tracks would be measured against that
+     group's contents alone and the columns would step sideways from one folder
+     to the next — which is the alignment #891 exists to hold. The figures are
+     the resolved design's own (ui_kits/app/model-shelf.html, row anatomy). */
+  --shelf-col-kind: 64px;
+  --shelf-col-base: 84px;
+  --shelf-col-size: 74px;
 }
 
 .shelf-toolbar {
@@ -2288,11 +2343,42 @@ watch(
   gap: var(--space-3);
 }
 
+/* The one filled button in the bar. It is the only control here with a result
+   behind it — everything else changes what you are looking at — and that is
+   what the fill says. `on-primary` and not the surface ink: this is a solid
+   accent fill, which is the pairing that measures (§4). */
+.shelf-toolbar .bar-btn--accent {
+  gap: var(--space-2);
+  border-color: rgb(var(--v-theme-primary));
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  font-weight: var(--weight-medium);
+}
+
+.shelf-toolbar .bar-btn--accent :deep(.v-icon) {
+  color: rgb(var(--v-theme-on-primary));
+}
+
+/* Group and Sort carry their current VALUE as the label: their glyphs are
+   abstract, and their state is the reason the list looks the way it does. It
+   ellipsises rather than widening the bar, because a base-model name can be
+   long and the tooltip carries the whole of it. */
+.bar-btn-value {
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .shelf-body {
   position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Room under the last row for the pill to float over nothing. Without it the
+     bottom-most rows sit permanently behind it and cannot be read or clicked
+     at the one moment they matter — while a selection exists. */
+  padding-bottom: 56px;
 }
 
 .shelf-state {
@@ -2312,100 +2398,63 @@ watch(
   margin: 0;
 }
 
-/* The selection tick lives in the reserved glyph column, so ticking a row
-   moves nothing. Sized to the 24px target the rest of the app uses. */
-.shelf-row-pick {
+/* ── The floating selection pill ───────────────────────────────────────────
+   Bottom-centre over the list, the same object the photo grid docks over its
+   tiles. The strip takes no pointer events so the rows it crosses stay
+   clickable; the pill inside it takes them back. */
+.shelf-selbar-float {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: var(--space-5);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: var(--z-sticky);
+}
+
+.shelf-selbar-float > :deep(*) {
+  pointer-events: auto;
+}
+
+/* ── Banners ───────────────────────────────────────────────────────────────
+   One line, one verb, dismissible. Nothing here is broken and nothing needs
+   fixing — the models come back the moment the drive does — so it states the
+   fact and stops, and deliberately never takes the error surface. */
+.shelf-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  background: rgba(var(--v-theme-primary), 0.09);
+  font-size: var(--text-xs);
+}
+
+.shelf-banner-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-banner-dismiss {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-/* The row is the control, so it takes the pointer and the focus ring. The ring
-   is inset rather than an outline: the rows sit flush against each other and an
-   outer ring would be clipped by the neighbour above. */
-.shelf-row {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgba(var(--v-theme-on-background), 0.7);
   cursor: pointer;
 }
 
-.shelf-row:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: -2px;
-}
-
-/* A wash, not a border: a 1px outline on a selected row shifts every glyph in
-   it by a pixel, and 200 selected rows would shimmer as the list scrolls. */
-.shelf-row--selected {
-  background: rgba(var(--v-theme-primary), 0.12);
-}
-
-/* ── The two kinds of absence ──────────────────────────────────────────────
-   BROKEN is a fault: the file was registered and is gone. It takes the error
-   rail and the error mark in the status column.
-
-   OFFLINE is not a fault: the drive is simply not plugged in, nothing is lost,
-   and the models come back with it. It takes a DASHED rail and muted ink, and
-   deliberately NEVER the error colour — the offline case is the common one for
-   anyone keeping adapters on an external disk, and painting it as a failure is
-   what trains a reader to ignore both.
-
-   They are told apart in GREYSCALE, which is what makes this a treatment and
-   not a hue: solid rail, dashed rail, no rail, plus two different glyphs. The
-   colours only reinforce what the shapes already say.
-
-   Both ride `.ps-row`'s own rail (`border-left: 3px solid transparent`,
-   §5.1) — always present, always transparent, only its colour and style
-   change — so a row that flips state does not move a pixel. */
-.shelf-row--broken {
-  border-left-color: rgb(var(--v-theme-error));
-}
-
-.shelf-row--offline {
-  border-left-style: dashed;
-  border-left-color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-/* Muted ink, not faded ink. 0.7 is the alpha the figure columns already carry
-   and the one #836 measured as clearing contrast at this size; 0.6 does not.
-   The NAME is what recedes, because on an offline row the row's own content is
-   what is out of reach, where a broken row's name is still perfectly true and
-   only its file is gone. */
-.shelf-row--offline .shelf-row-name {
-  color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-/* What the last scan added, in the success treatment: `success` as a
-   foreground and a border on the canvas, which is the tier it is for (§4) and
-   measures 4.87:1 light / 5.96:1 dark. The outline-pill shape rather than the
-   filled count pill — that one is reserved for picture counts, and this is a
-   word. Beside the name in the same inline slot as the step count, so nothing
-   gains a column that is empty on 1,800 rows. */
-.shelf-row-new {
-  flex: none;
-  padding: 0 var(--space-2);
-  border: 1px solid rgba(var(--v-theme-success), 0.5);
-  border-radius: var(--radius-pill);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  color: rgb(var(--v-theme-success));
-}
-
-/* The offline mount's one statement. A quiet strip in the same muted ink and
-   the same dashed rail as the rows it accounts for, so the two read as one
-   fact rather than two — and never the error surface, for the reason the row
-   treatment is not the error colour either. */
-.shelf-offline-banner {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0 0 var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-left: 3px dashed rgba(var(--v-theme-on-background), 0.7);
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+.shelf-banner-dismiss:hover {
   background: var(--hover-wash);
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-background), 0.7);
+  color: rgb(var(--v-theme-on-background));
 }
 
 /* ── Drive bands ───────────────────────────────────────────────────────────
@@ -2413,43 +2462,56 @@ watch(
    `Drive, then folder`. Deliberately NOT sticky: two sticky levels need
    stacking arithmetic (the inner offset becomes the outer's measured height,
    which no token knows), and the band is a label with a meter rather than
-   something the reader needs pinned while they scan a folder. The folder
-   header below stays sticky and scrolls under nothing. */
-.shelf-band-heading {
-  display: grid;
-  grid-template-columns: minmax(0, auto) minmax(80px, 1fr) auto;
+   something the reader needs pinned while they scan a folder. */
+.shelf-band {
+  display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-3);
-  margin: var(--space-2) 0 var(--space-3);
-  /* Tight vertically, roomy horizontally: a one-line band reads as loose at
-     --space-3 top and bottom, and the next value down the scale is --space-2
-     (the scale has nothing between them, and an off-grid 6px is a design
-     decision rather than a nudge). The --space-4 inset is the point of the
-     change: the meter and its figures were running to the panel edge. */
-  padding: var(--space-2) var(--space-4);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: rgb(var(--v-theme-surface));
+  border-top: 1px solid rgb(var(--v-theme-border));
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
   color: rgb(var(--v-theme-on-background));
+}
+
+/* The glyph says "this is a disk", which is what lets the label be a bare
+   volume name rather than a path the reader has to parse to know what it is. */
+.shelf-band-icon {
+  flex: none;
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+.shelf-band-name {
+  font-weight: var(--weight-semibold);
+}
+
+/* The mount point beside the name, in the mono face §3 gives to paths: the
+   volume label answers "which disk" and the path answers "which one is that",
+   and on a machine with two Samsung 990s only the second one does. */
+.shelf-band-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-background), 0.7);
 }
 
 /* Rank is size and weight, never opacity: a header must not be dimmer than the
    rows it heads. The unknown case loses the meter, not the contrast. */
-.shelf-band-heading--unknown .shelf-band-figures {
+.shelf-band--unknown .shelf-band-figures {
   font-style: italic;
 }
 
 /* The drop affordance, in the same inset ring the folder header below uses:
    the shelf has one drop treatment and a second dialect on the outer level
-   would read as a different kind of target rather than the same one. The
-   radius is on the heading here because, unlike the header, the band is not
-   the full-bleed sticky strip. */
-.shelf-band-heading--drop,
-.shelf-band-heading--reject {
-  border-radius: var(--radius-sm);
-}
-
-.shelf-band-heading--drop {
+   would read as a different kind of target rather than the same one. */
+.shelf-band--drop {
   background: rgba(var(--v-theme-primary), 0.12);
   box-shadow: inset 0 0 0 2px rgba(var(--v-theme-primary), 0.65);
 }
@@ -2457,26 +2519,10 @@ watch(
 /* The refusal, while the pointer is still down. `no-drop` is the same cursor
    `.not-droppable` uses in the sidebar, and it is the third carrier after the
    hue and the hatch — the state has to survive greyscale and forced-colors. */
-.shelf-band-heading--reject {
+.shelf-band--reject {
   background: rgba(var(--v-theme-error), 0.1);
   box-shadow: inset 0 0 0 2px rgba(var(--v-theme-error), 0.65);
   cursor: no-drop;
-}
-
-.shelf-band-label {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The glyph says "this is a disk", which is what lets the label be a bare
-   volume name rather than a path the reader has to parse to know what it is. */
-.shelf-band-icon {
-  flex: none;
 }
 
 /* One track, three segments laid end to end. They sum to exactly 100% by
@@ -2490,15 +2536,13 @@ watch(
    stops here" when the next segment carries straight on (#893). */
 .shelf-band-meter {
   display: flex;
-  height: 6px;
+  width: 190px;
+  height: 10px;
+  flex: none;
+  padding: 1px;
+  border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
   background: var(--band-meter-free);
-  /* `outline`, not `border` or an inset shadow: both of those would eat 2 of
-     the 6 track pixels. An outline draws outside the box, costs no layout and
-     follows the radius. It exists because the track against the canvas is only
-     1.22:1 (light) / 1.11:1 (dark) — a nearly-empty drive would otherwise draw
-     a meter you cannot find. */
-  outline: 1px solid var(--band-meter-edge);
   overflow: hidden;
 }
 
@@ -2529,9 +2573,7 @@ watch(
 /* The projection. HATCHED, never a solid: the other three segments are things
    that were measured and this one is a thing that has not happened, and a
    fourth flat colour would have said "this is also on the disk". The same 45°
-   texture the sidebar's `.not-droppable` and the grid's ghosted tiles use, at
-   2px/4px because the track is 6px tall and the family's usual 4px/8px would
-   put barely one stripe in a narrow segment.
+   texture the sidebar's `.not-droppable` and the grid's ghosted tiles use.
 
    Both stops carry a visible alpha rather than one of them being transparent:
    a hatch that let the free track show through would read as a lighter free
@@ -2562,11 +2604,12 @@ watch(
   background: var(--band-meter-free-low);
 }
 
-/* The figures do NOT take the warning hue: they are --text-xs body text, and
-   light `warning` measures 3.09:1 on the canvas — the 3:1 UI floor, not the
-   4.5:1 body floor this size needs. Weight carries the rank instead, the same
-   way `--unknown` above ranks by style. */
-.shelf-band-figures--low {
+/* The figures do NOT take the warning hue: they are small body text, and light
+   `warning` measures 3.09:1 on the canvas — the 3:1 UI floor, not the 4.5:1
+   body floor this size needs. Weight carries the rank instead, the same way
+   `--unknown` above ranks by style. */
+.shelf-band-figures--low,
+.shelf-band-figures--reject {
   font-weight: var(--weight-semibold);
 }
 
@@ -2574,13 +2617,6 @@ watch(
    dark, both over the 3:1 UI floor. */
 .shelf-band-figures--low .v-icon {
   color: rgb(var(--v-theme-warning));
-}
-
-/* Same split as `--low` and for the same measurement: weight on the --text-xs
-   body text, hue reserved for the 16px glyph, which is non-text and answers to
-   the 3:1 UI floor rather than the 4.5:1 body one. */
-.shelf-band-figures--reject {
-  font-weight: var(--weight-semibold);
 }
 
 .shelf-band-figures--reject .v-icon {
@@ -2591,57 +2627,49 @@ watch(
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  color: rgba(var(--v-theme-on-background), 0.7);
 }
 
-/* The key, once for the view. Wraps rather than scrolls: three short pairs at
-   a narrow width belong on two lines, not behind a scrollbar. */
-.shelf-band-legend {
+/* The key, once for the view. Wraps rather than scrolls: four short pairs at a
+   narrow width belong on two lines, not behind a scrollbar. */
+.shelf-keys {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2) var(--space-3);
-  margin: 0 0 var(--space-2);
-  padding: 0 var(--space-4);
-  font-family: var(--font-mono);
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 
-.shelf-band-legend-item {
+.shelf-key {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
 }
 
-/* Square, deliberately: `--radius-sm` is 4px and would turn an 8px swatch into
-   a dot, which is a second kind of mark. A square chip reads as a piece cut
-   out of the bar, which is what it is meant to identify. */
-.shelf-band-swatch {
-  width: 8px;
-  height: 8px;
-  border-radius: 0;
+/* 10px squares rather than a scaled-down meter: the key names the three fills
+   and does not restate their proportions, which are per-drive. */
+.shelf-key-swatch {
+  width: 10px;
+  height: 10px;
   flex: none;
+  border-radius: 2px;
 }
 
-/* The "Free" swatch is a chip of bare track sitting on the canvas at 1.22:1,
-   so it needs the frame the meter gets from its outline. `inset` here rather
-   than `outline`, because a legend chip has no overflow to protect. */
-.shelf-band-legend .shelf-band-seg--free {
-  box-shadow: inset 0 0 0 1px var(--band-meter-edge);
+/* Free is the ABSENCE of a fill, so its swatch is an outline. Filled, it would
+   be a fourth colour in a three-colour key. */
+.shelf-keys .shelf-band-seg--free {
+  background: transparent;
+  border: 1px solid rgb(var(--v-theme-border));
 }
 
-/* ── Group headers ─────────────────────────────────────────────────────────
-   The inner level, and the only sticky one. Folder is a grouping value; the
-   band above is the outer tier and is static, so there is still one sticky
-   offset and no stacking arithmetic. */
-
-/* Space BETWEEN groups, no separator rule: a rule as well as the header's own
-   hairline would draw two lines at every boundary. */
-.shelf-group + .shelf-group {
-  margin-top: var(--space-5);
-}
-
+/* ── Folder headers ────────────────────────────────────────────────────────
+   The header IS the button, so its whole width is the collapse control and the
+   drop target; a second element would put a dead strip between the two. */
 .shelf-group-heading {
   margin: 0;
   font: inherit;
@@ -2650,26 +2678,28 @@ watch(
 /* Sticky inside the body's own scroller, the same band DuplicateQueue's
    `.mixed-head` ships: an OPAQUE `background` (rows pass underneath it), the
    named `--z-sticky` rung, and one hairline. No elevation: a shadow is for an
-   object floating above a surface, and this band is part of the list. */
+   object floating above a surface, and this band is part of the list.
+
+   The 3px inset rail is the TIER, and it is a shadow rather than a border so a
+   header that gains one does not move a pixel. */
 .shelf-group-btn {
   position: sticky;
   top: 0;
   z-index: var(--z-sticky);
-  width: 100%;
-  display: grid;
-  grid-template-columns:
-    var(--gutter-glyph)
-    var(--entity-thumb)
-    minmax(0, 1fr)
-    auto;
+  display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding-top: var(--space-2);
-  padding-bottom: var(--space-2);
-  text-align: left;
-  background: rgb(var(--v-theme-background));
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
+  border: 0;
   border-bottom: 1px solid rgb(var(--v-theme-divider));
+  background: rgb(var(--v-theme-background));
   color: rgb(var(--v-theme-on-background));
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  box-shadow: inset 3px 0 0 var(--shelf-rail, transparent);
   transition: background var(--dur-1) var(--ease-standard);
 }
 
@@ -2677,341 +2707,188 @@ watch(
   background: var(--hover-wash);
 }
 
-/* A run's other steps. Indented into the identity column so the deck reads as
-   belonging to the row above it, and quieter than a row because it is detail
-   rather than something to act on — the members are not selectable, stacks
-   being atomic here. */
-.shelf-row--member {
-  cursor: default;
-  color: rgb(var(--v-theme-on-surface-variant));
+.shelf-group-btn--nested {
+  padding-left: var(--space-7);
 }
 
-.shelf-row--member .shelf-row-name {
-  font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface-variant));
+/* Three tiers, three rails, and the glyph beside each is the shape half: the
+   hue groups the folders on one disk and the tier's mdi folder gives it a
+   form, but neither survives greyscale on its own — which is what the chip
+   beside the label is for. */
+.shelf-group-btn--registered {
+  --shelf-rail: rgb(var(--v-theme-primary));
 }
 
-/* The drop affordance, on the destination header only. An inset ring rather
-   than a border: the header is sticky and on a grid, so a border would shift
-   its columns by a pixel at the moment the reader is aiming at it. */
+.shelf-group-btn--managed,
+.shelf-group-btn--builtin {
+  --shelf-rail: rgb(var(--v-theme-info));
+}
+
+/* An unplugged drive: muted ink and a muted rail, and deliberately NEVER the
+   error colour. Nothing is lost and the models come back with the drive, so
+   painting it as a failure is what trains a reader to ignore both. */
+.shelf-group-btn--offline {
+  --shelf-rail: rgba(var(--v-theme-on-background), 0.5);
+  background: rgba(var(--v-theme-on-background), 0.04);
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+.shelf-group-btn--offline .shelf-group-mark {
+  opacity: 0.5;
+}
+
+/* The drop affordance keeps the tier rail beside it rather than replacing it:
+   which folder this is does not stop being true while a drag is over it. */
 .shelf-group-btn--drop {
   background: rgba(var(--v-theme-primary), 0.12);
-  box-shadow: inset 0 0 0 2px rgba(var(--v-theme-primary), 0.65);
+  box-shadow:
+    inset 3px 0 0 var(--shelf-rail, transparent),
+    inset 0 0 0 2px rgba(var(--v-theme-primary), 0.65);
 }
 
-/* The bar's corner. `.shelf` rather than `.shelf-body` is what it hangs from:
-   the body is the scroller, and a card inside it would scroll away from the
-   work it is reporting. --z-floating is "chrome anchored to the content area",
-   which is what this is, and it clears the veil below. */
-.shelf-progress {
-  position: absolute;
-  right: var(--space-4);
-  bottom: var(--space-4);
-  z-index: var(--z-floating);
-}
-
-/* The wrapper owns the corner, so the card lays out in flow inside it rather
-   than re-anchoring to the same ancestor with its own grid-shaped offsets. */
-.shelf-progress :deep(.progress-overlay) {
-  position: static;
-}
-
-/* Paired with `inert` on `.shelf-body`, which is what actually stops the
-   interaction. Inside the body rather than over the whole view, so the toolbar
-   stays undimmed as well as live: Show and Sort still answer correctly while
-   files are in flight, and a veil over them would say otherwise. */
-.shelf-dim {
-  position: absolute;
-  inset: 0;
-  background: rgba(var(--v-theme-background), 0.55);
-  /* Above the sticky group headers, which is the whole point: a header left
-     bright over a dimmed list reads as the one thing still usable. */
-  z-index: calc(var(--z-sticky) + 1);
-  pointer-events: none;
-}
-
-/* One icon rotated, not two swapped: a swap cannot animate. --dur-2 is the
-   ramp's expand/collapse step; reduced motion is handled globally in
-   design-tokens.css and is not re-stated here. */
 .shelf-group-chevron {
-  transition: transform var(--dur-2) var(--ease-standard);
+  flex: none;
+  color: rgba(var(--v-theme-on-background), 0.7);
+  transition: transform var(--dur-1) var(--ease-standard);
 }
 
 .shelf-group-chevron--open {
   transform: rotate(90deg);
 }
 
-/* Column 2. The same reserved width the row thumbnails occupy, so a header's
-   label starts at the same x as the names under it; the axis glyph sits at its
-   left edge rather than centred, or it would drift away from the label. */
 .shelf-group-mark {
-  width: var(--entity-thumb);
-  display: inline-flex;
-  align-items: center;
-  /* 0.7 on the canvas colour, the same secondary weight `.shelf-col`
-     carries and a defined theme key — `on-surface-variant` is Vuetify's and is
-     not in this app's palettes. */
+  flex: none;
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 
-/* Rank is size, weight and tracking, never opacity: this label is at FULL
-   strength above full-strength row names, and it is the case and the tracking
-   that rank an 11px label above a 14px sentence-case one. */
 .shelf-group-label {
-  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
 }
 
-/* Column 3: the label and the marks that qualify it, on one baseline. The
-   label is the only thing allowed to shrink — a chip that ellipsised would be
-   an unreadable word rather than a shorter one. */
-.shelf-group-id {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-/* The tier, the drive and the offline state, each as a WORD. The outline pill
-   at label weight, the same shape `.mf-chip` gives the folders dialog: this is
-   the same fact in a second place, and a second shape for it would read as a
-   second kind of thing. Never a filled pill — that one is the picture count's. */
-.shelf-group-chip {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 0 var(--space-2);
-  border: 1px solid rgb(var(--v-theme-divider));
-  border-radius: var(--radius-sm);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-background), 0.7);
-  white-space: nowrap;
-}
-
-/* ── The folder header's own two kinds of absence ──────────────────────────
-   OFFLINE is the folder-level twin of `.shelf-row--offline`, and takes the
-   same treatment for the same reason: a dashed rail and muted ink, and
-   deliberately NEVER the error colour, because an unplugged disk is not a
-   fault and nothing under it is lost. The drive hue is dropped rather than
-   dashed in colour — a coloured rail says "this is which disk", and we cannot
-   see the disk. */
-.shelf-group-btn--offline {
-  border-left-style: dashed;
-  border-left-color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-.shelf-group-btn--offline .shelf-group-label,
-.shelf-group-btn--offline .shelf-group-mark {
-  color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-/* A folder header's label is a literal filesystem path. §3 gives the mono face
-   to paths, and uppercasing one misstates the string, so this variant drops the
-   case change and the tracking and takes the larger of the two ramp steps. */
+/* A folder is a PATH, and §3 gives paths the mono face. A base model or a
+   feature is a word and keeps the UI face. */
 .shelf-group-label--path {
   font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  letter-spacing: normal;
-  text-transform: none;
 }
 
-/* Column 4, where the row's own status glyph sits, so both align on one right
-   edge. The count is meta ON the header rather than the header's label, so it
-   takes the row meta line's alpha, not the label's full strength. */
 .shelf-group-count {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-background), 0.7);
+  flex: none;
+  font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  margin-left: var(--space-3);
+  color: rgba(var(--v-theme-on-background), 0.7);
 }
 
-/* The box, the rail and the indent come from the shared row system
-   (SideBar.global.css, visual-language.md §5.1) via `.ps-row`; only the
-   columns and the vertical rhythm are the shelf's own. Column 1 stays
-   reserved and empty: grouping fills it, and a column that appears later
-   would move every label sideways.
-
-   The four data columns are FIXED widths, not `auto`. Grouping makes one grid
-   per group, so `auto` tracks would be measured against that group's contents
-   alone and the columns would step sideways from one folder to the next —
-   which is the alignment the whole change is for. The three figures are the
-   resolved design's own (ui_kits/app/model-shelf.html, row anatomy);
-   `Assigned to` has no width there because that design carries assignment as
-   a ring on the identity mark instead, so it is stated in the mark's own
-   token — two marks wide is what a fanned pair needs (#892). */
-.shelf {
-  --shelf-col-kind: 64px;
-  --shelf-col-base: 84px;
-  --shelf-col-assigned: calc(var(--entity-thumb) * 2);
-  --shelf-col-size: 74px;
-}
-
-.shelf-row,
-.shelf-head-row {
-  display: grid;
-  grid-template-columns:
-    var(--gutter-glyph)
-    var(--entity-thumb)
-    minmax(0, 1fr)
-    var(--shelf-col-kind)
-    var(--shelf-col-base)
-    var(--shelf-col-assigned)
-    var(--shelf-col-size)
-    var(--gutter-glyph);
-  align-items: center;
-  gap: var(--space-2);
-  padding-top: var(--space-2);
-  padding-bottom: var(--space-2);
-}
-
+/* ── Rows ──────────────────────────────────────────────────────────────────
+   Flex rather than a grid, because the three data columns are fixed widths and
+   the name takes the rest: a grid would have to be declared identically on the
+   member rows and on the empty-folder row, and one of the three would drift. */
 .shelf-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-6);
+  /* Always present, always transparent: only its colour and style change, so a
+     row that flips into an absence state does not move a pixel (§5.1). */
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
   /* Native windowing: the browser skips layout and paint for rows outside the
      viewport, which is what 1,800 rows need and is two lines rather than a
      virtual scroller. The size hint is only the first guess — `auto` makes the
      browser remember each row's real height after it has painted once. */
   content-visibility: auto;
-  contain-intrinsic-size: auto calc(var(--entity-thumb) + var(--space-5));
+  contain-intrinsic-size: auto calc(var(--entity-thumb) + var(--space-6));
 }
 
 .shelf-row:hover {
   background: var(--hover-wash);
 }
 
-/* One hairline, which is what makes this read as a head rather than as a first
-   row. It does not double up with the group header's: that one is a sticky band
-   ABOVE this, a row's height away, not at the same boundary. Not sticky itself
-   — the folder header is the shelf's one sticky level, and a second needs the
-   stacking arithmetic no token knows (see the group-header block above). */
-.shelf-head-row {
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
+.shelf-row:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: -2px;
 }
 
-/* Rank is case, size and tracking, never opacity — the same treatment the
-   group label carries, so a column name reads as one rank above the figures
-   under it without being drawn darker than them. */
-.shelf-head-cell {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
+/* A wash and an inset bar, not a border: a 1px outline on a selected row
+   shifts every glyph in it by a pixel, and 200 selected rows would shimmer as
+   the list scrolls. The bar is the greyscale half — the wash alone is a hue. */
+.shelf-row--selected {
+  background: rgba(var(--v-theme-primary), 0.12);
+  box-shadow: inset 3px 0 0 rgb(var(--v-theme-primary));
+}
+
+/* ── The two kinds of absence ──────────────────────────────────────────────
+   BROKEN is a fault: the file was registered and is gone. It takes the error
+   rail and the error glyph in front of the name.
+
+   OFFLINE is not a fault: the drive is simply not plugged in, nothing is lost,
+   and the models come back with it. It takes a DASHED rail and muted ink, and
+   deliberately NEVER the error colour — the offline case is the common one for
+   anyone keeping adapters on an external disk, and painting it as a failure is
+   what trains a reader to ignore both.
+
+   They are told apart in GREYSCALE, which is what makes this a treatment and
+   not a hue: solid rail, dashed rail, no rail, plus two different glyphs. */
+.shelf-row--broken {
+  border-left-color: rgb(var(--v-theme-error));
+}
+
+.shelf-row--offline {
+  border-left-style: dashed;
+  border-left-color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* Muted ink, not faded ink. 0.7 is the alpha the figure columns already carry
+   and the one #836 measured as clearing contrast at this size; 0.6 does not.
+   The NAME is what recedes, because on an offline row the row's own content is
+   what is out of reach, where a broken row's name is still perfectly true and
+   only its file is gone. */
+.shelf-row--offline .shelf-row-name {
   color: rgba(var(--v-theme-on-background), 0.7);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.shelf-head-cell--size {
-  text-align: right;
-}
-
-/* The figures the header names. 0.7, not 0.6: at 12px the lower alpha measures
-   4.07:1 on the light canvas and misses the 4.5:1 floor. */
-.shelf-col {
-  min-width: 0;
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-background), 0.7);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The fan. `overflow: visible` against `.shelf-col`'s hidden, because the marks
-   are the content rather than text to ellipsise, and `assignmentMarks` already
-   caps them at what the track holds. */
-.shelf-col--assigned {
+/* The identity slot, sized to hold the ring's widest treatment: the mark is
+   24px and a `thick`/`double` ring stands 6px off it on every side. Anything
+   narrower clips the ring on the two rows that most need it read. */
+.shelf-row-ident {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  overflow: visible;
-}
-
-/* The fixed overlap: half a mark, so three fit the two-mark track exactly and a
-   fan of two still shows a whole mark and a half. The `z-index` bound on each
-   mark takes effect because `.emark` is positioned; without that the stacking
-   order would fall back to document order and the fan would read back-to-front. */
-.shelf-assigned-mark + .shelf-assigned-mark {
-  margin-left: calc(var(--entity-thumb) / -2);
-}
-
-/* Assigned to nothing, as a state rather than as a gap: the same footprint a
-   mark has, outlined dashed so it reads as an empty slot and not as a mark that
-   failed to load. Dashed and not merely faint, because the distinction has to
-   survive greyscale as well as a glance. */
-.shelf-assigned-none {
-  display: inline-block;
-  box-sizing: border-box;
-  width: var(--entity-thumb);
-  height: var(--entity-thumb);
-  /* 0.5, not the fainter alpha this would like to be: the outline is the only
-     visible carrier of the state, so it is a non-text UI component and owes
-     3:1 (WCAG 1.4.11). Measured with the shipped `contrastRatio`: 0.35 gives
-     2.13:1 on the light canvas and 0.5 gives 3.15:1 (4.36:1 dark). Not
-     `divider` either — that is a hairline BETWEEN things, and far below the
-     floor for something that has to be seen on its own. */
-  border: 1px dashed rgba(var(--v-theme-on-background), 0.5);
-  border-radius: var(--radius-sm);
-}
-
-.shelf-col--size {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-/* An absent value, said in words rather than left blank: a blank cell reads as
-   a rendering gap, and "which of these has no base model" is a question the
-   column exists to answer. Italic, because rank here is style and not another
-   step down in contrast. */
-.shelf-col-none {
-  font-style: italic;
-}
-
-.shelf-row-ident {
-  display: inline-flex;
   justify-content: center;
-  color: rgba(var(--v-theme-on-background), 0.7);
+  width: calc(var(--entity-thumb) + var(--space-4));
+  flex: none;
 }
 
 .shelf-row-label {
-  min-width: 0;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-/* The run's step count, riding with the name. `flex: none` so it is the name
-   that ellipsises when the column is tight and never the count, which is two
-   characters and the reason the row is stacked. */
-.shelf-row-steps {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
+/* The filename takes the whole of the second line. It is what the file is
+   actually called — which the name above it may well not be — and it is the
+   string that gets pasted into a ComfyUI node, so §3's mono face rather than a
+   tooltip. */
+.shelf-row-file {
+  flex: 0 0 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  font-variant-numeric: tabular-nums;
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 
-/* One icon rotated, not two swapped, the same as the group chevron — the class
-   was already bound here and had nothing to do. */
-.shelf-row-steps-chevron {
-  transition: transform var(--dur-2) var(--ease-standard);
-}
-
-.shelf-row-steps-chevron--open {
-  transform: rotate(90deg);
-}
-
 .shelf-row-name {
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3033,9 +2910,8 @@ watch(
 
 /* An EMPTY FIELD inviting a name, never disabled-looking text — the one
    distinction #897 says decides whether these rows ever get fixed. So: full
-   ink, an accent rule that is always there, and a pencil that never hides.
-   Italic because rank is style and not another step down in contrast, the same
-   call `.shelf-col-none` makes one column over. */
+   ink and an accent rule that is always there. Italic because rank is style
+   and not another step down in contrast. */
 .shelf-row-name--needs-a-name {
   font-style: italic;
   font-weight: var(--weight-regular);
@@ -3044,34 +2920,18 @@ watch(
 
 /* A readable name we generated. The UI face, because this string is OURS and
    is not in the file — mono would claim it were. Regular weight, so it does
-   not carry the authority of a title somebody chose; the tag beside it says
-   the rest. */
+   not carry the authority of a title somebody chose; the tag beside it and the
+   accent rule under it say the rest. */
 .shelf-row-name--derived {
   font-weight: var(--weight-regular);
-}
-
-/* Quiet beside the name, in the same slot the stack count uses: it qualifies
-   the identity rather than being part of it. Tabular figures so a column of
-   steps lines up when several members of a run sit together. */
-.shelf-row-at-step {
-  flex: none;
-  font-size: var(--text-2xs);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  /* The same ink as `.shelf-row-steps` directly below, because they are
-     siblings in the same slot: both quiet qualifiers on the name rather than
-     part of it. Colour lives in the Vuetify themes, not in design-tokens.css,
-     which holds fixed scales only. 0.7 and not the 0.6 that #836 measured as
-     failing contrast. */
-  color: rgba(var(--v-theme-on-background), 0.7);
+  border-bottom-color: rgba(var(--v-theme-accent), 0.7);
 }
 
 /* The file's own string, shown because nothing survived the strip. Mono at
    regular weight, at FULL strength: §3 gives the mono face to file paths, and
    this IS one — so the face says what the string is rather than demoting it.
    Rank is never opacity (§5.1), and 37% of rows faded would be a column of
-   ghosts. (The comment used to sit above `.shelf-row-at-step`, two rules from
-   the one it describes.) */
+   ghosts. */
 .shelf-row-name--from-file {
   font-family: var(--font-mono);
   font-weight: var(--weight-regular);
@@ -3102,28 +2962,6 @@ watch(
   color: rgb(var(--v-theme-on-background));
 }
 
-/* The affordance itself. Opacity rather than `display`, so it holds its own
-   width and the name never reflows out from under the pointer. */
-.shelf-name-pencil {
-  flex: none;
-  opacity: 0;
-  cursor: pointer;
-  color: rgba(var(--v-theme-on-background), 0.7);
-  transition: opacity var(--dur-2) var(--ease-standard);
-}
-
-.shelf-row:hover .shelf-name-pencil,
-.shelf-row:focus-within .shelf-name-pencil,
-.shelf-name-pencil--persistent {
-  opacity: 1;
-}
-
-/* On the row that has no name, the pencil is the ask and wears the accent with
-   the rule under the placeholder. */
-.shelf-name-pencil--persistent {
-  color: rgb(var(--v-theme-accent));
-}
-
 /* Editing: a real bordered field, in the app's one focus language (§11). Sized
    to the text it replaces so committing does not jump the row. */
 .shelf-row-rename {
@@ -3131,7 +2969,7 @@ watch(
   flex: 1 1 auto;
   padding: 0 var(--space-2);
   font-family: var(--font-ui);
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-on-background));
   background: rgba(var(--v-theme-on-background), 0.06);
@@ -3144,16 +2982,10 @@ watch(
   box-shadow: var(--focus-ring);
 }
 
-/* No `margin-left` any more: the status glyph is a column of its own now, and
-   a margin inside a `--gutter-glyph` track would leave the icon 4px to sit in
-   and push it out of its own cell. The grid's gap is what separates it. */
+/* The absence glyph leads the name line, because it changes what everything
+   after it means: the name is still true, the file behind it is not there. */
 .shelf-row-loc {
-  display: inline-flex;
-  width: var(--gutter-glyph);
-}
-
-.shelf-row-loc--present {
-  visibility: hidden;
+  flex: none;
 }
 
 .shelf-row-loc--missing,
@@ -3166,5 +2998,156 @@ watch(
 .shelf-row-loc--unreachable,
 .shelf-row-loc--not_downloaded {
   color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* One outlined chip vocabulary for every short qualifier on a row: the kind,
+   the training step, an unset base. Outlined and not filled, because the
+   filled count pill is reserved for picture counts and these are words. */
+.shelf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  max-width: 100%;
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* Not set is a DASHED chip, not a blank cell: a blank under a column that
+   promises something reads as a rendering gap rather than as a state, and the
+   dash is the greyscale half of "there is nothing here yet". */
+.shelf-chip--none {
+  border-style: dashed;
+  font-style: italic;
+}
+
+/* The run's file count, and the control that opens it. A pill because it is a
+   count, and a real button because Right/Left on the row is the keyboard path
+   and a pointer needs one too. */
+.shelf-stack-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.shelf-stack-badge:hover {
+  border-color: rgb(var(--v-theme-primary));
+}
+
+.shelf-stack-badge .v-icon {
+  transition: transform var(--dur-1) var(--ease-standard);
+}
+
+.shelf-stack-chevron--open {
+  transform: rotate(90deg);
+}
+
+/* What the last scan added, in the success treatment: `success` as a
+   foreground and a border on the canvas, which is the tier it is for (§4) and
+   measures 4.87:1 light / 5.96:1 dark. A word rather than a dot: the shelf is
+   a list of 1,800 rows and a dot beside one name says nothing about what is
+   different about it. */
+.shelf-row-new {
+  flex: none;
+  padding: 0 var(--space-2);
+  border: 1px solid rgba(var(--v-theme-success), 0.5);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: rgb(var(--v-theme-success));
+}
+
+.shelf-col {
+  flex: none;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+.shelf-col--kind {
+  width: var(--shelf-col-kind);
+}
+
+.shelf-col--base {
+  width: var(--shelf-col-base);
+}
+
+/* Right-aligned and tabular, which is what makes a column of sizes scannable:
+   the reader is comparing magnitudes, and a ragged right edge is what stops
+   them being able to. */
+.shelf-col--size {
+  width: var(--shelf-col-size);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.shelf-row--broken .shelf-row-name,
+.shelf-row--broken .shelf-col {
+  opacity: 0.75;
+}
+
+/* A run's other steps. Indented past the identity column so the arrow reads as
+   belonging to the row above it, and quieter than a row because it is detail
+   rather than something to act on — the members are not selectable, stacks
+   being atomic here. */
+.shelf-row--member {
+  cursor: default;
+  padding-left: var(--space-7);
+  color: rgb(var(--v-theme-on-surface-variant));
+}
+
+.shelf-row--member .shelf-row-name {
+  font-weight: var(--weight-regular);
+}
+
+.shelf-empty-folder {
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-6);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  font-size: var(--text-xs);
+  font-style: italic;
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* ── The busy state, scoped to the panel that is busy (#900) ─────────────── */
+.shelf-progress {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: var(--z-overlay);
+}
+
+.shelf-progress :deep(.progress-overlay) {
+  position: static;
+}
+
+/* The visible half of `inert`. A veil over the LIST, never over the app: the
+   toolbar keeps answering while files are in flight. */
+.shelf-dim {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-sticky);
+  background: rgba(var(--v-theme-background), 0.55);
 }
 </style>
