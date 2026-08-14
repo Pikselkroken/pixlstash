@@ -200,6 +200,42 @@ def test_one_setting_moves_the_download_dir_and_the_shelf_folder_together(tmp_pa
         model_utils.set_insightface_root(original)
 
 
+def test_nothing_but_the_setting_can_name_the_models_directory(monkeypatch, tmp_path):
+    """No second source for this one path, environment included.
+
+    `builtin_caches` used to carry `PIXLSTASH_INSIGHTFACE_DIR`, a declaration-only
+    test seam that pointed at the *models* directory — one level below the thing
+    the setting names, so the two could disagree. Harmless while nothing could
+    relocate; a bug the moment something could, because the shelf would declare
+    the override path while downloads and `FaceAnalysis` used the root, and a
+    relocation identified by `insightface_models_dir()` would repoint the row at
+    a directory the next start-up would not declare.
+
+    Asserted by setting every plausible spelling and requiring the answer not to
+    move: a reader that consults the environment fails this, whatever it is
+    called.
+    """
+    original = model_utils.insightface_root()
+    relocated = str(tmp_path / "configured")
+    for name in (
+        "PIXLSTASH_INSIGHTFACE_DIR",
+        "PIXLSTASH_INSIGHTFACE_ROOT",
+        "INSIGHTFACE_ROOT",
+    ):
+        monkeypatch.setenv(name, str(tmp_path / "from-the-environment"))
+    try:
+        model_utils.set_insightface_root(relocated)
+        assert builtin_caches.insightface_models_dir() == os.path.join(
+            relocated, "models"
+        )
+        assert not hasattr(builtin_caches, "INSIGHTFACE_DIR_ENV"), (
+            "the seam is gone; `insightface_root` in server-config does its job "
+            "and reaches all three callers rather than only the declaration"
+        )
+    finally:
+        model_utils.set_insightface_root(original)
+
+
 # --------------------------------------------------------------------------- #
 # move_directory: a complete pack survives every interruption
 # --------------------------------------------------------------------------- #
@@ -294,6 +330,52 @@ def test_relocating_the_packs_moves_them_and_repoints_every_caller(face_env):
         "auraface": "missing",
         "buffalo_l": "present",
     }
+
+
+def test_a_config_write_that_fails_still_leaves_the_server_where_the_packs_are(
+    face_env, monkeypatch, caplog
+):
+    """The one residue a completed move must not have.
+
+    The config file is the durable authority, so it is written before anything
+    believes the move happened. But by this point the packs *are* at the new
+    root and a relocation cannot be undone, so a failed write must not leave the
+    running server pointing at a directory the bytes have left — that is a face
+    pipeline re-downloading every pack, which is worse than either end state.
+    The filesystem is the ground truth once the move has completed, so the
+    process and the shelf follow it, and the part that genuinely failed —
+    surviving a restart — is reported as an error rather than swallowed.
+    """
+    folder_id = face_env.folder_id
+
+    def _explode(*args, **kwargs):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(model_moves, "write_json_atomic", _explode)
+
+    with caplog.at_level("ERROR"):
+        r = face_env.owner.post(
+            f"{API}/model-folders/{folder_id}/relocate",
+            json={"path": str(face_env.target)},
+        )
+        assert r.status_code == 202, r.text
+        body = _await_move(face_env)
+
+    assert [item["status"] for item in body["results"]] == ["moved"], body
+    moved = face_env.target / "models" / "buffalo_l"
+    assert sorted(p.name for p in moved.iterdir()) == sorted(_PACK_FILES)
+
+    # The running server follows the bytes, so face extraction keeps working.
+    assert model_utils.insightface_root() == str(face_env.target)
+    assert model_utils._pack_dir("buffalo_l") == str(moved)
+    assert face_env.folder_path(folder_id) == str(face_env.target / "models")
+
+    # And the failure is loud, naming both directories and the repair.
+    assert any(
+        "WILL NOT survive a restart" in record.message
+        and str(face_env.target / "models") in record.message
+        for record in caplog.records
+    ), [record.message for record in caplog.records]
 
 
 def test_the_relocated_root_is_what_the_shelf_reports(face_env):

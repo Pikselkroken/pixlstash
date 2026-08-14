@@ -1427,6 +1427,21 @@ is nothing to drift. It is a process-global rather than a value threaded through
 vault → engine → task because it is a statement about this *machine's* disk, and
 two of the three callers are not on that chain.
 
+**The declaration's own environment override was removed to keep that true.**
+`builtin_caches` carried `PIXLSTASH_INSIGHTFACE_DIR`, the sibling of
+`BUILTIN_MODEL_DIR_ENV`, pointing at the *models* directory — one level below
+the thing the setting names, so the two could disagree. That was inert while
+nothing could relocate and a bug the moment something could: the shelf would
+declare the override path while downloads and `FaceAnalysis` used the root, and
+a relocation identified by `insightface_models_dir()` would repoint the row at a
+directory the next start-up would not declare. It had no callers — declared and
+never set, in the product or the suite — and the setting does its job strictly
+better, because it reaches all three callers rather than only the declaration.
+`tests/test_insightface_relocation.py` points a test Server at `tmp_path`
+through the setting and asserts no environment variable can move the answer.
+The HuggingFace seam beside it stays: that cache has no setting and cannot
+relocate, so its override has nothing to disagree with.
+
 **The path names the root, not the folder.** `models` is InsightFace's own
 layout — the library joins it onto whatever root it is given — so the folder
 follows the root to `<path>/models`. Naming the folder directly would mean
@@ -1456,6 +1471,16 @@ root is persisted to `server-config.json`, applied to the process-global, and th
 `model_folder` row is repointed at `<new root>/models` in one statement — updated
 rather than replaced, so the pack rows travel with it. The row is for the running
 server's benefit; the declaration rewrites it from the setting on every start.
+
+**Persist first, and adopt even if persisting failed.** The config file is the
+durable authority, so it is written before anything in memory believes the move
+happened. But by that point the packs *are* at the new root and a relocation is
+not undoable (the cancel ruling), so a failed write must not leave the running
+server pointing at a directory the bytes have left — that is a face pipeline
+re-downloading every pack, which is worse than either end state. Once the move
+has completed the filesystem is the ground truth, so the process and the shelf
+row follow it regardless, and the part that genuinely failed — surviving a
+restart — is logged as an error naming both directories and the repair.
 Interrupted halfway, the moved packs are at the new root, the rest are at the old
 one, and the setting still names the old one — so face extraction keeps working
 and re-running the relocation finishes the job (a pack whose source is gone is

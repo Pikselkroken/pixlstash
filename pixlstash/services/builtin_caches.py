@@ -53,9 +53,21 @@ logger = get_logger(__name__)
 
 # The same test seam as `BUILTIN_MODEL_DIR_ENV`, and for the same reason: a
 # Server built on a temp config dir must not declare rows about the developer's
-# real home, or the shelf's contents depend on which packs and repos that
-# machine happens to have downloaded.
-INSIGHTFACE_DIR_ENV = "PIXLSTASH_INSIGHTFACE_DIR"
+# real home, or the shelf's contents depend on which repos that machine happens
+# to have downloaded.
+#
+# **InsightFace had one of these and no longer does (#906).** It pointed at the
+# models directory, which is one level below the thing the setting names, so it
+# could disagree with `insightface_root()` — and once the packs became
+# relocatable that disagreement was a bug rather than a curiosity: the shelf
+# would declare the override path while downloads and `FaceAnalysis` used the
+# root, and a relocation identified by `insightface_models_dir()` would repoint
+# the row at a directory the next start-up would not declare. It had no callers
+# — it was declared and never set, here or in the suite — and
+# `server_config["insightface_root"]` now does its job strictly better, because
+# it reaches all three callers instead of only the declaration.
+# `tests/test_insightface_relocation.py` points a test Server at `tmp_path`
+# through the setting, which is what the seam was for.
 HUGGINGFACE_CACHE_DIR_ENV = "PIXLSTASH_HUGGINGFACE_CACHE_DIR"
 
 # InsightFace's own layout: it joins this onto whatever root it is given.
@@ -92,12 +104,16 @@ def insightface_models_dir() -> str:
     the tool's own state and would be a less honest thing to call a model
     folder.
 
+    **Derived from :func:`~pixlstash.utils.insightface_model_utils.insightface_root`
+    and from nothing else**, so this and the two callers that resolve pack paths
+    for themselves cannot name different directories. There is deliberately no
+    environment override beside it (see the note above): a second source for
+    this one path is exactly what makes a relocation move the shelf's row away
+    from where the packs actually load.
+
     Returns:
-        The absolute path, or the override when one is set.
+        The absolute path.
     """
-    override = os.environ.get(INSIGHTFACE_DIR_ENV, "").strip()
-    if override:
-        return override
     return insightface_models_dir_under(insightface_root())
 
 

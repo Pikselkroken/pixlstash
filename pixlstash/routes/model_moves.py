@@ -31,8 +31,8 @@ against; that one moves directories with
 share is :func:`_start_job`, which is everything except the work itself.
 
 The managed store's relocation has one trick of its own: how it keeps "exactly
-one ``managed`` folder" true throughout. The new location is registered as an ordinary ``user`` folder
-first; every file is moved into it with its ``model_file`` row repointed
+one ``managed`` folder" true throughout. The new location is registered as an
+ordinary ``user`` folder first; every file is moved into it with its row repointed
 individually, so the per-file invariant is untouched; and only when every file
 has landed does **one** transaction promote the new row to ``managed`` and drop
 the old one. A crash at any point leaves exactly one managed row (the old,
@@ -597,12 +597,16 @@ def create_router(server) -> APIRouter:
 
         ``payload.path`` is validated first because ``realpath`` makes a
         relative path absolute against the server's cwd, which would turn the
-        "must be absolute" refusal into an accidental acceptance.
+        "must be absolute" refusal into an accidental acceptance. The two checks
+        are written as separate statements rather than as one ``or`` so that the
+        order the paragraph above insists on is the order the code reads in;
+        ``realpath`` is pure, so this is the same behaviour either way.
         """
+        error = validate_reference_folder_path(payload.path)
+        if error:
+            raise HTTPException(status_code=400, detail=error)
         destination_path = os.path.realpath(payload.path)
-        error = validate_reference_folder_path(
-            payload.path
-        ) or validate_reference_folder_path(destination_path)
+        error = validate_reference_folder_path(destination_path)
         if error:
             raise HTTPException(status_code=400, detail=error)
         return destination_path
@@ -765,10 +769,37 @@ def create_router(server) -> APIRouter:
                     insightface_root(),
                 )
                 return
+            # **Persist first, then adopt — and adopt even if persisting
+            # failed.** The config file is the durable authority, so it is
+            # written before anything in memory believes the move happened. But
+            # the packs are already at the new root by now and a relocation is
+            # not undoable (the cancel ruling), so a failed write must not leave
+            # the running server pointing at a directory the bytes have left:
+            # that is a face pipeline re-downloading every pack, which is worse
+            # than either end state. The filesystem is the ground truth once the
+            # move has completed, so the process and the shelf follow it
+            # regardless, and the part that really did fail — surviving a
+            # restart — is reported as the error it is.
             server._server_config["insightface_root"] = new_root
             config_path = getattr(server, "_server_config_path", None)
-            if config_path:
-                write_json_atomic(config_path, server._server_config)
+            try:
+                if config_path:
+                    write_json_atomic(config_path, server._server_config)
+            except OSError as exc:
+                logger.error(
+                    "InsightFace packs were moved to %s, but the new root could "
+                    "not be written to %s (%s). This server has been pointed at "
+                    "the new location and will keep working, but the change WILL "
+                    "NOT survive a restart: after one, PixlStash would look in "
+                    "%s, find nothing and re-download. Fix the config file's "
+                    "permissions and either re-run the relocation or set "
+                    '"insightface_root": %r by hand.',
+                    destination_dir,
+                    config_path,
+                    exc,
+                    source_dir,
+                    new_root,
+                )
             set_insightface_root(new_root)
             with server.hub.transaction() as conn:
                 conn.execute(
