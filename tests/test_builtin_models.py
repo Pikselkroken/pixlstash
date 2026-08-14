@@ -13,11 +13,14 @@ import pytest
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.services.builtin_models import (
+    BUILTIN_DIRNAME,
     BUILTIN_ENGINES,
     BUILTIN_OWNER,
     TOOLING_DIRS,
+    builtin_model_dir,
     declare_builtin_models,
     declared_paths,
+    set_builtin_model_dir,
     unclaimed_files,
 )
 from pixlstash.services.builtin_caches import (
@@ -823,3 +826,99 @@ def test_re_declaring_an_unchanged_set_writes_nothing(
 
     assert declare_huggingface_cache(server_hub, str(tmp_path)) == folder_id
     assert rowids() == before, "an unchanged declaration rewrote the rows"
+
+
+# ===========================================================================
+# Where the folder is: one accessor, and a location that can be recorded (#905)
+# ===========================================================================
+
+
+@pytest.fixture
+def data_dir(tmp_path, monkeypatch):
+    """Stand in for the platform user data directory."""
+    from pixlstash.services import builtin_models
+
+    root = tmp_path / "userdata"
+    root.mkdir()
+    monkeypatch.setattr(builtin_models, "_pixlstash_data_dir", lambda: str(root))
+    monkeypatch.delenv(builtin_models.BUILTIN_MODEL_DIR_ENV, raising=False)
+    return root
+
+
+def test_the_folder_defaults_to_where_it_has_always_been(data_dir):
+    """A machine that never relocated it must not see the folder move."""
+    assert builtin_model_dir() == os.path.join(str(data_dir), BUILTIN_DIRNAME)
+
+
+def test_a_recorded_location_survives_the_process_that_wrote_it(data_dir):
+    """The relocation is only real if the next start agrees with it — otherwise
+    every engine is downloaded again into the folder that was just emptied."""
+    set_builtin_model_dir("/mnt/big/models")
+    assert builtin_model_dir() == "/mnt/big/models"
+
+
+def test_an_unreadable_record_names_the_default_rather_than_nothing(
+    data_dir, monkeypatch, caplog
+):
+    """Refusing to name a folder at all would disable every engine over one bad
+    file, so the failure is loud and the default answers."""
+    set_builtin_model_dir("/mnt/big/models")
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr("builtins.open", _boom)
+    with caplog.at_level("ERROR"):
+        assert builtin_model_dir() == os.path.join(str(data_dir), BUILTIN_DIRNAME)
+    assert "permission denied" in caplog.text
+
+
+def test_the_environment_override_still_wins(data_dir, monkeypatch):
+    """It exists for a deployment that mounts the folder elsewhere without
+    moving anything into it, so a recorded location must not overrule it."""
+    from pixlstash.services.builtin_models import BUILTIN_MODEL_DIR_ENV
+
+    set_builtin_model_dir("/mnt/big/models")
+    monkeypatch.setenv(BUILTIN_MODEL_DIR_ENV, "/srv/models")
+    assert builtin_model_dir() == "/srv/models"
+
+
+def test_every_downloader_asks_the_accessor_rather_than_rebuilding_the_path(
+    data_dir,
+):
+    """The prerequisite the whole feature rests on. The declaration, the
+    inference engine and the aesthetic scorer each used to build
+    ``user_data_dir("pixlstash")/downloaded_models`` for themselves: they agreed
+    by convention, so a relocated folder would have been declared in one place
+    and filled in another. Asserted on the aesthetic table because it is the one
+    that resolved its paths at IMPORT time, which is what blocked the change."""
+    from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
+    from pixlstash.tagger_plugins.clip_service import CLIP_MODEL_NAME
+
+    set_builtin_model_dir("/mnt/big/models")
+    config = ImageEmbeddingTask.AESTHETIC_MODELS.get(CLIP_MODEL_NAME)
+    if config is None:
+        pytest.skip(f"no aesthetic scorer for CLIP model {CLIP_MODEL_NAME}")
+    assert ImageEmbeddingTask._aesthetic_config()["path"] == os.path.join(
+        "/mnt/big/models", config["filename"]
+    )
+
+
+def test_no_module_builds_the_download_path_for_itself():
+    """The convention that used to hold the three callers together, pinned so a
+    fourth caller cannot quietly reintroduce it."""
+    import pathlib
+
+    import pixlstash
+
+    root = pathlib.Path(pixlstash.__file__).parent
+    offenders = [
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*.py")
+        if BUILTIN_DIRNAME in path.read_text(encoding="utf-8")
+        and path.name != "builtin_models.py"
+    ]
+    assert offenders == [], (
+        f"{offenders} name the download folder themselves; ask "
+        "builtin_model_dir() instead, or the folder cannot be relocated."
+    )

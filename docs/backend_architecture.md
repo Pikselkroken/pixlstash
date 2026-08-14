@@ -511,7 +511,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/model-folders/devices                                                 | model_shelf     | Capacity of the drives the model folders sit on            |
 | PATCH  | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Update a registered model folder                           |
 | DELETE | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Forget a registered model folder                           |
-| POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move the managed model store to another location           |
+| POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a folder PixlStash owns to another location           |
 | POST   | /api/v1/model-folders/{folder_id}/rescan                                      | model_shelf     | Rescan a registered model folder                           |
 | GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder      |
 | GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview image from a training run                      |
@@ -1453,6 +1453,59 @@ cannot cost the shelf the other two, and every failure is logged and swallowed:
 a machine that has never run face detection has no InsightFace directory, and one
 that has downloaded nothing through the library has no cache. Both are normal.
 
+**Where the folder is: one accessor, and a location that can be recorded (#905,
+closing #112).** `builtin_models.builtin_model_dir()` is the single answer, and
+the declaration, `inference/engine.py` and `tasks/image_embedding_task.py` all
+ask it. They used to each build `user_data_dir("pixlstash")/downloaded_models`
+for themselves — agreeing by convention, not by construction — which is exactly
+what made the folder immovable: relocate it and the shelf would have declared the
+new location while every downloader kept filling the old one and re-fetching what
+had just been moved away. Unifying them needed
+`ImageEmbeddingTask.AESTHETIC_MODELS` to stop resolving its paths at **import**
+time; the table now holds `filename` and `_aesthetic_config()` joins the folder at
+use time. `tests/test_builtin_models.py::test_no_module_builds_the_download_path_for_itself`
+is what stops a fourth caller reintroducing the convention.
+
+Resolution order, first hit wins:
+
+1. `PIXLSTASH_BUILTIN_MODEL_DIR` — for a deployment that mounts the folder
+   elsewhere without moving anything into it. It now redirects the folder
+   *whole*, downloads included, which is what makes it safe to name here; the
+   test suite no longer uses it (see below).
+2. the location a relocation recorded, in `downloaded_models.location` beside
+   the default;
+3. `user_data_dir("pixlstash")/downloaded_models`.
+
+**The recorded location is a file, not a hub row**, because the folder is
+machine-global — one download serves every library and every server instance on
+the host — while a hub belongs to one deployment. In the hub, a second deployment
+on the same machine would keep downloading to the old place, which is the
+divergence the accessor exists to remove. Read on every call rather than cached,
+so a relocation applies to the next download instead of to the next restart.
+
+**Relocating it is `POST /model-folders/{id}/relocate`**, the managed store's
+route, gated by `managed_model_store.relocatable_identity()` — the one place that
+says which roots relocate, read by the route *and* reported to the client as
+`relocatable` on `GET /model-folders`. It has to be reported: the download folder
+carries the same `kind`, `owner` and `movable` as the InsightFace packs
+(`declare_folder` writes all three identically), so it is told apart by **path**,
+which no client can do. The folder adds two steps to the relocation's ending,
+both after the last file has landed and before the hub is told: its **companion**
+files are carried across (they are declared but have no `model_file` row, and an
+engine without its label set is a broken engine), and the new location is
+recorded. Order matters — a pointer written before the files arrived would send
+the next download to an empty folder.
+
+**Start-up declaration is off in the test suite** (`Server.DEFAULT_DECLARE_MODEL_ROOTS`).
+These roots are machine-global, so a `Server` on a temp config dir would otherwise
+describe whichever engines the developer's machine holds — `test_workers_api`
+caught that as `assert 3 == 0` on a runner with a warm cache. Pointing the
+accessor at a temp directory instead, which is how this was handled before, stopped
+being an option the moment the downloaders started reading it: a fresh temp
+directory means every engine is downloaded again on every shard, against the model
+cache CI restores. `tests/test_builtin_models.py` covers the declaration directly
+against a `tmp_path`.
+
 ### The managed model store (shelf plan B7)
 
 **Exactly one `model_folder` row with `kind='managed'` always exists.** It is
@@ -2020,7 +2073,7 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
     Arithmetic, not judgement.
 
-  - **Updated 2026-08-09 (fourth change the same day) — the locality total is now `29 = 24 local + 5 loopback`.** `POST /api/v1/model-folders/{folder_id}/relocate` moves the managed model store (§13) to a **caller-supplied host path**: it is the `reference-folders/{folder_id}/relocate` class *and* carries `POST /model-moves`' file movement, so it is the one shelf route on this tier for both reasons at once. It is refused with 409 for any folder that is not the managed store.
+  - **Updated 2026-08-09 (fourth change the same day) — the locality total is now `29 = 24 local + 5 loopback`.** `POST /api/v1/model-folders/{folder_id}/relocate` moves the managed model store (§13) to a **caller-supplied host path**: it is the `reference-folders/{folder_id}/relocate` class *and* carries `POST /model-moves`' file movement, so it is the one shelf route on this tier for both reasons at once. It is refused with 409 for any folder that does not relocate — since #905 that is every folder but the managed store and PixlStash's own download folder; the tier is unchanged, the set of targets is not.
 
     Arithmetic, not judgement — pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_25_local_5_loopback`.
 

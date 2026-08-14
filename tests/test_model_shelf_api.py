@@ -2635,6 +2635,156 @@ def test_a_relocation_with_a_failed_file_does_not_promote_the_new_folder(
 
 
 # ===========================================================================
+# Relocating PixlStash's own download folder (#905, closing #112)
+# ===========================================================================
+
+
+@pytest.fixture
+def relocatable_downloads(shelf_env, tmp_path, monkeypatch):
+    """The download folder as it really is: one engine, and a companion.
+
+    The companion is the whole reason this needs its own coverage. The
+    declaration gives a ``model_file`` row to the engine file alone, so the mover
+    — which moves rows — never sees the label set beside it. A relocation that
+    only moved the rows would leave a tagger that cannot load and would be
+    downloaded again, which is the failure #905 exists to prevent.
+
+    ``_pixlstash_data_dir`` is redirected rather than the env override, because
+    the override wins over the recorded location and this fixture is here to
+    watch that recording happen.
+    """
+    from pixlstash.routes import model_moves
+    from pixlstash.services import builtin_models
+
+    model_moves._job = None
+    data_dir = tmp_path / "userdata"
+    monkeypatch.setattr(builtin_models, "_pixlstash_data_dir", lambda: str(data_dir))
+    downloads = data_dir / builtin_models.BUILTIN_DIRNAME
+    downloads.mkdir(parents=True)
+    assert builtin_models.builtin_model_dir() == str(downloads)
+
+    (downloads / "pixlstash-anomaly-tagger.safetensors").write_bytes(b"weights" * 64)
+    (downloads / "pixlstash-anomaly-tagger_meta.json").write_text('{"labels": []}')
+    folder_id = builtin_models.declare_builtin_models(
+        shelf_env.server.hub, str(downloads)
+    )
+    return SimpleNamespace(
+        downloads=downloads,
+        target=tmp_path / "big-drive" / "models",
+        folder_id=folder_id,
+        pointer=data_dir / builtin_models.BUILTIN_MODEL_DIR_POINTER,
+    )
+
+
+def test_relocating_the_download_folder_takes_the_companions_with_it(
+    shelf_env, relocatable_downloads
+):
+    """A declared engine has a row; the files it needs beside it do not."""
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{relocatable_downloads.folder_id}/relocate",
+        json={"path": str(relocatable_downloads.target)},
+    )
+    assert r.status_code == 202, r.text
+    body = _await_move(shelf_env)
+    assert [item["status"] for item in body["results"]] == ["moved"]
+
+    assert sorted(p.name for p in relocatable_downloads.target.iterdir()) == [
+        "pixlstash-anomaly-tagger.safetensors",
+        "pixlstash-anomaly-tagger_meta.json",
+    ]
+    assert not relocatable_downloads.downloads.exists()
+
+
+def test_an_empty_download_folder_still_relocates(shelf_env, relocatable_downloads):
+    """The obvious first thing to do on a fresh install: send the downloads to
+    the big drive BEFORE anything is fetched. Nothing to move is not nothing to
+    do — the location still has to be recorded, or the first download lands in
+    the folder the owner just moved away from."""
+    from pixlstash.services import builtin_models
+
+    for leftover in relocatable_downloads.downloads.iterdir():
+        leftover.unlink()
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_folder_id = ?",
+            (relocatable_downloads.folder_id,),
+        )
+
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{relocatable_downloads.folder_id}/relocate",
+        json={"path": str(relocatable_downloads.target)},
+    )
+    assert r.status_code == 202, r.text
+    assert _await_move(shelf_env)["results"] == []
+    assert builtin_models.builtin_model_dir() == str(relocatable_downloads.target)
+
+
+def test_a_relocated_download_folder_is_where_the_next_download_goes(
+    shelf_env, relocatable_downloads
+):
+    """The point of the whole change. If the accessor still named the old path,
+    every engine would be fetched again into the folder just emptied."""
+    from pixlstash.services import builtin_models
+
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{relocatable_downloads.folder_id}/relocate",
+        json={"path": str(relocatable_downloads.target)},
+    )
+    assert r.status_code == 202, r.text
+    _await_move(shelf_env)
+
+    assert builtin_models.builtin_model_dir() == str(relocatable_downloads.target)
+    assert relocatable_downloads.pointer.read_text().strip() == str(
+        relocatable_downloads.target
+    )
+    # And the shelf agrees: one row for the folder, at the new path, still ours.
+    rows = shelf_env.server.hub.fetchall(
+        "SELECT path, kind, owner, movable FROM model_folder WHERE owner = 'pixlstash' "
+        "AND kind = 'foreign'"
+    )
+    assert [dict(row) for row in rows] == [
+        {
+            "path": str(relocatable_downloads.target),
+            "kind": "foreign",
+            "owner": "pixlstash",
+            "movable": "root_only",
+        }
+    ]
+
+
+def test_a_root_only_folder_with_no_relocate_route_is_still_refused(
+    shelf_env, relocatable_downloads, tmp_path
+):
+    """The InsightFace packs carry the same kind, owner and `movable` as the
+    download folder — `declare_folder` writes all three the same way — so the
+    route cannot key on those columns. #906 is what opens this one."""
+    packs = tmp_path / "insightface" / "models"
+    packs.mkdir(parents=True)
+    with shelf_env.server.hub.transaction() as conn:
+        packs_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, owner, movable, created_at) "
+                "VALUES (?, 'foreign', 'pixlstash', 'root_only', "
+                "'2026-08-09T00:00:00Z')",
+                (str(packs),),
+            ).lastrowid
+        )
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{packs_id}/relocate",
+        json={"path": str(tmp_path / "elsewhere")},
+    )
+    assert r.status_code == 409, r.text
+
+    # ...and the list says so up front, so the UI offers Move on neither.
+    folders = {
+        row["id"]: row["relocatable"]
+        for row in shelf_env.owner.get(f"{API}/model-folders").json()["folders"]
+    }
+    assert folders[packs_id] is False
+    assert folders[relocatable_downloads.folder_id] is True
+
+
+# ===========================================================================
 # The verb layer (F3): PATCH /models and POST /models/forget
 # ===========================================================================
 

@@ -39,10 +39,12 @@ export const CREATABLE_KINDS = ["user", "source"];
  *
  * @returns {Promise<Array<Object>>} the `folders` array. Each entry carries
  *   `id`, `path`, `kind` (`user`/`managed`/`foreign`/`source`), `owner`,
- *   `movable`, `host_path`, `delete_after_import`, `last_checked`,
- *   `created_at`, `file_count` (copies registered under it, in any state) and
- *   `present_bytes` (bytes of the `present` ones only, so zero is an answer
- *   rather than an unknown).
+ *   `movable`, `relocatable` (whether `POST .../relocate` will move it whole —
+ *   offer Move on exactly these, never on `movable === "root_only"`, which the
+ *   InsightFace packs also say and cannot be moved yet), `host_path`,
+ *   `delete_after_import`, `last_checked`, `created_at`, `file_count` (copies
+ *   registered under it, in any state) and `present_bytes` (bytes of the
+ *   `present` ones only, so zero is an answer rather than an unknown).
  */
 export async function listModelFolders() {
   const body = await unwrap(apiClient.get(MODEL_FOLDERS_URL));

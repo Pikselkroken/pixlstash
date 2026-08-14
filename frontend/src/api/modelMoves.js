@@ -35,6 +35,25 @@ export async function startModelMove(destinationFolderId, items) {
 }
 
 /**
+ * Move a folder PixlStash owns to another host path, files and all.
+ *
+ * A relocation IS a move — of every file one folder holds — so it runs the same
+ * job and is watched through the same status route. Two folders qualify, and
+ * the list response says which: offer this on the rows whose `relocatable` is
+ * true, never on `movable === "root_only"`, which is also what the InsightFace
+ * packs say and they have no relocate route yet.
+ *
+ * @param {number} folderId - the folder to move, from `GET /model-folders`.
+ * @param {string} path - an absolute host path. Created if it does not exist.
+ * @returns {Promise<Object>} the first status snapshot.
+ */
+export async function relocateModelFolder(folderId, path) {
+  return unwrap(
+    apiClient.post(`/model-folders/${folderId}/relocate`, { path }),
+  );
+}
+
+/**
  * How the current or last move is going.
  *
  * `status` is `running`, `finished`, or `idle` when none has ever run. The last

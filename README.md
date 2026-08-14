@@ -78,6 +78,8 @@ the app's own user-data directory.
 > | **Windows** | `%LOCALAPPDATA%\pixlstash\downloaded_models\` |
 >
 > An internet connection is required the first time the server starts. Subsequent starts use the cached models.
+>
+> **Moving them somewhere else:** open **Model folders** on the model shelf and use **Move** on PixlStash's own folder. Every file in it is copied, verified and removed from the old location, and the new location is remembered — so nothing is downloaded again. Set `PIXLSTASH_BUILTIN_MODEL_DIR` instead if you want the folder somewhere else without moving what is already in it (a mounted model volume, typically).
 
 If you need to use a custom config path:
 
