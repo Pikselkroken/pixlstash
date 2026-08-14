@@ -357,9 +357,10 @@ watch(
 
 .adapter-tray__grid {
   display: grid;
-  /* Two per row in the 480-wide person editor, three in the 660-wide set
-     editor, one on a narrow window — the same card either way, so neither
-     editor needs its own tray. */
+  /* Three per row in both 720-wide editors, where the tray spans both columns,
+     one on a narrow window — the same card either way, so neither editor needs
+     its own tray. (The tray only renders for a saved entity, which in the
+     person editor is exactly the case that is 720 rather than 480.) */
   /* `min(180px, 100%)` rather than a bare 180px: a hard minimum track cannot
      shrink, so below 180px of content width the grid would overflow its dialog
      sideways instead of reflowing to one narrower column. */
