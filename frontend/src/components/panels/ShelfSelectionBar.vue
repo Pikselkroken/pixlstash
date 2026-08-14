@@ -58,7 +58,15 @@
     <!-- Assign is one button and one popover, because "person or set" is one
          question: which thing does this adapter belong to. The two pickers
          inside it are the shared `AddToEntityControl` the grid uses, so the
-         search, the tri-state and the keyboard model are learned once. -->
+         search, the tri-state and the keyboard model are learned once.
+
+         Every verb below carries BOTH `aria-label` and `title`, and they say
+         different things on purpose. The label is the verb and never changes,
+         so a screen reader hears a stable name and voice control has something
+         to say; the tooltip is the REFUSAL — "Only files that are actually on
+         this machine can be moved" — and changes with the selection. `title`
+         alone is not an accessible name a reader can rely on, and it does not
+         exist at all on touch. -->
     <v-menu
       v-model="assignMenuOpen"
       :close-on-content-click="false"
@@ -72,6 +80,7 @@
           class="selbar-btn"
           type="button"
           data-verb="assign"
+          aria-label="Assign to person or set"
           :disabled="!assignable.length"
           :title="assignTitle || 'Assign to person or set'"
         >
@@ -108,6 +117,7 @@
       class="selbar-btn"
       type="button"
       data-verb="stack"
+      aria-label="Stack these into one training run"
       :disabled="!stackable"
       :title="stackTitle"
       @click="emit('stack')"
@@ -119,6 +129,7 @@
       class="selbar-btn"
       type="button"
       data-verb="move"
+      aria-label="Move to another folder"
       :disabled="!movable.length || moves.busy"
       :title="moveTitle"
       @click="emit('move')"
@@ -134,6 +145,7 @@
       class="selbar-btn"
       type="button"
       data-verb="rename"
+      aria-label="Rename"
       :disabled="!single"
       :title="renameTitle"
       @click="emit('rename')"
@@ -145,6 +157,7 @@
       class="selbar-btn"
       type="button"
       data-verb="set-icon"
+      aria-label="Set icon"
       :disabled="!single"
       :title="iconTitle"
       @click="emit('set-icon')"
@@ -158,6 +171,7 @@
       class="selbar-btn"
       type="button"
       data-verb="forget"
+      aria-label="Remove from shelf"
       :disabled="!forgettable.length"
       :title="forgetTitle"
       @click="emit('forget')"
@@ -178,6 +192,7 @@
           class="selbar-btn"
           type="button"
           data-verb="more"
+          aria-label="More actions"
           aria-haspopup="menu"
           :aria-expanded="moreMenuOpen"
           title="More…"

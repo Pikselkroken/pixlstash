@@ -1927,6 +1927,16 @@ describe("the assignment ring (#892, redrawn for #904)", () => {
     expect(styles[0]).toBe(styles[1]);
   });
 
+  it("sets no hue property at all on an unassigned mark", async () => {
+    // Not an EMPTY one. `var(--mmark-ring, transparent)` takes its fallback
+    // only when the property is unset; set-but-empty resolves to nothing, which
+    // is invalid at computed-value time and drops the whole `border` shorthand
+    // — the 2px width with it, leaving the dashed ring a different size from
+    // every other ring on the shelf.
+    const wrapper = await mountShelf([adapter({ attachments: [] })]);
+    expect(wrapper.find(".mmark").attributes("style")).toBeUndefined();
+  });
+
   it("draws the dashed grey ring for a model assigned to nothing", async () => {
     const wrapper = await mountShelf([adapter({ attachments: [] })]);
     const mark = wrapper.find(".mmark");

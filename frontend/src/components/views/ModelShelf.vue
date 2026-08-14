@@ -629,10 +629,19 @@
                     v-if="row.memberCount > 1"
                     :count="row.memberCount"
                   />
+                  <!-- The hue is bound as a custom property rather than a
+                       class, because it is per-entity DATA and there is no
+                       bounded set of them to name. Bound only when there IS
+                       one: an unassigned ring has no hue, and a custom
+                       property set to an empty string is a different thing
+                       from an unset one — `var(--mmark-ring, transparent)`
+                       would resolve to nothing rather than to its fallback,
+                       and an invalid-at-computed-value-time `border` takes the
+                       whole shorthand down with it, including the 2px. -->
                   <ModelMark
                     :row="row"
                     :ring="ringFor(row)"
-                    :style="{ '--mmark-ring': ringFor(row).hue }"
+                    :style="ringStyle(row)"
                   />
                 </span>
                 <span role="gridcell" class="shelf-row-label">
@@ -1899,6 +1908,21 @@ function ringFor(row) {
     characters: entityLists.characters,
     sets: entityLists.pictureSets,
   });
+}
+
+/**
+ * The ring's hue, as an inline custom property, or nothing at all.
+ *
+ * `{}` and not `{ "--mmark-ring": "" }` for the unassigned ring: the dashed
+ * grey treatment is drawn by `.mmark--none`, which needs the pseudo-element's
+ * `border` shorthand to have applied first, and a custom property that is set
+ * but empty makes `var(--mmark-ring, transparent)` resolve to nothing rather
+ * than to its fallback. That is invalid at computed-value time, which drops the
+ * whole shorthand — the 2px width with it.
+ */
+function ringStyle(row) {
+  const { hue } = ringFor(row);
+  return hue ? { "--mmark-ring": hue } : {};
 }
 
 /**

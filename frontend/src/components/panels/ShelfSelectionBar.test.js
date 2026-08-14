@@ -135,6 +135,27 @@ describe("the selection bar", () => {
     expect(forget.attributes("title")).toContain("the 1 whose files are gone");
   });
 
+  it("names every icon verb, and does not lean on the tooltip to do it", async () => {
+    // The pill's verbs are icons, so `aria-label` is the only thing naming
+    // them — and it has to be the VERB, stable across selections, because the
+    // `title` beside it is the refusal and changes with what is selected.
+    // `title` is not a reliable accessible name and does not exist on touch.
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    const verbs = wrapper.findAll("[data-verb]");
+    expect(verbs.length).toBeGreaterThan(0);
+    for (const button of verbs) {
+      expect(button.attributes("aria-label")).toBeTruthy();
+    }
+    // Stable: the tooltip moves with the selection, the name does not.
+    const before = wrapper.find('[data-verb="move"]').attributes("aria-label");
+    selectRows([row(2, "missing")]);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-verb="move"]').attributes("aria-label")).toBe(
+      before,
+    );
+  });
+
   it("emits rather than acting, so the confirmations live in one place", async () => {
     // The two confirmations (Forget, Stack) are the view's, and this is what
     // keeps them there: the pill never calls a store verb of its own.
