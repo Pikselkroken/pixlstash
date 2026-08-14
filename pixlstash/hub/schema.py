@@ -390,7 +390,7 @@ CREATE TABLE IF NOT EXISTS model_file (
 # working. This table is additive — a row with no capabilities declared simply
 # has none, which is what every scanned adapter and checkpoint is.
 #
-# No index on ``capability``: the shelf faces and filters client-side over the
+# No index on ``capability``: the shelf facets and filters client-side over the
 # rows it already fetched, so nothing queries "which models can X" in SQL.
 _V2_MODEL_CAPABILITY = """
 CREATE TABLE IF NOT EXISTS model_capability (
