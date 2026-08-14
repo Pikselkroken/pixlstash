@@ -27,6 +27,17 @@ import {
 const FILTERS_KEY = "pixlstash:modelShelfFilters";
 
 /**
+ * Bumped when a *default* below changes; a blob from another `v` is discarded.
+ *
+ * A remembered selection outlives the reason it was remembered. `Unclassified`
+ * shipped off by default, so every blob written before this carries
+ * `unclassified: false` whether or not anyone chose it — and a shelf that now
+ * has something real to show under that box would have gone on hiding it from
+ * exactly the people who have been using the screen longest (#927).
+ */
+const FILTERS_SCHEMA_VERSION = 1;
+
+/**
  * Where the view axes are remembered: grouping, sort, and what is collapsed.
  *
  * A second key rather than more fields in {@link FILTERS_KEY}: `resetFilters`
@@ -255,7 +266,11 @@ function defaultFilters() {
     adapters: true,
     adapterKinds: [],
     checkpoints: true,
-    unclassified: false,
+    // On, for the reason `engines` is on: a file nothing can classify is still
+    // taking the disk the shelf exists to account for, and off by default is
+    // how a 339 MB leftover in PixlStash's own download folder stayed invisible
+    // (#927). The box is still there to turn it off.
+    unclassified: true,
     engines: true,
     baseModels: [],
     capabilities: [],
@@ -293,7 +308,10 @@ function writeStored(key, value) {
 /** Read the remembered selection, or null when there is none to trust. */
 function storedFilters() {
   const parsed = readStored(FILTERS_KEY);
-  if (!parsed) return null;
+  // A blob an older build wrote is discarded whole rather than half-applied,
+  // the same trade `storedView` makes: the alternative is carrying every past
+  // default forward forever.
+  if (!parsed || parsed.v !== FILTERS_SCHEMA_VERSION) return null;
   const filters = defaultFilters();
   for (const key of ["adapters", "checkpoints", "unclassified", "engines"]) {
     if (typeof parsed[key] === "boolean") filters[key] = parsed[key];
@@ -370,7 +388,9 @@ function storedCollapsed() {
  */
 function groupsOf(row, axis) {
   if (axis === "feature") {
-    const capabilities = Array.isArray(row.capabilities) ? row.capabilities : [];
+    const capabilities = Array.isArray(row.capabilities)
+      ? row.capabilities
+      : [];
     if (!capabilities.length) {
       // Every scanned adapter and checkpoint lands here, which is most of the
       // shelf: `kind` on those rows is an adapter algorithm, not a capability,
@@ -454,7 +474,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   let epoch = 0;
 
   function remember() {
-    writeStored(FILTERS_KEY, filters);
+    writeStored(FILTERS_KEY, { v: FILTERS_SCHEMA_VERSION, ...filters });
   }
 
   /** Persist the view axes and the collapsed sets as one versioned blob. */
@@ -797,7 +817,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     let n = 0;
     if (!filters.adapters || filters.adapterKinds.length) n += 1;
     if (!filters.checkpoints) n += 1;
-    if (filters.unclassified) n += 1;
+    // Counted the way `checkpoints` is, because it now defaults the same way:
+    // the badge says how far the selection has moved from the default, so the
+    // departure is turning it OFF.
+    if (!filters.unclassified) n += 1;
     if (filters.baseModels.length) n += 1;
     if (filters.capabilities.length) n += 1;
     return n;

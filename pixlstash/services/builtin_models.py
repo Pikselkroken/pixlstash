@@ -24,11 +24,17 @@ Drift here is also self-announcing rather than silent: a renamed file makes its
 declared row go ``missing`` and the real file appear under
 :func:`unclaimed_files`, which is a visible pair, not a quiet wrong answer.
 
-**These rows are protected.** The folder answers 409 to ``DELETE`` and every
-shelf verb refuses them, because they are ours: renaming our own tagger would
-make the shelf lie about it, and assigning a tagger to a character means
+**The engine rows are protected.** The folder answers 409 to ``DELETE`` and
+every shelf verb refuses them, because they are ours: renaming our own tagger
+would make the shelf lie about it, and assigning a tagger to a character means
 nothing. They are on the shelf for completeness — so the owner can see what is
 on their disk and what it costs — not to be curated.
+
+**The unclaimed files in the folder are not**, and that is the point of
+declaring them (#927). They go in as ``file_kind='unknown'``, which is what the
+shelf calls *Unclassified*, so a leftover like ``best.pt`` is visible, carries
+its size, and is an ordinary row the owner can rename or forget rather than one
+the shelf refuses to discuss.
 """
 
 from __future__ import annotations
@@ -41,7 +47,7 @@ from typing import Optional
 from platformdirs import user_data_dir
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.adapter_header import FILE_ENGINE
+from pixlstash.utils.adapter_header import FILE_ENGINE, FILE_UNKNOWN
 
 logger = get_logger(__name__)
 
@@ -71,6 +77,27 @@ BUILTIN_PROVENANCE = "builtin"
 # HuggingFace's, not ours and not the owner's, so it is neither declared nor
 # reported as unclaimed — it is simply not a model file.
 TOOLING_DIRS = (".cache",)
+
+# What counts as weights, for the unclaimed readout. Wider than the scanner's
+# `MODEL_SUFFIX` (`.safetensors` alone), because this folder is precisely where
+# the other formats land — our own tagger is ONNX and both scorers are `.pth` —
+# and the leftover that prompted #927 is a `.pt`.
+#
+# An allowlist rather than "every file the walk saw", because the readout now
+# writes a shelf row per hit. A label CSV, a revision sidecar or a stray README
+# is a fact about the folder and not a model, and a shelf that lists them
+# teaches the reader to skim past the row that matters. The size still counts:
+# what is skipped here is a row, never a byte of the folder's own total, which
+# the folder list reads off the disk.
+MODEL_SUFFIXES = (
+    ".safetensors",
+    ".ckpt",
+    ".pt",
+    ".pth",
+    ".bin",
+    ".onnx",
+    ".gguf",
+)
 
 
 @dataclass(frozen=True)
@@ -116,8 +143,11 @@ class DeclaredEntry:
 
     Attributes:
         relpath: Location within the folder — `model_file`'s own identity.
-        display_name: What the shelf calls it.
-        role: Stored in ``model.kind``; see :class:`BuiltinEngine.role`.
+        display_name: What the shelf calls it, or None to let the row derive a
+            name from its filename. None for an unclaimed file: we did not put
+            it there and have nothing to call it.
+        role: Stored in ``model.kind``; see :class:`BuiltinEngine.role`. None
+            for an unclaimed file, whose role we do not know.
         size: Bytes, or None when it could not be read. None never overwrites a
             size already recorded.
         present: Whether it is on disk now. False writes ``missing``, which is a
@@ -126,19 +156,42 @@ class DeclaredEntry:
             to ``model_capability``. Empty means "just the role", which is what
             all but one caller means: a model that does one thing does not have
             to say it twice.
+        file_kind: ``engine`` for something PixlStash chose to download, which
+            is what every declaration but one is. ``unknown`` for an unclaimed
+            file, and that is not a formality: every shelf verb refuses an
+            engine row, so declaring a leftover as one would put it on the shelf
+            in the single state that cannot be acted on.
     """
 
     relpath: str
-    display_name: str
-    role: str
+    display_name: Optional[str]
+    role: Optional[str]
     size: Optional[int]
     present: bool
     capabilities: tuple[str, ...] = field(default_factory=tuple)
+    file_kind: str = FILE_ENGINE
 
     @property
     def declared_capabilities(self) -> tuple[str, ...]:
-        """The capability set to write — never empty, `role` first."""
-        return self.capabilities or (self.role,)
+        """The capability set to write — `role` first, empty when there is none."""
+        if self.capabilities:
+            return self.capabilities
+        return (self.role,) if self.role else ()
+
+    @property
+    def restated_file_kind(self) -> Optional[str]:
+        """The ``file_kind`` a re-declaration asserts, or None to leave it alone.
+
+        An engine is ours and its row says what we say. An unclaimed file is
+        not, and the difference is load-bearing rather than tidy: it enters with
+        ``sha256`` NULL, so ``CheckpointHashTask`` picks it up, and if it hashes
+        to a digest already registered the two ``model`` rows **merge** — this
+        folder's ``model_file`` is repointed at the survivor, which is somebody's
+        real adapter. Restating ``unknown`` onto that row on the next start would
+        drop the adapter out of ``/adapters`` for its own folder too, over a
+        second copy the owner happened to leave here.
+        """
+        return self.file_kind if self.file_kind == FILE_ENGINE else None
 
 
 # Mirrors `pixlstash_tagger.PIXLSTASH_TAGGER_FILENAME` /
@@ -322,13 +375,17 @@ def declared_paths() -> set[str]:
 
 
 def unclaimed_files(folder_path: str) -> list[dict]:
-    """Files present in the folder that no declaration accounts for.
+    """Model files present in the folder that no declaration accounts for.
 
     **Not "orphaned".** We know our own manifest; we do not know that a previous
     build, a plugin or the owner did not put a file there deliberately. This
     reports what nothing in *this build* claims, which is a smaller and true
     statement — the same distinction the scan already draws between ``missing``
     (we looked and it was not there) and ``unreachable`` (we could not look).
+
+    **Weights only** (:data:`MODEL_SUFFIXES`). Each hit becomes a row on the
+    model shelf, and a shelf that also lists a label CSV and a revision sidecar
+    is one nobody reads carefully enough to notice the 339 MB `.pt` among them.
 
     Detection proposes and never applies: nothing here deletes.
 
@@ -345,6 +402,8 @@ def unclaimed_files(folder_path: str) -> list[dict]:
     for directory, dirs, files in os.walk(folder_path):
         dirs[:] = [d for d in dirs if d not in TOOLING_DIRS]
         for name in files:
+            if not name.lower().endswith(MODEL_SUFFIXES):
+                continue
             absolute = os.path.join(directory, name)
             relpath = os.path.relpath(absolute, folder_path)
             if relpath in declared:
@@ -375,6 +434,14 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
     did not see to ``missing``; pointed here it would mark the ONNX tagger and
     both ``.pth`` scorers missing on every pass.
 
+    **The unclaimed files are declared too.** :func:`unclaimed_files` has always
+    known about the leftovers — a 339 MB ``best.pt`` on a measured machine — but
+    nothing called it, so the shelf listed the four engines and said nothing
+    about the file sitting beside them: invisible, and therefore impossible to
+    act on (#927). They go in as ``file_kind='unknown'`` with no role and no
+    capability, which is what the shelf already calls *Unclassified* and is the
+    honest reading of "present, and nothing in this build claims it".
+
     Args:
         hub: The open hub database.
         folder_path: Where PixlStash downloads its engines.
@@ -403,6 +470,20 @@ def declare_builtin_models(hub, folder_path: str) -> Optional[int]:
                 role=engine.role,
                 size=size,
                 present=present,
+            )
+        )
+    for leftover in unclaimed_files(folder_path):
+        # `present` unconditionally: the walk just saw the file. One that goes
+        # away is swept to `missing` by `declare_folder` like any other row,
+        # which is what then lets the owner forget it.
+        entries.append(
+            DeclaredEntry(
+                relpath=leftover["relpath"],
+                display_name=None,
+                role=None,
+                size=leftover["size"],
+                present=True,
+                file_kind=FILE_UNKNOWN,
             )
         )
     return declare_folder(hub, folder_path, entries)
@@ -480,7 +561,7 @@ def declare_folder(
                     "INSERT INTO model (file_kind, kind, display_name, filename, "
                     "provenance, file_size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
-                        FILE_ENGINE,
+                        entry.file_kind,
                         entry.role,
                         entry.display_name,
                         os.path.basename(entry.relpath),
@@ -497,13 +578,29 @@ def declare_folder(
                 )
             else:
                 model_id = int(existing[0])
-                # The declaration is the authority for what this row IS, so it
-                # is written outright rather than COALESCE'd: unlike a scanned
-                # row there is no owner curation here to preserve.
+                # COALESCE'd on the *declared* value throughout, which changes
+                # nothing for an engine: every one declares its kind, its role
+                # and its name, so the declaration still wins outright — and no
+                # verb lets anyone edit an engine row anyway.
+                #
+                # It is what keeps an unclaimed file honest, which declares only
+                # the first of the three. Written outright, every server start
+                # would reset the name and kind the owner typed onto the one row
+                # class here they are allowed to curate — and `restated_file_kind`
+                # covers the sharper case above, where the row is no longer the
+                # leftover's alone.
                 conn.execute(
-                    "UPDATE model SET file_kind = ?, kind = ?, display_name = ?, "
+                    "UPDATE model SET file_kind = COALESCE(?, file_kind), "
+                    "kind = COALESCE(?, kind), "
+                    "display_name = COALESCE(?, display_name), "
                     "file_size = COALESCE(?, file_size) WHERE id = ?",
-                    (FILE_ENGINE, entry.role, entry.display_name, size, model_id),
+                    (
+                        entry.restated_file_kind,
+                        entry.role,
+                        entry.display_name,
+                        size,
+                        model_id,
+                    ),
                 )
                 conn.execute(
                     "UPDATE model_file SET state = ?, seen_at = ? "

@@ -1308,6 +1308,37 @@ doctrine — detection proposes, it never applies, so nothing here deletes.
 at the top level and inside every subdirectory it fills; that is the tool's, and
 reporting it would train the reader to ignore the list.
 
+**And the readout is declared, which is what makes it reachable (#927).** It
+existed, it was right, and *nothing called it* — so the shelf listed the four
+engines and said nothing about the 339 MB sitting beside them: invisible, and
+therefore impossible to act on. `declare_builtin_models` now appends one entry
+per unclaimed file, and two choices carry the fix:
+
+- **`file_kind='unknown'`, never `engine`.** Every shelf verb refuses an engine
+  row (see *Protected, because they are ours* above), so a leftover declared as
+  ours would be visible and still untouchable — half a fix that reads like a
+  whole one. `unknown` is what the shelf already calls *Unclassified*, and it is
+  the honest reading of "present, and nothing in this build claims it".
+- **Weights only** (`MODEL_SUFFIXES`: `.safetensors .ckpt .pt .pth .bin .onnx
+  .gguf`, wider than the scanner's lone `.safetensors` because this folder is
+  where the other formats land). Every hit is now a row rather than a line in a
+  log, and a shelf that also lists a label CSV and a revision sidecar is one
+  nobody reads closely enough to notice the `.pt`. Bytes are unaffected: the
+  folder's total is read off the disk, not summed from these rows.
+
+**A re-declaration `COALESCE`s rather than restates.** That is a no-op for an
+engine — each declares its kind, role and name, and `PATCH /models` refuses one
+anyway — and it is what stops every server start from resetting a name the owner
+typed onto the one row class here they may curate. `file_kind` needs the same
+care for a sharper reason (`DeclaredEntry.restated_file_kind`): a leftover enters
+with `sha256` NULL, so `CheckpointHashTask` picks it up, and a digest that is
+already registered **merges** the two `model` rows — this folder's `model_file`
+is repointed at the survivor, which is somebody's real adapter. Restating
+`unknown` onto it would drop that adapter out of `/adapters` for its own folder,
+over a second copy the owner happened to leave in the download folder.
+
+Deleting the *file* is not this change and not this module: that is #925.
+
 ### The other two roots: InsightFace packs and the HuggingFace cache
 
 **The built-in folder was never the only place models land, and the other two

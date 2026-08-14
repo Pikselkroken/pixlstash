@@ -76,7 +76,9 @@
       </label>
       <!-- `unknown` is a first-class stored value, never promoted to
            checkpoint and never folded into adapters. It gets its own box and
-           its own word, and it is off by default. -->
+           its own word, and it is ON by default: the leftovers in PixlStash's
+           own download folder land here, and off by default is how they stayed
+           invisible (#927). -->
       <label
         class="tbm-check"
         title="Files we could not identify as an adapter or a checkpoint"

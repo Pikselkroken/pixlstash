@@ -27,7 +27,7 @@ from pixlstash.services.builtin_caches import (
     declare_huggingface_cache,
     declare_insightface_packs,
 )
-from pixlstash.utils.adapter_header import FILE_ENGINE
+from pixlstash.utils.adapter_header import FILE_ENGINE, FILE_UNKNOWN
 from pixlstash.utils.insightface_model_utils import KNOWN_MODEL_PACKS
 
 
@@ -95,6 +95,21 @@ def test_the_download_tools_own_bookkeeping_is_not_unclaimed(tmp_path):
     assert unclaimed_files(str(tmp_path)) == []
 
 
+def test_only_weights_are_reported_as_unclaimed(tmp_path):
+    """Every hit becomes a shelf row, so the readout is weights or nothing.
+
+    The folder collects a trainer's `results.csv` and the odd README beside the
+    files that matter, and a shelf listing those is one nobody reads carefully
+    enough to notice the 339 MB `.pt` among them.
+    """
+    (tmp_path / "best.pt").write_bytes(b"y" * 20)
+    (tmp_path / "results.csv").write_text("epoch,loss\n")
+    (tmp_path / "README.md").write_text("# notes")
+    (tmp_path / "hub.db").write_bytes(b"SQLite")
+
+    assert [item["relpath"] for item in unclaimed_files(str(tmp_path))] == ["best.pt"]
+
+
 def test_a_folder_that_has_never_been_downloaded_into_reports_nothing(tmp_path):
     """The normal state before the first run, and not an error."""
     assert unclaimed_files(str(tmp_path / "never-created")) == []
@@ -148,6 +163,134 @@ def test_declaring_twice_does_not_duplicate_a_row(server_hub, tmp_path):
         "SELECT COUNT(*) AS n FROM model_file WHERE model_folder_id = ?", (folder_id,)
     )
     assert count["n"] == len(BUILTIN_ENGINES)
+
+
+def test_an_unclaimed_file_gets_a_row_the_owner_can_actually_reach(
+    server_hub, tmp_path
+):
+    """#927: the readout knew about `best.pt` and nothing called it.
+
+    Two halves, and the second is the one that makes the first useful. It has to
+    appear at all — a file that is on the shelf's own folder and not on the
+    shelf is one the owner cannot act on — and it has to appear as `unknown`
+    rather than `engine`, because every shelf verb refuses an engine row. A
+    leftover declared as ours would be visible and still untouchable.
+    """
+    (tmp_path / "best.pt").write_bytes(b"y" * 20)
+
+    folder_id = declare_builtin_models(server_hub, str(tmp_path))
+
+    row = server_hub.fetchone(
+        "SELECT m.file_kind, m.kind, m.display_name, m.filename, m.file_size, "
+        "mf.state FROM model m JOIN model_file mf ON mf.model_id = m.id "
+        "WHERE mf.model_folder_id = ? AND mf.relpath = ?",
+        (folder_id, "best.pt"),
+    )
+    assert row is not None, "the leftover got no row, which is the bug"
+    assert row["file_kind"] == FILE_UNKNOWN
+    assert row["state"] == "present"
+    assert row["file_size"] == 20
+    assert row["filename"] == "best.pt"
+    # No name and no role: we did not put it there and do not know what it is.
+    # The shelf derives a name from the filename, which is honest about who
+    # decided it.
+    assert row["display_name"] is None
+    assert row["kind"] is None
+
+    # And it is not counted among PixlStash's own engines.
+    engines = server_hub.fetchone(
+        "SELECT COUNT(*) AS n FROM model WHERE file_kind = ?", (FILE_ENGINE,)
+    )
+    assert engines["n"] == len(BUILTIN_ENGINES)
+
+
+def test_declaring_again_does_not_wipe_a_name_the_owner_gave_a_leftover(
+    server_hub, tmp_path
+):
+    """The declaration is the authority for an engine, not for a leftover.
+
+    An engine restates its name on every start because nobody may rename one.
+    An unclaimed file declares no name at all, so restating it outright would
+    reset whatever the owner typed on the one row class here they are allowed
+    to curate — every server start, silently.
+    """
+    (tmp_path / "best.pt").write_bytes(b"y" * 20)
+    declare_builtin_models(server_hub, str(tmp_path))
+    with server_hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET display_name = 'YOLO detector', kind = 'detector' "
+            "WHERE filename = 'best.pt'"
+        )
+
+    declare_builtin_models(server_hub, str(tmp_path))
+
+    row = server_hub.fetchone(
+        "SELECT display_name, kind FROM model WHERE filename = 'best.pt'"
+    )
+    assert (row["display_name"], row["kind"]) == ("YOLO detector", "detector")
+
+
+def test_a_leftover_merged_into_a_real_model_does_not_drag_it_to_unknown(
+    server_hub, tmp_path
+):
+    """The sharp edge of giving leftovers a row, and the reason `file_kind` is
+    COALESCE'd rather than restated.
+
+    A leftover enters with `sha256` NULL, so `CheckpointHashTask` picks it up,
+    and if it hashes to a digest already registered the two `model` rows MERGE:
+    this folder's `model_file` is repointed at the survivor, which is somebody's
+    real adapter in their own folder. Restating `unknown` onto that row on the
+    next start would drop the adapter out of `/adapters` everywhere, over a
+    second copy the owner happened to leave in the download folder.
+
+    The merge is simulated rather than driven through the hash task: what is
+    under test is the declaration's behaviour once a location it wrote points at
+    a row it did not.
+    """
+    (tmp_path / "stray.safetensors").write_bytes(b"y" * 20)
+    folder_id = declare_builtin_models(server_hub, str(tmp_path))
+
+    with server_hub.transaction() as conn:
+        adapter_id = conn.execute(
+            "INSERT INTO model (file_kind, kind, sha256, display_name, "
+            "provenance, created_at) VALUES ('adapter', 'lora', ?, "
+            "'Cyanwood Style', 'external', '2026-08-01T00:00:00Z')",
+            ("a" * 64,),
+        ).lastrowid
+        # What `CheckpointHashTask._merge` does: the survivor keeps its identity
+        # and takes the other row's locations.
+        conn.execute(
+            "UPDATE model_file SET model_id = ? "
+            "WHERE model_folder_id = ? AND relpath = ?",
+            (adapter_id, folder_id, "stray.safetensors"),
+        )
+
+    declare_builtin_models(server_hub, str(tmp_path))
+
+    row = server_hub.fetchone(
+        "SELECT file_kind, kind, display_name FROM model WHERE id = ?", (adapter_id,)
+    )
+    assert row["file_kind"] == "adapter", "the merged adapter was demoted to unknown"
+    assert (row["kind"], row["display_name"]) == ("lora", "Cyanwood Style")
+
+
+def test_a_leftover_that_is_deleted_outside_pixlstash_goes_missing(
+    server_hub, tmp_path
+):
+    """Which is what then lets the owner forget the row: `POST /models/forget`
+    refuses anything with a copy still `present`."""
+    leftover = tmp_path / "best.pt"
+    leftover.write_bytes(b"y" * 20)
+    folder_id = declare_builtin_models(server_hub, str(tmp_path))
+    os.unlink(leftover)
+
+    declare_builtin_models(server_hub, str(tmp_path))
+
+    state = server_hub.fetchone(
+        "SELECT state FROM model_file WHERE model_folder_id = ? AND relpath = ?",
+        (folder_id, "best.pt"),
+    )
+    assert state["state"] == "missing"
 
 
 def test_claiming_a_path_the_owner_registered_resets_every_column(server_hub, tmp_path):
