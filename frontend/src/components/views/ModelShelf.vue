@@ -1686,21 +1686,21 @@ const rovingRowKey = computed(
 /**
  * Click, Ctrl+click, Shift+click — the grid's own three gestures.
  *
- * A drag across THIS row's text is not a pick: releasing it would otherwise
- * collapse the selection to that one row. Scoped to the row the click landed
- * in — asking only whether any text is selected anywhere would make the whole
- * list unclickable for as long as the reader had a selection somewhere else on
- * the page, which is a far bigger rule than the one intended.
+ * The guard that used to sit here — ignore a click ending a text drag anchored
+ * inside THIS row — went with the panel's `user-select: none` (#932): the only
+ * text left to drag across is the rename field, which opts back in. The
+ * row-being-renamed check is what covers that one remaining case. A drag out of
+ * the field ends in a mouseup the field's own `@click.stop` never sees, so the
+ * click lands here — and picking a row from under an open field is the same
+ * "that was a text drag, not a pick" mistake as before.
+ *
+ * It cannot swallow a plain click on the row: mousedown there blurs the field
+ * first, and `commitRename` clears `editingRowKey` synchronously, so by the
+ * time the click arrives this row is no longer the one being renamed. Clicking
+ * away to commit still commits and still picks.
  */
 function pickRow(row, event) {
-  const selection = window.getSelection?.();
-  if (
-    selection &&
-    !selection.isCollapsed &&
-    event.currentTarget?.contains?.(selection.anchorNode)
-  ) {
-    return;
-  }
+  if (editingRowKey.value === row.rowKey) return;
   focusedRowKey.value = row.rowKey;
   store.selectFromClick(
     row.id,
@@ -2252,6 +2252,18 @@ watch(
   background: rgb(var(--v-theme-background));
   color: rgb(var(--v-theme-on-background));
   outline: none;
+  /* Picking rows is the gesture on this panel, and the browser's text selection
+     rode along with it: Shift+click extends a text range from the last click and
+     a fast double click word-selects, so a multi-select arrived with the list
+     highlighted through it (#932). On the PANEL rather than on the row, because
+     a drag that starts a row-height too high — on the column headers, a group
+     header, the band legend — paints the same text just as well. The desktop
+     shell already gets this from `.is-desktop` in `style.css`; this is the same
+     rule for the browser build, kept to the shelf rather than made global,
+     which is a wider decision than this issue. The rename field opts back in
+     below: it is the one place on the panel a name is edited. */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .shelf-toolbar {
@@ -3125,9 +3137,13 @@ watch(
 }
 
 /* Editing: a real bordered field, in the app's one focus language (§11). Sized
-   to the text it replaces so committing does not jump the row. */
+   to the text it replaces so committing does not jump the row. Selectable
+   against the panel's `user-select: none`, or the one place a name is genuinely
+   edited would be a field whose text cannot be dragged over or double-clicked. */
 .shelf-row-rename {
   min-width: 0;
+  -webkit-user-select: text;
+  user-select: text;
   flex: 1 1 auto;
   padding: 0 var(--space-2);
   font-family: var(--font-ui);
