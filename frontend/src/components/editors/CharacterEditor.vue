@@ -66,6 +66,16 @@
           No reference images yet — add more scored pictures of this person.
         </p>
       </div>
+      <!-- `v-if="props.open"` so the tray remounts and re-reads on every open.
+           Vuetify's dialog already unboots its body on close, so this is mostly
+           belt-and-braces — but the freshness of a list written on ANOTHER
+           surface (the shelf) should not rest on an overlay's lazy-mount
+           behaviour, which is a detail of the dialog rather than a contract. -->
+      <AdapterTray
+        v-if="props.open"
+        entity-type="character"
+        :entity-id="props.character?.id"
+      />
     </div>
     <template #footer>
       <AppButton variant="secondary" @click="emit('close')">Cancel</AppButton>
@@ -118,6 +128,7 @@ import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import AdapterTray from "../widgets/AdapterTray.vue";
 import { errorDetail } from "../../utils/apiError";
 
 // Failures report through the notice surface instead of a blocking native

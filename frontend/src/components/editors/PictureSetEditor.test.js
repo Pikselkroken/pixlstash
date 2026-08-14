@@ -191,3 +191,55 @@ describe("PictureSetEditor — unlocked set", () => {
     expect(body).not.toHaveProperty("project_id");
   });
 });
+
+// The adapter tray is wired here, not tested here — `AdapterTray.test.js` owns
+// its behaviour. What only this file can prove is the WIRING: that the editor
+// mounts it at all, and that it hands it this set rather than some other
+// entity. Both are invisible to the tray's own suite, and a tray pointed at the
+// wrong entity type renders another entity's adapters under this set's name.
+const AdapterTrayStub = {
+  name: "AdapterTray",
+  props: ["entityType", "entityId"],
+  template: `<div class="adapter-tray-stub" :data-type="entityType" :data-id="entityId"></div>`,
+};
+
+describe("PictureSetEditor — adapter tray", () => {
+  function mountWithTray(props) {
+    return mount(PictureSetEditor, {
+      props: { backendUrl: "http://x", projects: [], ...props },
+      global: {
+        ...globalOpts,
+        stubs: { ...globalOpts.stubs, AdapterTray: AdapterTrayStub },
+      },
+    });
+  }
+
+  it("points the tray at this set", () => {
+    const tray = mountWithTray({ open: true, set: lockedSet }).find(
+      ".adapter-tray-stub",
+    );
+    expect(tray.exists()).toBe(true);
+    expect(tray.attributes("data-type")).toBe("set");
+    expect(tray.attributes("data-id")).toBe("7");
+  });
+
+  it("shows it even for a locked set, because it is read-only", () => {
+    // Everything else on this dialog is disabled while the set is locked. The
+    // tray writes nothing, so hiding it would withhold a fact for no reason.
+    expect(
+      mountWithTray({ open: true, set: lockedSet })
+        .find(".adapter-tray-stub")
+        .exists(),
+    ).toBe(true);
+  });
+
+  it("does not mount it while the dialog is closed", () => {
+    // The mount is what triggers the read, and the hosts keep this component
+    // alive for the life of the view.
+    expect(
+      mountWithTray({ open: false, set: lockedSet })
+        .find(".adapter-tray-stub")
+        .exists(),
+    ).toBe(false);
+  });
+});

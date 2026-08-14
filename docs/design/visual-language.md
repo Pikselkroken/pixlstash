@@ -119,9 +119,14 @@ The recurring uppercase label is already a global class. Use it; do not re-roll 
 .section-label { /* in style.css */
   font-size: var(--text-2xs); font-weight: var(--weight-semibold);
   text-transform: uppercase; letter-spacing: var(--tracking-label);
-  color: rgba(var(--v-theme-on-surface), 0.5);
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 ```
+The alpha is `0.7` because 11px semibold is **small** text under §4 and owes 4.5:1;
+composited on `surface` it measures 5.94:1 light / 6.65:1 dark. It shipped at `0.5`
+(3.19:1 light) until 2026-08. Do not lower it to restore a "quieter than the body"
+look — an uppercase tracked semibold already separates on case, weight and tracking,
+and a heading below its own hint text is inverted hierarchy, not restraint.
 
 ### Reading text
 Line-height 1.5 for body (`--leading-body`), 1.35 for single-line UI, 1.2 for display.
