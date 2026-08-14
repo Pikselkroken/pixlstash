@@ -370,10 +370,12 @@ def test_relocating_the_packs_moves_them_and_repoints_every_caller(face_env):
         (relocated_id,),
     )
     assert {row["relpath"]: row["state"] for row in rows} == {
-        # Declared and absent is a normal state for a pack nobody has fetched.
-        # It carries across rather than being dropped with the old row: it is a
-        # tombstone, and the packs moving is not news about whether it came back.
-        "auraface": "missing",
+        # Declared and absent is a normal state for a pack nobody has fetched,
+        # which is why it is `not_downloaded` and not `missing` — the shelf draws
+        # `missing` as a fault (#926). It carries across rather than being
+        # dropped with the old row: it is a tombstone, and the packs moving is
+        # not news about whether it came back.
+        "auraface": "not_downloaded",
         "buffalo_l": "present",
     }
     assert (
