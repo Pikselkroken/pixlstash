@@ -2,12 +2,17 @@
   <div class="tbm shelf-sort-panel">
     <span class="tbm-caret tbm-caret--end"></span>
     <div class="tbm-header">
-      <v-icon size="18" class="tbm-header-icon">{{ activeSort.icon }}</v-icon>
-      <span class="tbm-title">Sort</span>
+      <v-icon size="18" class="tbm-header-icon">{{ headerIcon }}</v-icon>
+      <span class="tbm-title">{{ showsSort ? "Sort" : "Group" }}</span>
       <span class="tbm-spacer"></span>
       <!-- The direction lives in the header rather than as a sixth option: it
            is a property of whichever key is chosen, not a key of its own. -->
-      <button class="tbm-ghost" type="button" @click="toggleDirection">
+      <button
+        v-if="showsSort"
+        class="tbm-ghost"
+        type="button"
+        @click="toggleDirection"
+      >
         <v-icon size="16">{{ directionIcon }}</v-icon>
         <span>{{ directionLabel }}</span>
       </button>
@@ -17,7 +22,7 @@
          this panel is a plain div holding other controls (the direction button
          above), so a menu role here would promise a widget contract nothing
          honours. Same shape as DedupTierMenu. -->
-    <div class="tbm-section">
+    <div v-if="showsSort" class="tbm-section">
       <span class="tbm-label">Sort by</span>
       <div class="tbm-grid-2" role="group" aria-label="Sort by">
         <button
@@ -40,7 +45,7 @@
     <!-- Three axes, not four: Type is already a Show checkbox and is already on
          every row as an icon and a word, so grouping by it would restate what
          the reader can see. -->
-    <div class="tbm-section">
+    <div v-if="showsGroup" class="tbm-section">
       <span class="tbm-label">Group by</span>
       <div class="tbm-grid-3" role="group" aria-label="Group by">
         <button
@@ -65,7 +70,7 @@
          Folder` once, which was never a sort: it reordered nothing and grouped
          everything, and having it sit in the sort control is why the absence of
          real sorting went unnoticed. -->
-    <div v-if="view.groupBy === 'folder'" class="tbm-section">
+    <div v-if="showsGroup && view.groupBy === 'folder'" class="tbm-section">
       <span class="tbm-label">Folders laid out</span>
       <div class="tbm-grid-2" role="group" aria-label="Folders laid out">
         <button
@@ -104,8 +109,27 @@ import {
   sortDirectionLabel,
 } from "../../utils/modelShelf";
 
+// Two axes, two toolbar controls, one panel: the resolved design gives Sort and
+// Group a button each, labelled with the value each currently holds, so the two
+// sections that used to share one popover are drawn separately. Same component
+// either way, because the toggles, the labels and the store writes are the same
+// — only which section is on screen differs (#904).
+const props = defineProps({
+  /** `"sort"`, `"group"`, or `"all"` for both in one panel. */
+  section: { type: String, default: "all" },
+});
+
 const store = useModelShelfStore();
 const view = store.view;
+
+const showsSort = computed(() => props.section !== "group");
+const showsGroup = computed(() => props.section !== "sort");
+
+const headerIcon = computed(() =>
+  showsSort.value
+    ? activeSort.value.icon
+    : (GROUP_BY_LABELS[view.groupBy] || GROUP_BY_LABELS.none).icon,
+);
 
 const activeSort = computed(
   () => SORT_LABELS[view.sortKey] || SORT_LABELS.added_at,

@@ -1,156 +1,228 @@
 <template>
-  <!-- `role="toolbar"` and an accessible name, because this is a row of related
-       controls that appears and disappears: without the name a screen reader
-       announces four unrelated buttons arriving from nowhere. -->
+  <!-- The floating pill, the SAME object the photo grid docks over its tiles:
+       bottom-centre, panel surface, pill radius, elevation-4. Nine labelled
+       buttons in a docked bar was a sentence to re-read on every selection;
+       seven icons is a chord you learn once, and the words are never gone —
+       hover has them and right-click has all of them (#904). -->
   <div
     v-if="store.selectedRows.length"
     class="shelf-selbar"
     role="toolbar"
     aria-label="Selected models"
   >
-    <span class="shelf-selbar-count">{{ countLabel }}</span>
-
-    <button class="bar-btn shelf-selbar-clear" type="button" @click="clear">
-      Clear
-    </button>
-
-    <span class="shelf-selbar-spacer"></span>
-
-    <!-- Rename is the one verb that is single-row by nature: a name is a fact
-         about one file, and the server refuses it for more than one id. Shown
-         and disabled rather than hidden, so the row of verbs does not reflow
-         under the pointer as the selection grows. -->
-    <AppButton
-      size="sm"
-      variant="secondary"
-      icon-left="rename-outline"
-      :disabled="store.selectedRows.length !== 1"
-      :title="renameTitle"
-      @click="emit('rename')"
+    <!-- The count is a control, not a caption: it is where "I meant all of
+         them" and "never mind" live, which is why it carries a chevron. -->
+    <v-menu
+      v-model="countMenuOpen"
+      location="top"
+      origin="bottom center"
+      :offset="8"
     >
-      Rename
-    </AppButton>
+      <template #activator="{ props: menuProps }">
+        <button
+          v-bind="menuProps"
+          class="selbar-count"
+          type="button"
+          aria-haspopup="menu"
+          :aria-expanded="countMenuOpen"
+          :title="countTitle"
+        >
+          <v-icon size="17">mdi-cube-outline</v-icon>
+          <span>{{ store.selectedRows.length.toLocaleString() }}</span>
+          <span v-if="selectedSize" class="selbar-size"
+            >· {{ selectedSize }}</span
+          >
+          <v-icon size="15" class="selbar-chevron">mdi-menu-down</v-icon>
+        </button>
+      </template>
+      <div class="shelf-menu" role="menu">
+        <button
+          class="shelf-mi"
+          type="button"
+          role="menuitem"
+          @click="store.selectVisible()"
+        >
+          <v-icon size="16">mdi-select-all</v-icon>
+          <span>Select all shown</span>
+        </button>
+        <button class="shelf-mi" type="button" role="menuitem" @click="clear">
+          <v-icon size="16">mdi-close</v-icon>
+          <span>Clear selection</span>
+          <span class="shelf-mi-kbd">Esc</span>
+        </button>
+      </div>
+    </v-menu>
 
-    <AppButton
-      size="sm"
-      variant="secondary"
-      icon-left="cube-outline"
-      @click="emit('set-base-model')"
+    <span class="selbar-sep"></span>
+
+    <!-- Assign is one button and one popover, because "person or set" is one
+         question: which thing does this adapter belong to. The two pickers
+         inside it are the shared `AddToEntityControl` the grid uses, so the
+         search, the tri-state and the keyboard model are learned once.
+
+         Every verb below carries BOTH `aria-label` and `title`, and they say
+         different things on purpose. The label is the verb and never changes,
+         so a screen reader hears a stable name and voice control has something
+         to say; the tooltip is the REFUSAL — "Only files that are actually on
+         this machine can be moved" — and changes with the selection. `title`
+         alone is not an accessible name a reader can rely on, and it does not
+         exist at all on touch. -->
+    <v-menu
+      v-model="assignMenuOpen"
+      :close-on-content-click="false"
+      location="top"
+      origin="bottom center"
+      :offset="8"
     >
-      Set base model
-    </AppButton>
+      <template #activator="{ props: menuProps }">
+        <button
+          v-bind="menuProps"
+          class="selbar-btn"
+          type="button"
+          data-verb="assign"
+          aria-label="Assign to person or set"
+          :disabled="!assignable.length"
+          :title="assignTitle || 'Assign to person or set'"
+        >
+          <v-icon size="19">mdi-account-plus-outline</v-icon>
+        </button>
+      </template>
+      <div class="shelf-menu shelf-menu--assign">
+        <AddToEntityControl
+          type="character"
+          label="Assign to person"
+          float-menu
+          :subject-ids="assignableIds"
+          :membership="membership.character"
+          :disabled="!assignable.length"
+          :title="assignTitle"
+          @attach="onAttach($event, true)"
+          @detach="onAttach($event, false)"
+        />
+        <AddToEntityControl
+          type="set"
+          label="Assign to set"
+          float-menu
+          :subject-ids="assignableIds"
+          :membership="membership.set"
+          :disabled="!assignable.length"
+          :title="assignTitle"
+          @attach="onAttach($event, true)"
+          @detach="onAttach($event, false)"
+        />
+      </div>
+    </v-menu>
 
-    <AppButton
-      size="sm"
-      variant="secondary"
-      icon-left="shape-outline"
-      @click="emit('set-kind')"
-    >
-      Set kind
-    </AppButton>
-
-    <!-- Stack, the manual half of grouping. The toolbar's sweep proposes only
-         what a training step spells out; a run whose files the detector cannot
-         read as one has no other way to be said. Gated on every rule the route
-         enforces, with the failing one in the tooltip. -->
-    <AppButton
-      size="sm"
-      variant="secondary"
-      icon-left="layers-outline"
+    <button
+      class="selbar-btn"
+      type="button"
+      data-verb="stack"
+      aria-label="Stack these into one training run"
       :disabled="!stackable"
       :title="stackTitle"
       @click="emit('stack')"
     >
-      Stack these
-    </AppButton>
+      <v-icon size="19">mdi-layers-outline</v-icon>
+    </button>
 
-    <!-- Assign, the fifth verb, as two pickers rather than a button: it names
-         an entity, and the shelf uses the same picker the grid does so the
-         search, the tri-state and the keyboard model are learned once. Both are
-         host-driven — the rows already carry their `attachments`, so nothing is
-         fetched, and the writes are the store's because the route replaces one
-         adapter's whole set. -->
-    <AddToEntityControl
-      type="character"
-      label="Assign to person"
-      :subject-ids="assignableIds"
-      :membership="membership.character"
-      :disabled="!assignable.length"
-      :title="assignTitle"
-      @attach="onAttach($event, true)"
-      @detach="onAttach($event, false)"
-    />
-
-    <AddToEntityControl
-      type="set"
-      label="Assign to set"
-      :subject-ids="assignableIds"
-      :membership="membership.set"
-      :disabled="!assignable.length"
-      :title="assignTitle"
-      @attach="onAttach($event, true)"
-      @detach="onAttach($event, false)"
-    />
-
-    <!-- An icon answers "which one is this?", so it is single-row by nature:
-         giving forty rows one mark would remove the only thing telling them
-         apart. Shown and disabled rather than hidden, like Rename. -->
-    <AppButton
-      size="sm"
-      variant="secondary"
-      icon-left="image-outline"
-      :disabled="store.selectedRows.length !== 1"
-      :title="iconTitle"
-      @click="emit('set-icon')"
-    >
-      Set icon
-    </AppButton>
-
-    <AppButton
-      v-if="withIcons.length"
-      size="sm"
-      variant="secondary"
-      icon-left="image-off-outline"
-      :title="clearIconTitle"
-      @click="emit('clear-icons')"
-    >
-      Clear icon
-    </AppButton>
-
-    <!-- Move is the keyboard path to what a drag does. The shelf's definition
-         of done requires every verb to be reachable without a pointer, and a
-         drag is not; it is also where the move is stated in files, bytes and
-         rename-versus-copy before a 438 GB operation starts. -->
-    <AppButton
-      size="sm"
-      variant="secondary"
-      icon-left="folder-move-outline"
+    <button
+      class="selbar-btn"
+      type="button"
+      data-verb="move"
+      aria-label="Move to another folder"
       :disabled="!movable.length || moves.busy"
       :title="moveTitle"
       @click="emit('move')"
     >
-      Move
-    </AppButton>
+      <v-icon size="19">mdi-folder-move-outline</v-icon>
+    </button>
 
-    <!-- Forget is gated on the rows' STATE, not on how many are selected: it is
-         offered only when every selected model has already lost its files.
-         Disabled with the reason in the tooltip rather than hidden, or the
-         reader learns nothing about why the verb they came for is absent. -->
-    <AppButton
-      size="sm"
-      variant="danger"
-      icon-left="delete-outline"
+    <!-- The two single-item verbs ride along DISABLED rather than disappearing:
+         a row of buttons that reflows as the selection grows is a row you have
+         to re-read, and a disabled button with its reason in the tooltip
+         teaches where the verb lives. -->
+    <button
+      class="selbar-btn"
+      type="button"
+      data-verb="rename"
+      aria-label="Rename"
+      :disabled="!single"
+      :title="renameTitle"
+      @click="emit('rename')"
+    >
+      <v-icon size="19">mdi-pencil-outline</v-icon>
+    </button>
+
+    <button
+      class="selbar-btn"
+      type="button"
+      data-verb="set-icon"
+      aria-label="Set icon"
+      :disabled="!single"
+      :title="iconTitle"
+      @click="emit('set-icon')"
+    >
+      <v-icon size="19">mdi-image-outline</v-icon>
+    </button>
+
+    <span class="selbar-sep"></span>
+
+    <button
+      class="selbar-btn"
+      type="button"
+      data-verb="forget"
+      aria-label="Remove from shelf"
       :disabled="!forgettable.length"
       :title="forgetTitle"
       @click="emit('forget')"
     >
-      Forget
-    </AppButton>
+      <v-icon size="19">mdi-playlist-remove</v-icon>
+    </button>
+
+    <v-menu
+      v-model="moreMenuOpen"
+      :close-on-content-click="false"
+      location="top end"
+      origin="bottom end"
+      :offset="8"
+    >
+      <template #activator="{ props: menuProps }">
+        <button
+          v-bind="menuProps"
+          class="selbar-btn"
+          type="button"
+          data-verb="more"
+          aria-label="More actions"
+          aria-haspopup="menu"
+          :aria-expanded="moreMenuOpen"
+          title="More…"
+        >
+          <v-icon size="19">mdi-dots-horizontal</v-icon>
+        </button>
+      </template>
+      <VerbMenu :single="false" v-bind="verbHandlers" />
+    </v-menu>
   </div>
+
+  <!-- The row context menu: the FULL inventory, and the thing every other
+       surface is a shortcut into. Anchored to the pointer rather than to the
+       row, which is what a context menu is; the view opens it through
+       `openContextMenu` after it has made the row the selection. -->
+  <v-menu
+    v-model="contextOpen"
+    :target="contextAt"
+    :close-on-content-click="false"
+    location="bottom end"
+    origin="top start"
+    :offset="2"
+  >
+    <VerbMenu :single="single" v-bind="verbHandlers" />
+  </v-menu>
 </template>
 
 <script setup>
-// The verb layer's control surface (shelf plan F3).
+// The verb layer's control surface (shelf plan F3, redrawn to the resolved
+// design in #904).
 //
 // It carries no verb logic of its own: every button emits and `ModelShelf.vue`
 // runs the confirmation and the call. That keeps the two confirmations in one
@@ -161,14 +233,20 @@
 // shared `AddToEntityControl`, which owns its own menu and emits the entity it
 // was pointed at. Handing that emit up unchanged and back down again would buy
 // nothing, so this one calls the store directly.
+//
+// **Three surfaces, one set of gates.** The pill, its `⋯` menu and the row
+// context menu all offer the same verbs under the same refusals, so they are
+// one component rather than three that have to be kept in step. That is the
+// whole reason the context menu lives here and not in the view: every `title`
+// below is a refusal sentence, and a second copy of them would drift.
 
-import { computed } from "vue";
+import { computed, h, ref } from "vue";
 
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
-import AppButton from "../widgets/AppButton.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { formatModelSize, movableCopies } from "../../utils/modelShelf";
 
 const emit = defineEmits([
@@ -185,6 +263,30 @@ const emit = defineEmits([
 const store = useModelShelfStore();
 const folders = useModelFoldersStore();
 const moves = useModelMovesStore();
+
+const countMenuOpen = ref(false);
+const assignMenuOpen = ref(false);
+const moreMenuOpen = ref(false);
+const contextOpen = ref(false);
+/** `[x, y]` in client coordinates — what v-menu's `target` takes. */
+const contextAt = ref([0, 0]);
+
+/**
+ * Open the context menu at a pointer.
+ *
+ * Called by the view, which has already made the right-clicked row the
+ * selection — the file-manager rule: right-clicking a row that is not selected
+ * selects it, right-clicking one that is leaves the selection alone.
+ *
+ * @param {number} x - clientX.
+ * @param {number} y - clientY.
+ */
+function openContextMenu(x, y) {
+  contextAt.value = [x, y];
+  contextOpen.value = true;
+}
+
+const single = computed(() => store.selectedRows.length === 1);
 
 /**
  * What the selection weighs, stack members included.
@@ -206,19 +308,21 @@ const selectedBytes = computed(() =>
 );
 
 /**
- * The count and what it weighs, in the separator the app already uses.
+ * What the selection weighs, or `""` when nothing in it has a recorded size.
  *
- * The size is what makes a bulk verb reviewable before it runs: "Forget these
- * 40" says nothing about what is being reclaimed and "12.4 GB" does. Dropped
- * rather than shown as `0 B` when nothing in the selection has a recorded size,
- * because a shelf that has not been hashed yet would otherwise claim the
- * selection is empty.
+ * Dropped rather than shown as `0 B`, because a shelf that has not been hashed
+ * yet would otherwise claim the selection is empty. The size is what makes a
+ * bulk verb reviewable before it runs: "these 40" says nothing about what is
+ * being reclaimed and "12.4 GB" does.
  */
-const countLabel = computed(() => {
+const selectedSize = computed(() =>
+  selectedBytes.value ? formatModelSize(selectedBytes.value) : "",
+);
+
+const countTitle = computed(() => {
   const n = store.selectedRows.length;
   const head = `${n.toLocaleString()} ${n === 1 ? "model" : "models"} selected`;
-  const size = formatModelSize(selectedBytes.value);
-  return selectedBytes.value && size ? `${head} · ${size}` : head;
+  return selectedSize.value ? `${head} · ${selectedSize.value}` : head;
 });
 
 /**
@@ -237,14 +341,28 @@ const forgettable = computed(() =>
 );
 
 const renameTitle = computed(() =>
-  store.selectedRows.length === 1
-    ? "Rename this model"
-    : "Select one model to rename it",
+  single.value ? "Rename this model" : "Select one model to rename it",
+);
+
+const iconTitle = computed(() =>
+  single.value
+    ? "Give this model a picture"
+    : "Select one model to give it a picture",
+);
+
+const withIcons = computed(() =>
+  store.selectedRows.filter((row) => row.icon_sha256),
+);
+
+const clearIconTitle = computed(() =>
+  withIcons.value.length === 1
+    ? "Go back to the generated mark"
+    : `Clear the ${withIcons.value.length} pictures in this selection`,
 );
 
 const forgetTitle = computed(() => {
   if (!forgettable.value.length) {
-    return "Only models whose files are gone can be forgotten";
+    return "Only models whose files are gone can be removed from the shelf";
   }
   if (forgettable.value.length === store.selectedRows.length) {
     return "Forget these models and everything recorded about them";
@@ -400,32 +518,196 @@ const stackTitle = computed(
     `Group these ${store.selectedRows.length.toLocaleString()} files into one run`,
 );
 
-/** The selected models that actually have an icon to clear. */
-const withIcons = computed(() =>
-  store.selectedRows.filter((row) => row.icon_sha256),
-);
-
-const iconTitle = computed(() =>
-  store.selectedRows.length === 1
-    ? "Give this model a mark of its own"
-    : "Select one model to give it an icon",
-);
-
-const clearIconTitle = computed(() =>
-  withIcons.value.length === 1
-    ? "Clear this model's icon"
-    : `Clear the icon on ${withIcons.value.length} models`,
-);
-
-function onAttach(payload, attach) {
-  return store.setAttachment({ ...payload, attach });
+/**
+ * Put the selection's filenames on the clipboard.
+ *
+ * The one verb in the design's context menu the shelf can answer without a new
+ * route: the names are already on the rows. It is also the answer to "I need
+ * this in a ComfyUI node", which is why it is worth a line at all.
+ *
+ * A notice rather than silence, because a clipboard write has no visible
+ * result: pressing it twice because nothing happened is how a reader ends up
+ * unsure whether it worked at all.
+ */
+async function copyFilenames() {
+  const names = store.selectedRows.map((row) => row.filename).filter(Boolean);
+  const notices = useNoticeStore();
+  if (!names.length) return;
+  try {
+    await navigator.clipboard.writeText(names.join("\n"));
+    notices.push({
+      level: "success",
+      text:
+        names.length === 1
+          ? `Copied ${names[0]}.`
+          : `Copied ${names.length} filenames.`,
+    });
+  } catch (err) {
+    // Denied permission, an insecure origin, or a browser that has no
+    // clipboard API at all. Named rather than swallowed: the reader pressed a
+    // verb and nothing on screen would otherwise say it did not run.
+    notices.push({
+      level: "error",
+      text: `Could not reach the clipboard: ${err?.message || err}`,
+    });
+  }
 }
 
 function clear() {
   store.clearSelection();
 }
 
+/**
+ * One write per row, for the entity the picker was pointed at.
+ *
+ * The route replaces one adapter's whole attachment set, so the store owns the
+ * read-modify-write; the picker only says which entity, and which way.
+ */
+function onAttach(payload, attach) {
+  return store.setAttachment({ ...payload, attach });
+}
+
+/**
+ * Everything `VerbMenu` needs, in one object, so the two mounts of it cannot
+ * drift apart. Passed with `v-bind` rather than listed twice in the template.
+ */
+const verbHandlers = computed(() => ({
+  rows: store.selectedRows,
+  renameTitle: renameTitle.value,
+  iconTitle: iconTitle.value,
+  clearIconTitle: clearIconTitle.value,
+  hasIcons: withIcons.value.length > 0,
+  assignTitle: assignTitle.value,
+  assignableIds: assignableIds.value,
+  assignable: assignable.value.length > 0,
+  membership: membership.value,
+  stackable: stackable.value,
+  stackTitle: stackTitle.value,
+  movable: movable.value.length > 0 && !moves.busy,
+  moveTitle: moveTitle.value,
+  forgettable: forgettable.value.length > 0,
+  forgetTitle: forgetTitle.value,
+  onVerb: (verb) => {
+    contextOpen.value = false;
+    moreMenuOpen.value = false;
+    if (verb === "copy-filenames") copyFilenames();
+    else emit(verb);
+  },
+  onAttach,
+}));
+
+/**
+ * The verb list itself, as a render function rather than a second `.vue` file.
+ *
+ * It is drawn twice — once under `⋯` and once at the pointer — from one array,
+ * and it is the ONE place the design's ordering lives: rename and set icon
+ * first because they are about this row, then the properties, then the two that
+ * move files, then removal. A separate component would need every gate above
+ * threaded through it as props anyway, which is exactly what `verbHandlers` is.
+ */
+const VerbMenu = (props) => {
+  const item = (icon, label, { on, disabled, title, kbd, danger } = {}) =>
+    h(
+      "button",
+      {
+        class: [
+          "shelf-mi",
+          disabled && "shelf-mi--disabled",
+          danger && "shelf-mi--danger",
+        ],
+        type: "button",
+        role: "menuitem",
+        disabled,
+        title,
+        onClick: on,
+      },
+      [
+        h("i", { class: `v-icon mdi ${icon}`, "aria-hidden": "true" }),
+        h("span", label),
+        kbd ? h("span", { class: "shelf-mi-kbd" }, kbd) : null,
+      ],
+    );
+  const sep = () => h("span", { class: "shelf-mi-sep" });
+  const assign = (type, label) =>
+    h(AddToEntityControl, {
+      type,
+      label,
+      floatMenu: true,
+      placement: "right",
+      subjectIds: props.assignableIds,
+      membership: props.membership[type],
+      disabled: !props.assignable,
+      title: props.assignTitle,
+      onAttach: (entity) => props.onAttach(entity, true),
+      onDetach: (entity) => props.onAttach(entity, false),
+    });
+
+  return h("div", { class: "shelf-menu", role: "menu" }, [
+    props.single
+      ? item("mdi-pencil-outline", "Rename", {
+          on: () => props.onVerb("rename"),
+          title: props.renameTitle,
+          kbd: "F2",
+        })
+      : null,
+    props.single
+      ? item("mdi-image-outline", "Set icon…", {
+          on: () => props.onVerb("set-icon"),
+          title: props.iconTitle,
+        })
+      : null,
+    props.hasIcons
+      ? item("mdi-image-off-outline", "Clear icon", {
+          on: () => props.onVerb("clear-icons"),
+          title: props.clearIconTitle,
+        })
+      : null,
+    props.single || props.hasIcons ? sep() : null,
+    item("mdi-cube-outline", "Set base model…", {
+      on: () => props.onVerb("set-base-model"),
+    }),
+    item("mdi-shape-outline", "Set kind…", {
+      on: () => props.onVerb("set-kind"),
+    }),
+    assign("character", "Assign to person"),
+    assign("set", "Assign to set"),
+    item(
+      "mdi-layers-outline",
+      props.single ? "Stack with selection" : "Stack these",
+      {
+        on: () => props.onVerb("stack"),
+        disabled: !props.stackable,
+        title: props.stackTitle,
+      },
+    ),
+    item("mdi-folder-move-outline", "Move to…", {
+      on: () => props.onVerb("move"),
+      disabled: !props.movable,
+      title: props.moveTitle,
+    }),
+    sep(),
+    item(
+      "mdi-content-copy",
+      props.single ? "Copy filename" : "Copy filenames",
+      { on: () => props.onVerb("copy-filenames") },
+    ),
+    sep(),
+    // NOT the danger treatment: removing a model whose file is already gone
+    // destroys a row, not bytes. `Delete from disk`, which the design puts
+    // below this in red, has no route behind it yet (#933).
+    item("mdi-playlist-remove", "Remove from shelf", {
+      on: () => props.onVerb("forget"),
+      disabled: !props.forgettable,
+      title: props.forgetTitle,
+    }),
+  ]);
+};
+
+// The opener the view calls, and the gates the suite asserts directly rather
+// than through seven `title` strings. Last in the file because `defineExpose`
+// evaluates its argument where it stands.
 defineExpose({
+  openContextMenu,
   forgettable,
   assignable,
   membership,
@@ -437,32 +719,167 @@ defineExpose({
 </script>
 
 <style scoped>
-/* Sits between the toolbar and the list rather than floating over it: the list
-   is what the selection was made in, and a floating bar would cover the rows a
-   reader checks before pressing a verb. */
+/* ── The pill ──────────────────────────────────────────────────────────────
+   Positioned by the shelf, which is the only thing that knows where its list
+   ends; this owns the object and not its place. `--elevation-4` and the pill
+   radius are what make it read as floating ABOVE the rows rather than as a
+   docked strip the list stops at. */
 .shelf-selbar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  border: 1px solid rgb(var(--v-theme-divider));
+  border-radius: var(--radius-pill);
+  box-shadow: var(--elevation-4);
+}
+
+.selbar-count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.selbar-size {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.selbar-chevron {
+  margin-left: calc(var(--space-1) * -1);
+}
+
+/* Round, 34px, and the hover wash is the only thing that draws a box: a border
+   per verb would make seven of them into a fence. */
+.selbar-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.selbar-btn:hover:not(:disabled) {
+  background: var(--hover-wash);
+}
+
+/* Shown and dimmed rather than hidden, so the row of verbs never reflows under
+   the pointer as the selection grows. The reason is in the `title`. */
+.selbar-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.selbar-sep {
+  width: 1px;
+  height: 22px;
+  background: rgb(var(--v-theme-divider));
+}
+
+/* ── The verb menu ─────────────────────────────────────────────────────────
+   The same panel vocabulary as the toolbar popovers and the undo receipt:
+   surface, hairline, `--elevation-4`. Global rather than scoped because the
+   items are built in a render function, which scoped CSS cannot reach. */
+</style>
+
+<style>
+.shelf-menu {
+  min-width: 210px;
+  padding: var(--space-2);
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid rgb(var(--v-theme-divider));
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-4);
+  font-size: var(--text-sm);
+}
+
+.shelf-menu--assign {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.shelf-mi {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
-  margin-bottom: var(--space-3);
-  border-radius: var(--radius-md);
-  background: rgba(var(--v-theme-primary), 0.1);
-  border: 1px solid rgba(var(--v-theme-primary), 0.35);
-}
-
-.shelf-selbar-count {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  font: inherit;
   font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-on-background));
+  text-align: left;
   white-space: nowrap;
+  cursor: pointer;
 }
 
-.shelf-selbar-clear {
+.shelf-mi:hover:not(:disabled) {
+  background: var(--hover-wash);
+}
+
+.shelf-mi > .v-icon {
+  width: 18px;
+  flex: none;
+  font-size: 16px;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.shelf-mi--disabled,
+.shelf-mi:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.shelf-mi-kbd {
+  margin-left: auto;
+  padding-left: var(--space-5);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.shelf-mi-sep {
+  display: block;
+  height: 1px;
+  margin: var(--space-2);
+  background: rgb(var(--v-theme-divider));
+}
+
+/* The two pickers inside the verb menu are full-width rows in it, not the
+   bordered buttons they are in a toolbar. */
+.shelf-menu .ate {
+  width: 100%;
+}
+
+.shelf-menu .ate-btn {
+  width: 100%;
+  justify-content: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   font-size: var(--text-sm);
-}
-
-.shelf-selbar-spacer {
-  flex: 1 1 auto;
 }
 </style>
