@@ -137,6 +137,16 @@
           </div>
         </div>
       </div>
+
+      <!-- Outside the lock wash: the tray is read-only, so a locked set still
+           shows what it uses. `v-if="props.open"` remounts it on every open, so
+           an adapter attached on the shelf in between shows up here without
+           the freshness resting on the dialog's lazy-mount behaviour. -->
+      <AdapterTray
+        v-if="props.open"
+        entity-type="set"
+        :entity-id="props.set?.id"
+      />
     </div>
     <template #footer>
       <AppButton variant="secondary" @click="emit('close')">Cancel</AppButton>
@@ -174,6 +184,7 @@ import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
+import AdapterTray from "../widgets/AdapterTray.vue";
 import { errorDetail } from "../../utils/apiError";
 
 import { API_BASE_URL } from "../../utils/apiClient";

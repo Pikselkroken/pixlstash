@@ -280,3 +280,71 @@ describe("overlay flow: the face is actually assigned", () => {
     expect(notices.error).toHaveBeenCalled();
   });
 });
+
+// The adapter tray is wired here, not tested here — `AdapterTray.test.js` owns
+// its behaviour. What only this file can prove is the WIRING: that the editor
+// mounts it at all, that it hands it THIS person, and that an unsaved person
+// gets no tray. All three are invisible to the tray's own suite, and a tray
+// given the wrong entity type would render a picture set's adapters under a
+// person's name.
+const AdapterTrayStub = {
+  name: "AdapterTray",
+  props: ["entityType", "entityId"],
+  template: `<div class="adapter-tray-stub" :data-type="entityType" :data-id="entityId"></div>`,
+};
+
+describe("CharacterEditor — adapter tray", () => {
+  function mountWithTray(props) {
+    return mount(CharacterEditor, {
+      props: { backendUrl: "http://x", projects: [], ...props },
+      global: {
+        plugins: [vuetify],
+        stubs: {
+          // The real AppDialog teleports its body out of the wrapper, so the
+          // tray would be unfindable for reasons that have nothing to do with
+          // the wiring under test.
+          AppDialog: {
+            props: ["open", "title", "width"],
+            template: "<div><slot /><slot name='footer' /></div>",
+          },
+          AdapterTray: AdapterTrayStub,
+        },
+      },
+    });
+  }
+
+  it("points the tray at this person", async () => {
+    const wrapper = mountWithTray({
+      open: true,
+      character: { id: 42, name: "Alice" },
+    });
+    await flushPromises();
+    const tray = wrapper.find(".adapter-tray-stub");
+    expect(tray.exists()).toBe(true);
+    expect(tray.attributes("data-type")).toBe("character");
+    expect(tray.attributes("data-id")).toBe("42");
+  });
+
+  it("gives an unsaved person no id to look up", async () => {
+    const wrapper = mountWithTray({
+      open: true,
+      character: { id: null, name: "" },
+    });
+    await flushPromises();
+    // Mounted, but with nothing to read — the tray renders nothing at all for a
+    // null id, which is what keeps a create dialog from carrying a section that
+    // can only ever say "none".
+    expect(wrapper.find(".adapter-tray-stub").attributes("data-id")).toBe(
+      undefined,
+    );
+  });
+
+  it("does not mount it while the dialog is closed", async () => {
+    const wrapper = mountWithTray({
+      open: false,
+      character: { id: 42, name: "Alice" },
+    });
+    await flushPromises();
+    expect(wrapper.find(".adapter-tray-stub").exists()).toBe(false);
+  });
+});

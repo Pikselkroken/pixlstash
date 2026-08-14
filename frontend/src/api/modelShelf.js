@@ -28,14 +28,32 @@ export const BASE_MODEL_UNASSIGNED = "UNASSIGNED";
  *   rows that record none. Omit for all.
  * @param {string} [options.kind] - adapter algorithm, e.g. `lora` or `lokr`.
  * @param {string} [options.q] - substring of name, filename or trigger words.
+ * @param {number} [options.characterId] - only adapters attached to this
+ *   character. Not enforced here: the server rejects both filters at once with
+ *   a 400, and duplicating that rule in the client would be a second place for
+ *   it to drift from.
+ * @param {number} [options.setId] - only adapters attached to this picture set.
  * @returns {Promise<Array<Object>>} the `adapters` array of the response body.
  */
-export async function listAdapters({ fileKind, baseModel, kind, q } = {}) {
+export async function listAdapters({
+  fileKind,
+  baseModel,
+  kind,
+  q,
+  characterId,
+  setId,
+} = {}) {
   const params = {};
   if (fileKind) params.file_kind = fileKind;
   if (baseModel) params.base_model = baseModel;
   if (kind) params.kind = kind;
   if (q) params.q = q;
+  // Ids are compared to null, not truth-tested: the filters are meaningful for
+  // any real id and a `0` would silently fall through a truthy check.
+  if (characterId !== undefined && characterId !== null) {
+    params.character_id = characterId;
+  }
+  if (setId !== undefined && setId !== null) params.set_id = setId;
   const body = await unwrap(apiClient.get("/adapters", { params }));
   return Array.isArray(body?.adapters) ? body.adapters : [];
 }

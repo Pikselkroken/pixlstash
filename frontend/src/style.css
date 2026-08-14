@@ -155,13 +155,20 @@ body {
   --notice-safe-bottom: calc(var(--space-5) + var(--floating-bottom-h));
 }
 
-/* Reusable uppercase section label — matches font-size 11px, weight 600, spacing 0.06em */
+/* Reusable uppercase section label — matches font-size 11px, weight 600, spacing 0.06em
+ *
+ * Alpha 0.7 by lead-designer ruling, 2026-08: 11px semibold is SMALL text under
+ * visual-language.md §4 and owes 4.5:1. It shipped at 0.5, which measures
+ * 3.19:1 light / 4.14:1 dark; 0.7 measures 5.94:1 / 6.65:1. Do not lower it to
+ * restore a "quieter than the body" look — an uppercase tracked semibold
+ * already separates on case, weight and tracking, and a heading below its own
+ * hint text is inverted hierarchy, not restraint. */
 .section-label {
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: var(--tracking-label);
-  color: rgba(var(--v-theme-on-surface), 0.5);
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 /* Screen-reader-only text. NEVER use `display: none` / `visibility: hidden` for

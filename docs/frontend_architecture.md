@@ -143,7 +143,7 @@ frontend/src/
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
-    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), and the Stack* family (badge, edge ticks, expansion strip)
+    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), and `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors)
 ```
 
 ---
@@ -571,11 +571,11 @@ Small presentational building blocks shared by the section components above, so 
 
 ### Editor and Browser Components
 
-#### `CharacterEditor.vue` (428 lines)
-Create/edit/delete character (person) entity. Props: `open`, `character`, `backendUrl`, `projects`. Emits: `close`, `saved` (payload: the saved record, with the server-assigned id on create, so hosts can chain follow-up work). Hosted by `SideBar` (its own entry points) and by `ImageGrid` (the context menu's create-person-and-assign flow, #645).
+#### `CharacterEditor.vue` (438 lines)
+Create/edit/delete character (person) entity. Props: `open`, `character`, `backendUrl`, `projects`. Emits: `close`, `saved` (payload: the saved record, with the server-assigned id on create, so hosts can chain follow-up work). Hosted by `SideBar` (its own entry points) and by `ImageGrid` (the context menu's create-person-and-assign flow, #645). Embeds `AdapterTray` below the reference images.
 
-#### `PictureSetEditor.vue` (618 lines)
-Create/edit/delete picture sets. Props: `open`, `set`, `thumbnailUrl`. Uses `SET_ICONS`, `SET_COLORS`, `SET_ICON_CATEGORIES`, `ICON_CARDS` from `setAppearance.js`. Emits: `close`, `saved`, `deleted`.
+#### `PictureSetEditor.vue` (621 lines)
+Create/edit/delete picture sets. Props: `open`, `set`, `thumbnailUrl`. Uses `SET_ICONS`, `SET_COLORS`, `SET_ICON_CATEGORIES`, `ICON_CARDS` from `setAppearance.js`. Emits: `close`, `saved`, `deleted`. Embeds `AdapterTray` below the appearance row, outside the lock wash — the tray is read-only, so a locked set still shows what it uses.
 
 #### `ProjectEditor.vue` (177 lines)
 Create/rename/delete a project. Props: `open`, `project`. Emits: `close`, `saved`, `deleted`.
@@ -604,6 +604,116 @@ Actual file upload engine. Props: `backendUrl`, `selectedCharacterId`, `allPictu
 ---
 
 ### Shared / Primitive Components
+
+#### `AdapterTray.vue` (421 lines, `widgets/`)
+The other end of the shelf's `Assigned to` marks (§9.1a): which adapters *this*
+person or set uses, as a read-only grid of small cards inside `CharacterEditor`
+and `PictureSetEditor`. Props: `entityType` (`character` | `set`), `entityId`.
+**`api/modelShelf.test.js` asserts the query string, not the arguments**, and it
+exists because every consumer of that module mocks it out at the import boundary
+— the shelf store, the shelf view, the show panel and this tray all replace
+`listAdapters` with a double, so the real function body was executed by nothing
+in the repo. FastAPI silently drops a query param it does not declare, so
+renaming `character_id` to `characterId` there would leave all ~3000 frontend
+tests green while the server answered with **every adapter on the machine**,
+which this tray would then render as one person's attachments under a confident
+"N attached". Any new param on this module wants the same kind of test.
+
+The filter is the route's own `character_id` / `set_id` (`GET /adapters`), which
+buys the wire and not the query: `_build_list` reads the whole kind and
+intersects against `attached_hashes` in Python, deliberately, because the hub and
+the vault are separate SQLite files (`model_shelf.py`). What it saves is shipping
+every adapter on the machine to the client and filtering it there, plus a second
+statement of what "attached" means.
+
+Each card is `ModelMark` + the `modelName` chain + the base model (`Base model
+not set` when there is none, never a blank) + the trigger words when there are
+any, keyed on the hub `model.id`. Ordering is newest-first on
+`newest_member_at || added_at` — a stack's date is its newest member's, the same
+rule `useModelShelfStore`'s sort accessor applies, so a six-step run does not
+order one way here and the other way on the shelf.
+
+**It asks for both `file_kind=adapter` and `file_kind=unknown`**, which is two
+requests because the route's `file_kind` Query is a single `str` (`_build_list`
+underneath it already takes a tuple, so one `list[str]` Query would collapse this
+to one request — worth doing, not done here; it would also halve the request
+count on every editor open, which for a scoped session is two guaranteed 403s).
+Of the file kinds, the attach route rejects only a checkpoint (400, on meaning)
+and an engine (409), so an unclassified file can carry an attachment, and asking for `adapter` alone
+told the owner "no adapters yet" about a person whose shelf row was showing their
+mark.
+
+**Known gap, wanting the same backend change** (the one that matters today; `engine` is the other kind the adapter block serves and the tray never asks for it, but the attach route 409s an engine, so no such attachment can exist): `file_kind` is owner-correctable
+while the sha256-keyed vault row survives the correction, so an adapter re-filed
+as a *checkpoint* keeps its attachment and disappears from the tray. Unreachable
+from the client — `/adapters` 400s on a checkpoint and `/checkpoints` takes no
+`character_id`.
+
+Rows are cleared *before* the await on a re-read, not after it: the epoch alone
+only stops a late answer from winning, and the cards already on screen are the
+previous entity's — leaving them there puts one person's adapters, under a
+confident "N attached", inside another person's dialog for the length of the
+load.
+
+**The failure matrix is decided by two counts, not case by case**, because
+patching it a cell at a time is exactly how it went wrong twice. The two reads
+are `Promise.allSettled`, not `Promise.all` — one kind failing must not throw
+away the other's rows — and then:
+
+| what came back | what renders |
+|---|---|
+| nothing failed | the rows (or the empty line) |
+| some flights failed | the rows that arrived **and** an error line |
+| every flight failed, all 403 | **nothing** — the section hides |
+| every flight failed, not all 403 | an error line |
+
+**Exactly one cell hides**, and the reason is narrow: `refused` means *this
+session may not read the shelf*, which is only what a wholly-refused read says.
+A 403 standing beside a success is not a permission to respect, it is a session
+that changed underneath two concurrent requests — and treating it as a
+permission is what printed "No adapters yet" for a person with three adapters
+attached. Every other failure renders a line, **including a partial one, over
+whatever rows did arrive**: those rows are true and the list is short of what
+the entity has, and dropping either half is a confident wrong answer. Which
+reason is shown is picked by kind, never by array position — a 403 carries no
+`detail`, so preferring it over a 500 beside it costs the only sentence that
+said what broke.
+
+The copy leads with our sentence and appends the server's via `errorDetail`,
+rather than `errorMessage`'s the-other-way-round: whether this is all of the
+adapters or only some is the part the reader needs, and no server detail says it.
+
+Add to that the two states that are not failures at all: **no id yet** (an
+unsaved create) renders nothing, because there is nothing to be attached to; and
+**no answer yet** renders nothing, heading included, because a section title over
+empty space is a promise not yet kept. `settled` is one-way — once the section
+has earned its place a re-read empties it rather than tearing it down — and
+`refused` is deliberately *not* cleared per read, or a refused session's tray
+blinks into view and out again on every open.
+
+The refusal is read off the response, deliberately not predicted from
+`sessionContext.is_owner`: predicting it saves a harmless request per open and
+buys a second, separately-drifting statement of who may read the shelf, which the
+server already owns.
+
+The heading names the list (`aria-labelledby`), so it is not announced as a bare
+"list, 3 items", and the card's `title` carries the **name** as well as the
+filename — the name is one ellipsised line in a ~180px track, so it is the half
+most likely to be truncated and was the half a bare `title="filename"` left out.
+
+Reads are **epoch-guarded**, the same guard and the same reason as
+`useModelShelfStore` (§4): opening one person's editor and switching to another's
+is two overlapping reads of one endpoint, and without it a slow first flight
+lands last and paints one person's adapters into another person's dialog. The
+grid has **no height cap and no scroller of its own** — `AppDialog` scrolls its
+body and keeps the footer outside it, so no number of cards can push Save out of
+reach, and a nested scroller would strand the rows past its cap from the
+keyboard.
+
+Attaching stays on the shelf, where the whole library is in front of you and
+where the replace-the-whole-set semantics of `PUT /adapters/{sha256}/attachments`
+can be honoured safely; the hosts mount the tray under `v-if="open"` so each open
+re-reads without that freshness resting on the dialog's lazy-mount behaviour.
 
 #### App* design-system layer (`widgets/`)
 The house-styled form/control primitives that wrap Vuetify with the PixlStash tokens (`styles/design-tokens.css`), so new UI composes from one consistent kit instead of raw Vuetify: `AppButton.vue` (263 lines), `AppDialog.vue` (217 lines), `AppInput.vue` (96 lines), `AppSelect.vue` (182 lines), `AppStepper.vue` (126 lines), `AppTextarea.vue` (61 lines), plus `FieldLabel.vue` (16 lines) for consistent field labelling. Presentational; each takes `v-model` / props and emits the matching update events.
@@ -1483,6 +1593,12 @@ undo:
 An attachment whose entity the lists do not answer still gets a mark, reading
 `#12`: the vault is the authority on what is attached, and dropping the mark
 would say "not assigned", which is a different and wrong fact.
+
+The same relation read from the entity's end is `AdapterTray.vue` in the person
+and set editors (§5, Shared / Primitive Components). It is deliberately
+read-only: Assign stays the shelf's verb, so there is one writer of
+`PUT /adapters/{sha256}/attachments` and one place that holds the whole
+attachment set it replaces.
 
 Rows are built on the shared row system (`SideBar.global.css`, §5.1) through
 the neutral `.ps-row` / `.ps-row-glyph` aliases, so the shelf consumes those
