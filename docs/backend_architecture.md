@@ -892,6 +892,8 @@ Located in [pixlstash/image_plugins/](../pixlstash/image_plugins/).
 
 Built-in plugins: `brightness_contrast`, `blur_sharpen`, `colour_filter`, `pixelate`, `rotate`, `scaling`, plus `plugin_template.py` as a starter for custom plugins.
 
+User-supplied image plugins are loaded from `user_data_dir("pixlstash")/image-plugins/user`. **The tagger plugins use the same discovery mechanism** (§9, "User-supplied plugins") — keep the two in step rather than letting them drift, and note where they already differ: taggers also accept a package folder, built-ins win a name collision instead of losing it, and `TaggerPluginManager.plugin_dirs()` returns a `{source: path}` dict (matching the JSON both `GET /taggers` and `GET /pictures/plugins` emit) where `ImagePluginManager.plugin_dirs()` returns a list of tuples it iterates internally.
+
 ---
 
 ## 9. Tagger Plugins
@@ -904,6 +906,67 @@ All taggers and captioners are implemented as `TaggerPlugin` subclasses ([pixlst
 | `pixlstash_tagger` | `PixlStashTaggerPlugin` | `tagger_plugins/pixlstash_tagger.py` | Tags | `PersonalJeebus/pixlvault-anomaly-tagger` (HF, pinned) |
 | `florence2` | `Florence2Plugin` | `tagger_plugins/florence2.py` | Descriptions | Florence-2 captions **and** the Segment action's detector — see the variant note below |
 | `joycaption` | `JoyCaptionPlugin` | `tagger_plugins/joycaption.py` | Tags + Descriptions | LLaVA-style LLM; `bitsandbytes` optional dep |
+
+#### User-supplied plugins (issue #326)
+
+Beyond the four built-ins above, `TaggerPluginManager` scans
+`user_data_dir("pixlstash")/tagger-plugins/user` and registers whatever `TaggerPlugin`
+subclasses it finds there. `pixlstash/tagger_plugins/plugin_template.py` is the starter and
+[docs/writing-tagger-plugins.md](writing-tagger-plugins.md) is the contract. Four properties
+are load-bearing:
+
+- **Two accepted shapes**: a single `.py` file, or a folder containing `__init__.py` (loaded
+  as a package, so it may `from . import helper`). Entries starting with `.` or `_` are
+  skipped. Modules are namespaced `pixlstash_user_tagger_<entry>` with the extension kept
+  (`foo.py` → `…_foo_py`, so a `foo/` package beside it is a different module), distinct
+  from the image plugins' `pixlstash_dynamic_plugin_*`. A failed import restores whatever
+  `sys.modules` entry it displaced, so a contrived clash cannot strip a working plugin's
+  module out from under it.
+- **Built-ins are loaded first and win a name collision**, which is the deliberate divergence
+  from `ImagePluginManager` (where the user directory is scanned first). A user plugin named
+  `florence2` would be inert anyway — `DescriptionWorkflow.generate_batch` routes that name
+  down a native fast path that never touches the plugin object — so the collision is recorded
+  as a `PluginLoadError` and surfaced in the UI rather than silently ignored.
+- **Every concrete class the module *defines* is registered**, not just the first one found,
+  so a package may bundle two engines. A subclass merely imported into the module is
+  excluded by comparing `__module__`.
+- **Start-up scan only.** There is no reload endpoint: re-instantiating a plugin whose model
+  is resident would orphan the model and make `is_loaded()` lie. Adding a plugin requires a
+  restart, which the guide and the Auto-tagging settings section both say. The directory is
+  not created at boot; `GET /taggers` returns its path in `plugin_dirs` so the UI can tell
+  the user where to make it.
+
+A broken plugin never aborts the load: each entry is wrapped, logged with its path, and
+recorded as a `PluginLoadError` that `GET /taggers` returns as a row with `load_error` set.
+Those rows carry neither capability flag, so `PluginsTable.vue` (which filters on them)
+cannot show them — the **Auto-tagging** settings section lists them separately instead.
+Registration also calls `plugin_schema()` once, because `GET /taggers`,
+`user_settings_utils` and `fill_defaults()` (on the library-open path, `server.py`) all
+call it unguarded: a plugin whose `parameter_schema()` raises has to be rejected at load
+or it takes the settings screen and the boot down with it. That check is boot-state only
+— it cannot catch a plugin that starts raising once its model is loaded — and the
+inference methods (`tag_images`, `generate_descriptions`, `download`, …) remain unguarded
+by design, exactly as they are for first-party plugins. `SystemExit` is caught alongside
+`Exception` so a stray `sys.exit()` in a plugin module cannot end the process;
+`KeyboardInterrupt` deliberately still propagates. The registry lock is an `RLock` and `_loaded`
+is set before loading for the same class of reason — a plugin whose module body calls
+`get_tagger_plugin_manager()` would otherwise hang the server forever, which is not an
+exception and so cannot be caught. It sees the partial registry.
+
+Plugin code runs unsandboxed, exactly as image plugins already do — but earlier: the
+tagger registry is built during vault construction, so a user plugin executes at boot
+rather than on first request. Three consequences worth naming: a plugin that hangs or
+segfaults at import stops the server starting (no containment is possible in-process);
+the developer's own plugin folder is executed by any test that boots a `Server`; and
+`GET /taggers` (`ANY_TOKEN`) now returns an absolute host path, as `GET /pictures/plugins`
+under the same policy already did.
+
+**The plugin lifecycle is not fully wired for third parties, and the guide says so.**
+`ModelLifecycleManager` unloads the four built-in *services* by name and does not walk the
+registry, so nothing calls `TaggerPlugin.unload()` on a user plugin; `DescriptionWorkflow`
+charges the VRAM budget for Florence-2 only, so `estimated_vram_mb()` is never consulted;
+and `generate_descriptions` is called without a `stop_event` (the tag path does pass one).
+Closing any of these is a separate change to the workflow, not to discovery.
 
 #### Florence-2 checkpoint selection (issue #512)
 

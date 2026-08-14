@@ -1,5 +1,5 @@
 <script setup>
-import { onUnmounted, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { getUserConfig, patchUserConfig } from "../../api/config";
 import { getWorkerProgress } from "../../api/workers";
 import { listTaggers } from "../../api/taggers";
@@ -20,6 +20,12 @@ const keepModelsInMemoryError = ref("");
 const taggerPlugins = ref([]);
 const taggerSettings = ref({});
 const taggerLoading = ref(false);
+const taggerPluginDir = ref("");
+// PluginsTable filters on the capability flags, and a plugin that failed to
+// load has neither — so these rows render nowhere unless we list them here.
+const taggerPluginErrors = computed(() =>
+  taggerPlugins.value.filter((p) => p.load_error),
+);
 
 // ── VRAM budget ───────────────────────────────────────────────────────────────
 const VRAM_BUDGET_MIN_GB = 2;
@@ -171,8 +177,10 @@ async function fetchTaggerPlugins() {
     const body = await listTaggers();
     taggerPlugins.value = body?.plugins ?? [];
     taggerSettings.value = body?.settings ?? {};
+    taggerPluginDir.value = body?.plugin_dirs?.user ?? "";
   } catch {
     taggerPlugins.value = [];
+    taggerPluginDir.value = "";
   } finally {
     taggerLoading.value = false;
   }
@@ -309,6 +317,22 @@ watch(
           />
         </SettingsFieldBlock>
       </SettingsTwoCol>
+      <ul
+        v-if="taggerPluginErrors.length"
+        class="settings-tagger-plugin-errors"
+      >
+        <li v-for="(p, i) in taggerPluginErrors" :key="`${p.name}-${i}`">
+          <strong>{{ p.name }}</strong> failed to load: {{ p.load_error }}
+        </li>
+      </ul>
+      <div v-if="taggerPluginDir" class="settings-tagger-plugin-dir">
+        Add your own plugin by dropping a <code>.py</code> file (or a folder
+        with an <code>__init__.py</code>) into
+        <code class="settings-tagger-plugin-path">{{ taggerPluginDir }}</code
+        >, creating the folder if it does not exist. Restart the server
+        afterwards — plugins are only discovered at start-up. Plugins run as
+        ordinary Python with your permissions, so only add ones you trust.
+      </div>
     </SettingsSection>
   </div>
 </template>
@@ -318,6 +342,25 @@ watch(
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.55);
   padding: var(--space-3) 0;
+}
+
+.settings-tagger-plugin-dir {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  padding-top: var(--space-3);
+}
+
+.settings-tagger-plugin-path {
+  overflow-wrap: anywhere;
+}
+
+.settings-tagger-plugin-errors {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-error));
+  overflow-wrap: anywhere;
 }
 
 .settings-error {

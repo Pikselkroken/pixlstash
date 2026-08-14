@@ -42,6 +42,7 @@ class TaggerListResponse(BaseModel):
 
     plugins: list[TaggerPluginResponse] = []
     settings: dict = {}
+    plugin_dirs: dict = {}
 
 
 class TaggerDownloadResponse(BaseModel):
@@ -108,7 +109,8 @@ def create_router(server) -> APIRouter:
                 },
                 ...
               ],
-              "settings": { ... }
+              "settings": { ... },
+              "plugin_dirs": {"user": "/path/to/tagger-plugins/user"}
             }
         """
         mgr = get_tagger_plugin_manager()
@@ -153,6 +155,7 @@ def create_router(server) -> APIRouter:
         return {
             "plugins": plugins_out,
             "settings": _current_settings(request),
+            "plugin_dirs": mgr.plugin_dirs(),
         }
 
     @router.post(
