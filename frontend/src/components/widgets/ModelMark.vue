@@ -10,13 +10,23 @@
        gone (#904). -->
   <span class="mmark" :class="ringClass" :title="ring?.label || undefined">
     <span class="mmark-face" aria-hidden="true">
+      <!-- KEYED on the URL, so each candidate in the fallback chain gets its
+           own element. Reusing one element across two srcs is what makes an
+           `error` impossible to attribute: the handler cannot tell which load
+           failed, and blacklisting the wrong one drops a face that was never
+           even requested. Keyed, the element that failed keeps its own `src`
+           for as long as it exists, so a late error from it re-reports the
+           failure already recorded and `dropFace` swallows it as a duplicate.
+           (The listener does NOT die with the replaced node — Vue leaves it
+           attached — which is exactly why the frozen `src` is what matters.) -->
       <img
         v-if="faceUrl"
+        :key="faceUrl"
         class="mmark-img"
         :src="faceUrl"
         alt=""
         loading="lazy"
-        @error="faceFailed = true"
+        @error="dropFace"
       />
       <span
         v-else
@@ -84,14 +94,36 @@ const iconUrl = computed(() =>
   props.row?.icon_sha256 ? modelIconUrl(props.row.icon_sha256) : "",
 );
 
-const faceFailed = ref(false);
+// The candidates that 404ed, not a single "it failed" flag: the chain below
+// has two steps, and a flag set by the first one would take the second down
+// with it — a model whose icon file is missing would draw nothing rather than
+// falling through to the face of whoever it is assigned to.
+const failed = ref([]);
+
+// Read off the element that failed, never off `faceUrl`: that computed updates
+// the moment `failed` is written, while the DOM catches up a tick later, so two
+// errors arriving in one task would blacklist the SECOND candidate on the
+// strength of the first one's failure. The `:key` above is what makes
+// `event.target` unambiguous.
+function dropFace(event) {
+  const src = event.target.getAttribute("src");
+  if (src && !failed.value.includes(src)) {
+    failed.value = [...failed.value, src];
+  }
+}
 
 // A recycled mark (the same DOM node reused for a different row) would
-// otherwise keep the previous row's failure and never try its own picture.
+// otherwise keep the previous row's failures and never try its own pictures.
+//
+// The source is a STRING, deliberately. `ringFor(row)` is called inline in the
+// shelf's `v-for` (ModelShelf.vue), so every parent render hands this component
+// a new-but-identical ring object; a getter returning an array or the object
+// itself compares unequal each time, and the reset would fire on every keystroke
+// in the filter box — putting the mark back on the URL that just 404ed.
 watch(
-  () => [iconUrl.value, props.ring?.type, props.ring?.id],
+  () => `${iconUrl.value}|${props.ring?.type}|${props.ring?.id}`,
   () => {
-    faceFailed.value = false;
+    failed.value = [];
   },
 );
 
@@ -107,15 +139,22 @@ watch(
  *    pictures both 404 their thumbnail, and an empty square would read as a
  *    broken mark rather than as an entity without a picture.
  *
+ * Each step is skipped once its own URL has failed, so the chain runs all the
+ * way down: a model pointing at an icon whose file is gone falls to the
+ * assigned face, and then to the mark, rather than sitting on a broken image.
+ *
  * Addressed by URL rather than fetched as a blob, so the browser caches one
  * response however many rows borrow the same face — which is the common case,
  * a cast of characters across 1,800 adapters.
  */
 const faceUrl = computed(() => {
-  if (iconUrl.value) return iconUrl.value;
-  if (faceFailed.value) return "";
   const build = ENTITY_THUMBNAIL[props.ring?.type];
-  return build && props.ring?.id != null ? build(props.ring.id) : "";
+  const entityUrl = build && props.ring?.id != null ? build(props.ring.id) : "";
+  return (
+    [iconUrl.value, entityUrl].find(
+      (url) => url && !failed.value.includes(url),
+    ) || ""
+  );
 });
 
 const mark = computed(() => generatedMark(props.row));

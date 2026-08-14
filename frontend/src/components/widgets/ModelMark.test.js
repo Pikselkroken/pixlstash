@@ -4,14 +4,20 @@
 // sample by construction, and 37% of real adapters carry no title, so the
 // generated mark is the common path rather than the fallback.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
+import { defineComponent, ref } from "vue";
 
-vi.mock("../../api/modelIcons", () => ({
-  modelIconUrl: (sha) => `/api/v1/model-icons/${sha}`,
-}));
+// The api modules are deliberately NOT mocked. A mock would hardcode the
+// prefixed string, which is exactly the shape that let the shelf ship with
+// marks that drew nothing: every one of them agreed on a URL the real code did
+// not produce. Here the real builders compute it.
+import { API_BASE_URL } from "../../utils/apiClient";
 
 import ModelMark from "./ModelMark.vue";
+
+const ADA_FACE = `${API_BASE_URL}/characters/4/thumbnail`;
+const icon = (sha) => `${API_BASE_URL}/model-icons/${sha}`;
 
 function row(overrides = {}) {
   return {
@@ -28,7 +34,9 @@ const mountMark = (props) => mount(ModelMark, { props: { row: row(props) } });
 describe("ModelMark", () => {
   it("draws the icon when there is one", () => {
     const wrapper = mountMark({ icon_sha256: "a".repeat(64) });
-    expect(wrapper.find("img").attributes("src")).toContain("a".repeat(64));
+    // The whole URL, not a substring: `toContain("model-icons")` passes just
+    // as happily against a base with no `/api/v1` in it, which is the bug.
+    expect(wrapper.find("img").attributes("src")).toBe(icon("a".repeat(64)));
     expect(wrapper.find(".mmark-initials").exists()).toBe(false);
   });
 
@@ -78,6 +86,111 @@ describe("ModelMark", () => {
     const mark = mountMark();
     expect(mark.find(".mmark-face").attributes("aria-hidden")).toBe("true");
     expect(mark.find(".mmark").attributes("aria-hidden")).toBeUndefined();
+  });
+
+  // The fallback chain. Each step is only reachable when the one above it has
+  // actually failed, so the test drives the `error` event rather than asserting
+  // on a flag: a missing icon FILE and a person with no reference face are both
+  // ordinary states, and a mark that stopped at the first 404 would be the same
+  // blank square the shelf was reported as showing.
+  const RING = { type: "character", id: 4, style: "dashed", label: "Ada" };
+
+  it("borrows the assigned person's face when the row has no icon", () => {
+    const wrapper = mount(ModelMark, { props: { row: row(), ring: RING } });
+    expect(wrapper.find("img").attributes("src")).toBe(ADA_FACE);
+  });
+
+  it("falls from a missing icon to that face, and then to the mark", async () => {
+    const wrapper = mount(ModelMark, {
+      props: { row: row({ icon_sha256: "b".repeat(64) }), ring: RING },
+    });
+    expect(wrapper.find("img").attributes("src")).toBe(icon("b".repeat(64)));
+
+    await wrapper.find("img").trigger("error");
+    expect(wrapper.find("img").attributes("src")).toBe(ADA_FACE);
+
+    await wrapper.find("img").trigger("error");
+    expect(wrapper.find("img").exists()).toBe(false);
+    expect(wrapper.find(".mmark-initials").text()).toBe("CS");
+  });
+
+  // Two errors in ONE task, both from the icon's element. The DOM only catches
+  // up on the next tick, so a handler that read the *computed* URL would take
+  // the second event as a verdict on Ada's face — a picture it had not yet
+  // asked the browser for — and skip straight to the initials.
+  it("blames only the load that failed when two errors arrive at once", async () => {
+    const wrapper = mount(ModelMark, {
+      props: { row: row({ icon_sha256: "b".repeat(64) }), ring: RING },
+    });
+    const img = wrapper.find("img").element;
+    img.dispatchEvent(new Event("error"));
+    img.dispatchEvent(new Event("error"));
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find("img").attributes("src")).toBe(ADA_FACE);
+  });
+
+  // A late error from the load that has already been replaced. The `:key` is
+  // what makes this harmless: the failed URL got its own element, which keeps
+  // that URL as its `src`, so the late event re-reports a failure already on
+  // the list and is swallowed as a duplicate. Sharing one element would hand
+  // this event the NEW src instead and blacklist a face that never failed.
+  // Dispatched on the captured node, because that is exactly what an in-flight
+  // request does when it resolves late.
+  it("ignores an error from a load it has already moved on from", async () => {
+    const wrapper = mount(ModelMark, {
+      props: { row: row({ icon_sha256: "b".repeat(64) }), ring: RING },
+    });
+    const stale = wrapper.find("img").element;
+    await wrapper.find("img").trigger("error");
+    expect(wrapper.find("img").attributes("src")).toBe(ADA_FACE);
+
+    stale.dispatchEvent(new Event("error"));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find("img").attributes("src")).toBe(ADA_FACE);
+  });
+
+  // The other half of the reset: a recycled mark (the same instance handed a
+  // different row) must forget the previous row's failures. The icon store is
+  // content-addressed, so rows genuinely share a hash — the URL that failed for
+  // one row is the URL the next row wants tried.
+  it("tries a failed URL again once it is a different row's", async () => {
+    const wrapper = mount(ModelMark, {
+      props: { row: row({ icon_sha256: "b".repeat(64) }), ring: RING },
+    });
+    await wrapper.find("img").trigger("error");
+    expect(wrapper.find("img").attributes("src")).toBe(ADA_FACE);
+
+    await wrapper.setProps({ ring: { ...RING, id: 9, label: "Bo" } });
+    expect(wrapper.find("img").attributes("src")).toBe(icon("b".repeat(64)));
+  });
+
+  // Through a PARENT that re-renders, because that is the only way this bug is
+  // visible: the shelf calls `ringFor(row)` inline in its `v-for`, so every
+  // render hands the mark a new-but-identical ring object, and a reset keyed on
+  // object identity would put the mark straight back on the URL that 404ed —
+  // on every keystroke in the filter box. Mounting ModelMark alone with a
+  // stable prop cannot see it.
+  it("keeps the fallback when the parent re-renders with an equal ring", async () => {
+    const tick = ref(0);
+    const parent = mount(
+      defineComponent({
+        components: { ModelMark },
+        setup: () => ({ tick, row: row({ icon_sha256: "b".repeat(64) }) }),
+        // A fresh object literal every render, exactly as `ringFor(row)` is.
+        template: `<div :data-tick="tick">
+          <ModelMark :row="row"
+            :ring="{ type: 'character', id: 4, style: 'dashed', label: 'Ada' }" />
+        </div>`,
+      }),
+    );
+
+    await parent.find("img").trigger("error");
+    expect(parent.find("img").attributes("src")).toBe(ADA_FACE);
+
+    tick.value += 1;
+    await parent.vm.$nextTick();
+    expect(parent.find("img").attributes("src")).toBe(ADA_FACE);
   });
 
   it("draws no ring at all where nothing hands it one", () => {

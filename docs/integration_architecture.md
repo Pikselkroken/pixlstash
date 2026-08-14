@@ -445,7 +445,7 @@ On `401 Unauthorized`, the client calls `logout()` automatically — **except**:
 - The probe endpoint `/users/me/auth` (used to test credentials without side-effects).
 - Requests made under a share token (a 401 just means that endpoint is outside the token's scope).
 
-All frontend code **must** route HTTP traffic through this client; bypassing it skips auth, share-token injection, and 401 handling. The only legitimate bypass is direct `<img src>`, which uses `appendShareToken()` to preserve the share token.
+All frontend code **must** route HTTP traffic through this client; bypassing it skips auth, share-token injection, and 401 handling. The only legitimate bypass is direct `<img src>`. Such a URL **must** be built from `API_BASE_URL`, since the `/api/v1` prefix is added by the request interceptor that only Axios requests reach; without it the request lands on the SPA fallback, which answers 200 with HTML rather than an error. It also passes through `appendShareToken()` wherever the resource is reachable under a share token — which is most of them, but not the shelf's own (a model icon is `OWNER_ONLY`, a training-run sample `LOCAL_OWNER_ONLY`), where a share token could never resolve anyway.
 
 ---
 

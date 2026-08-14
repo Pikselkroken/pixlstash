@@ -11,7 +11,7 @@
 // verify by SHA-256, register the row and commit, then unlink. It shares the
 // move's single job slot, so a move already running makes it a 409.
 
-import { apiClient } from "../utils/apiClient";
+import { API_BASE_URL, apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
@@ -42,9 +42,10 @@ export async function listRuns(folderId) {
  * @returns {string}
  */
 export function runSampleUrl(folderId, runName, filename) {
-  const base = apiClient.defaults.baseURL || "";
+  // An <img src> never reaches the apiClient interceptor, so the API base has
+  // to be spelled out here rather than left for axios to prepend.
   return (
-    `${base}/model-folders/${folderId}/runs` +
+    `${API_BASE_URL}/model-folders/${folderId}/runs` +
     `/${encodeURIComponent(runName)}/samples/${encodeURIComponent(filename)}`
   );
 }

@@ -8,7 +8,7 @@
 //
 // See docs/frontend_architecture.md §8 ("The `src/api/` resource layer").
 
-import { apiClient, appendShareToken } from "../utils/apiClient";
+import { API_BASE_URL, apiClient, appendShareToken } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
@@ -36,9 +36,10 @@ function charactersUrl(path = "") {
  * @returns {string}
  */
 export function characterThumbnailUrl(id) {
-  const base = apiClient.defaults.baseURL || "";
+  // An <img src> never reaches the apiClient interceptor, so the API base has
+  // to be spelled out here rather than left for axios to prepend.
   return appendShareToken(
-    `${base}${charactersUrl(`/${encodeURIComponent(id)}/thumbnail`)}`,
+    `${API_BASE_URL}${charactersUrl(`/${encodeURIComponent(id)}/thumbnail`)}`,
   );
 }
 

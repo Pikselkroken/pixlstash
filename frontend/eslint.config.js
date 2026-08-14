@@ -44,6 +44,26 @@ export default [
     },
   },
   {
+    // `apiClient.defaults.baseURL` is the backend ORIGIN. The `/api/v1` prefix
+    // is added by the request interceptor, which only Axios requests go
+    // through — so a URL built from `defaults` and handed to an `<img src>`
+    // misses the prefix, hits the SPA fallback and quietly returns HTML. That
+    // is what left the model shelf's marks blank. `API_BASE_URL` is the base
+    // for anything the browser fetches on its own.
+    files: ["src/api/**/*.js"],
+    rules: {
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "apiClient",
+          property: "defaults",
+          message:
+            "Use API_BASE_URL for URLs the browser loads itself (<img src>, downloads); apiClient.defaults.baseURL has no /api/v1 prefix.",
+        },
+      ],
+    },
+  },
+  {
     // Backend URL strings live only in src/api/ (frontend_architecture.md §8).
     // Importing the raw `apiClient` verb-caller anywhere else is how inline
     // URLs creep back in, so it is an ERROR outside that directory. The rest of

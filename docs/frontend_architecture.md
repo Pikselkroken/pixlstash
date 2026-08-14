@@ -1383,12 +1383,15 @@ Modules are seeded as their first call site migrates, so a module can legitimate
 
 - **URL strings exist only here.** No `apiClient.<verb>('/url')` outside `src/api/**`, and this is enforced: a `no-restricted-imports` ESLint rule makes importing the `apiClient` named export outside this directory an **error**, as is importing `axios` anywhere but the singleton's own definition. The exemptions are `src/utils/apiClient.js` itself and `*.test.js` files, which import it to mock the transport.
 - **Reuse the `apiClient` singleton; never import `axios` directly.** All the cross-cutting behaviour above (the `/api/v1` prefix, share-token injection, `X-Client-Id`, global 401 → logout) lives in the singleton's interceptors, so a module that re-creates an Axios instance silently loses every one of them.
+- **A URL the BROWSER loads is built from `API_BASE_URL`, never from `apiClient.defaults.baseURL`.** `defaults.baseURL` is the backend *origin*; the `/api/v1` prefix is added by the request interceptor, which only Axios requests go through. An `<img src>` or a download built from `defaults` therefore misses the prefix and lands on the SPA fallback, which answers **200 with HTML** rather than an error — so it fails silently. This cost the model shelf every mark it draws, and a `no-restricted-properties` ESLint rule on `apiClient.defaults` now flags it in this directory. Note the rule runs in editors and `npm run lint`; the frontend CI job runs `npm test` only, so it does not block a PR.
 - **Every function returns `response.data`,** not the Axios envelope. Where a caller genuinely needs response metadata (e.g. the `content-disposition` filename on an export download), the module parses it and returns a structured value such as `{ blob, filename }`, so the envelope still does not escape the layer.
 - **Modules are pure transport:** no Pinia imports, no Vue reactivity, no notice/snackbar side effects. Callers own state and error presentation.
 - **Non-JSON responses stay explicit:** blob endpoints (thumbnails, overlays, exports) forward `{ responseType: "blob" }` from inside the module.
 - **Failures propagate.** A module never swallows an error into a benign-looking empty value. This is the natural home for the integration-§13 error-shape normalisation once it lands.
 
 **Testing:** each module gets a co-located `.test.js` that mocks `../utils/apiClient` and asserts verb, URL, params/body, and that the function returns the body rather than the envelope. `api/config.test.js` is the pattern.
+
+The one deliberate exception is `api/imageUrls.test.js`, which is neither co-located nor mocked, and both for the same reason: it covers the URL builders the browser loads itself, and the bug it guards lives precisely in what a mocked `../utils/apiClient` cannot see. The suite stayed green through that bug because the two thumbnail builders had no assertion at all, and the mocks standing in for the other two hardcode the correctly-prefixed string — neither form can fail when the real base is wrong, and those mocks are still there, since mocking the transport is the right thing for the component tests that use them. Centralising the URL assertions here, against the real module, is what makes them able to fail at all.
 
 **Barrel:** there is deliberately no `src/api` barrel. Import the concrete module (`import { getUserConfig } from "@/api/config"`), which keeps imports tree-shakeable and matches the co-located-test convention. A barrel that re-exported `apiClient` would also be a hole in the lint guard above.
 
@@ -1594,8 +1597,14 @@ shared and cached, never a lookup per attachment.
   and the ring around it is already her colour, so the halves say one thing;
   failing that the generated mark. Thumbnails are `<img src>` from
   `characterThumbnailUrl` / `pictureSetThumbnailUrl` rather than blobs, so one
-  response is cached however many rows borrow that face, and a 404 falls back
-  to the initials rather than drawing an empty square.
+  response is cached however many rows borrow that face. **Each step is skipped
+  once its own URL has failed**, so the chain runs all the way down: a model
+  pointing at an icon whose file is gone falls to the assigned face and then to
+  the initials, rather than sitting on a broken image. `ModelMark` therefore
+  records the URLs that 404ed, not one "it failed" flag — and clears that record
+  on a *string* of the row's icon and ring identity, because the shelf builds a
+  fresh ring object on every render and an identity comparison would reset the
+  chain on every keystroke in the filter box.
 - **The FIRST attachment owns the ring and the label names them all.** A mark
   has one edge, and four rings around a 24px square is a mark that is mostly
   ring. The count and every name ride in the mark's `title` and in a
