@@ -104,9 +104,10 @@ def test_declaring_writes_a_row_per_engine_and_states_which_are_present(
     server_hub, tmp_path
 ):
     """No parsing and no hashing: an engine that is on disk is `present`, one
-    that has not been fetched yet is `missing` — which is the normal state for
-    about half of them, since the ViT-L/14 scorer arrives only with the CLIP
-    model that needs it."""
+    that has not been fetched yet is `not_downloaded` — which is the normal state
+    for about half of them, since the ViT-L/14 scorer arrives only with the CLIP
+    model that needs it, and NEVER `missing`, which the shelf draws as a fault
+    (#926)."""
     (tmp_path / "pixlstash-anomaly-tagger.safetensors").write_bytes(b"x" * 32)
 
     folder_id = declare_builtin_models(server_hub, str(tmp_path))
@@ -135,7 +136,7 @@ def test_declaring_writes_a_row_per_engine_and_states_which_are_present(
         "present",
     )
     assert tagger["file_size"] == 32
-    assert rows["Aesthetic scorer (ViT-L/14)"]["state"] == "missing"
+    assert rows["Aesthetic scorer (ViT-L/14)"]["state"] == "not_downloaded"
 
 
 def test_declaring_twice_does_not_duplicate_a_row(server_hub, tmp_path):
@@ -177,8 +178,13 @@ def test_claiming_a_path_the_owner_registered_resets_every_column(server_hub, tm
     assert row["movable"] == "root_only"
 
 
-def test_a_file_that_disappears_flips_its_row_to_missing(server_hub, tmp_path):
-    """Declared, not scanned — but the state still has to tell the truth."""
+def test_a_file_that_disappears_stops_claiming_to_be_present(server_hub, tmp_path):
+    """Declared, not scanned — but the state still has to tell the truth.
+
+    `not_downloaded` rather than `missing` even here: we re-fetch a declared
+    engine the moment something needs it, so a deleted one is pending, not lost,
+    and the owner has nothing to do about it either way.
+    """
     weights = tmp_path / "sa_0_4_vit_b_32_linear.pth"
     weights.write_bytes(b"z" * 8)
     folder_id = declare_builtin_models(server_hub, str(tmp_path))
@@ -190,7 +196,7 @@ def test_a_file_that_disappears_flips_its_row_to_missing(server_hub, tmp_path):
         "AND mf.relpath = ?",
         (folder_id, "sa_0_4_vit_b_32_linear.pth"),
     )
-    assert state["state"] == "missing"
+    assert state["state"] == "not_downloaded"
 
 
 def test_the_checkpoint_hash_worker_never_picks_up_an_engine(server_hub, tmp_path):
@@ -249,9 +255,10 @@ def test_insightface_declares_what_is_on_disk_and_what_we_know_about(
     assert rows["InsightFace antelopev2"]["state"] == "present"
     assert rows["InsightFace antelopev2"]["file_size"] == 64
     assert rows["InsightFace antelopev2"]["kind"] == "face"
-    # Known but not downloaded: `missing` is a state, not a warning.
+    # Known but not downloaded: a state, not a warning — and it has to be said
+    # with a word the shelf does not draw as a fault (#926).
     for pack in KNOWN_MODEL_PACKS:
-        assert rows[f"InsightFace {pack}"]["state"] == "missing"
+        assert rows[f"InsightFace {pack}"]["state"] == "not_downloaded"
 
 
 def test_the_zip_insightface_downloaded_a_pack_from_is_not_a_pack(server_hub, tmp_path):
@@ -414,7 +421,7 @@ def test_a_repo_deleted_from_the_cache_stops_claiming_its_bytes(
 def test_the_sweep_does_not_touch_a_declared_engine_that_is_simply_absent(
     server_hub, tmp_path
 ):
-    """`missing` for a declared engine is decided by the existence check, not by
+    """A declared engine's state is decided by the existence check, not by
     the sweep: the built-in entry set is fixed and always names every row, so a
     re-declaration must leave a present engine present."""
     (tmp_path / "sa_0_4_vit_b_32_linear.pth").write_bytes(b"z" * 8)

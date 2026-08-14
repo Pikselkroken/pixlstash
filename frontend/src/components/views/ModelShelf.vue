@@ -1600,9 +1600,14 @@ const KIND_ICON = {
 // `unreachable` is the absence of one (we could not look). Only the fact wears
 // a status colour — claiming a hue for "we do not know" would assert knowledge
 // we do not have. `present` reserves its slot and shows nothing.
+//
+// `not_downloaded` is a fourth thing and wears no status colour either: it is
+// one of PixlStash's own engines that nothing has needed yet, which is the
+// normal state of about half of them. A download glyph, not a broken-file one.
 const LOC_ICON = {
   present: "mdi-check",
   missing: "mdi-file-remove-outline",
+  not_downloaded: "mdi-cloud-download-outline",
   unreachable: "mdi-help-circle-outline",
   forgotten: "mdi-folder-off-outline",
 };
@@ -1610,6 +1615,8 @@ const LOC_ICON = {
 const LOC_TITLE = {
   present: "",
   missing: "The file is not where it was",
+  not_downloaded:
+    "Not downloaded — PixlStash fetches this when something needs it",
   // Not "the drive is unplugged", however common that is: a subdirectory the
   // scan could not list lands here too, and naming a cause we did not observe
   // is the same overclaim the muted glyph exists to avoid.
@@ -3154,7 +3161,10 @@ watch(
   color: rgb(var(--v-theme-error));
 }
 
-.shelf-row-loc--unreachable {
+/* Muted, never the error colour, and 0.7 like every other muted figure on this
+   screen — nothing is wrong with a row that simply has not been fetched. */
+.shelf-row-loc--unreachable,
+.shelf-row-loc--not_downloaded {
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 </style>

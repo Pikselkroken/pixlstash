@@ -1280,8 +1280,8 @@ files as module constants, but those modules import onnxruntime, torch, cv2 and
 PIL at module level and start-up must not pay that to learn two strings. The
 duplicate is pinned by `tests/test_builtin_models.py`, which imports the real
 constants where the cost is free. Drift is self-announcing rather than silent: a
-renamed file makes its declared row go `missing` *and* the real file appear in
-the unclaimed readout, which is a visible pair.
+renamed file makes its declared row go `not_downloaded` *and* the real file
+appear in the unclaimed readout, which is a visible pair.
 
 **Protected, because they are ours.** `DELETE` on the folder answers 409 (the
 caller is authorized; what refuses is what the target is), and every verb refuses
@@ -1293,9 +1293,20 @@ speaks — and the check runs *inside* the delete transaction, alongside the sta
 gate, rather than as a route-level read that would break the one-critical-section
 invariant.
 
-**Declared-but-absent is normal.** `sac+logos+ava1-l14-linearMSE.pth` is fetched
-only for the CLIP model that needs it, so about half of these are `missing` on
-any given machine. That is a state, not a warning.
+**Declared-but-absent is normal, and it has its own word.**
+`sac+logos+ava1-l14-linearMSE.pth` is fetched only for the CLIP model that needs
+it, so about half of these are absent on any given machine. That is a state, not
+a warning — which is why `declare_folder` writes **`not_downloaded`** and never
+`missing`. `missing` is the *scanner's* word for a registered file that was in a
+readable folder and is not in it any more, and the shelf draws it as a fault
+(error rail, error glyph, "The file is not where it was"): a false alarm on a
+healthy machine, which is what #926 reported. Everything declared here is
+re-fetched the moment something needs it, so the softer word is also right for a
+file that WAS here and is gone. The **sweep** at the end of `declare_folder` is
+the one exception and still writes `missing`: a row the declaration no longer
+*names* — `antelopev2` deleted out of the InsightFace store, a repo dropped by
+`huggingface-cli delete-cache` — is gone rather than pending, because nothing
+will fetch it back.
 
 **The unclaimed readout.** `unclaimed_files()` reports what is present and *not*
 declared — on a measured machine, `best.pt` at 339 MB, which nothing in the tree

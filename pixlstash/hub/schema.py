@@ -365,7 +365,11 @@ CREATE TABLE IF NOT EXISTS model_file (
     model_id         INTEGER NOT NULL REFERENCES model(id),
     model_folder_id  INTEGER NOT NULL REFERENCES model_folder(id),
     relpath          TEXT NOT NULL,
-    state            TEXT NOT NULL,   -- 'present' | 'missing' | 'unreachable'
+    -- 'present' | 'missing' | 'unreachable' | 'not_downloaded'. The first three
+    -- are the scanner's (see model_folder_scanner); the fourth belongs to the
+    -- roots PixlStash declares rather than scans, where an absent file is one we
+    -- have not fetched yet and never one that wandered off.
+    state            TEXT NOT NULL,
     seen_at          TEXT,
     -- st_mtime_ns of this copy at the last scan. Paired with model.file_size it
     -- is what lets a sweep skip re-hashing 1,800 unchanged adapters, without

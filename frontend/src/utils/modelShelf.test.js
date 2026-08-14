@@ -136,6 +136,19 @@ describe("locationState", () => {
     expect(locationState([])).toBe("forgotten");
     expect(locationState(undefined)).toBe("forgotten");
   });
+
+  it("does not call an engine nobody has needed yet a fault", () => {
+    // #926: a declared engine that was never fetched used to reach the shelf as
+    // `missing` — error rail, "The file is not where it was" — on a machine
+    // with nothing wrong with it.
+    expect(locationState([{ state: "not_downloaded" }])).toBe("not_downloaded");
+    // One genuinely missing copy still states the fault...
+    expect(
+      locationState([{ state: "not_downloaded" }, { state: "missing" }]),
+    ).toBe("missing");
+    // ...and so does a state this build has never heard of.
+    expect(locationState([{ state: "banana" }])).toBe("missing");
+  });
 });
 
 describe("offlineFolders", () => {
