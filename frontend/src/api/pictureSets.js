@@ -22,7 +22,7 @@ function setsUrl(path = "") {
  * The list row carries a `thumbnail_url` too, and the sidebar uses that because
  * it also wants the row's `top_picture_ids` as a cache-versioning key. This is
  * the plain form for a caller that has only an id — the model shelf's
- * `Assigned to` marks, which resolve from an attachment rather than a row.
+ * assignment ring, which resolves from an attachment rather than a row.
  *
  * The route is cookie-authenticated, so a share token has to ride in the query
  * — an `<img>` sends no header.

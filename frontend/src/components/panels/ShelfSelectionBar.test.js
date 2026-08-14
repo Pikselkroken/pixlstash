@@ -15,8 +15,25 @@ import { useModelShelfStore } from "../../stores/useModelShelfStore";
 // `AddToEntityControl` is stubbed rather than mounted: it reads the shared
 // entity lists on mount, and what this file has to assert about it is the props
 // the bar hands it, which a stub records exactly.
+//
+// `v-menu` is stubbed because Vuetify is not installed in these mounts, and an
+// UNRESOLVED component renders its default slot and silently drops its named
+// ones — so the count button and the Assign button, which are `#activator`
+// content, would not exist at all and every assertion about them would pass
+// vacuously. The stub renders both slots, which is what the real menu does once
+// it is open.
+const VMenuStub = {
+  name: "VMenu",
+  props: ["modelValue"],
+  template:
+    '<div class="v-menu-stub">' +
+    '<slot name="activator" :props="{}" /><slot /></div>',
+};
+
 const globalOpts = {
-  global: { stubs: { "v-icon": true, AddToEntityControl: true } },
+  global: {
+    stubs: { "v-icon": true, AddToEntityControl: true, "v-menu": VMenuStub },
+  },
 };
 
 /** The Assign picker for one entity type, as the bar configured it. */
@@ -49,8 +66,16 @@ function selectRows(rows) {
   return store;
 }
 
-function verb(wrapper, label) {
-  return wrapper.findAll("button").find((b) => b.text().includes(label));
+/**
+ * One verb on the pill, by name rather than by its label.
+ *
+ * The pill's verbs are ICONS with their words in the tooltip and in the context
+ * menu (#904), so there is no text to match on — `data-verb` is the hook, and
+ * it is also what stops a test passing because two buttons happened to share a
+ * word.
+ */
+function verb(wrapper, name) {
+  return wrapper.find(`[data-verb="${name}"]`);
 }
 
 beforeEach(() => {
@@ -70,18 +95,18 @@ describe("the selection bar", () => {
     // so the row of verbs does not reflow under the pointer.
     const store = selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    expect(verb(wrapper, "Rename").attributes("disabled")).toBeUndefined();
+    expect(verb(wrapper, "rename").attributes("disabled")).toBeUndefined();
 
     store.rows = [...store.rows, row(2, "present")];
     store.toggleSelected(2);
     await wrapper.vm.$nextTick();
-    expect(verb(wrapper, "Rename").attributes("disabled")).toBeDefined();
+    expect(verb(wrapper, "rename").attributes("disabled")).toBeDefined();
   });
 
   it("refuses Forget while a copy is still on disk", async () => {
     selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    const forget = verb(wrapper, "Forget");
+    const forget = verb(wrapper, "forget");
     expect(forget.attributes("disabled")).toBeDefined();
     expect(forget.attributes("title")).toContain("files are gone");
   });
@@ -91,13 +116,13 @@ describe("the selection bar", () => {
     // must never be one press away from losing its curation.
     selectRows([row(1, "unreachable")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    expect(verb(wrapper, "Forget").attributes("disabled")).toBeDefined();
+    expect(verb(wrapper, "forget").attributes("disabled")).toBeDefined();
   });
 
   it("offers Forget once every copy is missing", async () => {
     selectRows([row(1, "missing")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    expect(verb(wrapper, "Forget").attributes("disabled")).toBeUndefined();
+    expect(verb(wrapper, "forget").attributes("disabled")).toBeUndefined();
   });
 
   it("offers Forget on a mixed selection and says how many it will take", async () => {
@@ -105,18 +130,22 @@ describe("the selection bar", () => {
     // refuse the whole gesture because one file came back.
     selectRows([row(1, "missing"), row(2, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    const forget = verb(wrapper, "Forget");
+    const forget = verb(wrapper, "forget");
     expect(forget.attributes("disabled")).toBeUndefined();
     expect(forget.attributes("title")).toContain("the 1 whose files are gone");
   });
 
   it("emits rather than acting, so the confirmations live in one place", async () => {
-    selectRows([row(1, "missing")]);
+    // The two confirmations (Forget, Stack) are the view's, and this is what
+    // keeps them there: the pill never calls a store verb of its own.
+    selectRows([row(1, "missing"), row(2, "missing")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    await verb(wrapper, "Set base model").trigger("click");
-    await verb(wrapper, "Forget").trigger("click");
-    expect(wrapper.emitted("set-base-model")).toHaveLength(1);
+    await verb(wrapper, "forget").trigger("click");
+    await verb(wrapper, "rename").trigger("click");
     expect(wrapper.emitted("forget")).toHaveLength(1);
+    // Rename is disabled at two rows, so nothing is emitted — which is the
+    // other half of the same contract.
+    expect(wrapper.emitted("rename")).toBeUndefined();
   });
 
   it("hands Assign the rows it can address, not the whole selection", async () => {
@@ -220,7 +249,10 @@ describe("the selection bar", () => {
     ]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     // Two rows drawn (the stack folded into one), three files counted.
-    expect(wrapper.find(".shelf-selbar-count").text()).toBe(
+    // The pill shows the figures and the sentence is in the tooltip: it floats
+    // over the list and every character of it costs a row underneath.
+    expect(wrapper.find(".selbar-count").text()).toBe("2· 400.0 MB");
+    expect(wrapper.find(".selbar-count").attributes("title")).toBe(
       "2 models selected · 400.0 MB",
     );
   });
@@ -230,13 +262,16 @@ describe("the selection bar", () => {
     // selection is empty, which is a different and wrong statement.
     selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    expect(wrapper.find(".shelf-selbar-count").text()).toBe("1 model selected");
+    expect(wrapper.find(".selbar-count").text()).toBe("1");
+    expect(wrapper.find(".selbar-count").attributes("title")).toBe(
+      "1 model selected",
+    );
   });
 
   it("offers Stack for two present adapters in one folder", async () => {
     selectRows([row(1, "present"), row(2, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    await verb(wrapper, "Stack these").trigger("click");
+    await verb(wrapper, "stack").trigger("click");
     expect(wrapper.emitted("stack")).toHaveLength(1);
   });
 
@@ -250,7 +285,7 @@ describe("the selection bar", () => {
       }),
     ]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    const stack = verb(wrapper, "Stack these");
+    const stack = verb(wrapper, "stack");
     expect(stack.attributes("disabled")).toBeDefined();
     expect(stack.attributes("title")).toContain("one folder");
   });
@@ -261,7 +296,7 @@ describe("the selection bar", () => {
     // the reader to move something instead, and they are in one folder.
     selectRows([row(1, "present"), row(2, "unreachable")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    const stack = verb(wrapper, "Stack these");
+    const stack = verb(wrapper, "stack");
     expect(stack.attributes("disabled")).toBeDefined();
     expect(stack.attributes("title")).toContain("on this machine");
     expect(stack.attributes("title")).not.toContain("folder");
@@ -270,7 +305,7 @@ describe("the selection bar", () => {
   it("refuses Stack on one model, a checkpoint, or a row already in a run", async () => {
     const store = selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    expect(verb(wrapper, "Stack these").attributes("disabled")).toBeDefined();
+    expect(verb(wrapper, "stack").attributes("disabled")).toBeDefined();
 
     store.rows = [
       ...store.rows,
@@ -278,7 +313,7 @@ describe("the selection bar", () => {
     ];
     store.toggleSelected(2);
     await wrapper.vm.$nextTick();
-    expect(verb(wrapper, "Stack these").attributes("title")).toContain(
+    expect(verb(wrapper, "stack").attributes("title")).toContain(
       "Only adapters",
     );
 
@@ -287,7 +322,7 @@ describe("the selection bar", () => {
     store.toggleSelected(1);
     store.toggleSelected(3);
     await wrapper.vm.$nextTick();
-    expect(verb(wrapper, "Stack these").attributes("title")).toContain(
+    expect(verb(wrapper, "stack").attributes("title")).toContain(
       "already part of a run",
     );
   });
@@ -295,7 +330,13 @@ describe("the selection bar", () => {
   it("clears the selection without touching the rows", async () => {
     const store = selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
-    await verb(wrapper, "Clear").trigger("click");
+    // Clear lives under the count, which is the pill's one dropdown: "I meant
+    // all of them" and "never mind" are the two things you say about a
+    // selection, so they sit on the selection itself.
+    const clear = wrapper
+      .findAll(".shelf-mi")
+      .find((item) => item.text().includes("Clear selection"));
+    await clear.trigger("click");
     expect(store.selectedRows).toHaveLength(0);
     expect(store.rows).toHaveLength(1);
   });

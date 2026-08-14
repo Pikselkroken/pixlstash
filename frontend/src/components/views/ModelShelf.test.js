@@ -69,7 +69,7 @@ vi.mock("../../api/modelFolders", async (importOriginal) => ({
   listModelFolders: (...args) => listModelFolders(...args),
 }));
 
-// The names, colours and thumbnails behind the `Assigned to` marks (#892).
+// The names, colours and thumbnails behind the assignment rings (#892/#904).
 // Mocked for the same reason the folder reads are: unmocked they reach the
 // network from `onMounted`, and the rejection lands in a `console.warn` from a
 // promise no test awaits — which is the teardown race noted above.
@@ -186,7 +186,7 @@ describe("a row with nothing in its header", () => {
     // is the guaranteed anchor when all else is null, and an absent base model
     // says so in words rather than leaving a cell that reads as a gap.
     const cells = row.findAll(".shelf-col").map((s) => textOf(s));
-    expect(cells).toEqual(["LoRA", "Not set", "Not assigned", "342.1 MB"]);
+    expect(cells).toEqual(["LoRA", "not set", "342.1 MB"]);
   });
 
   it("marks the derived name by type, not by fading it", async () => {
@@ -251,11 +251,14 @@ describe("the four naming states", () => {
     // looks like a name and invites nothing. It is a prompt with a persistent
     // pencil now (#897).
     expect(rows[1].find(".shelf-row-name").text()).toBe("Name this model");
-    expect(rows[1].find(".shelf-name-pencil").classes()).toContain(
-      "shelf-name-pencil--persistent",
+    // The invitation is the NAME's own treatment now, not a pencil beside it:
+    // the resolved design puts the affordance on the field, so the accent rule
+    // and the italic are always there on this row and on no other.
+    expect(rows[1].find(".shelf-row-name").classes()).toContain(
+      "shelf-row-name--needs-a-name",
     );
-    expect(rows[0].find(".shelf-name-pencil").classes()).not.toContain(
-      "shelf-name-pencil--persistent",
+    expect(rows[0].find(".shelf-row-name").classes()).not.toContain(
+      "shelf-row-name--needs-a-name",
     );
   });
 });
@@ -358,10 +361,14 @@ describe("location state", () => {
       adapter({ id: 3 }),
     ]);
     const slots = wrapper.findAll(".shelf-row-loc");
+    // Two glyphs, not three: the mark leads the NAME line now, and a present
+    // row has no absence to announce. The two that do are told apart by shape
+    // and not only by hue, which is the rule that matters here.
+    expect(slots).toHaveLength(2);
     expect(slots[0].classes()).toContain("shelf-row-loc--missing");
     expect(slots[1].classes()).toContain("shelf-row-loc--unreachable");
-    // Present reserves its slot and shows nothing, so no row ever shifts.
-    expect(slots[2].classes()).toContain("shelf-row-loc--present");
+    const rows = wrapper.findAll(".shelf-row");
+    expect(rows[2].find(".shelf-row-loc").exists()).toBe(false);
   });
 });
 
@@ -741,7 +748,9 @@ describe("selecting rows", () => {
 
     await rowAt(wrapper, 0).trigger("click");
     await wrapper.vm.$nextTick();
-    expect(textOf(wrapper.find(".shelf-selbar"))).toContain("1 model selected");
+    expect(wrapper.find(".selbar-count").attributes("title")).toContain(
+      "1 model selected",
+    );
   });
 
   it("drops a selected model that the shelf no longer holds", async () => {
@@ -795,15 +804,15 @@ describe("drive bands", () => {
     useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
     await wrapper.vm.$nextTick();
 
-    const bands = wrapper.findAll(".shelf-band-heading");
+    const bands = wrapper.findAll(".shelf-band");
     expect(bands).toHaveLength(1);
     // The volume's name, not its mount point: a Linux mount point runs to
     // `/media/glindkvist/102AB4B6757AF9A3` and crowds the header out.
     expect(textOf(bands[0])).toContain("FastModels");
-    expect(textOf(bands[0])).not.toContain("/mnt/fast");
-    expect(bands[0].find(".shelf-band-label").attributes("title")).toBe(
-      "/mnt/fast",
-    );
+    // And the mount point beside it, in the mono face: the volume label answers
+    // "which disk" and the path answers "which one is that", which on a machine
+    // with two identically-named drives is the only half that does.
+    expect(textOf(bands[0].find(".shelf-band-path"))).toBe("/mnt/fast");
     // Free leads: it is the number that decides whether the next checkpoint
     // fits, and the meter is read at a glance rather than computed from.
     expect(textOf(bands[0])).toContain("512.0 GB free of 1.0 TB");
@@ -856,13 +865,11 @@ describe("drive bands", () => {
     useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
     await wrapper.vm.$nextTick();
 
-    expect(wrapper.findAll(".shelf-band-heading")).toHaveLength(2);
-    expect(wrapper.findAll(".shelf-band-legend")).toHaveLength(1);
-    expect(textOf(wrapper.find(".shelf-band-legend"))).toContain(
-      "On the shelf",
-    );
-    expect(textOf(wrapper.find(".shelf-band-legend"))).toContain("Other files");
-    expect(textOf(wrapper.find(".shelf-band-legend"))).toContain("Free");
+    expect(wrapper.findAll(".shelf-band")).toHaveLength(2);
+    expect(wrapper.findAll(".shelf-keys")).toHaveLength(1);
+    expect(textOf(wrapper.find(".shelf-keys"))).toContain("On the shelf");
+    expect(textOf(wrapper.find(".shelf-keys"))).toContain("Other files");
+    expect(textOf(wrapper.find(".shelf-keys"))).toContain("Free");
   });
 
   it("draws no key when no meter is on screen to key", async () => {
@@ -882,8 +889,8 @@ describe("drive bands", () => {
     useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
     await wrapper.vm.$nextTick();
 
-    expect(wrapper.find(".shelf-band-heading").exists()).toBe(true);
-    expect(wrapper.find(".shelf-band-legend").exists()).toBe(false);
+    expect(wrapper.find(".shelf-band").exists()).toBe(true);
+    expect(wrapper.find(".shelf-keys").exists()).toBe(false);
   });
 
   it("warns when a drive has no room for the next checkpoint", async () => {
@@ -904,14 +911,12 @@ describe("drive bands", () => {
 
     // The word carries the state in greyscale, and in a screen reader, without
     // a live region: this is a standing fact about a disk, not an event.
-    expect(textOf(wrapper.find(".shelf-band-heading"))).toContain(
+    expect(textOf(wrapper.find(".shelf-band"))).toContain(
       "Only 8.0 GB free of 1.0 TB",
     );
     expect(wrapper.find(".shelf-band-meter--low").exists()).toBe(true);
     expect(wrapper.find(".shelf-band-figures--low").exists()).toBe(true);
-    expect(wrapper.find(".shelf-band-heading").attributes("role")).not.toBe(
-      "alert",
-    );
+    expect(wrapper.find(".shelf-band").attributes("role")).not.toBe("alert");
   });
 
   it("leaves a roomy drive unwarned however full it looks", async () => {
@@ -932,7 +937,7 @@ describe("drive bands", () => {
     useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
     await wrapper.vm.$nextTick();
 
-    expect(textOf(wrapper.find(".shelf-band-heading"))).not.toContain("Only");
+    expect(textOf(wrapper.find(".shelf-band"))).not.toContain("Only");
     expect(wrapper.find(".shelf-band-meter--low").exists()).toBe(false);
   });
 
@@ -953,9 +958,7 @@ describe("drive bands", () => {
     useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
     await wrapper.vm.$nextTick();
 
-    expect(textOf(wrapper.find(".shelf-band-heading"))).toContain(
-      "Capacity unknown",
-    );
+    expect(textOf(wrapper.find(".shelf-band"))).toContain("Capacity unknown");
     expect(wrapper.find(".shelf-band-meter").exists()).toBe(false);
   });
 
@@ -976,7 +979,7 @@ describe("drive bands", () => {
     useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
     await wrapper.vm.$nextTick();
 
-    expect(wrapper.find(".shelf-band-heading").exists()).toBe(false);
+    expect(wrapper.find(".shelf-band").exists()).toBe(false);
     expect(wrapper.findAll(".shelf-group-btn").length).toBeGreaterThan(0);
   });
 });
@@ -1045,7 +1048,7 @@ describe("what a folder header says about its folder (#899)", () => {
     useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
     await wrapper.vm.$nextTick();
 
-    expect(textOf(wrapper.find(".shelf-band-heading"))).toContain("FastModels");
+    expect(textOf(wrapper.find(".shelf-band"))).toContain("FastModels");
     expect(textOf(wrapper.find(".shelf-group-btn"))).not.toContain(
       "FastModels",
     );
@@ -1073,7 +1076,7 @@ describe("what a folder header says about its folder (#899)", () => {
     );
     const headers = wrapper.findAll(".shelf-group-btn");
     const chips = headers.map((h) =>
-      h.findAll(".shelf-group-chip").map((c) => textOf(c)),
+      h.findAll(".shelf-chip").map((c) => textOf(c)),
     );
     // Alphabetical by path: /hf, /mine, /store.
     expect(chips[0]).toEqual(["Locked"]);
@@ -1129,7 +1132,7 @@ describe("the group header's reserved column", () => {
 
     const mark = wrapper.find(".shelf-group-mark");
     expect(mark.exists()).toBe(true);
-    expect(mark.find("v-icon-stub").exists()).toBe(true);
+    expect(mark.element.tagName.toLowerCase()).toBe("v-icon-stub");
   });
 });
 
@@ -1165,17 +1168,17 @@ describe("selection and drive bands together", () => {
     useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
     await wrapper.vm.$nextTick();
 
-    expect(wrapper.find(".shelf-band-heading").exists()).toBe(true);
+    expect(wrapper.find(".shelf-band").exists()).toBe(true);
     const rows = wrapper.findAll(".shelf-row");
     expect(rows).toHaveLength(1);
 
     await rows[0].trigger("click");
     await wrapper.vm.$nextTick();
-    expect(textOf(wrapper.find(".shelf-selbar"))).toContain("1 model selected");
-    // The band is a header, not a row: it must not have become selectable.
-    expect(wrapper.find(".shelf-band-heading").attributes("role")).not.toBe(
-      "option",
+    expect(wrapper.find(".selbar-count").attributes("title")).toContain(
+      "1 model selected",
     );
+    // The band is a header, not a row: it must not have become selectable.
+    expect(wrapper.find(".shelf-band").attributes("role")).not.toBe("option");
   });
 });
 
@@ -1637,7 +1640,7 @@ describe("dropping onto the capacity meter", () => {
 
   function bandFor(wrapper, label) {
     return wrapper
-      .findAll(".shelf-band-heading")
+      .findAll(".shelf-band")
       .find((band) => band.text().includes(label));
   }
 
@@ -1662,7 +1665,7 @@ describe("dropping onto the capacity meter", () => {
     expect(event.defaultPrevented).toBe(true);
 
     const band = bandFor(wrapper, "Slow");
-    expect(band.classes()).toContain("shelf-band-heading--drop");
+    expect(band.classes()).toContain("shelf-band--drop");
     expect(
       band.findAll(".shelf-band-seg").map((s) => s.attributes("style")),
     ).toEqual(["width: 10%;", "width: 50%;", "width: 10%;", "width: 30%;"]);
@@ -1687,8 +1690,8 @@ describe("dropping onto the capacity meter", () => {
     expect(event.defaultPrevented).toBe(false);
 
     const band = bandFor(wrapper, "Slow");
-    expect(band.classes()).toContain("shelf-band-heading--reject");
-    expect(band.classes()).not.toContain("shelf-band-heading--drop");
+    expect(band.classes()).toContain("shelf-band--reject");
+    expect(band.classes()).not.toContain("shelf-band--drop");
     expect(band.find(".shelf-band-seg--ghost-reject").exists()).toBe(true);
     expect(textOf(band)).toContain("100.0 GB will not fit · 60.0 GB short");
   });
@@ -1722,7 +1725,7 @@ describe("dropping onto the capacity meter", () => {
     await dragOnto(wrapper, "Fast");
 
     const band = bandFor(wrapper, "Fast");
-    expect(band.classes()).toContain("shelf-band-heading--drop");
+    expect(band.classes()).toContain("shelf-band--drop");
     expect(textOf(band)).toContain("Already on this drive · nothing to copy");
   });
 
@@ -1744,9 +1747,7 @@ describe("dropping onto the capacity meter", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(wrapper.find(".shelf-group-btn--drop").exists()).toBe(false);
-    expect(bandFor(wrapper, "Slow").classes()).toContain(
-      "shelf-band-heading--reject",
-    );
+    expect(bandFor(wrapper, "Slow").classes()).toContain("shelf-band--reject");
   });
 
   it("does not refuse a drive it could not measure", async () => {
@@ -1758,7 +1759,7 @@ describe("dropping onto the capacity meter", () => {
     expect(event.defaultPrevented).toBe(true);
 
     const band = bandFor(wrapper, "/mnt/slow/store");
-    expect(band.classes()).toContain("shelf-band-heading--drop");
+    expect(band.classes()).toContain("shelf-band--drop");
     expect(band.find(".shelf-band-seg--ghost").exists()).toBe(false);
     expect(textOf(band)).toContain("Capacity unknown");
   });
@@ -1789,23 +1790,22 @@ describe("a run's disclosure", () => {
     // tabindex="0">` is exactly as much of a second control, and a
     // tag-name-only assertion let that mutant through when this was checked.
     // `[tabindex]` is on the row itself, so the search is for descendants.
-    expect(
-      row
-        .findAll(
-          'button, a[href], input, select, textarea, [tabindex], [role="button"]',
-        )
-        // The rename pencil is the one exception, and it is a different ACTION
-        // rather than a second way into the run: voice control ("click Rename")
-        // and the AT element list both need a named target, so it carries a
-        // role and a label (#914 review). It is exempt from the count above and
-        // held to the rule that actually matters on the next line.
-        .filter((el) => !el.classes().includes("shelf-name-pencil")),
-    ).toHaveLength(0);
-    // ...which is that it is not a TAB STOP. `tabindex="-1"` is what keeps the
-    // keyboard path F2 on the row rather than a stop per row across 1,800 of
-    // them, and it is the assertion the exemption above would otherwise drop.
-    expect(row.find(".shelf-name-pencil").attributes("tabindex")).toBe("-1");
-    expect(row.find(".shelf-row-steps").exists()).toBe(true);
+    // The count badge is the one control in a row, and it is a real button on
+    // purpose: the grid role permits one where the old listbox did not, and a
+    // pointer needs a target for the disclosure that Right/Left gives the
+    // keyboard. Everything else in the row is still inert.
+    const controls = row.findAll(
+      'button, a[href], input, select, textarea, [tabindex], [role="button"]',
+    );
+    expect(controls).toHaveLength(1);
+    expect(controls[0].classes()).toContain("shelf-stack-badge");
+    // ...and it does not pick the row. The badge sits inside the one thing a
+    // click on a row already does, so without `@click.stop` opening a run
+    // would also select it — which is the gesture a reader uses to LOOK before
+    // deciding whether to act.
+    await controls[0].trigger("click");
+    expect(useModelShelfStore().selectedRows).toHaveLength(0);
+    expect(wrapper.findAll(".shelf-row--member")).toHaveLength(1);
   });
 
   it("opens and closes from the row with Right and Left", async () => {
@@ -1827,7 +1827,7 @@ describe("a run's disclosure", () => {
     // attribute the treegrid role already defines for exactly this.
     const wrapper = await mountShelf(run());
     const row = wrapper.find(".shelf-row");
-    expect(textOf(row.find(".shelf-row-steps"))).toContain("2");
+    expect(textOf(row.find(".shelf-stack-badge"))).toContain("2");
     expect(row.attributes("aria-expanded")).toBe("false");
     expect(row.attributes("aria-level")).toBe("1");
 
@@ -1863,30 +1863,21 @@ describe("a run's disclosure", () => {
     useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
     await wrapper.vm.$nextTick();
 
-    const heads = wrapper.findAll(".shelf-head-row");
+    // One strip per grid, and NONE of them drawn: a `columnheader` heads the
+    // grid it is in and nothing else, so grouping needs one per group — and
+    // the resolved design has no visible header strip, because the kind is a
+    // chip, the base is a word and the size is right-aligned, which is what
+    // makes the columns readable without being named. The names stay for the
+    // reader who cannot see that.
+    const heads = wrapper.findAll('[role="row"].visually-hidden');
     expect(heads).toHaveLength(2);
-    expect(heads[0].classes()).not.toContain("visually-hidden");
-    expect(heads[1].classes()).toContain("visually-hidden");
-    // The five the design names, plus the two glyph columns and the status
-    // column, which are headed for a reader only — a grid row owes a cell per
-    // column, and an unnamed one is a column a reader cannot be told about.
-    for (const head of heads) {
-      const names = head.findAll('[role="columnheader"]').map((c) => c.text());
-      expect(names).toEqual([
-        "Selected",
-        "Icon",
-        "Name",
-        "Kind",
-        "Base",
-        "Assigned to",
-        "Size",
-        "Status",
-      ]);
-    }
+    expect(
+      heads[0].findAll('[role="columnheader"]').map((cell) => cell.text()),
+    ).toEqual(["Model", "Name", "Kind", "Base", "Size"]);
   });
 });
 
-describe("the Assigned to marks (#892)", () => {
+describe("the assignment ring (#892, redrawn for #904)", () => {
   it("names every attached entity, and never by colour alone", async () => {
     listCharacters.mockResolvedValue([
       { id: 7, name: "Ada", character_color: "#e91e63" },
@@ -1902,59 +1893,87 @@ describe("the Assigned to marks (#892)", () => {
         ],
       }),
     ]);
-    const cell = wrapper.find(".shelf-col--assigned");
-    const marks = cell.findAll(".emark");
-    expect(marks).toHaveLength(2);
-    // The accessible name is on the cell whether or not anything is hovered,
-    // and it says the TYPE — which is what keeps the mark off colour and off
-    // shape as the only carrier of what it is (WCAG 1.4.1).
-    expect(textOf(cell)).toBe("Character: Ada. Set: Beach.");
-    expect(marks[0].attributes("title")).toBe("Character: Ada");
-    expect(marks[1].attributes("title")).toBe("Set: Beach");
-    // Front-to-back: the first attachment paints over the ones behind it.
-    const z = marks.map((m) => Number(m.attributes("style").match(/\d+/)[0]));
-    expect(z[0]).toBeGreaterThan(z[1]);
+    const mark = wrapper.find(".mmark");
+    // The greyscale test, as arithmetic: strip the hue and the ring still
+    // carries a STYLE, and the mark still says who out loud. Both attachments
+    // are named even though one ring is drawn — the mark has one edge.
+    expect(mark.attributes("title")).toBe("Ada (person), Beach (set)");
+    expect(textOf(mark)).toContain("Ada (person), Beach (set)");
+    expect(mark.classes()).toContain("mmark--ring");
+    expect(
+      mark
+        .classes()
+        .some((c) => /^mmark--(solid|dashed|thick|double)$/.test(c)),
+    ).toBe(true);
+    // The hue is the entity's own, so a character wears one colour app-wide.
+    expect(mark.attributes("style")).toContain("#e91e63");
   });
 
-  it("counts the overflow rather than widening the column", async () => {
-    listCharacters.mockResolvedValue(
-      [1, 2, 3, 4].map((id) => ({ id, name: `Char ${id}` })),
-    );
+  it("holds one treatment per entity, across every row that wears it", async () => {
+    // The style is the identity carrier, so it is a fact about the character
+    // rather than about the row: two adapters assigned to one person must draw
+    // the same ring or the treatment says nothing at all.
+    listCharacters.mockResolvedValue([{ id: 7, name: "Ada" }]);
+    const attachments = [{ entity_type: "character", entity_id: 7 }];
     const wrapper = await mountShelf([
-      adapter({
-        attachments: [1, 2, 3, 4].map((id) => ({
-          entity_type: "character",
-          entity_id: id,
-        })),
-      }),
+      adapter({ id: 1, attachments }),
+      adapter({ id: 2, sha256: "b".repeat(64), attachments }),
     ]);
-    const cell = wrapper.find(".shelf-col--assigned");
-    expect(cell.findAll(".emark")).toHaveLength(3);
-    // The counter names what it stands for: those marks cannot be hovered.
-    const last = cell.findAll(".emark")[2];
-    expect(last.text()).toContain("+2");
-    expect(last.attributes("title")).toBe(
-      "Character: Char 3, Character: Char 4",
-    );
+    const styles = wrapper
+      .findAll(".mmark")
+      .map((m) =>
+        m.classes().find((c) => c.startsWith("mmark--") && c !== "mmark--ring"),
+      );
+    expect(styles[0]).toBe(styles[1]);
   });
 
-  it("shows an outlined slot for a model assigned to nothing", async () => {
+  it("draws the dashed grey ring for a model assigned to nothing", async () => {
     const wrapper = await mountShelf([adapter({ attachments: [] })]);
-    const cell = wrapper.find(".shelf-col--assigned");
-    // A state, not a gap: the slot is drawn and the reader is told which it is.
-    expect(cell.find(".shelf-assigned-none").exists()).toBe(true);
-    expect(textOf(cell)).toBe("Not assigned");
+    const mark = wrapper.find(".mmark");
+    // A state, not a gap: an unringed mark under a design where every other
+    // mark has one reads as a rendering fault rather than as "assigned to
+    // nothing", and the word is what a reader hears.
+    expect(mark.classes()).toContain("mmark--none");
+    expect(mark.attributes("title")).toBe("Unassigned");
   });
 
-  it("still marks an attachment whose entity the lists do not answer", async () => {
-    // The vault is the authority on what is attached. Dropping the mark would
+  it("still rings an attachment whose entity the lists do not answer", async () => {
+    // The vault is the authority on what is attached. Dropping the ring would
     // say "not assigned", which is a different and wrong fact.
     const wrapper = await mountShelf([
       adapter({ attachments: [{ entity_type: "character", entity_id: 42 }] }),
     ]);
-    const cell = wrapper.find(".shelf-col--assigned");
-    expect(cell.findAll(".emark")).toHaveLength(1);
-    expect(textOf(cell)).toBe("Character: #42.");
+    const mark = wrapper.find(".mmark");
+    expect(mark.classes()).not.toContain("mmark--none");
+    expect(mark.attributes("title")).toBe("#42 (person)");
+  });
+
+  it("borrows the assigned face when the model has no picture of its own", async () => {
+    // A LoRA of Sarah with no icon is far better identified by Sarah's
+    // reference face than by the letters the generator would draw, and the ring
+    // around it is already her colour — so the two halves say one thing.
+    listCharacters.mockResolvedValue([{ id: 7, name: "Ada" }]);
+    const wrapper = await mountShelf([
+      adapter({ attachments: [{ entity_type: "character", entity_id: 7 }] }),
+    ]);
+    const img = wrapper.find(".mmark-img");
+    expect(img.exists()).toBe(true);
+    expect(img.attributes("src")).toContain("/characters/7");
+  });
+
+  it("keeps the model's own icon ahead of the face it is assigned to", async () => {
+    // Somebody chose that picture for this file. The assignment is still drawn
+    // — it is the ring — so nothing is lost by the icon winning the middle.
+    listCharacters.mockResolvedValue([{ id: 7, name: "Ada" }]);
+    const wrapper = await mountShelf([
+      adapter({
+        icon_sha256: "f".repeat(64),
+        attachments: [{ entity_type: "character", entity_id: 7 }],
+      }),
+    ]);
+    expect(wrapper.find(".mmark-img").attributes("src")).not.toContain(
+      "/characters/7",
+    );
   });
 });
 
@@ -1967,8 +1986,7 @@ describe("the icon verb", () => {
     const store = useModelShelfStore();
     store.toggleSelected(1);
     await wrapper.vm.$nextTick();
-    const setIcon = () =>
-      wrapper.findAll("button").find((b) => b.text().includes("Set icon"));
+    const setIcon = () => wrapper.find('[data-verb="set-icon"]');
     expect(setIcon().attributes("disabled")).toBeUndefined();
 
     store.toggleSelected(2);
@@ -2093,7 +2111,7 @@ describe("the training step", () => {
     // groups differently while the component is behaving correctly. Scoped to
     // the element for the same reason the negatives below are — "Step" also
     // appears in the shelf's own help paragraph.
-    expect(wrapper.get(".shelf-row-at-step").text()).toBe(
+    expect(wrapper.get(".shelf-chip--step").text()).toBe(
       `Step ${(2500).toLocaleString()}`,
     );
   });
@@ -2106,7 +2124,7 @@ describe("the training step", () => {
     // The element, not the page text: "Step" appears in the shelf's own help
     // paragraph, so a substring check over everything would pass or fail for
     // reasons that have nothing to do with this row.
-    expect(wrapper.find(".shelf-row-at-step").exists()).toBe(false);
+    expect(wrapper.find(".shelf-chip--step").exists()).toBe(false);
   });
 
   it("never puts a single step on a stack cover", async () => {
@@ -2130,7 +2148,7 @@ describe("the training step", () => {
         stack_id: 7,
       }),
     ]);
-    expect(wrapper.find(".shelf-row-at-step").exists()).toBe(false);
+    expect(wrapper.find(".shelf-chip--step").exists()).toBe(false);
   });
 });
 
@@ -2144,9 +2162,15 @@ describe("Add file", () => {
     await wrapper.vm.$nextTick();
   }
 
-  it("offers the verb in the toolbar, with a name a reader can hear", async () => {
+  it("offers the verb under Add, with a name a reader can hear", async () => {
+    // Not a button of its own in the bar any more: adding a folder, adding a
+    // loose file and importing a run are three ways into one thing, so they
+    // share the one accented control (#904).
     const wrapper = await mountShelf([adapter({ id: 1 })]);
-    expect(wrapper.find('[aria-label="Add a model file"]').exists()).toBe(true);
+    const item = wrapper
+      .findAll(".shelf-mi")
+      .find((entry) => entry.text().includes("Add file"));
+    expect(item).toBeDefined();
   });
 
   it("sends the picked path and refreshes the shelf, so no rescan is needed", async () => {
@@ -2234,11 +2258,11 @@ describe("the two kinds of absence", () => {
       adapter({ id: 1, locations: [at(7, "unreachable")] }),
       adapter({ id: 2, locations: [at(7, "unreachable")] }),
     ]);
-    const banner = wrapper.find(".shelf-offline-banner");
+    const banner = wrapper.find(".shelf-banner");
     expect(banner.exists()).toBe(true);
     expect(textOf(banner)).toContain("/mnt/7 is offline — 2 models");
     // Once, not once per row.
-    expect(wrapper.findAll(".shelf-offline-banner")).toHaveLength(1);
+    expect(wrapper.findAll(".shelf-banner")).toHaveLength(1);
   });
 
   it("says nothing about a folder that was readable", async () => {
@@ -2247,7 +2271,7 @@ describe("the two kinds of absence", () => {
     const wrapper = await mountShelf([
       adapter({ id: 1, locations: [at(7, "missing")] }),
     ]);
-    expect(wrapper.find(".shelf-offline-banner").exists()).toBe(false);
+    expect(wrapper.find(".shelf-banner").exists()).toBe(false);
   });
 });
 

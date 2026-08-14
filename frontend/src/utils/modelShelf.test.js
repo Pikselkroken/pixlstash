@@ -6,7 +6,8 @@ import { describe, it, expect } from "vitest";
 import { contrastRatio } from "./contrastAudit.js";
 import { SET_COLORS } from "./setAppearance";
 import {
-  assignmentMarks,
+  assignmentRing,
+  RING_STYLES,
   bandGroups,
   bandProjection,
   bandUsage,
@@ -1103,20 +1104,20 @@ describe("movableCopies", () => {
   });
 });
 
-describe("assignmentMarks", () => {
+describe("assignmentRing", () => {
   const attach = (type, id) => ({ entity_type: type, entity_id: id });
 
   it("takes the entity's own colour, so a character is one hue app-wide", () => {
-    const [mark] = assignmentMarks([attach("character", 7)], {
+    const ring = assignmentRing([attach("character", 7)], {
       characters: [{ id: 7, name: "Ada", character_color: "#e91e63" }],
     });
-    expect(mark.hue).toBe("#e91e63");
-    expect(mark.label).toBe("Character: Ada");
-    expect(mark.initials).toBe("AD");
+    expect(ring.hue).toBe("#e91e63");
+    expect(ring.label).toBe("Ada (person)");
+    expect(RING_STYLES).toContain(ring.style);
   });
 
-  it("keys a colourless entity on its id, never on its place in the fan", () => {
-    // Positional colour would repaint every remaining mark when one attachment
+  it("keys a colourless entity on its id, never on its place in the list", () => {
+    // Positional colour would repaint every remaining ring when one attachment
     // is removed, which is the failure `generatedMark` documents for models.
     const lists = {
       sets: [
@@ -1124,42 +1125,53 @@ describe("assignmentMarks", () => {
         { id: 9, name: "Studio" },
       ],
     };
-    const pair = assignmentMarks([attach("set", 4), attach("set", 9)], lists);
-    const alone = assignmentMarks([attach("set", 9)], lists);
-    expect(alone[0].hue).toBe(pair[1].hue);
-    expect(SET_COLORS.map((c) => c.value)).toContain(alone[0].hue);
+    const alone = assignmentRing([attach("set", 9)], lists);
+    const second = assignmentRing([attach("set", 9), attach("set", 4)], lists);
+    expect(second.hue).toBe(alone.hue);
+    expect(second.style).toBe(alone.style);
+    expect(SET_COLORS.map((c) => c.value)).toContain(alone.hue);
   });
 
-  it("gives every mark an identity beside its colour", () => {
-    // The greyscale test, as arithmetic: strip the hue and each mark still
-    // carries a name and a glyph, so nothing is distinguished by colour alone.
-    const marks = assignmentMarks(
-      [attach("character", 1), attach("set", 1)],
+  it("gives the ring a style and a label beside its colour", () => {
+    // The greyscale test, as arithmetic: strip the hue and the ring still
+    // carries a treatment and a name, so nothing is said by colour alone.
+    const ring = assignmentRing([attach("character", 1)], {});
+    expect(RING_STYLES).toContain(ring.style);
+    expect(ring.label).toBe("#1 (person)");
+    expect(SET_COLORS.some((c) => c.value === ring.hue)).toBe(true);
+  });
+
+  it("holds one style per entity, whatever else the model wears", () => {
+    // The style is the identity carrier, so it has to be a fact about the
+    // character rather than about the row: two models sharing one assignment
+    // must draw the same ring or the treatment says nothing.
+    const first = assignmentRing([attach("character", 42)], {});
+    const alsoOn = assignmentRing(
+      [attach("character", 42), attach("set", 3)],
       {},
     );
-    expect(marks.map((m) => m.label)).toEqual(["Character: #1", "Set: #1"]);
-    expect(marks.every((m) => m.initials)).toBe(true);
-    // The type is in the noun, never in the hue — two entities can and do
-    // collide on a colour, which is exactly why colour is only a hint.
-    expect(marks.every((m) => SET_COLORS.some((c) => c.value === m.hue))).toBe(
-      true,
-    );
+    expect(alsoOn.style).toBe(first.style);
+    expect(alsoOn.hue).toBe(first.hue);
   });
 
-  it("fans three and then counts, front-to-back", () => {
-    const marks = assignmentMarks(
-      [1, 2, 3, 4, 5].map((id) => attach("character", id)),
+  it("names every attachment while only the first draws the ring", () => {
+    const ring = assignmentRing(
+      [attach("character", 1), attach("set", 2), attach("character", 3)],
       {},
     );
-    expect(marks).toHaveLength(3);
-    expect(marks[2].more).toBe(3);
-    expect(marks[2].label).toBe("Character: #3, Character: #4, Character: #5");
-    expect(marks.map((m) => m.z)).toEqual([3, 2, 1]);
+    expect(ring.count).toBe(3);
+    expect(ring.label).toBe("#1 (person), #2 (set), #3 (person)");
   });
 
-  it("returns nothing for a model assigned to nothing", () => {
-    expect(assignmentMarks([], {})).toEqual([]);
-    expect(assignmentMarks(undefined)).toEqual([]);
+  it("draws the dashed grey ring for a model assigned to nothing", () => {
+    // Never an ABSENT ring: an unringed mark under a design where every other
+    // mark has one reads as a rendering gap rather than as a state.
+    for (const empty of [assignmentRing([], {}), assignmentRing(undefined)]) {
+      expect(empty.style).toBe("none");
+      expect(empty.hue).toBe("");
+      expect(empty.label).toBe("Unassigned");
+      expect(empty.count).toBe(0);
+    }
   });
 
   it("does not serve a stale name after the entity list is replaced", () => {
@@ -1169,10 +1181,10 @@ describe("assignmentMarks", () => {
     // mutating it, so a rename must come through on the next render.
     const before = [{ id: 7, name: "Ada" }];
     const after = [{ id: 7, name: "Ada Lovelace" }];
-    const marks = (characters) =>
-      assignmentMarks([attach("character", 7)], { characters })[0].label;
-    expect(marks(before)).toBe("Character: Ada");
-    expect(marks(before)).toBe("Character: Ada");
-    expect(marks(after)).toBe("Character: Ada Lovelace");
+    const label = (characters) =>
+      assignmentRing([attach("character", 7)], { characters }).label;
+    expect(label(before)).toBe("Ada (person)");
+    expect(label(before)).toBe("Ada (person)");
+    expect(label(after)).toBe("Ada Lovelace (person)");
   });
 });

@@ -1442,49 +1442,98 @@ undo by accident:
   is in neither list by default and is fetched only from the *adapters* block
   under `?file_kind=unknown`.
 
-**The `Assigned to` marks** (`EntityMark.vue`, `assignmentMarks` in
-`utils/modelShelf.js`) draw one bordered thumbnail per attached character or
-set. `attachments` carries `entity_type` and `entity_id` and no names, so the
-names, colours and thumbnails come from `useEntityListsStore` — the two list
-reads the sidebar already makes, shared and cached, never a lookup per
-attachment; the thumbnail is an `<img src>` from `characterThumbnailUrl` /
-`pictureSetThumbnailUrl` rather than a blob, so one response is cached however
-many rows name that character. Four rules hold it together and are each easy to
-undo:
+**The assignment ring** (`assignmentRing` in `utils/modelShelf.js`, drawn by
+`ModelMark.vue`) is what the shelf says about who a model belongs to. It
+replaced the `Assigned to` column in #904: the resolved design carries
+assignment as a ring on the identity mark instead, which frees a column that was
+empty on most rows and puts the fact where the eye already is. `attachments`
+carries `entity_type` and `entity_id` and no names, so the names and colours
+come from `useEntityListsStore` — the two list reads the sidebar already makes,
+shared and cached, never a lookup per attachment.
 
-- **Colour is a grouping hint and never the meaning.** Every mark carries the
-  entity's thumbnail (or its initials when the entity has no picture) and an
-  accessible name saying its type, so the column reads in greyscale (WCAG
-  1.4.1). Distinguishing a character from a set *by colour* is explicitly
-  rejected. The hue is the entity's own where it has one, so a character wears
-  the same colour here as in the sidebar, and a hash of its id otherwise —
-  never its position in the fan, which would repaint every mark when one
-  attachment is removed.
-- **One radius for every entity mark.** `--radius-sm`, because §6 reserves
-  `--radius-pill` for avatar rings and half of these are picture sets. Type
-  lives in the label, never in the shape.
-- **Unassigned is a dashed outline, not a blank cell**, so "assigned to
-  nothing" reads as a state rather than as a rendering gap.
-- **The fan is capped at three with an explicit z-order.** Three marks at a
-  half-mark overlap land exactly on the two-mark track, so a fourth would step
-  every column right of it sideways; beyond that the last slot becomes a `+N`
-  counter whose title names the entities it stands for. `assignmentMarks`
-  stamps `z` descending, so the fan paints front-to-back rather than the last
-  attachment covering the first.
+- **Two axes, and neither is colour alone.** The HUE is the entity's own, so a
+  character wears the same colour here as in the sidebar (a hash of its id
+  otherwise). The STYLE — solid, dashed, thick, double — is hashed off the same
+  `type:id` key, so it is a property of the ENTITY and not of the row: one
+  character draws one treatment across all 1,800 rows, and removing an
+  attachment repaints nothing else. Style is what survives greyscale, every
+  form of colour blindness and forced-colors mode, and it multiplies the palette
+  rather than replacing it — five usable colours times four usable styles is
+  twenty groups from a palette that gave five. **Dotted is deliberately
+  missing**: a 24px mark's ring is roughly 75px of edge, so 2px dotted is about
+  37 dots and reads as a faded solid ring.
+- **The ring is a pseudo-element with a 2px gap**, never a border (which would
+  push the picture in and make an assigned mark a different size from an
+  unassigned one) and never an outline (which would fight `--focus-ring`). The
+  gap is doing the real work: a ring drawn against an arbitrary thumbnail is one
+  contrast problem per image, and detached, its inner edge sits on the row
+  background — a known colour in both themes. That is also why `ModelMark` is
+  two boxes: one element cannot both clip an image and draw outside its own edge.
+- **The face inside the ring falls back twice.** The model's own icon wins,
+  because somebody chose that picture for this file; failing that the mark
+  borrows the thumbnail of whoever it is assigned to, since a LoRA of Sarah with
+  no icon is better identified by Sarah's reference face than by two letters —
+  and the ring around it is already her colour, so the halves say one thing;
+  failing that the generated mark. Thumbnails are `<img src>` from
+  `characterThumbnailUrl` / `pictureSetThumbnailUrl` rather than blobs, so one
+  response is cached however many rows borrow that face, and a 404 falls back
+  to the initials rather than drawing an empty square.
+- **The FIRST attachment owns the ring and the label names them all.** A mark
+  has one edge, and four rings around a 24px square is a mark that is mostly
+  ring. The count and every name ride in the mark's `title` and in a
+  `visually-hidden` span, which is the only thing on the row that says what the
+  model is assigned to now that the column is gone — so the mark's PICTURE is
+  `aria-hidden` and its label is not.
+- **Unassigned is a dashed grey ring, not an absent one**, so "assigned to
+  nothing" reads as a state rather than as a mark that failed to render. That is
+  distinct from handing `ModelMark` no ring at all (a picker, a dialog), which
+  draws none.
 
-An attachment whose entity the lists do not answer still gets a mark, reading
-`#12`: the vault is the authority on what is attached, and dropping the mark
-would say "not assigned", which is a different and wrong fact.
+An attachment whose entity the lists do not answer still gets a ring, reading
+`#12 (person)`: the vault is the authority on what is attached, and dropping the
+ring would say "not assigned", which is a different and wrong fact.
 
-Rows are built on the shared row system (`SideBar.global.css`, §5.1) through
-the neutral `.ps-row` / `.ps-row-glyph` aliases, so the shelf consumes those
-rules rather than keeping a second copy of them. Column 1 is reserved and empty
-until grouping fills it. Rows are **not** focus stops while they carry no verb:
+**A row is flex, not a grid, and its columns are FIXED widths.** Grouping makes
+one `role="treegrid"` list per group, so `auto` tracks would be measured against
+that group's contents alone and the columns would step sideways from one folder
+to the next — which is the alignment #891 exists to hold. The widths
+(`--shelf-col-kind: 64px`, `--shelf-col-base: 84px`, `--shelf-col-size: 74px`)
+are the resolved design's own. The name takes the rest, and the FILENAME takes
+the whole of a second line under it in the mono face: it is what the file is
+actually called — which the name above it often is not — and it is the string
+that gets pasted into a ComfyUI node, so it is drawn rather than parked in a
+tooltip.
+
+**The column names are announced and never drawn.** Each grid carries a
+`visually-hidden` `role="row"` of `columnheader`s, because a `columnheader` heads
+the grid it is in and nothing else. The resolved design has no visible header
+strip: the kind is a chip, the base is a word and the size is right-aligned,
+which is what makes the columns readable without being named. Rows are **not**
+focus stops while they carry no verb:
 1,800 empty tab stops would be a trap, so the shelf root takes `tabindex="-1"`
 and receives focus on entry, and roving focus arrives with the first thing a
 focused row can do. The sidebar's Models entry is a real `<button>` with
 `aria-current`; the three older fixed destinations are still clickable `div`s,
 which is a filed gap rather than a pattern to copy.
+
+**The toolbar changes the VIEW, and almost nothing else (#904).** The resolved
+design consolidates it: one accented, labelled `+ Add ▾` menu holding the three
+ways a model gets onto the shelf (a folder, a loose file, an ai-toolkit import),
+the stack-detection sweep beside it as an icon, then the view controls on the
+right. Add and the sweep are the only two things there that are not view
+controls, and they sit together apart from them because neither has a selection
+to hang on — Add makes a row that does not exist yet and the sweep proposes over
+the whole shelf — and both open something before they write anything. **Every
+other verb lives on the row's context menu or in the selection pill**, so a
+mutation is never one stray click from a view switch.
+
+The **label rule** on the view controls: a control whose glyph is abstract AND
+whose state explains why the list looks the way it does carries its current
+VALUE as its label. So `Group` reads `Folder` and `Sort` reads `Date added`,
+while the funnel keeps its count badge and its tooltip. `ShelfSortPanel.vue`
+takes a `section` prop (`"sort"` / `"group"` / `"all"`) so the two axes can be
+two buttons drawing one panel — the toggles, the labels and the store writes are
+identical and only which section is on screen differs.
 
 The `Show` panel (`components/panels/ShelfShowPanel.vue`) is the toolbar's
 shipped filter pattern reused whole: a `bar-btn--boxed` activator with a
@@ -1749,10 +1798,14 @@ fault teaches the reader to ignore the fault as well.
 
 **They are told apart in greyscale**, which is what makes this a treatment
 rather than a hue: solid rail, dashed rail, no rail, plus two different glyphs.
-The colours only reinforce what the shapes already say. Both ride `.ps-row`'s
-own rail — `border-left: 3px solid transparent`, always present, always
-transparent (§5.1) — so only its colour and style change and a row that flips
-state does not move a pixel.
+The colours only reinforce what the shapes already say. Both ride the row's own
+rail — `border-left: 3px solid transparent`, always present, always transparent
+(§5.1) — so only its colour and style change and a row that flips state does not
+move a pixel. **Selection uses an inset box-shadow rather than that border**, so
+a selected broken row still shows both; the glyph itself leads the NAME line
+rather than sitting in a status column of its own, because it changes what
+everything after it means, and the file line says the rest ("· file is not where
+it was").
 
 **Muted is 0.7, never lower.** That is the alpha the figure columns already
 carry and the one #836 measured as clearing contrast at this size; 0.6 does not.
@@ -1953,6 +2006,33 @@ half in the view, and the bar mounts in a test with nothing but a store. Assign
 is the one exception, and only because it is not a button: it is the shared
 `AddToEntityControl`, which owns its own menu and emits the entity it was
 pointed at, so relaying that up and calling back down would buy nothing.
+
+**Three surfaces, one set of gates (#904).** That component draws the floating
+pill, the pill's `⋯` menu and the ROW CONTEXT MENU, because every `title` on it
+is a refusal sentence (`stackRefusal`, `forgetTitle`, `moveTitle`,
+`assignTitle`) and three copies of them would drift. The verb list itself is one
+array in a render function drawn twice — under `⋯` without the single-item verbs
+and at the pointer with them.
+
+- **The pill floats bottom-centre over the list**, the same object the photo
+  grid docks over its tiles, rather than the docked strip it was: a bar between
+  the toolbar and the rows pushed the whole list down every time a row was
+  clicked. The float strip takes no pointer events so the rows it crosses stay
+  clickable, and `.shelf-body` carries bottom padding so the last rows are never
+  permanently underneath it.
+- **The verbs are ICONS with their words in the tooltip and in the menu.** Nine
+  labelled buttons was a sentence to re-read on every selection. Tests address
+  them by `data-verb`, not by label text.
+- **The two single-item verbs ride along disabled** past one selection rather
+  than disappearing, so the row of buttons never reflows under the pointer.
+- **Right-click follows the file-manager rule**: right-clicking a row that is
+  not selected selects it and acts on it alone; right-clicking one that IS
+  selected leaves the selection alone, so a menu opened on any of forty selected
+  rows acts on all forty. Without that, select-then-right-click — the commonest
+  gesture in a bulk edit — would silently drop the other 39.
+- **`Open in file manager` and `Delete from disk` are the design's and are NOT
+  built.** Neither has a route behind it and both are host-capability
+  operations, so they are tracked in #933 rather than rendered dead.
 
 **Assign reuses the grid's picker rather than a shelf-local one.** Two
 instances, `type="character"` and `type="set"`, so the search, the tri-state and

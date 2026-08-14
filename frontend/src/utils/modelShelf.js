@@ -1084,19 +1084,23 @@ export function generatedMark(row) {
 }
 
 /**
- * How many marks the `Assigned to` column fans before it starts counting.
+ * The ring's second axis (#904).
  *
- * Three, because the column is two marks wide and the overlap is half a mark:
- * 24 + 12 + 12 lands exactly on `calc(var(--entity-thumb) * 2)`. A fourth would
- * push the column wide and step every column right of it sideways, which is the
- * alignment #891 exists to hold.
+ * Four treatments, and dotted is deliberately not among them: a 24px mark's ring
+ * is roughly 75px of edge, so 2px dotted is about 37 dots and reads as a faded
+ * solid ring rather than as its own thing — it fails exactly where it has to
+ * work, at a glance in a list.
+ *
+ * Style MULTIPLIES the palette rather than replacing it: four styles against the
+ * hues an entity already carries is what makes the ring survive greyscale,
+ * colour blindness and forced-colors, where hue alone does not.
  */
-const ASSIGNMENT_FAN_MAX = 3;
+export const RING_STYLES = ["solid", "dashed", "thick", "double"];
 
 /**
  * `id -> row` for an entity list, built once per list rather than once per row.
  *
- * `assignmentMarks` is called from a `v-for` over the whole shelf, so rebuilding
+ * `assignmentRing` is called from a `v-for` over the whole shelf, so rebuilding
  * the maps inside it made the column cost rows x entities — 1,800 rows against a
  * few hundred characters, on every render. Keyed on the ARRAY, which the entity
  * store replaces wholesale on every refresh (`lists.value = { ...lists.value }`)
@@ -1119,42 +1123,48 @@ function indexById(list) {
 const ATTACHMENT_KIND = {
   character: {
     list: "characters",
-    noun: "Character",
+    noun: "person",
     colorKey: "character_color",
   },
-  set: { list: "sets", noun: "Set", colorKey: "set_color" },
+  set: { list: "sets", noun: "set", colorKey: "set_color" },
 };
 
 /**
- * The marks the `Assigned to` column draws for one row (#892).
+ * The ring one row's identity mark wears, from what the model is assigned to
+ * (#892, redrawn for #904).
  *
  * `attachments` carries `entity_type` and `entity_id` and nothing else, so the
- * names, colours and thumbnails come from the shared entity lists the sidebar
- * already fetches. An id the lists do not answer still gets a mark — the vault
- * is the authority on what is attached, and dropping the mark would say "not
- * assigned", which is a different and wrong fact. It reads `#12` until the list
- * lands, which is a loading state rather than a lie.
+ * names and colours come from the shared entity lists the sidebar already
+ * fetches. An id the lists do not answer still gets a ring — the vault is the
+ * authority on what is attached, and dropping the ring would say "not
+ * assigned", which is a different and wrong fact. It reads `#12` in the label
+ * until the list lands, which is a loading state rather than a lie.
  *
- * **Colour is a grouping hint and never the meaning.** Every mark carries the
- * entity's thumbnail or its initials and an accessible name, so the row still
- * reads in greyscale (WCAG 1.4.1); the hue only helps the eye tell two
- * overlapping marks apart. It is the entity's OWN colour where it has one, so a
- * character wears the same hue here as in the sidebar, and a hash of its id
- * otherwise — never the position in the fan, which would repaint every mark
- * when one attachment is removed.
+ * **Colour is never the only carrier.** The hue is the entity's own, so a
+ * character wears the same one here as in the sidebar — but the STYLE is what
+ * makes the ring survive greyscale, and the label is what makes it readable
+ * aloud. Hue, style and label always travel together.
  *
- * **Type is never carried by shape.** A character and a set take one radius;
- * which is which lives in the label (`Character: Ada` / `Set: Beach`).
+ * **Style is a property of the entity, not of the row.** It is hashed off the
+ * same `type:id` key the hue falls back to, so one character wears one
+ * treatment across all 1,800 rows and removing an attachment repaints nothing
+ * else. Position in a list would have repainted every row that shared it.
+ *
+ * The FIRST attachment owns the ring, and the label names them all: a mark has
+ * one edge, and drawing four rings around a 24px square is how you get a mark
+ * that is mostly ring. The count is what the row says out loud instead.
  *
  * @param {Array<{entity_type: string, entity_id: number}>} attachments
  * @param {Object} [lists]
  * @param {Array<Object>} [lists.characters] - `useEntityListsStore().characters`.
  * @param {Array<Object>} [lists.sets] - `useEntityListsStore().pictureSets`.
- * @returns {Array<Object>} up to {@link ASSIGNMENT_FAN_MAX} descriptors, the
- *   last of which is a `{more}` counter when there were more than that. Each
- *   carries `label`, `z`, and either `initials` + `tile` + `ink`, or `more`.
+ * @returns {{style: string, hue: string, type: string, id: ?number,
+ *   label: string, count: number}} `style`
+ *   is `"none"` and `hue` empty when nothing is attached, which is the dashed
+ *   grey ring — never an absent ring, because a mark with no edge at all would
+ *   read as a rendering gap rather than as a state.
  */
-export function assignmentMarks(
+export function assignmentRing(
   attachments,
   { characters = [], sets = [] } = {},
 ) {
@@ -1162,42 +1172,42 @@ export function assignmentMarks(
     characters: indexById(characters),
     sets: indexById(sets),
   };
-  const marks = (attachments ?? []).map((att) => {
+  const named = (attachments ?? []).map((att) => {
     const type = att.entity_type === "character" ? "character" : "set";
     const kind = ATTACHMENT_KIND[type];
     const entity = byId[kind.list].get(String(att.entity_id));
     const name = entity?.name || `#${att.entity_id}`;
-    const hex =
-      entity?.[kind.colorKey] ||
-      SET_COLORS[hash32(`${type}:${att.entity_id}`) % SET_COLORS.length].value;
     return {
       key: `${type}:${att.entity_id}`,
       type,
       id: att.entity_id,
-      label: `${kind.noun}: ${name}`,
-      hue: hex,
-      tile: markBackground(hex),
-      ink: markForeground(),
-      initials: initialsOf(name),
+      label: `${name} (${kind.noun})`,
+      hue:
+        entity?.[kind.colorKey] ||
+        SET_COLORS[hash32(`${type}:${att.entity_id}`) % SET_COLORS.length]
+          .value,
     };
   });
-  let fan = marks;
-  if (marks.length > ASSIGNMENT_FAN_MAX) {
-    const rest = marks.slice(ASSIGNMENT_FAN_MAX - 1);
-    fan = [
-      ...marks.slice(0, ASSIGNMENT_FAN_MAX - 1),
-      {
-        key: "more",
-        more: rest.length,
-        // The counter names what it stands for rather than only saying "+4":
-        // the reader cannot hover the marks that are not there.
-        label: rest.map((mark) => mark.label).join(", "),
-      },
-    ];
+  if (!named.length) {
+    return {
+      style: "none",
+      hue: "",
+      type: "",
+      id: null,
+      label: "Unassigned",
+      count: 0,
+    };
   }
-  // Painted front-to-back, which is the reverse of document order: the first
-  // attachment is the whole mark and the ones behind it show the sliver that
-  // says how many there are. Stamped here rather than in the template so the
-  // order is one decision with one test, not an expression in a `v-for`.
-  return fan.map((mark, index) => ({ ...mark, z: fan.length - index }));
+  const [first] = named;
+  return {
+    style: RING_STYLES[hash32(first.key) % RING_STYLES.length],
+    hue: first.hue,
+    // The entity the mark borrows a face from when the model has no picture of
+    // its own. Carried here rather than looked up again in the component, so
+    // which attachment owns the ring and which owns the face cannot drift.
+    type: first.type,
+    id: first.id,
+    label: named.map((one) => one.label).join(", "),
+    count: named.length,
+  };
 }
