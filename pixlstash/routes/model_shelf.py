@@ -125,10 +125,13 @@ class ModelLocation(BaseModel):
     relpath: str = Field(description="Path of this copy relative to the folder.")
     state: str = Field(
         description=(
-            "``present``, ``missing`` or ``unreachable``. ``missing`` is a fact "
-            "(the folder was readable and the file was not in it); "
-            "``unreachable`` is the absence of one (we could not look), and only "
-            "``missing`` is something a forget/cleanup action may act on."
+            "``present``, ``missing``, ``unreachable`` or ``not_downloaded``. "
+            "``missing`` is a fact (the folder was readable and the file was "
+            "not in it); ``unreachable`` is the absence of one (we could not "
+            "look), and only ``missing`` is something a forget/cleanup action "
+            "may act on. ``not_downloaded`` belongs to the folders PixlStash "
+            "declares rather than scans: one of its own engines that nothing "
+            "has needed yet, which is normal and not a fault."
         )
     )
     file_mtime: Optional[int] = Field(

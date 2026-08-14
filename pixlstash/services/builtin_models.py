@@ -21,7 +21,7 @@ pay that to learn two strings. They are duplicated here and pinned by
 two agree. The same trade the 48-hex ``SET_COLORS`` list already makes.
 
 Drift here is also self-announcing rather than silent: a renamed file makes its
-declared row go ``missing`` and the real file appear under
+declared row go :data:`STATE_NOT_DOWNLOADED` and the real file appear under
 :func:`unclaimed_files`, which is a visible pair, not a quiet wrong answer.
 
 **These rows are protected.** The folder answers 409 to ``DELETE`` and every
@@ -65,6 +65,23 @@ MOVABLE_FIXED = "fixed"
 
 # Everything in this folder arrived because PixlStash fetched it.
 BUILTIN_PROVENANCE = "builtin"
+
+# What a declared file that is not on disk gets, and deliberately NOT `missing`.
+#
+# `missing` is the SCANNER's word for a registered file that was in a readable
+# folder and is not in it any more, and the shelf draws it as a fault: error
+# rail, error glyph, "The file is not where it was". Nothing declared here is
+# ever that. Every file this module and `builtin_caches` declare is one
+# PixlStash fetches on demand — the ViT-L/14 scorer arrives only with the CLIP
+# model that needs it, an InsightFace pack only when face detection first runs —
+# so absence means "not fetched yet", on a perfectly healthy machine, for about
+# half of these. Saying a file wandered off when nobody ever asked for it is a
+# false alarm, and a false alarm teaches the reader to ignore the real one
+# (#926).
+#
+# It is also the right word for a file that WAS here and is gone: we re-fetch it
+# the moment something needs it, so the owner has nothing to do either way.
+STATE_NOT_DOWNLOADED = "not_downloaded"
 
 # `hf_hub_download(local_dir=...)` leaves its own bookkeeping beside the files it
 # writes, at the top level and again inside every subdirectory it fills. It is
@@ -120,8 +137,9 @@ class DeclaredEntry:
         role: Stored in ``model.kind``; see :class:`BuiltinEngine.role`.
         size: Bytes, or None when it could not be read. None never overwrites a
             size already recorded.
-        present: Whether it is on disk now. False writes ``missing``, which is a
-            normal state here and not a warning.
+        present: Whether it is on disk now. False writes
+            :data:`STATE_NOT_DOWNLOADED`, which is a normal state here and not a
+            warning.
         capabilities: Every feature these weights serve, primary first, written
             to ``model_capability``. Empty means "just the role", which is what
             all but one caller means: a model that does one thing does not have
@@ -460,11 +478,12 @@ def declare_folder(
 
         for entry in entries:
             size = entry.size
-            state = "present" if entry.present else "missing"
+            state = "present" if entry.present else STATE_NOT_DOWNLOADED
             # An engine that has not been downloaded yet is NOT an error and not
             # a warning: the ViT-L/14 scorer is fetched only for the CLIP model
             # that needs it, so "declared and absent" is the normal state for
-            # about half of these on any given machine.
+            # about half of these on any given machine. See
+            # :data:`STATE_NOT_DOWNLOADED` for why that is not `missing`.
             #
             # Identity is the LOCATION — `model_file`'s own primary key — not a
             # hash we would have to read 339 MB to compute, and not `run_key`,
@@ -556,6 +575,13 @@ def declare_folder(
         # left behind would otherwise claim its bytes are still on the disk
         # forever — inflating the very `present_bytes` figure the folder list
         # reports.
+        #
+        # `missing` here and not :data:`STATE_NOT_DOWNLOADED`, which is the one
+        # place in this module the distinction bites: a row the declaration no
+        # longer NAMES is one nothing will fetch back — `antelopev2` deleted out
+        # of the InsightFace store is not in `KNOWN_MODEL_PACKS`, so it is gone
+        # rather than pending. A declared entry that is merely absent goes
+        # through the loop above and gets the softer word.
         #
         # `seen_at <` the run's own stamp rather than `!=`, the same predicate
         # the scanner uses, so a concurrent declaration that stamped a later

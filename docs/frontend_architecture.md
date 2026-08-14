@@ -1746,6 +1746,13 @@ fault teaches the reader to ignore the fault as well.
   is not plugged in. The row takes a **dashed rail and muted ink**, and
   **deliberately never the error colour**. Nothing is lost and nothing needs
   fixing; the models come back when the drive does.
+- **Not downloaded** (`not_downloaded`) is not either, and is the third thing
+  #926 found the shelf calling a fault. It is one of PixlStash's own declared
+  engines that nothing has needed yet — the normal state of about half of them —
+  so it takes **no rail at all**, muted ink and a download glyph rather than a
+  broken-file one. Only an ALL-`not_downloaded` row reports it: one genuinely
+  `missing` copy still states the fault, and a state this build does not know
+  falls through to `missing` rather than being quietly reported as fine.
 
 **They are told apart in greyscale**, which is what makes this a treatment
 rather than a hue: solid rail, dashed rail, no rail, plus two different glyphs.

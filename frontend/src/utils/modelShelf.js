@@ -696,14 +696,22 @@ export function bandProjection(band, addedBytes) {
  * `unreachable` is the absence of one (we could not look). They must not read
  * the same, and one present copy makes both moot — the file is usable.
  *
+ * `not_downloaded` is neither: it is a file PixlStash declares and fetches on
+ * demand, which nothing has needed yet. Only an ALL-`not_downloaded` row reports
+ * it, so a model with one genuinely missing copy still states the fault, and any
+ * state this build does not know still falls through to `missing` rather than
+ * being quietly reported as fine.
+ *
  * @param {Array<Object>} locations - the row's `locations` array.
- * @returns {"present"|"missing"|"unreachable"|"forgotten"}
+ * @returns {"present"|"missing"|"not_downloaded"|"unreachable"|"forgotten"}
  */
 export function locationState(locations) {
   const list = Array.isArray(locations) ? locations : [];
   if (!list.length) return "forgotten";
   if (list.some((loc) => loc?.state === "present")) return "present";
   if (list.some((loc) => loc?.state === "unreachable")) return "unreachable";
+  if (list.every((loc) => loc?.state === "not_downloaded"))
+    return "not_downloaded";
   return "missing";
 }
 
