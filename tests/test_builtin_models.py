@@ -7,6 +7,7 @@ honest, so the first case here imports the real ones and asserts they agree.
 
 from __future__ import annotations
 
+import logging
 import os
 
 import pytest
@@ -1079,6 +1080,24 @@ def test_an_unreadable_record_names_the_default_rather_than_nothing(
     assert "permission denied" in caplog.text
 
 
+def _warnings(caplog) -> list[str]:
+    """Every WARNING-or-worse message captured, and nothing else.
+
+    ``caplog.text`` is whatever the capture handler saw, which includes INFO
+    when the runner asks for it — the gate passes ``--log-level=INFO``. So
+    ``caplog.text == ""`` is not "this said nothing worrying", it is "this said
+    nothing at all, at whatever level today's command line happens to capture",
+    and an ordinary INFO such as ``set_builtin_model_dir``'s own "now downloads
+    its engines to …" turns a correct silence into a failure. The assertions
+    below mean the narrow thing: no warning.
+    """
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+    ]
+
+
 def test_a_start_up_declaration_says_when_the_recorded_folder_cannot_be_read(
     server_hub, data_dir, tmp_path, caplog
 ):
@@ -1101,13 +1120,13 @@ def test_a_start_up_declaration_says_when_the_recorded_folder_cannot_be_read(
     os.makedirs(gone)
     with caplog.at_level("WARNING"):
         declare_builtin_models(server_hub, gone)
-    assert caplog.text == "", caplog.text
+    assert _warnings(caplog) == [], caplog.text
 
     caplog.clear()
     os.remove(data_dir / BUILTIN_MODEL_DIR_POINTER)
     with caplog.at_level("WARNING"):
         declare_builtin_models(server_hub, str(tmp_path / "never-downloaded"))
-    assert caplog.text == "", caplog.text
+    assert _warnings(caplog) == [], caplog.text
 
 
 def test_a_start_up_declaration_says_when_the_engines_stayed_where_they_were(
@@ -1131,7 +1150,7 @@ def test_a_start_up_declaration_says_when_the_engines_stayed_where_they_were(
 
     with caplog.at_level("WARNING"):
         declare_builtin_models(server_hub, str(elsewhere))
-    assert caplog.text == "", "nothing has been downloaded anywhere yet"
+    assert _warnings(caplog) == [], "nothing has been downloaded anywhere yet"
 
     (default / "pixlstash-anomaly-tagger.safetensors").write_bytes(b"x" * 8)
     caplog.clear()
@@ -1157,7 +1176,7 @@ def test_a_start_up_declaration_says_when_the_engines_stayed_where_they_were(
     caplog.clear()
     with caplog.at_level("WARNING"):
         declare_builtin_models(server_hub, str(elsewhere))
-    assert caplog.text == "", caplog.text
+    assert _warnings(caplog) == [], caplog.text
 
 
 def test_a_volume_the_environment_names_is_not_reported_as_a_lost_relocation(
@@ -1180,7 +1199,7 @@ def test_a_volume_the_environment_names_is_not_reported_as_a_lost_relocation(
 
     with caplog.at_level("WARNING"):
         declare_builtin_models(server_hub, builtin_model_dir())
-    assert caplog.text == "", caplog.text
+    assert _warnings(caplog) == [], caplog.text
 
 
 def test_a_recorded_folder_reached_through_a_symlinked_default_still_reports(
@@ -1213,7 +1232,7 @@ def test_a_recorded_folder_reached_through_a_symlinked_default_still_reports(
     caplog.clear()
     with caplog.at_level("WARNING"):
         declare_builtin_models(server_hub, builtin_model_dir())
-    assert caplog.text == "", caplog.text
+    assert _warnings(caplog) == [], caplog.text
 
 
 def test_a_record_naming_the_default_folder_says_nothing(
@@ -1226,7 +1245,7 @@ def test_a_record_naming_the_default_folder_says_nothing(
 
     with caplog.at_level("WARNING"):
         declare_builtin_models(server_hub, builtin_model_dir())
-    assert caplog.text == "", caplog.text
+    assert _warnings(caplog) == [], caplog.text
 
 
 def test_no_test_can_name_the_machines_own_recorded_locations():
