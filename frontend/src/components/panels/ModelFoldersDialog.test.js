@@ -26,6 +26,18 @@ vi.mock("../../stores/useModelShelfStore", () => ({
   useModelShelfStore: () => ({ fetchRows: vi.fn() }),
 }));
 
+// The move job is the store's, not the dialog's — the dialog only starts one.
+const relocate = vi.fn();
+let moveBusy = false;
+vi.mock("../../stores/useModelMovesStore", () => ({
+  useModelMovesStore: () => ({
+    relocate: (...a) => relocate(...a),
+    get busy() {
+      return moveBusy;
+    },
+  }),
+}));
+
 import ModelFoldersDialog from "./ModelFoldersDialog.vue";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 
@@ -53,6 +65,7 @@ function folder(overrides = {}) {
     kind: "user",
     owner: null,
     movable: "per_item",
+    relocatable: false,
     host_path: null,
     delete_after_import: false,
     last_checked: null,
@@ -68,7 +81,47 @@ const MANAGED = folder({
   path: "/var/pixlstash/models",
   kind: "managed",
   movable: "root_only",
+  relocatable: true,
   file_count: 3,
+});
+
+// PixlStash's own download folder. `movable` is identical to the InsightFace
+// packs' below, which is why the row reads the server's `relocatable` and never
+// derives Move from `movable` itself.
+const DOWNLOADS = folder({
+  id: 4,
+  path: "/home/g/.local/share/pixlstash/downloaded_models",
+  kind: "foreign",
+  owner: "pixlstash",
+  movable: "root_only",
+  relocatable: true,
+  file_count: 4,
+});
+
+const INSIGHTFACE = folder({
+  id: 5,
+  path: "/home/g/.insightface/models",
+  kind: "foreign",
+  owner: "pixlstash",
+  movable: "root_only",
+  // Relocatable since #906. It reads identically to DOWNLOADS above, which is
+  // the point: the two are told apart by path on the server and by nothing at
+  // all here, so the row can only ever ask.
+  relocatable: true,
+  file_count: 2,
+});
+
+// The HuggingFace cache: `fixed`, because its location is `HF_HOME` and another
+// tool owns it. The row that must never carry Move, and the reason the verb is
+// read from the server rather than derived from `kind` — this is `foreign` too.
+const HF_CACHE = folder({
+  id: 6,
+  path: "/home/g/.cache/huggingface/hub",
+  kind: "foreign",
+  owner: "pixlstash",
+  movable: "fixed",
+  relocatable: false,
+  file_count: 26,
 });
 
 async function open(rows, { canManage = true, inDocker = false } = {}) {
@@ -88,6 +141,8 @@ async function open(rows, { canManage = true, inDocker = false } = {}) {
 beforeEach(() => {
   setActivePinia(createPinia());
   listModelFolders.mockReset().mockResolvedValue([]);
+  relocate.mockReset().mockResolvedValue(true);
+  moveBusy = false;
   forgetModelFolder.mockReset().mockResolvedValue({ tombstoned_files: 0 });
   rescanModelFolder.mockReset().mockResolvedValue({ status: "started" });
 });
@@ -128,49 +183,78 @@ describe("the managed store", () => {
   });
 });
 
-describe("relocation, which is not built yet", () => {
-  it("renders the control blocked and reachable, with its reason", async () => {
-    const wrapper = await open([MANAGED]);
-    const move = wrapper
+describe("relocation", () => {
+  function moveButton(wrapper) {
+    return wrapper
       .findAll("button")
       .find((b) => (b.attributes("aria-label") || "").startsWith("Move"));
+  }
+
+  it("offers Move on the folders the server says relocate", async () => {
+    const wrapper = await open([MANAGED, DOWNLOADS, INSIGHTFACE]);
+    const labels = wrapper
+      .findAll("button")
+      .map((b) => b.attributes("aria-label") || "")
+      .filter((l) => l.startsWith("Move"));
+    expect(labels).toHaveLength(3);
+    expect(labels.join(" ")).toContain("downloaded_models");
+    expect(labels.join(" ")).toContain(".insightface");
+  });
+
+  it("offers none on a root_only folder that cannot relocate", async () => {
+    // The HuggingFace cache reads `foreign` and sits beside two folders that do
+    // relocate, so nothing in the row itself distinguishes it. Deriving the verb
+    // from `kind` or from `movable` would put a button there that can only ever
+    // 409, which is why the server is asked.
+    const wrapper = await open([HF_CACHE]);
+    expect(moveButton(wrapper)).toBeUndefined();
+  });
+
+  it("sends the picked path for the folder the owner clicked", async () => {
+    const wrapper = await open([MANAGED, DOWNLOADS]);
+    const move = wrapper
+      .findAll("button")
+      .filter((b) => (b.attributes("aria-label") || "").startsWith("Move"))[1];
+    await move.trigger("click");
+    wrapper
+      .getComponent({ name: "FolderBrowser" })
+      .vm.$emit("select", "/mnt/x");
+    await wrapper.vm.$nextTick();
+    expect(relocate).toHaveBeenCalledWith(DOWNLOADS.id, "/mnt/x");
+  });
+
+  it("blocks the verb while a move is running rather than taking the 409", async () => {
+    // One job, machine-wide, is the server's rule. A second POST is a 409, so
+    // the reason is said in the row instead of reported afterwards.
+    moveBusy = true;
+    const wrapper = await open([MANAGED]);
+    const move = moveButton(wrapper);
     expect(move.attributes("aria-disabled")).toBe("true");
     expect(move.attributes("disabled")).toBeUndefined();
-    const reason = wrapper.get(`#${move.attributes("aria-describedby")}`);
-    expect(reason.text()).toContain("not available in this release");
+    await move.trigger("click");
+    expect(relocate).not.toHaveBeenCalled();
   });
 
-  // Keyed on `movable`, not on `kind`. The InsightFace packs are `foreign` and
-  // relocate as a whole (#906); the HuggingFace cache is `foreign` too and
-  // cannot relocate at all, because its location is `HF_HOME`.
-  it("offers Move on a folder that relocates as a whole, whatever its kind", async () => {
-    const wrapper = await open([
-      folder({
-        id: 4,
-        kind: "foreign",
-        movable: "root_only",
-        path: "/home/me/.insightface/models",
-      }),
-    ]);
-    const labels = wrapper
-      .findAll("button")
-      .map((b) => b.attributes("aria-label") || "");
-    expect(labels.some((l) => l.startsWith("Move"))).toBe(true);
+  it("is unavailable to a remote owner, reachably", async () => {
+    const wrapper = await open([MANAGED], { canManage: false });
+    const move = moveButton(wrapper);
+    expect(move.attributes("aria-disabled")).toBe("true");
+    expect(move.attributes("aria-describedby")).toBe("mf-remote-note");
+    await move.trigger("click");
+    expect(relocate).not.toHaveBeenCalled();
   });
 
-  it("offers no Move on a folder another tool's location owns", async () => {
-    const wrapper = await open([
-      folder({
-        id: 5,
-        kind: "foreign",
-        movable: "fixed",
-        path: "/home/me/.cache/huggingface/hub",
-      }),
-    ]);
-    const labels = wrapper
-      .findAll("button")
-      .map((b) => b.attributes("aria-label") || "");
-    expect(labels.some((l) => l.startsWith("Move"))).toBe(false);
+  it("sends the picked path for the InsightFace packs like any other row", async () => {
+    // The one row whose path means something different on the server — it names
+    // the InsightFace *root*, not the folder — which is deliberately invisible
+    // here: the dialog sends what the owner picked and the server does the rest.
+    const wrapper = await open([INSIGHTFACE]);
+    await moveButton(wrapper).trigger("click");
+    wrapper
+      .getComponent({ name: "FolderBrowser" })
+      .vm.$emit("select", "/mnt/big/.insightface");
+    await wrapper.vm.$nextTick();
+    expect(relocate).toHaveBeenCalledWith(INSIGHTFACE.id, "/mnt/big/.insightface");
   });
 });
 

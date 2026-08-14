@@ -305,6 +305,36 @@ def fetch_locations(hub, model_id: Optional[int] = None) -> dict[int, list[dict]
     return grouped
 
 
+def fetch_capabilities(hub, model_id: Optional[int] = None) -> dict[int, list[str]]:
+    """Return ``model_id -> [capability, …]`` in a single query.
+
+    Same shape and same reason as :func:`fetch_locations`: one query for the
+    whole page, grouped in Python. Joining ``model_capability`` onto the row
+    SELECT would duplicate every model row once per capability, which is exactly
+    the fan-out the aggregate joins in that SELECT exist to avoid.
+
+    Ordered by ``rowid``, so the set comes back in the order the declaration
+    wrote it — primary first, matching ``model.kind``. A row's capabilities
+    reading "Detection, Captioning" for a captioner is a small lie the shelf
+    does not have to tell.
+
+    Args:
+        hub: The open hub database.
+        model_id: Restrict to one model (the detail route). Omit for the page.
+    """
+    sql = "SELECT model_id, capability FROM model_capability"
+    params: tuple = ()
+    if model_id is not None:
+        sql += " WHERE model_id = ?"
+        params = (model_id,)
+    sql += " ORDER BY model_id, rowid"
+
+    grouped: dict[int, list[str]] = {}
+    for row in hub.fetchall(sql, params):
+        grouped.setdefault(int(row["model_id"]), []).append(str(row["capability"]))
+    return grouped
+
+
 def fetch_attachments(vault, *, sha256: Optional[str] = None) -> dict[str, list[dict]]:
     """Return ``sha256 -> [{entity_type, entity_id}, …]`` from the **vault**.
 
@@ -551,10 +581,16 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
 
         if forgettable:
             marks = ", ".join("?" for _ in forgettable)
-            # Child first: `model_file` references `model(id)`, and the delete
-            # order is what keeps this working without turning foreign keys off.
+            # Children first: `model_file` and `model_capability` both
+            # reference `model(id)`, and the delete order is what keeps this
+            # working without turning foreign keys off. Missing either one does
+            # not leak a row, it aborts the whole delete.
             conn.execute(
                 f"DELETE FROM model_file WHERE model_id IN ({marks})",
+                tuple(forgettable),
+            )
+            conn.execute(
+                f"DELETE FROM model_capability WHERE model_id IN ({marks})",
                 tuple(forgettable),
             )
             conn.execute(f"DELETE FROM model WHERE id IN ({marks})", tuple(forgettable))

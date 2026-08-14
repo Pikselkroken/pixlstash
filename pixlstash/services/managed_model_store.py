@@ -41,6 +41,13 @@ from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.builtin_caches import is_insightface_models_dir
+from pixlstash.services.builtin_models import (
+    BUILTIN_KIND,
+    BUILTIN_OWNER,
+    MOVABLE_ROOT_ONLY,
+    is_builtin_model_dir,
+)
 
 logger = get_logger(__name__)
 
@@ -66,6 +73,44 @@ MANAGED_DIRNAME = "models"
 def managed_store_path(config_dir: str) -> str:
     """Where the managed store goes for a given config directory."""
     return os.path.join(config_dir, MANAGED_DIRNAME)
+
+
+def relocatable_identity(folder) -> Optional[tuple[str, str, str]]:
+    """The ``(kind, owner, movable)`` a folder keeps when it relocates, or None.
+
+    A relocation registers its destination as an ordinary ``user`` folder while
+    the files move and promotes it back in one transaction at the end, so it has
+    to know what the folder *is* — and that answer differs per root. This is the
+    one place that says which roots relocate at all; the route enforces it and
+    ``GET /model-folders`` reports it, from here, rather than each deciding.
+
+    Three do. The managed store, which is storage PixlStash owns outright; the
+    folder PixlStash downloads its own engines into, whose location became a
+    recorded setting in #905 (closing the long-open #112); and the InsightFace
+    packs, whose root became one in #906 — recorded the same way and for the same
+    reason, because it is machine-global too. The fourth declared root does not:
+    the HuggingFace cache is ``fixed`` — its location is read from the
+    environment at import by a library shared with every other tool on the
+    machine, so "moving" it is a restart and a re-download.
+
+    The two recorded roots return the same identity because ``declare_folder``
+    writes the same three columns for every root PixlStash declares — which is
+    also why each is recognised by *path* rather than by those columns.
+
+    Args:
+        folder: A ``model_folder`` row, or anything with ``kind`` and ``path``.
+
+    Returns:
+        The identity to restore at the new path, or None when the folder does
+        not relocate.
+    """
+    if folder["kind"] == MANAGED_KIND:
+        return (MANAGED_KIND, MANAGED_OWNER, MANAGED_MOVABLE)
+    if is_builtin_model_dir(folder["path"]) or is_insightface_models_dir(
+        folder["path"]
+    ):
+        return (BUILTIN_KIND, BUILTIN_OWNER, MOVABLE_ROOT_ONLY)
+    return None
 
 
 def find_managed_folder(hub: HubDatabase) -> Optional[dict]:

@@ -743,9 +743,17 @@
                     {{ row.memberCount }}
                   </span>
                 </span>
-                <span role="gridcell" class="shelf-col">{{
-                  kindLabel(row)
-                }}</span>
+                <!-- `title` because `.shelf-col` ellipsises and a
+                     multi-capability row is the one that overflows: the
+                     column's width is owed to the app-wide consistency pass,
+                     so the full list is reachable on hover rather than by
+                     widening one column ahead of it. -->
+                <span
+                  role="gridcell"
+                  class="shelf-col"
+                  :title="kindLabel(row)"
+                  >{{ kindLabel(row) }}</span
+                >
                 <!-- Base is a COLUMN, not a phrase on a metadata line: it is
                      the field a reader scans a shelf for, and it can only be
                      scanned if it aligns. The header names it, so the empty
@@ -912,6 +920,7 @@ import {
   bandKeyFor,
   bandProjection,
   bandUsage,
+  capabilityLabel,
   withEmptyFolders,
   withFolderSignals,
   formatModelSize,
@@ -2139,10 +2148,21 @@ function toggleDirection() {
   });
 }
 
-/** The always-present anchor of the metadata line, whatever else is null. */
+/**
+ * The always-present anchor of the metadata line, whatever else is null.
+ *
+ * A model that serves several features lists them ALL, because a single label
+ * answers "what breaks if I delete this" wrongly for exactly the rows a reader
+ * is most likely to be deciding about: Florence-2 captions and detects, and the
+ * CLIP the embedder loads is both the search encoder and the aesthetic scorer's
+ * backbone. `capabilities` arrives primary-first, so the first word is the one
+ * `row.kind` holds and the column still reads as one thing at a glance.
+ */
 function kindLabel(row) {
   if (row.file_kind === "checkpoint") return "Checkpoint";
   if (row.file_kind === "unknown") return "Unclassified";
+  const capabilities = Array.isArray(row.capabilities) ? row.capabilities : [];
+  if (capabilities.length) return capabilities.map(capabilityLabel).join(", ");
   const kind = String(row.kind || "").toLowerCase();
   return ALGO_LABEL[kind] || kind || "Adapter";
 }

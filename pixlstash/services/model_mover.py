@@ -431,9 +431,10 @@ class ModelMover:
                 destination path, this is about authority, and welding the two
                 together would mean any future caller wanting a tree copy
                 silently inherited the right to empty the HuggingFace cache.
-                ``POST /model-folders/{id}/relocate`` is the only caller, and it
-                has already refused every folder whose ``kind`` is not
-                ``managed`` before it gets here.
+                ``POST /model-folders/{id}/relocate`` is the only caller, and
+                ``relocatable_identity`` has already refused every folder but
+                the two that relocate — the managed store and PixlStash's own
+                download folder — before it gets here.
 
         Returns:
             The validated :class:`MovePlan`.

@@ -43,7 +43,7 @@ from pixlstash.services.builtin_models import (
     DeclaredEntry,
     declare_folder,
 )
-from pixlstash.services.model_features import feature_for_repo
+from pixlstash.services.model_features import features_for_repo
 from pixlstash.utils.insightface_model_utils import (
     KNOWN_MODEL_PACKS,
     insightface_root,
@@ -51,23 +51,17 @@ from pixlstash.utils.insightface_model_utils import (
 
 logger = get_logger(__name__)
 
-# The same test seam as `BUILTIN_MODEL_DIR_ENV`, and for the same reason: a
-# Server built on a temp config dir must not declare rows about the developer's
-# real home, or the shelf's contents depend on which repos that machine happens
-# to have downloaded.
+# Lets a deployment point the HuggingFace listing somewhere else. It is the last
+# of these left, and it is safe because that cache is `fixed`: it cannot be
+# relocated, so there is nothing for an override to disagree with.
 #
-# **InsightFace had one of these and no longer does (#906).** It pointed at the
-# models directory, which is one level below the thing the setting names, so it
-# could disagree with `insightface_root()` — and once the packs became
-# relocatable that disagreement was a bug rather than a curiosity: the shelf
-# would declare the override path while downloads and `FaceAnalysis` used the
-# root, and a relocation identified by `insightface_models_dir()` would repoint
-# the row at a directory the next start-up would not declare. It had no callers
-# — it was declared and never set, here or in the suite — and
-# `server_config["insightface_root"]` now does its job strictly better, because
-# it reaches all three callers instead of only the declaration.
-# `tests/test_insightface_relocation.py` points a test Server at `tmp_path`
-# through the setting, which is what the seam was for.
+# **InsightFace had one and no longer does (#906).** `PIXLSTASH_INSIGHTFACE_DIR`
+# named the *models* directory, one level below the root that is now recorded, so
+# the two could disagree — inert while nothing could relocate, a bug the moment
+# something could: the shelf would declare the override path while downloads and
+# `FaceAnalysis` used the root, and a relocation identified by
+# `insightface_models_dir()` would repoint the row at a directory the next start
+# would not declare. It had no callers, in the product or the suite.
 HUGGINGFACE_CACHE_DIR_ENV = "PIXLSTASH_HUGGINGFACE_CACHE_DIR"
 
 # InsightFace's own layout: it joins this onto whatever root it is given.
@@ -115,6 +109,17 @@ def insightface_models_dir() -> str:
         The absolute path.
     """
     return insightface_models_dir_under(insightface_root())
+
+
+def is_insightface_models_dir(path: str) -> bool:
+    """Whether *path* is the folder the InsightFace packs live in.
+
+    By path rather than by ``kind``/``owner``/``movable``, for the reason
+    :func:`~pixlstash.services.builtin_models.is_builtin_model_dir` gives about
+    its own folder: ``declare_folder`` writes the same three values for every
+    root PixlStash declares, so those columns cannot tell them apart.
+    """
+    return os.path.realpath(path) == os.path.realpath(insightface_models_dir())
 
 
 def huggingface_cache_dir() -> Optional[str]:
@@ -271,18 +276,26 @@ def declare_huggingface_cache(hub, folder_path: str) -> Optional[int]:
         )
         return None
 
-    entries = [
-        DeclaredEntry(
-            # The repo's own directory name (`models--org--name`), which is what
-            # it is called inside this folder. `repo_id` is the display name.
-            relpath=os.path.basename(str(repo.repo_path)),
-            display_name=repo.repo_id,
-            # The feature it powers, not `repo_type` — which is `model` for all
-            # 26 repos on a real machine and therefore says nothing.
-            role=feature_for_repo(repo),
-            size=int(repo.size_on_disk),
-            present=True,
+    entries = []
+    for repo in info.repos:
+        # The features it powers, not `repo_type` — which is `model` for all 26
+        # repos on a real machine and therefore says nothing. Classified once
+        # per repo: the primary label goes in `model.kind` for the Kind column
+        # and the whole set goes to `model_capability`, because Florence-2 and
+        # the embedder's CLIP each serve two and a reader deciding what is safe
+        # to delete has to see both.
+        capabilities = features_for_repo(repo)
+        entries.append(
+            DeclaredEntry(
+                # The repo's own directory name (`models--org--name`), which is
+                # what it is called inside this folder. `repo_id` is the display
+                # name.
+                relpath=os.path.basename(str(repo.repo_path)),
+                display_name=repo.repo_id,
+                role=capabilities[0],
+                size=int(repo.size_on_disk),
+                present=True,
+                capabilities=capabilities,
+            )
         )
-        for repo in info.repos
-    ]
     return declare_folder(hub, folder_path, entries, movable=MOVABLE_FIXED)

@@ -16,28 +16,44 @@ I/O-bound on one disk regardless. A second POST while one runs is a 409.
 moved. That is the ruling, and it is the only answer that does not need its own
 crash-window argument for the undo.
 
-**Relocating a PixlStash-owned folder lives here too**, at
+**Relocating a folder PixlStash owns lives here too**, at
 ``POST /model-folders/{folder_id}/relocate``, despite the path — because a
 relocation *is* a move, of everything one folder holds, and it runs the same
-single job slot and the same job clients poll. Doing it any other way would mean
-a second implementation of the ordering.
+single job slot and the same job clients poll. Doing it any other way
+would mean a second implementation of the ordering. Three folders qualify and
+``managed_model_store.relocatable_identity`` is the one place that says which:
+the managed store, the folder PixlStash downloads its own engines into (#905,
+closing #112), and the InsightFace packs (#906).
 
-Two folders can be relocated and they are not the same operation. The **managed
-store** is a batch of files and reuses ``ModelMover`` whole. The **InsightFace
-packs** are directories — the shelf catalogues a pack, not the ``.onnx`` files
-inside it — so there is no per-file row to repoint and no ``sha256`` to verify
-against; that one moves directories with
-``model_mover.move_directory`` and persists its new root as a setting. What they
-share is :func:`_start_job`, which is everything except the work itself.
+**Two of the three are a batch of files and reuse ``ModelMover`` whole. The
+InsightFace packs are not.** The shelf catalogues a *pack* — a directory — and
+not the ``.onnx`` files inside it, so there is no per-file row to repoint and no
+``sha256`` to verify a copy against; that one moves directories with
+``model_mover.move_directory``. What all three share is :func:`_start_job` (the
+job slot, the job clients poll, the cancel flag) and the ending below, so the
+divergence is the work itself and nothing around it.
 
 The managed store's relocation has one trick of its own: how it keeps "exactly
 one ``managed`` folder" true throughout. The new location is registered as an
 ordinary ``user`` folder first; every file is moved into it with its row repointed
 individually, so the per-file invariant is untouched; and only when every file
-has landed does **one** transaction promote the new row to ``managed`` and drop
-the old one. A crash at any point leaves exactly one managed row (the old,
-partly emptied store) plus a ``user`` folder holding what already moved, with
-every row naming a file that exists. Re-running the relocation resumes it.
+has landed does **one** transaction promote the new row and drop the old one. A
+crash at any point leaves exactly one managed row (the old, partly emptied
+store) plus a ``user`` folder holding what already moved, with every row naming
+a file that exists. Re-running the relocation resumes it.
+
+The download folder adds two steps to that ending, both after the last file has
+landed and before the hub is told: its **companion** files are carried across
+(they are declared but have no ``model_file`` row, and an engine without its
+label set is a broken engine), and the new location is **recorded**, so every
+downloader follows the folder instead of re-fetching what was just moved.
+
+The InsightFace packs add the second of those and not the first — a pack has no
+companions, because the whole directory moves — and record their root the same
+way, in a pointer file beside the download folder's. Their one difference from
+both is what the owner names: ``payload.path`` is the InsightFace **root**, and
+the packs land in ``<path>/models``, because that subdirectory is the library's
+own layout rather than ours to choose.
 
 Authorization: `LOCAL_OWNER_ONLY` on all three, declared in
 ``pixlstash/authz/registry.py`` and never inline. See the §16.3 note on the
@@ -48,6 +64,7 @@ tier in ``docs/backend_architecture.md``; the reasoning per route is in
 from __future__ import annotations
 
 import os
+import shutil
 import threading
 from datetime import datetime, timezone
 from typing import Optional
@@ -57,14 +74,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_caches import (
-    insightface_models_dir,
     insightface_models_dir_under,
+    is_insightface_models_dir,
 )
-from pixlstash.services.managed_model_store import (
-    MANAGED_KIND,
-    MANAGED_MOVABLE,
-    MANAGED_OWNER,
+from pixlstash.services.builtin_models import (
+    is_builtin_model_dir,
+    set_builtin_model_dir,
 )
+from pixlstash.services.managed_model_store import relocatable_identity
 from pixlstash.services.model_folder_scanner import STATE_PRESENT
 from pixlstash.services.model_mover import (
     SHELF_IO_LOCK,
@@ -79,11 +96,7 @@ from pixlstash.services.model_mover import (
     require_space,
     same_device,
 )
-from pixlstash.utils.atomic_write import write_json_atomic
-from pixlstash.utils.insightface_model_utils import (
-    insightface_root,
-    set_insightface_root,
-)
+from pixlstash.utils.insightface_model_utils import set_insightface_root
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 
@@ -400,18 +413,26 @@ def _register_or_reuse(hub, path: str) -> int:
         )
 
 
-def _finish_relocation(hub, old_folder_id: int, new_folder_id: int) -> None:
+def _finish_relocation(
+    hub, old_folder_id: int, new_folder_id: int, identity: tuple[str, str, str]
+) -> None:
     """Promote the new folder and retire the old one, in one transaction.
 
-    Ordered so that at no instant are there two ``managed`` rows or none: the
-    old row stops being managed and the new one starts being managed inside a
-    single commit.
+    Ordered so that at no instant are there two rows of the relocating folder's
+    kind or none: the old row stops being it and the new one starts being it
+    inside a single commit. That matters for the managed store, of which exactly
+    one must exist, and costs nothing for the built-in download folder.
 
     The old folder's ``missing`` and ``unreachable`` rows are carried across
     rather than dropped. They are tombstones — a file the shelf once saw and can
     re-link by content — and the store moving is not news about whether those
     files came back.
+
+    Args:
+        identity: The ``(kind, owner, movable)`` the folder keeps at its new
+            path, from :func:`relocatable_identity`.
     """
+    kind, owner, movable = identity
     with hub.transaction() as conn:
         conn.execute(
             "UPDATE model_file SET model_folder_id = ? WHERE model_folder_id = ?",
@@ -419,9 +440,47 @@ def _finish_relocation(hub, old_folder_id: int, new_folder_id: int) -> None:
         )
         conn.execute(
             "UPDATE model_folder SET kind = ?, owner = ?, movable = ? WHERE id = ?",
-            (MANAGED_KIND, MANAGED_OWNER, MANAGED_MOVABLE, new_folder_id),
+            (kind, owner, movable, new_folder_id),
         )
         conn.execute("DELETE FROM model_folder WHERE id = ?", (old_folder_id,))
+
+
+def _move_leftovers(source: str, destination: str) -> None:
+    """Carry the files no ``model_file`` row names across with the folder.
+
+    Only the built-in download folder needs this, and it needs it badly. The
+    mover moves *catalogued* copies, and the declaration gives a row to the
+    engine file alone: the tagger's label set, its revision sidecar and WD14's
+    ``selected_tags.csv`` are declared as **companions** and have no row. Leaving
+    them behind would move a tagger to a folder where it does not work, and the
+    engine would then download the whole thing again — the exact failure #905 is
+    about.
+
+    The managed store deliberately does NOT do this: what the owner left in it is
+    theirs and stays put. Here the folder is ours end to end, so everything in it
+    is ours to move, including whatever a previous build downloaded.
+
+    Failures are logged per file and never raised: every catalogued copy has
+    already moved and been verified by the time this runs, so a companion that
+    could not follow is worth a loud line and a re-download, not an exception
+    thrown from a finished job.
+    """
+    for root, _dirs, files in os.walk(source):
+        for name in files:
+            origin = os.path.join(root, name)
+            target = os.path.join(destination, os.path.relpath(origin, source))
+            try:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                shutil.move(origin, target)
+            except OSError as exc:
+                logger.error(
+                    "Could not move %s to %s while relocating PixlStash's "
+                    "download folder: %s. The file stays where it is and will "
+                    "be downloaded again at the new location if it is needed.",
+                    origin,
+                    target,
+                    exc,
+                )
 
 
 def _remove_if_empty(path: str) -> None:
@@ -611,7 +670,9 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail=error)
         return destination_path
 
-    def _relocate_insightface_packs(folder: dict, payload: RelocateRequest) -> dict:
+    def _relocate_insightface_packs(
+        folder: dict, payload: RelocateRequest, identity: tuple[str, str, str]
+    ) -> dict:
         """Move the InsightFace packs to a new root and point the pipeline at it.
 
         **The path names the InsightFace *root*, not the folder.** ``models`` is
@@ -625,38 +686,32 @@ def create_router(server) -> APIRouter:
         ``ModelMover``: there is no per-file row to repoint and no ``sha256`` to
         verify against. :func:`~pixlstash.services.model_mover.move_directory`
         keeps the equivalent guarantee — a complete pack survives at one end or
-        the other — and the shelf row moves with the folder rather than per item.
+        the other.
 
-        **The setting is what makes it stick.** ``insightface_root`` is persisted
-        and applied to the process-global reader every InsightFace caller goes
-        through, so the packs load, download and list from the new location
-        without a restart. The folder row is updated in the same step for the
-        running server's benefit; the *setting* is the authority, because the
-        declaration rewrites that row from it on every start.
+        **Everything else is the shared relocation.** The destination is
+        registered as an ordinary ``user`` folder while the packs move and
+        promoted to this folder's ``identity`` by :func:`_finish_relocation` once
+        they have landed, so the pack rows — the ``missing`` ones included, which
+        are tombstones — travel across exactly as the other two relocations move
+        theirs. The recorded root is written first, for the reason
+        ``set_builtin_model_dir`` is: a root recorded before the packs arrived
+        would send the next download into an empty directory.
 
         Interrupted halfway, the packs that moved are at the new root, the rest
-        are at the old one, and the setting still names the old one — so face
-        extraction keeps working and re-running the relocation finishes the job.
+        are at the old one, and the recorded root still names the old one — so
+        face extraction keeps working and re-running finishes the job.
+
+        Args:
+            folder: The InsightFace ``model_folder`` row.
+            payload: The request, whose ``path`` is the new root.
+            identity: The ``(kind, owner, movable)`` to restore at the new path,
+                from :func:`relocatable_identity`.
         """
         new_root = _validated_destination(payload)
         destination_dir = insightface_models_dir_under(new_root)
         source_dir = folder["path"]
         if os.path.realpath(source_dir) == os.path.realpath(destination_dir):
             raise HTTPException(status_code=400, detail="The packs are already there.")
-        clash = server.hub.fetchone(
-            "SELECT id FROM model_folder WHERE path = ?", (destination_dir,)
-        )
-        if clash is not None and int(clash["id"]) != int(folder["id"]):
-            # ``model_folder.path`` is UNIQUE, so repointing this row onto an
-            # already-registered path would fail at the end of a completed move.
-            # Refused now, before anything is copied.
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"{destination_dir} is already a registered model folder. "
-                    "Pick a root the shelf does not already catalogue."
-                ),
-            )
         try:
             os.makedirs(destination_dir, exist_ok=True)
         except OSError as exc:
@@ -668,6 +723,12 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=409, detail=f"Could not create {destination_dir}: {exc}"
             ) from exc
+
+        # The same two-step ending the other two relocations use: the
+        # destination is an ordinary ``user`` folder while the packs move, and
+        # ``_finish_relocation`` promotes it to *this* folder's identity in one
+        # transaction once they have all landed.
+        destination_id = _register_or_reuse(server.hub, destination_dir)
 
         packs: list[tuple[str, str, str]] = []
         bytes_to_copy = 0
@@ -761,51 +822,37 @@ def create_router(server) -> APIRouter:
             if failed or report.cancelled:
                 logger.warning(
                     "InsightFace relocation to %s stopped with %d pack(s) not "
-                    "moved. The configured root stays at %s, so face extraction "
-                    "keeps loading the packs that are still there; re-run to "
-                    "finish.",
+                    "moved. The recorded root is unchanged, so face extraction "
+                    "keeps loading the packs still at %s; re-run to finish.",
                     new_root,
                     len(failed),
-                    insightface_root(),
+                    source_dir,
                 )
                 return
-            # **Persist first, then adopt — and adopt even if persisting
-            # failed.** The config file is the durable authority, so it is
-            # written before anything in memory believes the move happened. But
-            # the packs are already at the new root by now and a relocation is
-            # not undoable (the cancel ruling), so a failed write must not leave
-            # the running server pointing at a directory the bytes have left:
-            # that is a face pipeline re-downloading every pack, which is worse
-            # than either end state. The filesystem is the ground truth once the
-            # move has completed, so the process and the shelf follow it
-            # regardless, and the part that really did fail — surviving a
-            # restart — is reported as the error it is.
-            server._server_config["insightface_root"] = new_root
-            config_path = getattr(server, "_server_config_path", None)
+            # The pointer, then the hub — the download folder's order, and
+            # correct here for the same reason: a root recorded before the packs
+            # arrived would send the next download to an empty directory.
             try:
-                if config_path:
-                    write_json_atomic(config_path, server._server_config)
+                set_insightface_root(new_root)
             except OSError as exc:
+                # The packs ARE at the new root, so the hub is still told the
+                # truth. What is lost is the memory of it: the next start
+                # resolves the default root again, declares it, and downloads
+                # there. Loud, because the fix is to write the pointer by hand
+                # or re-run the relocation.
                 logger.error(
-                    "InsightFace packs were moved to %s, but the new root could "
-                    "not be written to %s (%s). This server has been pointed at "
-                    "the new location and will keep working, but the change WILL "
-                    "NOT survive a restart: after one, PixlStash would look in "
-                    "%s, find nothing and re-download. Fix the config file's "
-                    "permissions and either re-run the relocation or set "
-                    '"insightface_root": %r by hand.',
+                    "Moved the InsightFace packs to %s but could not record the "
+                    "new root: %s. The shelf will show them there, but the next "
+                    "start will resolve the default root again and download into "
+                    "it. What failed is the write of the pointer file named in "
+                    "that error — it lives in the platform user data directory, "
+                    "NOT under %s — so make that file writable and re-run the "
+                    "relocation.",
                     destination_dir,
-                    config_path,
                     exc,
-                    source_dir,
-                    new_root,
+                    destination_dir,
                 )
-            set_insightface_root(new_root)
-            with server.hub.transaction() as conn:
-                conn.execute(
-                    "UPDATE model_folder SET path = ? WHERE id = ?",
-                    (destination_dir, int(folder["id"])),
-                )
+            _finish_relocation(server.hub, int(folder["id"]), destination_id, identity)
             _remove_if_empty(source_dir)
             logger.info(
                 "InsightFace packs relocated from %s to %s (%d pack(s)).",
@@ -815,10 +862,7 @@ def create_router(server) -> APIRouter:
             )
 
         return _start_job(
-            # The folder being moved, not a separate destination row: unlike the
-            # managed store's relocation this one has no second folder to
-            # register, because the row travels with the packs.
-            destination_folder_id=int(folder["id"]),
+            destination_folder_id=destination_id,
             total=len(packs),
             bytes_to_copy=bytes_to_copy,
             run=_run,
@@ -827,34 +871,33 @@ def create_router(server) -> APIRouter:
 
     @router.post(
         "/model-folders/{folder_id}/relocate",
-        summary="Move a PixlStash-owned model folder to another location",
+        summary="Move a folder PixlStash owns to another location",
         description=(
-            "Moves everything the folder holds to a new host path and points "
-            "PixlStash at it. Two folders can be relocated and they differ in "
-            "what the path means.\n\n"
-            "**The managed store**: the path is the store's new location. Every "
-            "file is a model move like any other — copy, verify by SHA-256, "
-            "repoint the row and commit, then unlink — so an interruption "
-            "leaves duplicates rather than rows naming files that are gone, and "
-            "a move within one filesystem is a rename.\n\n"
-            "**The InsightFace packs**: the path is the new InsightFace "
-            "*root*, and the packs land in `<path>/models`, which is the layout "
-            "InsightFace itself requires. Each pack is a directory and is copied "
-            "under a partial name and renamed into place, so a complete pack "
-            "always survives at one end or the other. The new root is persisted "
-            "and applied immediately — no restart, and face extraction, pack "
-            "downloads and the shelf all follow it.\n\n"
-            "Any other folder is refused: an ordinary folder is one you "
-            "registered, so if you move it yourself, register it again. The "
-            "HuggingFace cache cannot be relocated at all — its location is "
-            "`HF_HOME`, read at import by a library shared with your other "
-            "tools."
+            "Moves everything the folder holds to a new host path and points the "
+            "folder at it. For the managed store and PixlStash's download folder "
+            "this is a model move like any other — copy, verify by SHA-256, "
+            "repoint the row and commit, then unlink, per file — so an "
+            "interruption leaves duplicates rather than rows naming files that "
+            "are gone, and a move within one filesystem is a rename. "
+            "Three folders can be relocated: the managed store; the folder "
+            "PixlStash downloads its own engines into, whose new location is "
+            "recorded so every downloader follows it; and the InsightFace packs. "
+            "For the packs the path names the InsightFace **root**, and they "
+            "land in `<path>/models`, which is the layout InsightFace itself "
+            "requires; each pack is a directory, copied under a partial name and "
+            "renamed into place so a complete pack always survives at one end or "
+            "the other, and the new root is recorded so face extraction, pack "
+            "downloads and the shelf all follow it without a restart. "
+            "A folder you registered is one you moved yourself; register it "
+            "again at its new path. The HuggingFace cache cannot be relocated at "
+            "all — its location is `HF_HOME`, read at import by a library shared "
+            "with your other tools."
         ),
         status_code=202,
         tags=["model_shelf"],
         response_model=MoveStatusResponse,
     )
-    def relocate_managed_store(
+    def relocate_model_folder(
         folder_id: int, request: Request, payload: RelocateRequest = Body(...)
     ):
         server.auth.ensure_secure_when_required(request)
@@ -863,25 +906,30 @@ def create_router(server) -> APIRouter:
         )
         if folder is None:
             raise HTTPException(status_code=404, detail="Model folder not found.")
-        if os.path.realpath(folder["path"]) == os.path.realpath(
-            insightface_models_dir()
-        ):
-            # Identified by path rather than by a marker column, because the
-            # path IS the thing being relocated: after a move the setting, the
-            # declaration and this comparison all name the new directory
-            # together, which is the property a separate marker could lose.
-            return _snapshot(_relocate_insightface_packs(dict(folder), payload))
-        if folder["kind"] != MANAGED_KIND:
+        identity = relocatable_identity(folder)
+        if identity is None:
             # 409 for the same reason the managed store's DELETE is 409: the
             # caller is authorized and the request is well formed, and what
             # refuses it is what the target row is.
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "Only the managed store and the InsightFace packs can be "
-                    "relocated. A folder you registered is one you moved "
-                    "yourself; register it again at its new path."
+                    "This folder cannot be relocated. Only the managed store, "
+                    "PixlStash's own download folder and the InsightFace packs "
+                    "can be; a folder you registered is one you moved yourself, "
+                    "so register it again at its new path."
                 ),
+            )
+        # Read before anything moves: `relocatable_identity` recognises these two
+        # by comparing them with `builtin_model_dir()` / `insightface_models_dir()`,
+        # and this route is about to change what those return.
+        is_download_folder = is_builtin_model_dir(folder["path"])
+        if is_insightface_models_dir(folder["path"]):
+            # The one relocation whose rows are directories, so it does not run
+            # a `MovePlan` at all. Everything around the work — the job slot,
+            # the destination validation, the ending — is still shared.
+            return _snapshot(
+                _relocate_insightface_packs(dict(folder), payload, identity)
             )
 
         destination_path = _validated_destination(payload)
@@ -936,18 +984,45 @@ def create_router(server) -> APIRouter:
             failed = [o for o in report.outcomes if o.status != "moved"]
             if failed or report.cancelled:
                 logger.warning(
-                    "Managed store relocation to %s stopped with %d file(s) not "
-                    "moved. The store stays at %s and the moved files are "
+                    "Relocation of %s to %s stopped with %d file(s) not moved. "
+                    "The folder stays where it is and the moved files are "
                     "catalogued under the new folder; re-run to finish.",
+                    folder["path"],
                     destination_path,
                     len(failed),
-                    folder["path"],
                 )
                 return
-            _finish_relocation(server.hub, folder_id, destination_id)
+            if is_download_folder:
+                # Companions first, then the pointer, then the hub. Each step is
+                # only correct once the one before it has happened: an engine
+                # without its label set is broken, and a pointer written before
+                # the files arrived would send the next download to an empty
+                # folder.
+                _move_leftovers(folder["path"], destination_path)
+                try:
+                    set_builtin_model_dir(destination_path)
+                except OSError as exc:
+                    # The files ARE at the new path, so the hub is still told the
+                    # truth. What is lost is the memory of it: the next start
+                    # resolves the default location again, declares it, and
+                    # downloads there. Loud, because the fix is to write the
+                    # pointer by hand or re-run the relocation.
+                    logger.error(
+                        "Moved PixlStash's downloads to %s but could not record "
+                        "the new location: %s. The shelf will show them there, "
+                        "but the next start will resolve the default folder "
+                        "again and download into it. What failed is the write "
+                        "of the pointer file named in that error — it lives in "
+                        "the platform user data directory, NOT under %s — so "
+                        "make that file writable and re-run the relocation.",
+                        destination_path,
+                        exc,
+                        destination_path,
+                    )
+            _finish_relocation(server.hub, folder_id, destination_id, identity)
             _remove_if_empty(folder["path"])
             logger.info(
-                "Managed model store relocated from %s to %s (%d file(s)).",
+                "Model folder relocated from %s to %s (%d file(s)).",
                 folder["path"],
                 destination_path,
                 len(plan.moves),

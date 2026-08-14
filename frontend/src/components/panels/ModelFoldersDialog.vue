@@ -117,25 +117,20 @@
             @click="onScan(folder)"
           />
 
-          <!-- Slot two is Forget on a folder the owner associated and Relocate
-               on a folder that relocates as a whole and has no association to
-               dissolve — the managed store and the InsightFace packs. One
-               element either way, so the column holds.
-
-               Keyed on `movable`, not on `kind`: `root_only` is the column that
-               says "this folder relocates, whole", which is exactly the
-               question this slot asks. `foreign` alone would offer it on the
-               HuggingFace cache too, which is `fixed` and cannot be moved at
-               all. -->
+          <!-- Slot two is Forget on a folder the owner associated and Move on
+               one PixlStash owns, which has no association to dissolve. One
+               element either way, so the column holds. `relocatable` and not
+               `movable === 'root_only'`: the InsightFace packs say that too and
+               have no relocate route yet, so the server is asked. -->
           <AppButton
-            v-if="canRelocate(folder)"
+            v-if="folder.relocatable"
             icon-only
             variant="ghost"
             icon-left="folder-move-outline"
-            :title="`Move ${basename(folder.path)} to a different location`"
+            :title="`Move ${basename(folder.path)} to a different location. Every file in it is copied, verified and removed from here.`"
             :aria-label="`Move ${folder.path} to a different location`"
-            aria-disabled="true"
-            :aria-describedby="RELOCATE_NOTE_ID"
+            v-bind="blockedAttrs(relocateReason(folder), REMOTE_NOTE_ID)"
+            @click="onRelocate(folder)"
           />
           <AppButton
             v-else
@@ -166,15 +161,11 @@
          target of every control the tier blocks, so the reason a keyboard user
          lands on is rendered rather than living in a tooltip. -->
     <p v-if="!canManage" :id="REMOTE_NOTE_ID" class="mf-note">
-      Adding, scanning, and forgetting model folders is only available on the
-      machine running PixlStash, or over your local network or Tailscale. To
-      allow it from anywhere, set <code>allow_remote_host_ops</code> in server
-      settings.
+      Adding, scanning, moving, and forgetting model folders is only available
+      on the machine running PixlStash, or over your local network or Tailscale.
+      To allow it from anywhere, set <code>allow_remote_host_ops</code> in
+      server settings.
     </p>
-
-    <span :id="RELOCATE_NOTE_ID" class="visually-hidden">{{
-      RELOCATE_REASON
-    }}</span>
 
     <template #footer>
       <AppButton variant="secondary" key-hint="esc" @click="emit('close')">
@@ -183,8 +174,11 @@
     </template>
   </AppDialog>
 
-  <!-- The shipped host-path picker, reused whole. `registeredPaths` is what
-       stops the 409 rather than reporting it. -->
+  <!-- The shipped host-path picker, reused whole, by both verbs that need a
+       host path: Add takes the folder as it is, Move empties one into it.
+       `registeredPaths` is what stops the 409 rather than reporting it, and it
+       is right for Move too — moving into a folder the owner already registered
+       would swallow their association into PixlStash's. -->
   <FolderBrowser
     :open="browseOpen"
     :registered-paths="store.registeredPaths"
@@ -204,6 +198,7 @@ import HelpTip from "../widgets/HelpTip.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import { MANAGED_KIND } from "../../api/modelFolders";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
+import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import {
   basename,
   countLabel,
@@ -220,6 +215,9 @@ const emit = defineEmits(["close"]);
 
 const store = useModelFoldersStore();
 const librariesStore = useLibrariesStore();
+// The move job is a STORE and not dialog state: a relocation of 438 GB outlives
+// this dialog, and the shelf's own progress bar watches the same job.
+const moves = useModelMovesStore();
 
 /** LEFT-TO-RIGHT MARK. Without it the `direction: rtl` truncation resolves a
  *  POSIX path's leading slash against the RTL paragraph and renders
@@ -229,15 +227,8 @@ const LRM = "‎";
 /** The one VISIBLE note every tier-blocked control is described by. */
 const REMOTE_NOTE_ID = "mf-remote-note";
 
-// The relocate reason has no visible home in the row: the managed row already
-// carries the line explaining its missing Forget, and a second sentence there
-// would be two explanations competing for one row. Its visible route is the
-// help mark's tooltip, which opens on focus as well as hover; this node is the
-// stable `aria-describedby` target that a tooltip cannot be.
-const RELOCATE_NOTE_ID = "mf-relocate-note";
-
-const RELOCATE_REASON =
-  "Moving a folder is not available in this release. It is planned for a later one.";
+const MOVE_RUNNING_REASON =
+  "A move is already running. There is one at a time, machine-wide.";
 
 const REMOTE_REASON =
   "Only available on the machine running PixlStash, or over your local network or Tailscale.";
@@ -256,6 +247,9 @@ const KIND_ICON = Object.fromEntries(
 
 const browseOpen = ref(false);
 const expanded = ref(new Set());
+// Which verb opened the picker. One browser serves both, so the pick has to be
+// told apart: Add registers the folder, Move empties another one into it.
+const relocating = ref(null);
 
 /**
  * Whether this session can reach the §16.3 host-capability tier.
@@ -296,15 +290,6 @@ function canForget(folder) {
   return folder.kind === "user" || folder.kind === "source";
 }
 
-/**
- * Whether this folder moves as a whole — the managed store and the InsightFace
- * packs. `fixed` (the HuggingFace cache) and `per_item` are both excluded, and
- * the backend refuses them at `POST /model-folders/{id}/relocate` besides.
- */
-function canRelocate(folder) {
-  return folder.movable === "root_only";
-}
-
 function scanVerb(folder) {
   return folder.last_checked ? "Rescan" : "Scan";
 }
@@ -324,14 +309,28 @@ function forgetReason(folder) {
   return isScanning(folder) ? "This folder is being scanned right now." : "";
 }
 
+/** Why this folder cannot be moved right now, or "" when it can. */
+function relocateReason(folder) {
+  // No button is rendered for these, so this is the guard rather than a label:
+  // it is what makes the click path refuse a row the server would 409.
+  if (!folder.relocatable) return "This folder cannot be moved.";
+  if (remoteReason.value) return remoteReason.value;
+  // The server takes one move at a time, machine-wide, and answers a second
+  // with a 409. Saying so beforehand beats reporting it afterwards.
+  if (moves.busy) return MOVE_RUNNING_REASON;
+  return isScanning(folder) ? "This folder is being scanned right now." : "";
+}
+
 /** Everything the row's help indicator has to explain, in one sentence each. */
 function rowReason(folder) {
   const reasons = [];
   if (remoteReason.value) reasons.push(remoteReason.value);
-  else if (isScanning(folder) && canForget(folder)) {
+  else if (isScanning(folder) && (canForget(folder) || folder.relocatable)) {
     reasons.push("This folder is being scanned right now.");
   }
-  if (canRelocate(folder)) reasons.push(RELOCATE_REASON);
+  if (!remoteReason.value && folder.relocatable && moves.busy) {
+    reasons.push(MOVE_RUNNING_REASON);
+  }
   return reasons.join(" ");
 }
 
@@ -357,16 +356,33 @@ function toggleExpanded(id) {
 
 function onAdd() {
   if (addReason.value) return;
+  relocating.value = null;
   browseOpen.value = true;
 }
 
-function onPicked(path) {
-  if (addReason.value) return;
-  store.add({ path, kind: "user" });
+function onRelocate(folder) {
+  if (relocateReason(folder)) return;
+  relocating.value = folder;
+  browseOpen.value = true;
+}
+
+async function onPicked(path) {
+  const folder = relocating.value;
+  if (!folder) {
+    if (addReason.value) return;
+    store.add({ path, kind: "user" });
+    return;
+  }
+  if (relocateReason(folder)) return;
+  // Closed on start, not kept open with a second progress bar in it: the job
+  // outlives this dialog and the shelf behind it already watches it, so staying
+  // would only put a copy of that progress on top of the original.
+  if (await moves.relocate(folder.id, path)) emit("close");
 }
 
 function closeBrowser() {
   browseOpen.value = false;
+  relocating.value = null;
 }
 
 function onScan(folder) {

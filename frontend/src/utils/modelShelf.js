@@ -135,7 +135,43 @@ export const GROUP_BY_LABELS = {
   none: { label: "None", icon: "mdi-format-list-bulleted" },
   base_model: { label: "Base model", icon: "mdi-cube-outline" },
   folder: { label: "Folder", icon: "mdi-folder-outline" },
+  feature: { label: "Feature", icon: "mdi-star-four-points-outline" },
 };
+
+/**
+ * What each stored capability is called on screen.
+ *
+ * The screen's words, not the database's: `model_capability` stores machine
+ * vocabulary (`captioner`, `scorer`) because a stored value is not a thing a
+ * designer gets to change, and these are. Named for the FEATURE rather than the
+ * ML task for the same reason the classifier is — nobody who switched
+ * captioning on thinks they have an `image-to-text` model.
+ *
+ * An unrecognised value falls through to itself rather than to a placeholder:
+ * a server that grew an eighth capability should show it, not hide it behind
+ * "Unknown".
+ */
+export const CAPABILITY_LABELS = {
+  captioner: "Captioning",
+  tagger: "Tagging",
+  detector: "Detection",
+  face: "Faces",
+  search: "Search",
+  scorer: "Quality score",
+  checkpoint: "Checkpoint",
+  other: "Other",
+};
+
+/**
+ * Name one capability for display.
+ *
+ * @param {string} capability - a stored `model_capability.capability`.
+ * @returns {string} e.g. `Captioning`.
+ */
+export function capabilityLabel(capability) {
+  const key = String(capability || "");
+  return CAPABILITY_LABELS[key] || key;
+}
 
 const SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"];
 

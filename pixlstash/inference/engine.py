@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from pixlstash.inference.vram_budget import VramBudget
 from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.builtin_models import builtin_model_dir
 
 if TYPE_CHECKING:
     from pixlstash.tagger_plugins.clip_service import ClipService
@@ -500,14 +501,13 @@ class InferenceEngine:
             A fully constructed :class:`InferenceEngine` ready for use.
         """
         import torch
-        from platformdirs import user_data_dir
         from pixlstash.tagger_plugins.clip_service import ClipService
         from pixlstash.tagger_plugins.sbert import SBertService
         from pixlstash.tagger_plugins.pixlstash_tagger import PixlStashTaggerService
         from pixlstash.tagger_plugins.wd14 import WD14Service
         from pixlstash.tagger_plugins.florence2 import Florence2Service
 
-        model_dir = os.path.join(user_data_dir("pixlstash"), "downloaded_models")
+        model_dir = builtin_model_dir()
 
         if force_cpu:
             device = "cpu"

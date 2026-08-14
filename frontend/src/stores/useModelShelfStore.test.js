@@ -1170,3 +1170,118 @@ describe("the folded base model", () => {
     ]);
   });
 });
+
+describe("capabilities", () => {
+  /** An engine row as `/adapters?file_kind=engine` returns one. */
+  function engine(overrides = {}) {
+    return adapter({
+      id: 900,
+      file_kind: "engine",
+      kind: "captioner",
+      display_name: "florence-community/Florence-2-base",
+      capabilities: ["captioner", "detector"],
+      ...overrides,
+    });
+  }
+
+  it("lists a two-capability model under EVERY feature it serves", async () => {
+    // The rule this whole change exists for. A model that captions AND detects
+    // cannot be filed under one heading, so the feature axis draws it twice —
+    // the same fan-out `folder` already does for a file copied into two places.
+    listEngines.mockResolvedValue([engine()]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "feature" });
+
+    const byKey = Object.fromEntries(store.groups.map((g) => [g.key, g]));
+    expect(Object.keys(byKey).sort()).toEqual(["captioner", "detector"]);
+    expect(byKey.captioner.rows.map((r) => r.id)).toEqual([900]);
+    expect(byKey.detector.rows.map((r) => r.id)).toEqual([900]);
+    // The stored word is machine vocabulary; the header is the screen's.
+    expect(byKey.captioner.label).toBe("Captioning");
+    expect(byKey.detector.label).toBe("Detection");
+  });
+
+  it("gives each draw its own rowKey, so focus cannot land on two at once", async () => {
+    // The collision `folder` already had: one key across several draws put
+    // `tabindex="0"` on all of them and made `indexOf` return the first.
+    listEngines.mockResolvedValue([engine()]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "feature" });
+
+    const keys = store.groups.flatMap((g) => g.rows.map((r) => r.rowKey));
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it("files a row with no capabilities under its own header, not under a guess", async () => {
+    // Most of the shelf: `kind` on a scanned adapter is an algorithm, and
+    // calling `lokr` a feature would be the confident wrong answer the
+    // classifier refuses to give.
+    listAdapters.mockResolvedValue([adapter({ id: 1, capabilities: [] })]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "feature" });
+
+    expect(store.groups).toHaveLength(1);
+    expect(store.groups[0].label).toBe("No feature recorded");
+  });
+
+  it("matches HAS this capability rather than IS this kind", async () => {
+    // Ticking one feature keeps a model that also serves another: that is the
+    // difference between the capability filter and the old single label.
+    listEngines.mockResolvedValue([
+      engine(),
+      engine({
+        id: 901,
+        kind: "tagger",
+        display_name: "WD14",
+        capabilities: ["tagger"],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+
+    await store.setFilters({ capabilities: ["detector"] });
+    expect(store.visibleRows.map((r) => r.id)).toEqual([900]);
+
+    // The same row survives a tick of its OTHER capability.
+    await store.setFilters({ capabilities: ["captioner"] });
+    expect(store.visibleRows.map((r) => r.id)).toEqual([900]);
+  });
+
+  it("narrows only the engines, exactly as the kind boxes narrow only adapters", async () => {
+    // A nested filter narrows the block it hangs under. Ticking `Captioning`
+    // hiding every LoRA would be the same defect as ticking `lora` hiding every
+    // checkpoint.
+    listAdapters.mockResolvedValue([adapter({ id: 1 })]);
+    listEngines.mockResolvedValue([engine()]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+
+    await store.setFilters({ capabilities: ["tagger"] });
+    expect(store.visibleRows.map((r) => r.id)).toEqual([1]);
+  });
+
+  it("facets every capability present and counts as one active section", async () => {
+    listEngines.mockResolvedValue([
+      engine(),
+      engine({ id: 901, capabilities: ["scorer", "search"] }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+
+    // Sorted by the LABEL, because that is what the reader sees: `scorer`
+    // renders as "Quality score" and belongs under Q, not S.
+    expect(store.capabilityOptions).toEqual([
+      "captioner",
+      "detector",
+      "scorer",
+      "search",
+    ]);
+    expect(store.activeCount).toBe(0);
+    await store.setFilters({ capabilities: ["detector"] });
+    expect(store.activeCount).toBe(1);
+  });
+});

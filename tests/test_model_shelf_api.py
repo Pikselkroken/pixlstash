@@ -188,7 +188,10 @@ _SEED_MODELS = (
 def _seed_hub(server) -> dict[str, int]:
     """Write the shelf tables from scratch. Returns filename -> model.id."""
     with server.hub.transaction() as conn:
+        # Both children of `model` before the parent: foreign keys are on for
+        # the hub, so a leftover row aborts the wipe rather than lingering.
         conn.execute("DELETE FROM model_file")
+        conn.execute("DELETE FROM model_capability")
         conn.execute("DELETE FROM model")
         conn.execute("DELETE FROM model_folder")
         conn.execute("DELETE FROM adapter_stack")
@@ -1479,8 +1482,14 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
     # An allowlist cannot go stale that way: Starlette serves the handler on its
     # own threadpool, whose threads are named "AnyIO worker thread", and nothing
     # else in this process is. It also cannot rot into a dead assertion — the
-    # tally is asserted to be exactly 2, so a naming change that matched nothing
-    # would fail loudly rather than pass silently.
+    # tally is asserted to be an exact number, so a naming change that matched
+    # nothing would fail loudly rather than pass silently.
+    #
+    # That number is three: the rows, the locations, and the capabilities. What
+    # this test actually guards is that the tally does not MOVE WITH THE ROW
+    # COUNT, which is why both sides are compared as well as pinned — a whole-
+    # page query added on purpose changes the constant, a per-row lookup breaks
+    # the equality.
     request_thread_prefix = "AnyIO worker thread"
 
     def counting(sql, params=()):
@@ -1528,7 +1537,7 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
         r = shelf_env.owner.get(f"{API}/adapters", params={"sort": "size"})
         assert r.status_code == 200, r.text
         assert len(r.json()["adapters"]) == 24
-        assert len(calls) == with_four_rows == 2, (
+        assert len(calls) == with_four_rows == 3, (
             f"{len(calls)} hub queries for 24 rows vs {with_four_rows} for 4 — "
             "the list has grown a per-row lookup"
         )
@@ -2623,6 +2632,156 @@ def test_a_relocation_with_a_failed_file_does_not_promote_the_new_folder(
         "the store was promoted despite files that never arrived"
     )
     assert (relocatable_store.store / "one.safetensors").exists()
+
+
+# ===========================================================================
+# Relocating PixlStash's own download folder (#905, closing #112)
+# ===========================================================================
+
+
+@pytest.fixture
+def relocatable_downloads(shelf_env, tmp_path, monkeypatch):
+    """The download folder as it really is: one engine, and a companion.
+
+    The companion is the whole reason this needs its own coverage. The
+    declaration gives a ``model_file`` row to the engine file alone, so the mover
+    — which moves rows — never sees the label set beside it. A relocation that
+    only moved the rows would leave a tagger that cannot load and would be
+    downloaded again, which is the failure #905 exists to prevent.
+
+    ``_pixlstash_data_dir`` is redirected rather than the env override, because
+    the override wins over the recorded location and this fixture is here to
+    watch that recording happen.
+    """
+    from pixlstash.routes import model_moves
+    from pixlstash.services import builtin_models
+
+    model_moves._job = None
+    data_dir = tmp_path / "userdata"
+    monkeypatch.setattr(builtin_models, "_pixlstash_data_dir", lambda: str(data_dir))
+    downloads = data_dir / builtin_models.BUILTIN_DIRNAME
+    downloads.mkdir(parents=True)
+    assert builtin_models.builtin_model_dir() == str(downloads)
+
+    (downloads / "pixlstash-anomaly-tagger.safetensors").write_bytes(b"weights" * 64)
+    (downloads / "pixlstash-anomaly-tagger_meta.json").write_text('{"labels": []}')
+    folder_id = builtin_models.declare_builtin_models(
+        shelf_env.server.hub, str(downloads)
+    )
+    return SimpleNamespace(
+        downloads=downloads,
+        target=tmp_path / "big-drive" / "models",
+        folder_id=folder_id,
+        pointer=data_dir / builtin_models.BUILTIN_MODEL_DIR_POINTER,
+    )
+
+
+def test_relocating_the_download_folder_takes_the_companions_with_it(
+    shelf_env, relocatable_downloads
+):
+    """A declared engine has a row; the files it needs beside it do not."""
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{relocatable_downloads.folder_id}/relocate",
+        json={"path": str(relocatable_downloads.target)},
+    )
+    assert r.status_code == 202, r.text
+    body = _await_move(shelf_env)
+    assert [item["status"] for item in body["results"]] == ["moved"]
+
+    assert sorted(p.name for p in relocatable_downloads.target.iterdir()) == [
+        "pixlstash-anomaly-tagger.safetensors",
+        "pixlstash-anomaly-tagger_meta.json",
+    ]
+    assert not relocatable_downloads.downloads.exists()
+
+
+def test_an_empty_download_folder_still_relocates(shelf_env, relocatable_downloads):
+    """The obvious first thing to do on a fresh install: send the downloads to
+    the big drive BEFORE anything is fetched. Nothing to move is not nothing to
+    do — the location still has to be recorded, or the first download lands in
+    the folder the owner just moved away from."""
+    from pixlstash.services import builtin_models
+
+    for leftover in relocatable_downloads.downloads.iterdir():
+        leftover.unlink()
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_folder_id = ?",
+            (relocatable_downloads.folder_id,),
+        )
+
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{relocatable_downloads.folder_id}/relocate",
+        json={"path": str(relocatable_downloads.target)},
+    )
+    assert r.status_code == 202, r.text
+    assert _await_move(shelf_env)["results"] == []
+    assert builtin_models.builtin_model_dir() == str(relocatable_downloads.target)
+
+
+def test_a_relocated_download_folder_is_where_the_next_download_goes(
+    shelf_env, relocatable_downloads
+):
+    """The point of the whole change. If the accessor still named the old path,
+    every engine would be fetched again into the folder just emptied."""
+    from pixlstash.services import builtin_models
+
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{relocatable_downloads.folder_id}/relocate",
+        json={"path": str(relocatable_downloads.target)},
+    )
+    assert r.status_code == 202, r.text
+    _await_move(shelf_env)
+
+    assert builtin_models.builtin_model_dir() == str(relocatable_downloads.target)
+    assert relocatable_downloads.pointer.read_text().strip() == str(
+        relocatable_downloads.target
+    )
+    # And the shelf agrees: one row for the folder, at the new path, still ours.
+    rows = shelf_env.server.hub.fetchall(
+        "SELECT path, kind, owner, movable FROM model_folder WHERE owner = 'pixlstash' "
+        "AND kind = 'foreign'"
+    )
+    assert [dict(row) for row in rows] == [
+        {
+            "path": str(relocatable_downloads.target),
+            "kind": "foreign",
+            "owner": "pixlstash",
+            "movable": "root_only",
+        }
+    ]
+
+
+def test_a_root_only_folder_with_no_relocate_route_is_still_refused(
+    shelf_env, relocatable_downloads, tmp_path
+):
+    """The InsightFace packs carry the same kind, owner and `movable` as the
+    download folder — `declare_folder` writes all three the same way — so the
+    route cannot key on those columns. #906 is what opens this one."""
+    packs = tmp_path / "insightface" / "models"
+    packs.mkdir(parents=True)
+    with shelf_env.server.hub.transaction() as conn:
+        packs_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, owner, movable, created_at) "
+                "VALUES (?, 'foreign', 'pixlstash', 'root_only', "
+                "'2026-08-09T00:00:00Z')",
+                (str(packs),),
+            ).lastrowid
+        )
+    r = shelf_env.owner.post(
+        f"{API}/model-folders/{packs_id}/relocate",
+        json={"path": str(tmp_path / "elsewhere")},
+    )
+    assert r.status_code == 409, r.text
+
+    # ...and the list says so up front, so the UI offers Move on neither.
+    folders = {
+        row["id"]: row["relocatable"]
+        for row in shelf_env.owner.get(f"{API}/model-folders").json()["folders"]
+    }
+    assert folders[packs_id] is False
+    assert folders[relocatable_downloads.folder_id] is True
 
 
 # ===========================================================================
@@ -3847,3 +4006,52 @@ def test_a_checkpoint_added_this_way_keeps_the_digest_rather_than_deferring_it(
     )
     assert row["file_kind"] == "checkpoint"
     assert row["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+
+
+# --- Capabilities on the wire (#903) ----------------------------------------
+
+
+def test_a_row_carries_every_feature_it_serves_not_just_the_first(shelf_env):
+    """The contract the shelf's feature axis and capability filter are built on.
+
+    `kind` keeps the primary label so every existing reader is unchanged, and
+    `capabilities` carries the whole ordered set beside it — primary first, so
+    the two agree rather than telling a reader two different stories.
+    """
+    server = shelf_env.server
+    model_id = shelf_env.model_ids["alice.safetensors"]
+    with server.hub.transaction() as conn:
+        for capability in ("captioner", "detector"):
+            conn.execute(
+                "INSERT INTO model_capability (model_id, capability) VALUES (?, ?)",
+                (model_id, capability),
+            )
+
+    r = shelf_env.owner.get(f"{API}/adapters")
+    assert r.status_code == 200, r.text
+    rows = {row["filename"]: row for row in r.json()["adapters"]}
+    assert rows["alice.safetensors"]["capabilities"] == ["captioner", "detector"]
+    assert rows["alice.safetensors"]["kind"] == "lora"
+    # A row that declares none says so with an empty list, never a null: an
+    # adapter's `kind` is an algorithm, which is not a capability.
+    assert rows["bob.safetensors"]["capabilities"] == []
+
+
+def test_the_detail_route_answers_with_the_same_set_as_the_list(shelf_env):
+    """The two shapes cannot drift apart — the list is what the shelf renders
+    and the detail route is what a client fetching one model reads."""
+    server = shelf_env.server
+    model_id = shelf_env.model_ids["alice.safetensors"]
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_capability (model_id, capability) VALUES (?, 'search')",
+            (model_id,),
+        )
+
+    listed = {
+        row["filename"]: row
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }["alice.safetensors"]
+    detail = shelf_env.owner.get(f"{API}/adapters/{listed['sha256']}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["capabilities"] == listed["capabilities"] == ["search"]

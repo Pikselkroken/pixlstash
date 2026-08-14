@@ -54,7 +54,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import BUILTIN_OWNER
-from pixlstash.services.managed_model_store import MANAGED_KIND
+from pixlstash.services.managed_model_store import MANAGED_KIND, relocatable_identity
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.model_folder_scan_task import ModelFolderScanTask
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
@@ -165,10 +165,21 @@ class ModelFolderResponse(BaseModel):
     movable: str = Field(
         description=(
             "`per_item` (files move one at a time), `root_only` (relocates as a "
-            "whole — offer Move on it), `external` (taken from, never written "
-            "into) or `fixed` (cannot relocate at all; another tool owns where "
-            "it lives)."
+            "whole), `external` (taken from, never written into) or `fixed` "
+            "(cannot relocate at all; another tool owns where it lives). What "
+            "the folder *is*; read `relocatable` for what can be done to it."
         )
+    )
+    relocatable: bool = Field(
+        default=False,
+        description=(
+            "Whether `POST /model-folders/{id}/relocate` will move this folder "
+            "whole. Reported rather than derived by the client, because "
+            "`movable=root_only` does not settle it: it is also what the "
+            "HuggingFace cache's neighbours say, and the two roots PixlStash "
+            "records a location for are told apart from each other by path, not "
+            "by any column. Offer Move on exactly the rows that carry this."
+        ),
     )
     host_path: Optional[str] = None
     delete_after_import: Optional[bool] = None
@@ -418,6 +429,7 @@ def create_router(server) -> APIRouter:
             kind=row["kind"],
             owner=row["owner"],
             movable=row["movable"],
+            relocatable=relocatable_identity(row) is not None,
             host_path=row["host_path"],
             delete_after_import=(
                 None if delete_after_import is None else bool(delete_after_import)

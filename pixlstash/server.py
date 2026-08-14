@@ -117,7 +117,6 @@ from pixlstash.routes.snapshots import create_router as create_snapshots_router
 from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
 from pixlstash.utils.atomic_write import write_json_atomic
-from pixlstash.utils.insightface_model_utils import set_insightface_root
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from pixlstash.utils.request_origin import OriginClientMiddleware
@@ -236,6 +235,15 @@ class Server(
             override. When set (e.g. by a test), it replaces the
             ``insightface_model_pack`` value from the persisted config for all
             Server instances. ``None`` means use the config value.
+        DEFAULT_DECLARE_MODEL_ROOTS: Whether start-up declares the model roots
+            PixlStash owns. ``False`` in the test suite, where it is the only
+            way to keep the shelf's contents machine-independent: those roots
+            are machine-global by design, so a Server on a temp config dir would
+            otherwise describe whichever engines the developer's home happens to
+            hold (``test_workers_api`` caught it as ``assert 3 == 0``). Pointing
+            them at a temp directory instead is no longer an option — since #905
+            the downloaders read the same accessor, so a temp directory means
+            every engine is downloaded again.
     """
 
     DEFAULT_MAX_VRAM_GB: float | None = None
@@ -244,6 +252,7 @@ class Server(
     DEFAULT_PORT: int | None = None
     DEFAULT_CLEANUP_MISSING_PICTURES: bool = False
     DEFAULT_INSIGHTFACE_MODEL_PACK: str | None = None
+    DEFAULT_DECLARE_MODEL_ROOTS: bool = True
 
     @staticmethod
     def running_in_docker() -> bool:
@@ -461,50 +470,52 @@ class Server(
         # services/managed_model_store.py for why it is `managed` rather than a
         # seeded `user` folder nobody is allowed to remove.
         ensure_managed_folder(self.hub, os.path.dirname(self._server_config_path))
-        # PixlStash's own engines, declared rather than scanned: we downloaded
-        # them, so we know what they are without reading a header — and half of
-        # them are ONNX or `.pt`, which the scanner does not yield at all.
-        # Cheap: existence checks and a handful of upserts, no hashing.
-        try:
-            declare_builtin_models(self.hub, builtin_model_dir())
-        except (sqlite3.Error, OSError) as exc:
-            # The shelf losing its engine rows is not a reason to refuse to
-            # start; everything else on it still works. `OSError` as well as
-            # the database errors: the declaration walks a machine-global
-            # directory that may be unreadable, on a different mount, or gone,
-            # and this comment promised non-critical while the handler only
-            # covered half of what the call can raise.
-            logger.error(
-                "Could not declare the built-in model folder (%s); PixlStash's "
-                "own engines will not be listed on the shelf this session.",
-                exc,
-            )
-        # Before the declaration below, which reads it: the InsightFace packs
-        # are relocatable, and their location is a persisted setting rather than
-        # a constant. Applied to the process-global reader every InsightFace
-        # caller goes through — the downloader, this declaration and the
-        # `FaceAnalysis(root=…)` the face pipeline constructs — so a relocated
-        # root cannot leave the shelf pointing at one directory while the packs
-        # load from another.
-        set_insightface_root(self._server_config.get("insightface_root"))
-        # The other two roots models land in. Same deal as above and same
-        # failure policy: each is declared independently so one unreadable root
-        # cannot cost the shelf the other two.
-        for label, resolve, declare in (
-            ("InsightFace packs", insightface_models_dir, declare_insightface_packs),
-            ("HuggingFace cache", huggingface_cache_dir, declare_huggingface_cache),
-        ):
+        # The three roots PixlStash's models live in, declared rather than
+        # scanned. Off in the test suite: they are machine-global, so a Server
+        # on a temp config dir would otherwise describe whichever engines the
+        # developer's home happens to hold.
+        if Server.DEFAULT_DECLARE_MODEL_ROOTS:
+            # PixlStash's own engines: we downloaded them, so we know what they
+            # are without reading a header — and half of them are ONNX or `.pt`,
+            # which the scanner does not yield at all. Cheap: existence checks
+            # and a handful of upserts, no hashing.
             try:
-                folder_path = resolve()
-                if folder_path:
-                    declare(self.hub, folder_path)
+                declare_builtin_models(self.hub, builtin_model_dir())
             except (sqlite3.Error, OSError) as exc:
+                # The shelf losing its engine rows is not a reason to refuse to
+                # start; everything else on it still works. `OSError` as well as
+                # the database errors: the declaration walks a machine-global
+                # directory that may be unreadable, on a different mount, or
+                # gone, and this comment promised non-critical while the handler
+                # only covered half of what the call can raise.
                 logger.error(
-                    "Could not declare the %s (%s); it will not be listed on "
-                    "the shelf this session.",
-                    label,
+                    "Could not declare the built-in model folder (%s); "
+                    "PixlStash's own engines will not be listed on the shelf "
+                    "this session.",
                     exc,
                 )
+            # The other two roots models land in. Same deal as above and same
+            # failure policy: each is declared independently so one unreadable
+            # root cannot cost the shelf the other two.
+            for label, resolve, declare in (
+                (
+                    "InsightFace packs",
+                    insightface_models_dir,
+                    declare_insightface_packs,
+                ),
+                ("HuggingFace cache", huggingface_cache_dir, declare_huggingface_cache),
+            ):
+                try:
+                    folder_path = resolve()
+                    if folder_path:
+                        declare(self.hub, folder_path)
+                except (sqlite3.Error, OSError) as exc:
+                    logger.error(
+                        "Could not declare the %s (%s); it will not be listed "
+                        "on the shelf this session.",
+                        label,
+                        exc,
+                    )
         if self._hub_bootstrap.migrated:
             logger.info(
                 "First run after the hub/vault split: identity now lives in %s",
@@ -1065,13 +1076,6 @@ class Server(
                 "image_root": default_image_root,
                 "default_device": "auto",
                 "insightface_model_pack": "buffalo_l",
-                # Where the InsightFace packs live. Empty means the library's own
-                # default (`~/.insightface`); a relocation writes the new root
-                # here. Unlike `PIXLSTASH_BUILTIN_MODEL_DIR` this is safe to set
-                # in production, because `insightface_root()` is the only reader
-                # and the downloads, the shelf row and `FaceAnalysis` all go
-                # through it.
-                "insightface_root": "",
                 "min_free_disk_gb": 1.0,
                 "min_free_vram_mb": 1024.0,
                 "cors_origins": [],
@@ -1106,8 +1110,6 @@ class Server(
                     server_config["default_device"] = "auto"
                 if "insightface_model_pack" not in server_config:
                     server_config["insightface_model_pack"] = "buffalo_l"
-                if "insightface_root" not in server_config:
-                    server_config["insightface_root"] = ""
                 if "min_free_disk_gb" not in server_config:
                     server_config["min_free_disk_gb"] = 1.0
                 if "min_free_vram_mb" not in server_config:

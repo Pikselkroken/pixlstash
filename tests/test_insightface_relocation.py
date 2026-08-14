@@ -76,27 +76,50 @@ def _write_pack(models_dir, name: str) -> None:
 
 
 @pytest.fixture
-def face_env(tmp_path):
+def data_dir(tmp_path, monkeypatch):
+    """Stand in for the platform user data directory, where the pointer lives.
+
+    The same seam ``test_builtin_models.py`` uses, and the same one call:
+    ``insightface_model_utils`` resolves its pointer through
+    ``builtin_models._pixlstash_data_dir`` rather than rebuilding
+    ``user_data_dir("pixlstash")``, so redirecting it here redirects both
+    recorded locations at once — which is the property that keeps a test from
+    writing into the developer's real home.
+    """
+    from pixlstash.services import builtin_models
+
+    root = tmp_path / "userdata"
+    root.mkdir()
+    monkeypatch.setattr(builtin_models, "_pixlstash_data_dir", lambda: str(root))
+    return root
+
+
+@pytest.fixture
+def face_env(tmp_path, data_dir, monkeypatch):
     """A server whose InsightFace root is a temp directory holding one pack.
 
-    Function-scoped, unlike the shared shelf server: a relocation writes the
-    config file and re-points ``insightface_root()`` for the whole process, so a
-    module-scoped server would hand the next test a root the test did not choose.
+    Function-scoped, unlike the shared shelf server: a relocation writes a
+    pointer file that every later call to ``insightface_root()`` reads, so a
+    module-scoped server would hand the next test a root it did not choose.
+
+    ``DEFAULT_DECLARE_MODEL_ROOTS`` is back **on** for these tests. The suite
+    turns it off (``conftest``) so a Server on a temp config dir cannot describe
+    the developer's real home — here the root is a ``tmp_path`` and the pointer
+    is redirected with it, so the declaration is both safe and the thing under
+    test: without it there is no InsightFace folder row to relocate.
     """
-    original_root = model_utils.insightface_root()
     insightface_root = tmp_path / "home" / ".insightface"
     models_dir = insightface_root / "models"
     models_dir.mkdir(parents=True)
     _write_pack(models_dir, "buffalo_l")
+    model_utils.set_insightface_root(str(insightface_root))
 
     model_moves._job = None
+    monkeypatch.setattr(Server, "DEFAULT_DECLARE_MODEL_ROOTS", True)
     tmp = tempfile.TemporaryDirectory()
     config_path = f"{tmp.name}/server-config.json"
     with open(config_path, "w") as handle:
-        json.dump(
-            {"port": 8000, "insightface_root": str(insightface_root)},
-            handle,
-        )
+        json.dump({"port": 8000}, handle)
     server = Server(config_path)
     server.__enter__()
     try:
@@ -108,7 +131,7 @@ def face_env(tmp_path):
         yield _FaceEnv(
             server=server,
             owner=owner,
-            config_path=config_path,
+            pointer=data_dir / model_utils.INSIGHTFACE_ROOT_POINTER,
             root=insightface_root,
             models_dir=models_dir,
             target=tmp_path / "big-drive" / ".insightface",
@@ -117,16 +140,15 @@ def face_env(tmp_path):
         server.__exit__(None, None, None)
         tmp.cleanup()
         model_moves._job = None
-        model_utils.set_insightface_root(original_root)
 
 
 class _FaceEnv:
     """What a relocation test needs to name: the server, and both roots."""
 
-    def __init__(self, *, server, owner, config_path, root, models_dir, target):
+    def __init__(self, *, server, owner, pointer, root, models_dir, target):
         self.server = server
         self.owner = owner
-        self.config_path = config_path
+        self.pointer = pointer
         self.root = root
         self.models_dir = models_dir
         self.target = target
@@ -174,66 +196,88 @@ def _await_move(env, timeout=20.0):
 # --------------------------------------------------------------------------- #
 
 
-def test_one_setting_moves_the_download_dir_and_the_shelf_folder_together(tmp_path):
+def test_the_root_defaults_to_where_insightface_itself_looks(data_dir):
+    """A machine that never relocated the packs must not see them move."""
+    assert model_utils.insightface_root() == model_utils.DEFAULT_INSIGHTFACE_ROOT
+
+
+def test_a_recorded_root_survives_the_process_that_wrote_it(data_dir):
+    """The relocation is only real if the next start agrees with it — otherwise
+    every pack is downloaded again into the directory just emptied.
+
+    A file beside the download folder's own pointer rather than a key in
+    `server-config.json`, for the reason #905 gives: this path is machine-global,
+    so recording it per deployment would leave a second PixlStash on the same
+    machine downloading packs to the old place.
+    """
+    model_utils.set_insightface_root("/mnt/big/.insightface")
+    assert (data_dir / model_utils.INSIGHTFACE_ROOT_POINTER).read_text() == (
+        "/mnt/big/.insightface"
+    )
+    assert model_utils.insightface_root() == "/mnt/big/.insightface"
+
+
+def test_an_unreadable_record_names_the_default_rather_than_nothing(
+    data_dir, monkeypatch, caplog
+):
+    """Refusing to name a root at all would disable face detection entirely over
+    one bad file, so the failure is loud and the default answers."""
+    model_utils.set_insightface_root("/mnt/big/.insightface")
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr("builtins.open", _boom)
+    with caplog.at_level("ERROR"):
+        assert model_utils.insightface_root() == model_utils.DEFAULT_INSIGHTFACE_ROOT
+    assert "permission denied" in caplog.text
+
+
+def test_one_recorded_root_moves_the_download_dir_and_the_shelf_folder_together(
+    data_dir,
+):
     """The property the relocation rests on, asserted without a server.
 
     If these two could disagree the shelf would list the packs on the new drive
     while `ensure_model_pack_available` re-downloaded them to the old one.
     """
-    original = model_utils.insightface_root()
-    relocated = str(tmp_path / "elsewhere")
-    try:
-        model_utils.set_insightface_root(relocated)
-        assert model_utils.insightface_root() == relocated
-        assert model_utils._pack_dir("auraface") == os.path.join(
-            relocated, "models", "auraface"
-        )
-        assert builtin_caches.insightface_models_dir() == os.path.join(
-            relocated, "models"
-        )
-
-        # Cleared, not just overwritten: an empty setting is "wherever
-        # InsightFace itself would look", not an empty path.
-        model_utils.set_insightface_root("")
-        assert model_utils.insightface_root() == model_utils.DEFAULT_INSIGHTFACE_ROOT
-    finally:
-        model_utils.set_insightface_root(original)
+    relocated = str(data_dir / "elsewhere")
+    model_utils.set_insightface_root(relocated)
+    assert model_utils._pack_dir("auraface") == os.path.join(
+        relocated, "models", "auraface"
+    )
+    assert builtin_caches.insightface_models_dir() == os.path.join(relocated, "models")
 
 
-def test_nothing_but_the_setting_can_name_the_models_directory(monkeypatch, tmp_path):
+def test_nothing_but_the_record_can_name_the_models_directory(data_dir, monkeypatch):
     """No second source for this one path, environment included.
 
     `builtin_caches` used to carry `PIXLSTASH_INSIGHTFACE_DIR`, a declaration-only
-    test seam that pointed at the *models* directory — one level below the thing
-    the setting names, so the two could disagree. Harmless while nothing could
+    seam that pointed at the *models* directory — one level below the root that is
+    now recorded, so the two could disagree. Harmless while nothing could
     relocate; a bug the moment something could, because the shelf would declare
     the override path while downloads and `FaceAnalysis` used the root, and a
     relocation identified by `insightface_models_dir()` would repoint the row at
-    a directory the next start-up would not declare.
+    a directory the next start-up would not declare. The download folder's
+    override is safe for the opposite reason: it redirects that folder whole.
 
     Asserted by setting every plausible spelling and requiring the answer not to
     move: a reader that consults the environment fails this, whatever it is
     called.
     """
-    original = model_utils.insightface_root()
-    relocated = str(tmp_path / "configured")
+    relocated = str(data_dir / "recorded")
     for name in (
         "PIXLSTASH_INSIGHTFACE_DIR",
         "PIXLSTASH_INSIGHTFACE_ROOT",
         "INSIGHTFACE_ROOT",
     ):
-        monkeypatch.setenv(name, str(tmp_path / "from-the-environment"))
-    try:
-        model_utils.set_insightface_root(relocated)
-        assert builtin_caches.insightface_models_dir() == os.path.join(
-            relocated, "models"
-        )
-        assert not hasattr(builtin_caches, "INSIGHTFACE_DIR_ENV"), (
-            "the seam is gone; `insightface_root` in server-config does its job "
-            "and reaches all three callers rather than only the declaration"
-        )
-    finally:
-        model_utils.set_insightface_root(original)
+        monkeypatch.setenv(name, str(data_dir / "from-the-environment"))
+    model_utils.set_insightface_root(relocated)
+    assert builtin_caches.insightface_models_dir() == os.path.join(relocated, "models")
+    assert not hasattr(builtin_caches, "INSIGHTFACE_DIR_ENV"), (
+        "the seam is gone; the recorded root reaches all three callers rather "
+        "than only the declaration"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -295,9 +339,8 @@ def test_a_crash_mid_copy_never_leaves_a_pack_under_its_real_name(
 
 
 def test_relocating_the_packs_moves_them_and_repoints_every_caller(face_env):
-    folder_id = face_env.folder_id
     r = face_env.owner.post(
-        f"{API}/model-folders/{folder_id}/relocate",
+        f"{API}/model-folders/{face_env.folder_id}/relocate",
         json={"path": str(face_env.target)},
     )
     assert r.status_code == 202, r.text
@@ -310,48 +353,55 @@ def test_relocating_the_packs_moves_them_and_repoints_every_caller(face_env):
     assert sorted(p.name for p in moved.iterdir()) == sorted(_PACK_FILES)
     assert not face_env.models_dir.exists(), "the vacated directory was tidied"
 
-    # The setting, persisted and applied — no restart.
-    with open(face_env.config_path) as handle:
-        assert json.load(handle)["insightface_root"] == str(face_env.target)
+    # The root, recorded and in force — no restart.
+    assert face_env.pointer.read_text() == str(face_env.target)
     assert model_utils.insightface_root() == str(face_env.target)
     assert model_utils._pack_dir("buffalo_l") == str(moved)
     assert builtin_caches.insightface_models_dir() == str(face_env.target / "models")
 
-    # The shelf follows, keeping its rows: the folder moved, it was not replaced.
-    assert face_env.folder_path(folder_id) == str(face_env.target / "models")
+    # The shelf follows. `folder_id` re-resolves through the accessor, so this
+    # is the row the *relocated* folder now has — the shared ending registers
+    # the destination and retires the old row, as it does for the other two.
+    relocated_id = face_env.folder_id
+    assert face_env.folder_path(relocated_id) == str(face_env.target / "models")
     rows = face_env.server.hub.fetchall(
         "SELECT relpath, state FROM model_file WHERE model_folder_id = ? "
         "ORDER BY relpath",
-        (folder_id,),
+        (relocated_id,),
     )
     assert {row["relpath"]: row["state"] for row in rows} == {
-        # Declared and absent is a normal state for a pack nobody has fetched;
-        # it is not moved and it is not dropped.
+        # Declared and absent is a normal state for a pack nobody has fetched.
+        # It carries across rather than being dropped with the old row: it is a
+        # tombstone, and the packs moving is not news about whether it came back.
         "auraface": "missing",
         "buffalo_l": "present",
     }
+    assert (
+        face_env.server.hub.fetchone(
+            "SELECT id FROM model_folder WHERE path = ?", (str(face_env.models_dir),)
+        )
+        is None
+    ), "the old row was retired rather than left beside the new one"
 
 
-def test_a_config_write_that_fails_still_leaves_the_server_where_the_packs_are(
+def test_a_record_that_cannot_be_written_still_tells_the_hub_the_truth(
     face_env, monkeypatch, caplog
 ):
-    """The one residue a completed move must not have.
+    """What a completed move leaves when only the *memory* of it fails.
 
-    The config file is the durable authority, so it is written before anything
-    believes the move happened. But by this point the packs *are* at the new
-    root and a relocation cannot be undone, so a failed write must not leave the
-    running server pointing at a directory the bytes have left — that is a face
-    pipeline re-downloading every pack, which is worse than either end state.
-    The filesystem is the ground truth once the move has completed, so the
-    process and the shelf follow it, and the part that genuinely failed —
-    surviving a restart — is reported as an error rather than swallowed.
+    The packs are at the new root and a relocation cannot be undone (the cancel
+    ruling), so the hub is still told where they are — the shelf shows them
+    correctly. What is lost is durability: the next start resolves the default
+    root again and would download there, which is why the failure is loud and
+    names the repair. Exactly the residue #905 accepts for the download folder's
+    own pointer; giving the two different answers would be the worse outcome.
     """
     folder_id = face_env.folder_id
 
-    def _explode(*args, **kwargs):
+    def _explode(*_args, **_kwargs):
         raise OSError(13, "Permission denied")
 
-    monkeypatch.setattr(model_moves, "write_json_atomic", _explode)
+    monkeypatch.setattr(model_moves, "set_insightface_root", _explode)
 
     with caplog.at_level("ERROR"):
         r = face_env.owner.post(
@@ -365,29 +415,50 @@ def test_a_config_write_that_fails_still_leaves_the_server_where_the_packs_are(
     moved = face_env.target / "models" / "buffalo_l"
     assert sorted(p.name for p in moved.iterdir()) == sorted(_PACK_FILES)
 
-    # The running server follows the bytes, so face extraction keeps working.
-    assert model_utils.insightface_root() == str(face_env.target)
-    assert model_utils._pack_dir("buffalo_l") == str(moved)
-    assert face_env.folder_path(folder_id) == str(face_env.target / "models")
+    # The hub still names where the packs really are.
+    row = face_env.server.hub.fetchone(
+        "SELECT path FROM model_folder WHERE id = ?", (folder_id,)
+    )
+    moved_row = face_env.server.hub.fetchone(
+        "SELECT id FROM model_folder WHERE path = ?",
+        (str(face_env.target / "models"),),
+    )
+    assert row is None and moved_row is not None
 
-    # And the failure is loud, naming both directories and the repair.
+    # The root reverts, because the pointer is the only memory there is.
+    assert model_utils.insightface_root() == str(face_env.root)
+
+    # And the failure is loud, naming the new location and the repair.
     assert any(
-        "WILL NOT survive a restart" in record.message
-        and str(face_env.target / "models") in record.message
+        "could not record the new root" in record.message
+        and "re-run the relocation" in record.message
         for record in caplog.records
     ), [record.message for record in caplog.records]
 
 
-def test_the_relocated_root_is_what_the_shelf_reports(face_env):
-    """The folder list is the surface the Move control reads back."""
+def test_the_shelf_reports_the_packs_as_relocatable_before_and_after(face_env):
+    """The folder list is the surface the Move control reads back.
+
+    ``relocatable``, not ``movable``: the packs, the download folder and the
+    HuggingFace cache all read `foreign`, and the first two share `root_only`
+    besides, so this boolean is the only thing that tells the client which rows
+    to offer Move on. It has to be true here *before* the relocation — that is
+    what puts the control on the row — and again afterwards, since a folder that
+    moved once can move again.
+    """
+
+    def _listed(folder_id):
+        return next(
+            folder
+            for folder in face_env.owner.get(f"{API}/model-folders").json()["folders"]
+            if folder["id"] == folder_id
+        )
+
     folder_id = face_env.folder_id
-    listed = [
-        folder
-        for folder in face_env.owner.get(f"{API}/model-folders").json()["folders"]
-        if folder["id"] == folder_id
-    ]
-    assert listed and listed[0]["movable"] == "root_only", (
-        "the shelf must go on saying this folder relocates as a whole"
+    before = _listed(folder_id)
+    assert before["movable"] == "root_only"
+    assert before["relocatable"] is True, (
+        "without this the dialog shows no Move control at all"
     )
 
     r = face_env.owner.post(
@@ -397,13 +468,10 @@ def test_the_relocated_root_is_what_the_shelf_reports(face_env):
     assert r.status_code == 202, r.text
     _await_move(face_env)
 
-    listed = [
-        folder
-        for folder in face_env.owner.get(f"{API}/model-folders").json()["folders"]
-        if folder["id"] == folder_id
-    ]
-    assert listed[0]["path"] == str(face_env.target / "models")
-    assert listed[0]["movable"] == "root_only"
+    after = _listed(face_env.folder_id)
+    assert after["path"] == str(face_env.target / "models")
+    assert after["movable"] == "root_only"
+    assert after["relocatable"] is True
 
 
 # --------------------------------------------------------------------------- #
