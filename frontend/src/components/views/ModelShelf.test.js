@@ -1263,38 +1263,28 @@ describe("focus under folder grouping, where a model is drawn twice", () => {
   });
 });
 
-describe("a click that ends a text drag", () => {
-  it("is ignored only when the text was dragged inside that row", async () => {
-    // Asking whether ANY text is selected anywhere made the whole list
-    // unclickable for as long as the reader had a selection elsewhere.
-    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+describe("a click on the row being renamed", () => {
+  it("does not pick it, and does not stop the OTHER rows being picked", async () => {
+    // The panel is `user-select: none` (#932) and the rename field is the one
+    // thing on it that opts back in, so it is the only place a text drag can
+    // still start. Released on the row underneath, that drag is a mouseup the
+    // field's own `@click.stop` never sees, and the click picked the row.
+    //
+    // Both directions, because the scope is the whole guard: blocking every
+    // click while a field is open would kill "click the next row to move on",
+    // and that is not a text drag.
+    const wrapper = await mountShelf([adapter({ id: 7 }), adapter({ id: 8 })]);
     const store = useModelShelfStore();
     const rows = wrapper.findAll(".shelf-row");
 
-    // A live selection anchored OUTSIDE the row must not block the click.
-    const outside = document.createElement("p");
-    outside.textContent = "selected somewhere else";
-    document.body.appendChild(outside);
-    vi.spyOn(window, "getSelection").mockReturnValue({
-      isCollapsed: false,
-      anchorNode: outside,
-      toString: () => "selected somewhere else",
-    });
+    await rows[0].trigger("keydown", { key: "F2" });
+    await wrapper.find(".shelf-row-rename").setValue("Cyanw");
 
     await rows[0].trigger("click");
-    expect([...store.selectedIds]).toEqual([1]);
+    expect(store.selectedRows).toHaveLength(0);
 
-    // Anchored INSIDE the clicked row, it is a drag and must be ignored.
-    vi.spyOn(window, "getSelection").mockReturnValue({
-      isCollapsed: false,
-      anchorNode: rows[1].element.firstChild,
-      toString: () => "a name",
-    });
     await rows[1].trigger("click");
-    expect([...store.selectedIds]).toEqual([1]);
-
-    window.getSelection.mockRestore();
-    outside.remove();
+    expect([...store.selectedIds]).toEqual([8]);
   });
 });
 

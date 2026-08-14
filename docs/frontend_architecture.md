@@ -2101,12 +2101,15 @@ range measured against an order the reader cannot see would select a run they
 did not point at. A model drawn under two folders appears once in that sequence,
 since the range is over models and models are what the verbs act on.
 
-**The rows are a multi-select listbox with a roving tabindex.** Removing the
+**The rows are a multi-select treegrid with a roving tabindex.** Removing the
 checkbox removed the only focus stop a row had, so the row takes the role
-instead: `role="listbox"` + `aria-multiselectable` on the `<ul>`,
-`role="option"` + `aria-selected` on each row, and exactly one row at
-`tabindex="0"` — seeded to the first drawn row, or a roving tabindex with
-nothing at 0 makes the whole list unreachable by Tab.
+instead: `role="treegrid"` + `aria-multiselectable` on the `<ul>`, `role="row"`
++ `aria-selected` on each row, `role="gridcell"` per column, and exactly one row
+at `tabindex="0"` — seeded to the first drawn row, or a roving tabindex with
+nothing at 0 makes the whole list unreachable by Tab. It was a listbox first and
+became a grid with the columns (#891): a listbox cannot carry a `columnheader`,
+so nothing named what the figures in a row meant. A run's other steps are CHILD
+rows at `aria-level="2"`, which is the "tree" half.
 
 **Focus is keyed per DRAWN ROW (`rowKey`), selection per MODEL (`id`), and the
 two lists are not the same.** Under folder grouping a model with copies in two
@@ -2118,18 +2121,42 @@ draw's index whichever draw the cursor was on. `rowKey` is assigned on **both**
 branches of `groups`, including the ungrouped default, where it was previously
 absent and left the list's `v-for` key `undefined` for every row. That is the same "1,800
 tab stops is a trap" rule as before, now solved by roving rather than by having
-no stop at all. The listbox role is legitimate here and was refused in
-`ModelFoldersDialog` for the mirror-image reason: these rows hold no interactive
-controls, and a control inside `role="option"` is unreachable.
+no stop at all. The grid role also lifts the ban that a listbox imposes on
+controls inside a row — the reason `ModelFoldersDialog` refused a listbox, where
+a control inside `role="option"` would have been unreachable. Nothing in the row
+is a tab stop even so, because the alternative is 1,800 new stops: renaming is a
+double click on the name, or F2 on the row for the keyboard.
 
 Arrows move the stop **without** selecting, so a reader can walk the list
 without arming a verb against every row they pass; Space and Enter pick;
 Shift+arrow extends from the anchor, the keyboard's Shift+click; Escape clears.
-A click that ends a text drag **inside that row** is ignored, or dragging across
-a name to copy it would collapse the selection on mouseup. Scoped to the clicked
-row: asking only whether any text is selected anywhere would make the entire
-list unclickable for as long as the reader had a selection elsewhere on the
-page.
+**The panel's text is not selectable** (`user-select: none` on `.shelf`, #932).
+Picking rows is the gesture here and the browser's own text selection rode along
+with it: Shift+click extends a text range from the last click and a fast double
+click word-selects, so a multi-select arrived with the list highlighted through
+it. On the PANEL and not on the row, because a drag that starts a row-height too
+high — on a group heading, the band, the empty-folder note — paints the same
+text just as well. It also clears the way for the resolved design's double click
+to rename: the gesture that opens the field would otherwise word-select the name
+behind it. It is the app-chrome rule `style.css` already applies to the
+desktop shell under `.is-desktop`, restated here for the browser build; making
+that global is a wider decision than this issue, and it leaves the same bug open
+on `DuplicateQueue`, whose Shift+click has it too. The menus and dialogs the
+shelf opens are Vuetify overlays and teleport OUT of `.shelf`, so they never
+inherit the rule and their text stays selectable — worth knowing before giving
+any of them `attach`, which would silently make its content uncopyable.
+
+The rename field opts back in, which makes it the only text inside `.shelf`
+itself a drag can start in, and a drag released on the row underneath is a
+mouseup the field's `@click.stop` never sees — hence `pickRow` ignores a click
+on the row it is renaming, which is what replaced the old guard against a click
+ending a text drag inside a row. It is scoped to THAT row: clicking the next row
+to move on still commits and still picks, because the blur fires on mousedown
+and `commitRename` clears the key before the click lands. The cost is that a
+model name and its paths are no longer copyable out of the browser build, as
+they already were not out of the desktop one — `style.css`'s `selectable` opt-in
+is itself gated on `.is-desktop`, so a copy gesture here would need a real
+affordance rather than a class, and this issue asked for the opposite.
 
 **`ShelfSelectionBar.vue` emits; `ModelShelf.vue` acts.** Every button is an
 emit, so both confirmations live in one place instead of half in the bar and
