@@ -4,7 +4,7 @@
 // (`/picture_sets/{id}/members/{pictureId}`), so bulk actions are the caller's
 // loop over these calls, not a bulk endpoint.
 
-import { apiClient, appendShareToken } from "../utils/apiClient";
+import { API_BASE_URL, apiClient, appendShareToken } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
@@ -31,9 +31,10 @@ function setsUrl(path = "") {
  * @returns {string}
  */
 export function pictureSetThumbnailUrl(id) {
-  const base = apiClient.defaults.baseURL || "";
+  // An <img src> never reaches the apiClient interceptor, so the API base has
+  // to be spelled out here rather than left for axios to prepend.
   return appendShareToken(
-    `${base}${setsUrl(`/${encodeURIComponent(id)}/thumbnail`)}`,
+    `${API_BASE_URL}${setsUrl(`/${encodeURIComponent(id)}/thumbnail`)}`,
   );
 }
 

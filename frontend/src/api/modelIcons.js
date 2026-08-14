@@ -4,7 +4,7 @@
 // sample, which is what a model produces. The store is content-addressed, so
 // forty models given one logo share one file and one cached response.
 
-import { apiClient } from "../utils/apiClient";
+import { API_BASE_URL, apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
@@ -18,8 +18,9 @@ import { unwrap } from "../utils/unwrap";
  * @returns {string}
  */
 export function modelIconUrl(sha256) {
-  const base = apiClient.defaults.baseURL || "";
-  return `${base}/model-icons/${encodeURIComponent(sha256)}`;
+  // An <img src> never reaches the apiClient interceptor, so the API base has
+  // to be spelled out here rather than left for axios to prepend.
+  return `${API_BASE_URL}/model-icons/${encodeURIComponent(sha256)}`;
 }
 
 /**
