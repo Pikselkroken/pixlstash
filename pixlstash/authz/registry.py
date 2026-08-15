@@ -336,6 +336,21 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # product, and the attachment names stay per-vault.
     ("GET", "/api/v1/adapters"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/adapters/{sha256}"): RoutePolicy(_OWNER),
+    # The one shelf read that is NOT on the owner_only tier. Every other one
+    # surfaces host paths but takes none, which is why they stayed there; this
+    # one returns the **raw bytes** of a file inside a registered model folder,
+    # which is the GET .../runs/{run_name}/samples/{filename} class exactly —
+    # reads inside a registered host root, writes nothing, and is a new
+    # capability rather than a narrower view of the metadata beside it. It takes
+    # no host path at all (a sha256 the scanner already registered is the whole
+    # input), so it is on this tier for the authority it exercises, not for what
+    # it accepts. Loopback/LAN/Tailscale covers the case the route exists for —
+    # a generator on the owner's own network — and a genuinely remote one needs
+    # allow_remote_host_ops, which is the safe default direction.
+    ("GET", "/api/v1/adapters/{sha256}/file"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 serves the raw bytes of a model file out of a registered model folder — the same read-inside-a-registered-root authority as model-folders/{folder_id}/runs/{run_name}/samples/{filename}, and a new capability rather than a subset of GET /adapters, which serves metadata only. Takes no host path: the sha256 addresses a row the scanner wrote, the join is contained, and only a `present` copy is served; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("GET", "/api/v1/checkpoints"): RoutePolicy(_OWNER),
     # The assignment path. OWNER_ONLY, same pin: it WRITES the active vault's
     # adapter_attachment rows, so a token stamped for another library must not

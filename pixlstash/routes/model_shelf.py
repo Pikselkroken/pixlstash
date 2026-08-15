@@ -11,6 +11,14 @@ hence a list route and no by-hash detail route on that side. Every row carries
 its hub ``model.id`` for that reason: it is AUTOINCREMENT, never recycled, and it
 is the only identifier an unhashed checkpoint has.
 
+**One route on this block serves bytes rather than rows.**
+``GET /adapters/{sha256}/file`` streams the adapter itself, so a generator on
+another machine can *use* what this one catalogues — the locations the detail
+route returns are this host's paths and mean nothing over there. It is the only
+shelf read off the ``OWNER_ONLY`` tier: raw bytes out of a registered model
+folder is the ``.../runs/{run_name}/samples/{filename}`` authority class, so it
+carries the §16.3 locality tier. It still takes no path of its own.
+
 **``unknown`` is never rendered as a checkpoint.** ``file_kind='unknown'`` is a
 first-class stored value (a marker-free file too small to be a base model is most
 likely an adapter format we have not met yet), and it appears in neither list by
@@ -56,17 +64,20 @@ All four id-taking verbs address rows by hub ``model.id`` rather than by hash,
 because a 24 GB checkpoint is listable long before it is hashed and would
 otherwise be the one row on the shelf that cannot be corrected.
 
-Authorization is declared, never inline: every route here is ``OWNER_ONLY`` in
-``pixlstash/authz/registry.py`` and takes the **default** library pin
+Authorization is declared, never inline: every route here but the download is
+``OWNER_ONLY`` in ``pixlstash/authz/registry.py`` (that one is
+``LOCAL_OWNER_ONLY``, above), and all of them take the **default** library pin
 (``library_independent`` is left at ``False``, so the pin runs before the policy
 branch). See ``docs/backend_architecture.md`` §16.1.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
@@ -96,6 +107,7 @@ from pixlstash.utils.adapter_header import (
     FILE_UNKNOWN,
 )
 from pixlstash.utils.known_base_models import completions, fold
+from pixlstash.utils.path_utils import path_is_within
 
 logger = get_logger(__name__)
 
@@ -484,6 +496,46 @@ class CheckpointListResponse(BaseModel):
     checkpoints: list[ModelResponse]
 
 
+def _present_copy(locations: list[dict]) -> Optional[str]:
+    """The path of a readable copy, or ``None`` when there is none.
+
+    ``present`` only. ``missing`` says the scan looked and the file was gone,
+    ``unreachable`` says its drive is unplugged, and a forgotten folder leaves
+    its rows tombstoned rather than deleted — serving from any of those three
+    would hand out bytes from a location the shelf does not consider live.
+
+    The join is contained even though **neither half is caller-supplied**:
+    ``folder_path`` is a registered folder and ``relpath`` is the scanner's, so
+    a ``..`` in the table can only come from a faulty scan, a restored hub or a
+    bug. That is the same argument the mover makes for containing its writes
+    (§16.3), and it matters more on a route that streams the result to the
+    network. Containment is ``path_is_within``, which is lexical first: a model
+    symlinked into a folder is ordinary practice, and realpath-only containment
+    would refuse every one of them as an escape.
+    """
+    for location in locations:
+        if location.get("state") != "present":
+            continue
+        folder = location.get("folder_path") or ""
+        path = os.path.join(folder, location.get("relpath") or "")
+        if not path_is_within(path, folder):
+            logger.error(
+                "Refusing to serve %r: it escapes the registered folder %r. "
+                "That relpath should not be in model_file at all.",
+                location.get("relpath"),
+                folder,
+            )
+            continue
+        if os.path.isfile(path):
+            return path
+        logger.warning(
+            "The shelf records a present copy at %s but there is no file "
+            "there; a rescan of that folder would correct the row.",
+            path,
+        )
+    return None
+
+
 def _to_response(
     row: dict,
     locations: dict[int, list[dict]],
@@ -684,6 +736,62 @@ def create_router(server) -> APIRouter:
             fetch_locations(server.hub, int(row["id"])),
             fetch_attachments(server.vault, sha256=sha256),
             fetch_capabilities(server.hub, int(row["id"])),
+        )
+
+    @router.get(
+        "/adapters/{sha256}/file",
+        summary="Download one adapter's bytes",
+        description=(
+            "Serves the file itself, so a generator on another machine can use "
+            "an adapter this one catalogues instead of being told where it "
+            "would be. The route beside it returns `locations[].folder_path` "
+            "and `relpath`, which are **this** host's paths and mean nothing on "
+            "the machine that asked.\n\n"
+            "Addressed by content hash and by nothing else: the caller names no "
+            "path, and the only files reachable here are the ones the scanner "
+            "registered. The copy served is a `present` one — a hash the shelf "
+            "knows but has no reachable copy of is a 409, not a 404, because "
+            "the adapter exists and the file does not.\n\n"
+            "**The digest is the caller's to verify.** The bytes are streamed "
+            "from disk and are not re-hashed on the way out: that would read "
+            "every byte twice on every request, and the caller already has the "
+            "hash it asked by."
+        ),
+        tags=["model_shelf"],
+        response_class=FileResponse,
+        responses={200: {"content": {"application/octet-stream": {}}}},
+    )
+    def get_adapter_file(sha256: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        row = fetch_model_by_hash(server.hub, sha256)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such adapter.")
+        if row["file_kind"] == FILE_CHECKPOINT:
+            # Same refusal as the detail route beside it, for the same reason:
+            # a checkpoint is not addressable by hash on this block.
+            raise HTTPException(
+                status_code=404,
+                detail="That hash is a checkpoint; see GET /checkpoints.",
+            )
+
+        model_id = int(row["id"])
+        path = _present_copy(fetch_locations(server.hub, model_id).get(model_id, []))
+        if path is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This adapter is on the shelf but no copy of it is readable "
+                    "on this machine right now."
+                ),
+            )
+        # `attachment`, and not because a browser is expected here. Nothing sets
+        # X-Content-Type-Options on this app, so a served file is sniffable; a
+        # disposition of `attachment` is what stops any of these bytes being
+        # rendered as a document on our own origin.
+        return FileResponse(
+            path,
+            media_type="application/octet-stream",
+            filename=row["filename"] or os.path.basename(path),
         )
 
     @router.get(
