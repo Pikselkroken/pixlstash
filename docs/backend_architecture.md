@@ -467,8 +467,8 @@ Public guest scoring and shared-link endpoints.
 | ------ | ----------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------- |
 | GET    | /api/v1/adapters                                                              | model_shelf     | List adapters on the shelf                                 |
 | GET    | /api/v1/adapters/{sha256}                                                     | model_shelf     | One adapter by hash                                        |
-| GET    | /api/v1/adapters/{sha256}/file                                                | model_shelf     | Download one adapter's bytes                               |
 | PUT    | /api/v1/adapters/{sha256}/attachments                                         | model_shelf     | Set which characters and sets use an adapter               |
+| GET    | /api/v1/adapters/{sha256}/file                                                | model_shelf     | Download one adapter's bytes                               |
 | GET    | /api/v1/characters                                                            | characters      | List characters                                            |
 | POST   | /api/v1/characters                                                            | characters      | Create character                                           |
 | POST   | /api/v1/characters/likeness-search                                            | characters      | Search characters by face likeness                         |
