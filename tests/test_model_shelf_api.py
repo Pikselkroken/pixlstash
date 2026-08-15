@@ -68,6 +68,7 @@ _SHELF_ROUTES = (
     ("GET", "/api/v1/adapters"),
     ("GET", "/api/v1/adapters/{sha256}"),
     ("GET", "/api/v1/checkpoints"),
+    ("GET", "/api/v1/models/base-models"),
 )
 
 
@@ -406,6 +407,37 @@ def test_base_model_filter_carries_not_set_as_an_explicit_value(shelf_env):
     assert _names(r.json()["adapters"]) == {"alice.safetensors"}
 
 
+def test_base_model_completions_carry_the_shipped_labels_and_the_users_own(
+    shelf_env,
+):
+    """The field completes against both halves, and neither hides the other.
+
+    A fresh install has no recorded base model at all, which is why the shipped
+    labels are in the list; a string this machine invented is nowhere in that
+    table, which is why the distinct column is in it too. Asserted on identity
+    rather than on a count, because the shipped half grows every few months.
+    """
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'Clementine ZIB 3B' "
+            "WHERE filename = 'dana.safetensors'"
+        )
+
+    r = shelf_env.owner.get(f"{API}/models/base-models")
+    assert r.status_code == 200, r.text
+    offered = r.json()["base_models"]
+
+    assert "Clementine ZIB 3B" in offered, (
+        "a base model this machine recorded is not offered back; the user's own "
+        "vocabulary is half of what makes the field completable"
+    )
+    assert "SDXL 1.0" in offered, "the shipped labels are missing"
+    # `SDXL 1.0` is seeded on two rows AND is a shipped label: neither path may
+    # produce a duplicate, or the dropdown offers one value twice.
+    assert len(offered) == len(set(offered))
+    assert "" not in offered
+
+
 def test_unknown_is_neither_adapter_nor_checkpoint_by_default(shelf_env):
     """DoD 5: ``unknown`` never renders as a checkpoint. It is absent from both
     lists until it is asked for by name, and ``/checkpoints`` never serves it."""
@@ -535,6 +567,7 @@ def _shelf_paths() -> list[str]:
         f"{API}/adapters/{ADAPTER_WITH_BASE}",
         f"{API}/checkpoints",
         f"{API}/model-stacks/proposals",
+        f"{API}/models/base-models",
     ]
 
 

@@ -366,6 +366,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # constraints would reject) and that is a data check, not a scope one.
     ("PATCH", "/api/v1/models"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/models/forget"): RoutePolicy(_OWNER),
+    # The base-model field's completion list. OWNER_ONLY on the same default
+    # pin as the rest of the shelf, and NOT ANY_TOKEN: it returns per-object
+    # data — the distinct `base_model` strings recorded on this machine's model
+    # rows — even though the shipped labels beside them are a constant.
+    ("GET", "/api/v1/models/base-models"): RoutePolicy(_OWNER),
     # ── model_folders.py (shelf plan B5; §16.3 host-capability for the writes)
     # The read is OWNER_ONLY like the rest of the shelf. Every mutator and the
     # rescan take — or walk — a caller-supplied host path, which is the

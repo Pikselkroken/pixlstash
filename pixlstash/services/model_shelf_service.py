@@ -258,6 +258,21 @@ def fetch_models(
     return [dict(row) for row in hub.fetchall(sql, tuple(params))]
 
 
+def fetch_distinct_base_models(hub) -> list[str]:
+    """Return every base model string recorded on a model row, once each.
+
+    The user's own vocabulary, which ``known_base_models.completions`` takes as
+    its *extra*: anything the module does not recognise is theirs and is offered
+    verbatim from the moment it was saved. Distinct on the raw column, because
+    that is what the field stores and what completing it has to produce.
+    """
+    rows = hub.fetchall(
+        "SELECT DISTINCT base_model FROM model "
+        "WHERE base_model IS NOT NULL AND TRIM(base_model) <> ''"
+    )
+    return [row["base_model"] for row in rows]
+
+
 def fetch_model_by_hash(hub, sha256: str) -> Optional[dict]:
     """Return the one model row carrying *sha256*, or None.
 
