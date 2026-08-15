@@ -194,7 +194,8 @@ def test_unscored_off_by_default_filters_nothing(session):
 
 
 def test_score_range_still_excludes_the_unscored(session):
-    """min/max keep SQL's NULL semantics and keep ignoring 0; unscored is separate."""
+    """min/max drop NULL by SQL's semantics but treat 0 as a number, so they are
+    not a substitute for ``unscored``: ``max_score=5`` keeps a cleared 0 in."""
     never = _add_picture(session, file_path="never.jpg", score=None)
     _add_picture(session, file_path="cleared.jpg", score=0)
     rated = _add_picture(session, file_path="three.jpg", score=3)
