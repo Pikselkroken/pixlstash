@@ -20,7 +20,8 @@ const keepModelsInMemoryError = ref("");
 const taggerPlugins = ref([]);
 const taggerSettings = ref({});
 const taggerLoading = ref(false);
-const taggerPluginDir = ref("");
+// null until the diagnostics request answers; "" once it has answered 403.
+const taggerPluginDir = ref(null);
 // Both come from the diagnostics route rather than the plugin list: a load
 // error is exception text from a third-party plugin and can name any path on
 // the host, so it is owner-and-local like the folder itself.
@@ -341,16 +342,24 @@ watch(
         Add your own plugin by dropping a <code>.py</code> file (or a folder
         with an <code>__init__.py</code>) into
         <code class="settings-tagger-plugin-path">{{ taggerPluginDir }}</code
-        >, creating the folder if it does not exist. Restart the server
-        afterwards — plugins are only discovered at start-up. Plugins run as
-        ordinary Python with your permissions, so only add ones you trust.
+        >, creating the folder if it does not exist. Plugins run as ordinary
+        Python with the same access as PixlStash itself, so only add ones you
+        trust. Restart the server afterwards — plugins are only discovered at
+        start-up.
       </div>
-      <!-- Without it the block above just vanishes, which reads as a missing
-           feature rather than a deliberate restriction. -->
-      <div v-else class="settings-tagger-plugin-dir">
-        Your own plugins live in a folder on the machine running PixlStash. The
-        path is shown there, not here — installing one means putting a file in
-        it and restarting the server.
+      <!-- Rendered only once the diagnostics request has answered. Without it
+           the block just vanishes for a remote caller, which reads as a missing
+           feature rather than a deliberate restriction; rendered too early it
+           tells a local owner the path cannot be shown on the screen showing
+           it. -->
+      <div
+        v-else-if="taggerPluginDir !== null"
+        class="settings-tagger-plugin-dir"
+      >
+        Custom plugins are installed by putting a file into a folder on the
+        machine running PixlStash. That folder is only shown to someone signed
+        in on that machine, so it cannot be named here — ask whoever runs this
+        server.
       </div>
     </SettingsSection>
   </div>

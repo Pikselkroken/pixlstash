@@ -1,8 +1,11 @@
-// Tagger plugins resource — /taggers and /tagger/label-thresholds.
+// Tagger plugins resource — /taggers, /taggers/plugin-diagnostics and
+// /tagger/label-thresholds.
 //
 // `/taggers` returns both the installed plugins and the user's per-plugin
 // settings in one body; the settings are written back through the user config
-// (see api/config.js), which is why there is no PATCH here.
+// (see api/config.js), which is why there is no PATCH here. Because it carries
+// those settings it is owner-only, and the installation diagnostics beside it
+// are local-owner-only — both calls have to tolerate a 403.
 
 import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";

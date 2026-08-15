@@ -32,8 +32,8 @@ describe("api/taggers", () => {
     expect(apiClient.get).toHaveBeenCalledWith("/taggers");
   });
 
-  // Its own route because both halves name host paths: /taggers is any-token
-  // and must never carry them.
+  // Its own route because both halves name host paths, and the folder is
+  // stricter than the plugin list: local owner, not merely owner.
   it("listTaggerPluginDiagnostics GETs the separate diagnostics route", async () => {
     apiClient.get.mockResolvedValue({
       data: {

@@ -16,9 +16,12 @@ Covers the three-lens (CSO/Principal/CEO) decided design landing before Step 5:
   is allowed.
 
 Both-directional per CLAUDE.md / §16.1: every deny is paired with an in-scope
-allow so over-blocking is caught as its own regression. The shipped constant
-``AUTHZ_GATE_ENFORCING`` stays ``False``; enforcement is proven behind
-``enforcing=True`` exactly as the Step-3 suite does.
+allow so over-blocking is caught as its own regression. These tests set
+``enforcing`` explicitly rather than relying on the shipped default, which was
+``False`` when this file was written and is ``True`` today — one test
+deliberately turns it **off**, to prove the middleware's
+``READ_BLOCKED_GET_PATHS`` still refuses a share token if the documented
+one-line rollback is ever taken.
 """
 
 import contextlib
@@ -422,19 +425,79 @@ def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path
                 f"the plugin list is owner-only; got {listing.status_code}"
             )
 
-            # ...and the ANY_TOKEN routes that remain disclose no path under
-            # the owner's home directory, under any key, for that same token.
-            # The home directory rather than the plugin folder: a check anchored
-            # on the folder passes any leak one directory over, which is how the
-            # first version of this test passed while `load_error` still carried
-            # the path.
+            # ...and no route a share token CAN reach discloses a path under
+            # the owner's home directory, under any key.
+            #
+            # Two deliberate choices, both learned from this change's own
+            # review rounds. The home directory rather than the plugin folder:
+            # a check anchored on the folder passes any leak one directory
+            # over, which is how the first version of this test passed while
+            # `load_error` still carried the path. And the route list is
+            # *derived from the registry*, not written down: the first two
+            # rounds each missed a sibling because they fixed the field they
+            # knew about instead of enumerating the disclosure, and a hand-kept
+            # list here would reproduce exactly that.
             home = os.path.expanduser("~")
-            for route in (f"{API}/pictures/plugins", f"{API}/comfyui/workflows"):
+            reachable = sorted(
+                path
+                for (method, path), rp in ROUTE_POLICIES.items()
+                if method == "GET"
+                and rp.policy in (AccessPolicy.ANY_TOKEN, AccessPolicy.PUBLIC)
+                and "{" not in path
+            )
+            assert len(reachable) >= 8, reachable  # the enumeration must be live
+            for route in reachable:
                 body = anon.get(route, headers=share)
-                assert body.status_code == 200, f"{route}: {body.text}"
+                if body.status_code != 200:
+                    continue  # refused outright is a stronger answer than clean
                 assert home not in body.text, (
-                    f"{route} is ANY_TOKEN and disclosed a host path"
+                    f"{route} is reachable by a share token and disclosed a host path"
                 )
+
+
+def test_the_plugin_routes_survive_the_documented_gate_rollback():
+    """The second belt: ``READ_BLOCKED_GET_PATHS``, with the gate switched off.
+
+    ``AUTHZ_GATE_ENFORCING = False`` is a documented one-line rollback, and
+    ``GET /filesystem/browse`` is on both belts precisely so taking it does not
+    re-open a filesystem disclosure. The two tagger routes are GETs on the same
+    tier, so they need the same pair — a fact the #326 review reproduced by
+    reading the owner's home directory out of the diagnostics route with the
+    gate off. The owner (no token, session cookie) is unaffected either way.
+    """
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        minted = owner.post(
+            f"{API}/users/me/token",
+            json={
+                "description": "set share",
+                "scope": "READ",
+                "resource_type": "picture_set",
+                "resource_id": 1,
+            },
+        )
+        assert minted.status_code == 200, minted.text
+        from starlette.testclient import TestClient
+
+        anon = TestClient(server.api, raise_server_exceptions=True)
+        share = {"Authorization": f"Bearer {minted.json()['token']}"}
+        # The rollback state, set explicitly: the gate ships enforcing.
+        server.authz._enforcing = False
+        try:
+            assert anon.get(f"{API}/pictures", headers=share).status_code == 200, (
+                "the share token is dead; the refusals below would prove nothing"
+            )
+            for route in (_TAGGER_DIAGNOSTICS, f"{API}/taggers"):
+                refused = anon.get(route, headers=share)
+                assert refused.status_code == 403, (
+                    f"{route} must stay closed to a READ token with the gate "
+                    f"off; got {refused.status_code}"
+                )
+            # The owner still reaches both, from the same middleware.
+            assert owner.get(_TAGGER_DIAGNOSTICS).status_code == 200
+            assert owner.get(f"{API}/taggers").status_code == 200
+        finally:
+            server.authz._enforcing = True
 
 
 # ---- LOOPBACK_OWNER_ONLY (5) — the flag-immune red line --------------------

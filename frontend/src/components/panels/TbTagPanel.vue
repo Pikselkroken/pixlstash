@@ -268,7 +268,6 @@
                     v-for="plugin in taggerPlugins"
                     :key="plugin.name"
                     :title="plugin.display_name || plugin.name"
-                    :disabled="!!plugin.load_error"
                     @click="generateTagsForAll(plugin.name)"
                   />
                   <v-list-item

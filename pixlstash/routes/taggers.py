@@ -47,9 +47,11 @@ class TaggerListResponse(BaseModel):
 class TaggerPluginDiagnosticsResponse(BaseModel):
     """Everything about plugin *installation* — a §16.3 host-path disclosure.
 
-    Deliberately its own route rather than fields on ``GET /taggers``: that one
-    is ANY_TOKEN, so a share-link holder would otherwise be handed the owner's
-    home directory. Both halves disclose it. ``plugin_dirs`` says so plainly,
+    Deliberately its own route rather than fields on ``GET /taggers``, which
+    used to be ANY_TOKEN and handed a share-link holder the owner's home
+    directory. (That route is OWNER_ONLY now as well, for the settings it
+    carries; this one is stricter still because a host path is the §16.3
+    locality class.) Both halves disclose it. ``plugin_dirs`` says so plainly,
     and a ``load_errors`` message is built from an exception raised by
     third-party code at import — an ``OSError`` out of a plugin's module body
     carries whatever absolute path it was reaching for. Sanitising that text is
@@ -129,8 +131,13 @@ def create_router(server) -> APIRouter:
             }
 
         Neither the scanned folders nor the plugins that failed to load are
-        here: both name paths on the server's disk and this route is reachable
-        by any token. See ``GET /taggers/plugin-diagnostics``.
+        here: both name paths on the server's disk, and this route's job is the
+        plugin list, not installation. See ``GET /taggers/plugin-diagnostics``,
+        which is local-owner-only.
+
+        OWNER_ONLY: ``settings`` is the caller's own ``tagger_settings``, and a
+        plugin is free to declare a free-text parameter the owner has typed a
+        path into.
         """
         mgr = get_tagger_plugin_manager()
 
