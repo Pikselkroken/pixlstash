@@ -9,7 +9,6 @@
     tabindex="-1"
     aria-label="Model shelf"
     aria-describedby="shelf-help"
-    @keydown.escape="onShelfEscape"
   >
     <p id="shelf-help" class="visually-hidden">
       Every adapter and checkpoint PixlStash has found on this machine. Group
@@ -905,7 +904,15 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, shallowRef, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  ref,
+  shallowRef,
+  watch,
+} from "vue";
 import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
@@ -928,7 +935,10 @@ import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { errorDetail } from "../../utils/apiError";
+import { isTypingTarget } from "../../utils/dom.js";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
   adapterKindLabel,
@@ -958,6 +968,10 @@ const store = useModelShelfStore();
 const entityLists = useEntityListsStore();
 const foldersStore = useModelFoldersStore();
 const moves = useModelMovesStore();
+// Both read by the window-level Escape, which has to know what else on screen
+// owns the key before it clears anything. See `onShelfEscape`.
+const reviewSessionsStore = useReviewSessionsStore();
+const sidebarStore = useSidebarStore();
 const rootEl = ref(null);
 const showMenuOpen = ref(false);
 const sortMenuOpen = ref(false);
@@ -1346,32 +1360,70 @@ function onBandDrop(band, event) {
 }
 
 /**
- * Escape clears the selection, from anywhere in the shelf.
+ * Escape clears the selection, from anywhere — including outside the shelf.
  *
- * On the ROOT rather than on the row: a selection made by clicking leaves focus
- * on the row, but a selection survives Tab to the toolbar, a dialog opening and
- * closing, or a click on empty space — and "Escape clears the selection" has to
- * mean that everywhere, not only while a row holds the roving tab stop.
+ * On the WINDOW rather than on the shelf root, because a keydown only reaches
+ * an element that contains the focus: bound to the root it worked from a row
+ * and from the toolbar, and did nothing at all once the sidebar, the app bar or
+ * anything else outside this view had been clicked. The selection is still on
+ * screen at that point, so "Escape clears the selection" reads as broken. The
+ * shelf is `v-else-if`'d away with the view, so the listener is only live while
+ * there is a shelf to clear.
  *
- * A dialog is checked for first. Vuetify's own overlays stop the key before it
- * reaches here, but the shelf's `AppDialog`s and the entity picker are inside
- * this subtree, and Escape inside one of those means "close me" — clearing the
- * selection underneath at the same time would be a second, unasked-for effect.
+ * Everything that can own the key ahead of the shelf gets it handed back
+ * rather than taken from it, all one rule — Escape means "undo the thing in
+ * front of you", and clearing the selection underneath would be a second,
+ * unasked-for effect. What that means in practice, and why each one is checked
+ * the way it is:
+ *   * one of the shelf's OWN dialogs is open. By ref, not by target: those are
+ *     `AppDialog`s inside this subtree and a press with nothing focused targets
+ *     `<body>`, which no ancestor test can see. `docs/frontend_architecture.md`
+ *     §"the create-person dialog" records that same body-target hole.
+ *   * any Vuetify overlay that is not a tooltip is up — a menu, a dialog, a
+ *     select. On the OVERLAY rather than on the target, because `VMenu` only
+ *     pulls focus into its content on a later `focusin`: a menu opened with the
+ *     mouse leaves focus on its activator, so the shelf's own Sort, Show and
+ *     verb menus would close AND drop the selection. Tooltips are exempt or a
+ *     hovered button elsewhere would swallow the key.
+ *   * a full-screen surface is over the shelf. The review overlay renders
+ *     OUTSIDE `App.vue`'s view switch, so the shelf is still mounted under it
+ *     and would clear a selection nobody can see.
+ *   * the auto-hide sidebar is showing. Escape dismisses it (WCAG 1.4.13) and
+ *     `useGlobalKeydown` deliberately does not stop the event, so without this
+ *     one press would hide the sidebar and wipe the selection behind it.
+ *   * something is being typed in — the search field's own Escape clears the
+ *     search.
+ *
+ * Bubble phase, not capture: every owner above is meant to resolve the key
+ * FIRST, and a capture-phase listener would take it from them.
  */
 function onShelfEscape(event) {
+  if (event.key !== "Escape") return;
   if (
     moveOpen.value ||
     importOpen.value ||
     stacksOpen.value ||
+    foldersOpen.value ||
+    addFileOpen.value ||
     editVerb.value
   ) {
     return;
   }
+  if (
+    reviewSessionsStore.overlayOpen ||
+    document.querySelector(".v-overlay--active:not(.v-tooltip), .image-overlay")
+  ) {
+    return;
+  }
+  if (sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible) return;
   if (event.target?.closest?.(".ate, [role='dialog']")) return;
+  if (isTypingTarget(event.target)) return;
   if (!store.selectedRows.length) return;
-  event.preventDefault();
   store.clearSelection();
 }
+
+onMounted(() => window.addEventListener("keydown", onShelfEscape));
+onUnmounted(() => window.removeEventListener("keydown", onShelfEscape));
 
 // ── The icon verb ───────────────────────────────────────────────────────────
 
@@ -1800,9 +1852,9 @@ function onRowKeydown(row, event) {
     );
     return;
   }
-  // Escape is NOT handled here. It is owned by the shelf root, so it works
-  // wherever focus happens to be — on a row, on the toolbar, or nowhere at all
-  // after a click — rather than only while a row holds the roving tab stop,
+  // Escape is NOT handled here. It is owned by a window listener, so it works
+  // wherever focus happens to be — on a row, on the toolbar, on the sidebar, or
+  // nowhere at all — rather than only while a row holds the roving tab stop,
   // which is what it used to mean and is not what a reader expects from
   // "Escape clears the selection".
 }

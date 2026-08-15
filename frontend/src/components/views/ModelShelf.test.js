@@ -92,6 +92,7 @@ import ModelShelf from "./ModelShelf.vue";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const globalOpts = {
@@ -790,6 +791,9 @@ describe("selecting rows", () => {
       adapter({ id: 2 }),
       adapter({ id: 3 }),
     ]);
+    // Attached, because Escape is handled on the window: a keydown on a
+    // detached row bubbles into nothing and would pass for the wrong reason.
+    document.body.appendChild(wrapper.element);
     const store = useModelShelfStore();
     await rowAt(wrapper, 0).trigger("keydown", { key: " " });
     await rowAt(wrapper, 0).trigger("keydown", {
@@ -800,6 +804,7 @@ describe("selecting rows", () => {
 
     await rowAt(wrapper, 0).trigger("keydown", { key: "Escape" });
     expect(store.selectedRows).toHaveLength(0);
+    wrapper.unmount();
   });
 
   it("shows no selection bar until something is selected", async () => {
@@ -2151,11 +2156,20 @@ describe("the manual stack verb", () => {
 });
 
 describe("Escape", () => {
+  // The key is handled on the WINDOW, so every assertion here needs a real
+  // event path out of the shelf — a detached wrapper's keydown bubbles into
+  // nothing and would pass or fail for the wrong reason.
+  async function mountAttachedShelf() {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    document.body.appendChild(wrapper.element);
+    return wrapper;
+  }
+
   it("clears the selection from anywhere in the shelf, not only from a row", async () => {
     // It used to be handled on the row, so it only worked while a row held the
     // roving tab stop — not after a click moved focus, and not from the
     // toolbar. "Escape clears the selection" has to mean everywhere.
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const wrapper = await mountAttachedShelf();
     const store = useModelShelfStore();
     store.toggleSelected(1);
     await wrapper.vm.$nextTick();
@@ -2163,12 +2177,64 @@ describe("Escape", () => {
 
     await wrapper.find(".shelf-toolbar").trigger("keydown", { key: "Escape" });
     expect(store.selectedRows).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("clears the selection when focus has left the shelf entirely", async () => {
+    // The listener used to sit on the shelf's own root, so the key only
+    // reached it while focus was inside that subtree. Click the sidebar, the
+    // app bar, or anything else after picking rows and Escape did nothing —
+    // which is how "Escape clears the selection" reads as broken.
+    const wrapper = await mountAttachedShelf();
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(store.selectedRows).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("stops listening once the shelf is gone", async () => {
+    // The view is v-else-if'd away when another one opens, and a window
+    // listener outlives its element unless it is taken down.
+    const wrapper = await mountAttachedShelf();
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    wrapper.unmount();
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(store.selectedRows).toHaveLength(1);
+  });
+
+  it("leaves the key to whoever is being typed in", async () => {
+    // The bare input stands in for the app's search field, whose own Escape
+    // clears the search. Clearing the shelf's selection underneath at the same
+    // time is the same unasked-for second effect a dialog gets protected from.
+    const wrapper = await mountAttachedShelf();
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(store.selectedRows).toHaveLength(1);
+    input.remove();
+    wrapper.unmount();
   });
 
   it("leaves the selection alone when a dialog owns the key", async () => {
     // Escape inside a dialog means "close me". Clearing the selection
     // underneath at the same time is a second, unasked-for effect.
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const wrapper = await mountAttachedShelf();
     const store = useModelShelfStore();
     store.toggleSelected(1);
     await wrapper.find(".shelf-toolbar").trigger("click");
@@ -2177,6 +2243,80 @@ describe("Escape", () => {
 
     await wrapper.find(".shelf-toolbar").trigger("keydown", { key: "Escape" });
     expect(store.selectedRows).toHaveLength(1);
+
+    // Every dialog the shelf owns, not only the edit one: a press with nothing
+    // focused targets `<body>`, so the ref is the only thing that can see them.
+    wrapper.vm.editVerb = "";
+    wrapper.vm.foldersOpen = true;
+    await wrapper.vm.$nextTick();
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(store.selectedRows).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("leaves the key to an open menu, whose activator still holds the focus", async () => {
+    // Vuetify only pulls focus into a menu's content on a later `focusin`, so a
+    // menu opened with the MOUSE leaves focus on its activator inside the
+    // shelf. Read off the target alone, the shelf's own Sort, Show and verb
+    // menus would close and drop the selection in one press.
+    const wrapper = await mountAttachedShelf();
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    const overlay = document.createElement("div");
+    overlay.className = "v-overlay v-overlay--active";
+    document.body.appendChild(overlay);
+    await wrapper.find(".shelf-toolbar").trigger("keydown", { key: "Escape" });
+    expect(store.selectedRows).toHaveLength(1);
+
+    // A tooltip is not an owner: hovering one elsewhere must not swallow the key.
+    overlay.className = "v-overlay v-overlay--active v-tooltip";
+    await wrapper.find(".shelf-toolbar").trigger("keydown", { key: "Escape" });
+    expect(store.selectedRows).toHaveLength(0);
+    overlay.remove();
+    wrapper.unmount();
+  });
+
+  it("leaves the key to a full-screen surface over the shelf", async () => {
+    // The review overlay renders outside `App.vue`'s view switch, so the shelf
+    // is still mounted underneath it — and a selection nobody can see must not
+    // be cleared by the press that dismisses what is covering it.
+    const wrapper = await mountAttachedShelf();
+    const store = useModelShelfStore();
+    const reviews = useReviewSessionsStore();
+    store.toggleSelected(1);
+    reviews.overlayOpen = true;
+    await wrapper.vm.$nextTick();
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(store.selectedRows).toHaveLength(1);
+    reviews.overlayOpen = false;
+    wrapper.unmount();
+  });
+
+  it("leaves the key to the auto-hide sidebar it is dismissing", async () => {
+    // `useGlobalKeydown` hides the revealed sidebar on Escape and deliberately
+    // does not stop the event, so one press would otherwise hide the sidebar
+    // and wipe the selection behind it.
+    const wrapper = await mountAttachedShelf();
+    const store = useModelShelfStore();
+    const sidebar = useSidebarStore();
+    store.toggleSelected(1);
+    // Both flags are computed: unpinning makes it an overlay and reveals it.
+    sidebar.setSidebarPinned(false);
+    sidebar.revealSidebar();
+    await wrapper.vm.$nextTick();
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(store.selectedRows).toHaveLength(1);
+    wrapper.unmount();
   });
 });
 
