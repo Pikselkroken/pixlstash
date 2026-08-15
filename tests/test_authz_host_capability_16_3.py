@@ -148,10 +148,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_26_local_5_loopback():
+def test_host_capability_tier_split_is_27_local_5_loopback():
     """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 31 routes carry a
-    locality tier = 26 local + 5 loopback.
+    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 32 routes carry a
+    locality tier = 27 local + 5 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -209,6 +209,20 @@ def test_host_capability_tier_split_is_26_local_5_loopback():
     inside a registered folder). It never unlinks: the source is the owner's own
     file.
 
+    32 = 27 + 5 with ``GET /adapters/{sha256}/file``, which streams one
+    registered adapter's bytes so a generator on another machine can use what
+    this one catalogues — the locations the detail route serves are *this*
+    host's paths and mean nothing over there. It is the **first shelf read off
+    the ``owner_only`` tier**, and the line that kept the others on it says why:
+    they "surface host paths but take none". This one takes none either, but it
+    does not surface a path — it returns the raw bytes of a file inside a
+    registered model folder, which is the ``.../runs/{run_name}/samples/
+    {filename}`` authority class exactly: reads inside a registered host root,
+    writes nothing, and is a new capability rather than a narrower view of the
+    metadata route beside it. Loopback/LAN/Tailscale is the deployment the route
+    exists for, so the tier costs it nothing; a genuinely remote generator needs
+    ``allow_remote_host_ops``, which is the safe direction to fail in.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -222,7 +236,7 @@ def test_host_capability_tier_split_is_26_local_5_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 26, sorted(local)
+    assert len(local) == 27, sorted(local)
 
 
 # ===========================================================================
