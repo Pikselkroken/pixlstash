@@ -602,7 +602,16 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/pictures/impossible-tags/restore"): _LIST_AWARE,
     ("GET", "/api/v1/tags"): _LIST_AWARE,
     # ── pictures: owner-only surfaces ───────────────────────────────────────
-    ("GET", "/api/v1/pictures/plugins"): RoutePolicy(_ANY),
+    # Retargeted ANY_TOKEN -> OWNER_ONLY on 2026-08-15 (#326), for the reason
+    # its tagger sibling was: every field is verbatim text out of a plugin's
+    # own class body, half of them from a .py file the owner dropped in, and
+    # the only thing the list drives (POST /pictures/plugins/{name}) a READ
+    # token cannot call. Leaving it any_token while retargeting GET /taggers
+    # would have been the same argument reaching two answers.
+    ("GET", "/api/v1/pictures/plugins"): RoutePolicy(
+        _OWNER,
+        justification="Image plugin list; third-party plugin text, and the run endpoint beside it is owner-only",
+    ),
     ("GET", "/api/v1/sort_mechanisms"): RoutePolicy(_ANY),
     # Import status is NOT ANY_TOKEN: the completed payload carries per-object
     # data (``results[].picture_id``, ``results[].file`` the vault-relative

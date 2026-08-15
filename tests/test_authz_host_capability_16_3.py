@@ -3,8 +3,9 @@
 Covers the three-lens (CSO/Principal/CEO) decided design landing before Step 5:
 
 * ``LOCAL_OWNER_ONLY`` (the filesystem/folder routes, the library switch, and the
-  host-path disclosures; the live count is the one asserted by the tier-split
-  test below, never a number written in prose) — loopback / RFC1918 LAN /
+  host-path disclosures; the tier-split test's own name carries the count, and
+  it is the only place that does — prose here goes stale, an assertion cannot)
+  — loopback / RFC1918 LAN /
   **Tailscale CGNAT ``100.64.0.0/10``** all count as local; a genuinely remote
   owner is 403'd with a message NAMING ``allow_remote_host_ops`` unless that
   dedicated flag is set, which then admits the remote owner.
@@ -32,6 +33,7 @@ import tempfile
 import pytest
 
 from pixlstash.auth import (
+    READ_BLOCKED_GET_PATHS,
     is_local_ip,
     is_local_or_tailscale_ip,
     is_loopback_ip,
@@ -425,8 +427,18 @@ def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path
                 f"the plugin list is owner-only; got {listing.status_code}"
             )
 
-            # ...and no route a share token CAN reach discloses a path under
-            # the owner's home directory, under any key.
+            # ...and no **parameterless GET declared any_token or public**
+            # discloses a path under the owner's home directory, under any key.
+            #
+            # Read that scope literally. It is NOT "no route a share token can
+            # reach": the picture rows themselves carry host paths in
+            # `import_source_folder` and `tags_file`, which a picture-scoped
+            # token reads through `GET /pictures/{id}/{field}` today. That is a
+            # pre-existing disclosure of a different class — per-object columns
+            # behind a membership check, not a global one behind none — and it
+            # is recorded as a follow-up rather than fixed here. Claiming the
+            # wider invariant in this comment would have been the third version
+            # of exactly the mistake below.
             #
             # Two deliberate choices, both learned from this change's own
             # review rounds. The home directory rather than the plugin folder:
@@ -438,6 +450,9 @@ def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path
             # knew about instead of enumerating the disclosure, and a hand-kept
             # list here would reproduce exactly that.
             home = os.path.expanduser("~")
+            # JSON escapes backslashes, so the raw form never substring-matches
+            # a Windows path in a serialised body.
+            home_forms = (home, home.replace("\\", "\\\\"))
             reachable = sorted(
                 path
                 for (method, path), rp in ROUTE_POLICIES.items()
@@ -445,14 +460,20 @@ def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path
                 and rp.policy in (AccessPolicy.ANY_TOKEN, AccessPolicy.PUBLIC)
                 and "{" not in path
             )
-            assert len(reachable) >= 8, reachable  # the enumeration must be live
+            inspected = 0
             for route in reachable:
                 body = anon.get(route, headers=share)
                 if body.status_code != 200:
                     continue  # refused outright is a stronger answer than clean
-                assert home not in body.text, (
-                    f"{route} is reachable by a share token and disclosed a host path"
-                )
+                inspected += 1
+                for form in home_forms:
+                    assert form not in body.text, (
+                        f"{route} is reachable by a share token and disclosed "
+                        f"a host path"
+                    )
+            # Not a count of *declarations* — a count of bodies actually read.
+            # Every route 403ing would otherwise make the loop silently green.
+            assert inspected >= 8, f"only {inspected} of {len(reachable)} answered 200"
 
 
 def test_the_plugin_routes_survive_the_documented_gate_rollback():
@@ -482,6 +503,7 @@ def test_the_plugin_routes_survive_the_documented_gate_rollback():
         anon = TestClient(server.api, raise_server_exceptions=True)
         share = {"Authorization": f"Bearer {minted.json()['token']}"}
         # The rollback state, set explicitly: the gate ships enforcing.
+        previously_enforcing = server.authz._enforcing
         server.authz._enforcing = False
         try:
             assert anon.get(f"{API}/pictures", headers=share).status_code == 200, (
@@ -497,7 +519,42 @@ def test_the_plugin_routes_survive_the_documented_gate_rollback():
             assert owner.get(_TAGGER_DIAGNOSTICS).status_code == 200
             assert owner.get(f"{API}/taggers").status_code == 200
         finally:
-            server.authz._enforcing = True
+            server.authz._enforcing = previously_enforcing
+
+
+def test_every_untemplated_locality_get_is_on_the_read_blocked_belt():
+    """Derive the belt's membership instead of writing it down.
+
+    ``READ_BLOCKED_GET_PATHS`` matches literal paths, so a GET on the locality
+    tier is only protected under the documented ``AUTHZ_GATE_ENFORCING = False``
+    rollback if its own path is in that frozenset. The rollback test beside this
+    one names two paths; this one asserts the *rule*, so the next such GET fails
+    the build rather than waiting for a review to notice it.
+
+    The templated ones cannot be expressed in an exact-match frozenset at all.
+    They are pinned as a known set rather than ignored: adding a fourth fails
+    here, and closing the gap needs prefix matching (the follow-up recorded in
+    ``tests/test_model_shelf_api.py`` and ``docs/backend_architecture.md`` §16.3).
+    """
+    tier = (AccessPolicy.LOCAL_OWNER_ONLY, AccessPolicy.LOOPBACK_OWNER_ONLY)
+    tier_gets = {
+        path
+        for (method, path), rp in ROUTE_POLICIES.items()
+        if method == "GET" and rp.policy in tier
+    }
+    untemplated = {path for path in tier_gets if "{" not in path}
+    assert untemplated, "the derivation found nothing — it has stopped working"
+    missing = sorted(untemplated - READ_BLOCKED_GET_PATHS)
+    assert missing == [], (
+        f"locality-tier GETs off the second belt: {missing}. Add each to "
+        f"READ_BLOCKED_GET_PATHS in pixlstash/auth.py."
+    )
+
+    templated_gap = sorted(path for path in tier_gets if "{" in path)
+    assert templated_gap == [
+        "/api/v1/model-folders/{folder_id}/runs",
+        "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
+    ], templated_gap
 
 
 # ---- LOOPBACK_OWNER_ONLY (5) — the flag-immune red line --------------------

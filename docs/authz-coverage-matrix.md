@@ -61,14 +61,16 @@ forward: 277 declared.** The previous figures below the header (`249` total,
 `local_owner_only` 13) had gone stale by a long way — the shelf's host-capability
 routes alone took the local tier 13 → 26 without this table being touched. #326
 itself adds exactly **+1 `local_owner_only`** (`GET /api/v1/taggers/plugin-diagnostics`)
-and retargets `GET /api/v1/taggers` `any_token` -> `owner_only`; every other movement
-here is drift being written down, not a change made now.
+and retargets two routes `any_token` -> `owner_only` (`GET /api/v1/taggers`, which
+carries the caller's own `tagger_settings`, and `GET /api/v1/pictures/plugins`, its
+image-plugin sibling); every other movement here is drift being written down, not a
+change made now.
 
 | Policy | Count |
 |---|---|
 | `public` | 13 |
-| `any_token` | 13 |
-| `owner_only` | 128 |
+| `any_token` | 12 |
+| `owner_only` | 129 |
 | `picture_scoped` | 36 |
 | `scoped_list` | 39 |
 | `set_scoped` | 4 |
@@ -221,7 +223,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | POST | `/api/v1/pictures/impossible-tags/restore` | scoped_list |  |  |
 | GET | `/api/v1/pictures/likeness-groups` | scoped_list |  |  |
 | POST | `/api/v1/pictures/likeness-search` | scoped_list |  |  |
-| GET | `/api/v1/pictures/plugins` | any_token |  |  |
+| GET | `/api/v1/pictures/plugins` | owner_only |  | Image plugin list; third-party plugin text, and the run endpoint beside it is owner-only |
 | POST | `/api/v1/pictures/plugins/{name}` | scoped_list |  |  |
 | PATCH | `/api/v1/pictures/project` | scoped_list |  |  |
 | POST | `/api/v1/pictures/score_character_likeness` | owner_only |  | Owner scoring op; POST not in READ_SAFE; owner only |

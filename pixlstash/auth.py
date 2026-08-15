@@ -129,6 +129,15 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # declare a free-text parameter and the owner may have typed a path
         # into it. Gate policy is OWNER_ONLY; same belt-and-braces reasoning.
         "/api/v1/taggers",
+        # Found by the derivation in tests/test_authz_host_capability_16_3.py
+        # ::test_every_untemplated_locality_get_is_on_the_read_blocked_belt,
+        # not by anyone reading this list: it is LOCAL_OWNER_ONLY at the gate
+        # and serves the move queue's source and destination folders, so with
+        # the gate rolled back a READ token read host paths straight out of it.
+        # Its two templated siblings on the same tier cannot be expressed here
+        # at all — this frozenset matches literal paths — and stay the recorded
+        # follow-up.
+        "/api/v1/model-moves",
     }
 )
 
