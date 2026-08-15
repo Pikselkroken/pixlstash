@@ -15,6 +15,7 @@ import { errorDetail } from "../utils/apiError";
 import {
   baseModelKey,
   collapseStacks,
+  capabilityIcon,
   capabilityLabel,
   compareGroups,
   locationState,
@@ -407,6 +408,10 @@ function groupsOf(row, axis) {
       key: String(capability),
       label: capabilityLabel(capability),
       labelKind: "name",
+      // The feature's own glyph, so eight headers read as eight things. Empty
+      // for a capability this build does not know, which leaves the header on
+      // the axis's glyph rather than on a wrong one.
+      icon: capabilityIcon(capability),
     }));
   }
   if (axis === "base_model") {
@@ -717,6 +722,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
             // only place that survives the flattening: `location` belongs to a
             // copy, and a bucket outlives the copy that opened it.
             folderId: group.location ? Number(group.location.folder_id) : null,
+            // The header's glyph, where the axis has one per group rather than
+            // one for the whole axis. Empty elsewhere, and `withFolderSignals`
+            // fills it in for `folder` after the fact.
+            icon: group.icon || "",
             rows: [],
           };
           byKey.set(group.key, bucket);

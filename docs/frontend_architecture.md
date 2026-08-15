@@ -2042,6 +2042,20 @@ promises, which is the failure a test now pins.
   storage answer wrong: the file really does occupy both disks. The consequence
   is that group counts sum higher than the shelf holds, so the toolbar states
   both numbers when they differ (`1,782 models · 1,806 copies`).
+- **Under `Feature` each header wears that feature's own glyph**, not the axis's.
+  `CAPABILITY_ICONS` in `utils/modelShelf.js` is not a second icon family, the
+  same rule `FOLDER_TIERS` follows: where the product already marks a feature,
+  that mark is the one used and it is **not** re-drawn on anything else here —
+  `face` takes `ImageOverlay`'s `mdi-face-recognition`, `detector` takes the
+  `mdi-shape-outline` that "Object boxes" and "Detect objects" already wear (so
+  the catch-all may not have it), and `tagger` / `scorer` / `captioner` take the
+  operation log's tag, star and caption box. The two features nothing else marks
+  take glyphs nothing else uses: `checkpoint` a packaged model, deliberately not
+  the `mdi-cube-outline` that means *base model* on the sort and group-by
+  controls, and `other` the overflow dots. The **unset** group and a capability
+  this build has never seen both fall back to the axis's own glyph, which is the
+  rule every axis follows for its unset group; the fallback is what the whole
+  axis used to draw, one star over eight different features.
 - **The sort never reorders groups, only rows inside them.** Groups are
   alphabetical by label with the unset group last. Switching to "Largest first"
   and having every header move out from under the reader would be a different
