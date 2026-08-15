@@ -14,10 +14,10 @@
     <p id="shelf-help" class="visually-hidden">
       Every adapter and checkpoint PixlStash has found on this machine. Group
       and Sort choose the order and whether the list is cut into groups; Show
-      chooses which kinds are listed and which base models; the bar ends in the
-      app-wide pair, Undo and Settings, and the stats sidebar toggle. A ring
-      around a model's mark says who it is assigned to. A name in italics has
-      not been given one. A row that stands for a training run says how many
+      chooses which kinds are listed and which base models. The bar ends in the
+      app-wide controls: Undo and Redo, Settings, and the stats sidebar toggle.
+      A ring around a model's mark says who it is assigned to. A name in italics
+      has not been given one. A row that stands for a training run says how many
       files it holds; Right and Left open and close it. Right-click a row for
       everything that can be done to it. Escape clears the selection.
     </p>
