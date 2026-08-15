@@ -577,6 +577,65 @@ describe("floatMenu", () => {
     host.remove();
   });
 
+  it("refuses to float a flyout, whatever the host asks for", async () => {
+    // The model shelf's row context menu passed `floatMenu` AND
+    // `placement="right"`, which the prop doc has always called incompatible.
+    // Both symptoms follow from honouring it: `sizeMenu` parks the panel BELOW
+    // the row instead of beside it, and teleporting takes it out of the `.ate`
+    // root the flyout hovers off — so moving the pointer towards it fires
+    // `mouseleave` and shuts it before it arrives. Refused here, where every
+    // caller routes through, rather than at each call site.
+    const { wrapper, host } = await mountInScroller({
+      floatMenu: true,
+      placement: "right",
+    });
+    const menu = host.querySelector(".ate-menu");
+    expect(menu).toBeTruthy();
+    expect(menu.classList.contains("ate-menu--floating")).toBe(false);
+    // No viewport coordinates were written: it is placed by the flyout CSS.
+    expect(menu.style.left).toBe("");
+    // The one that keeps it reachable: still inside the hover root.
+    expect(wrapper.find(".ate").element.contains(menu)).toBe(true);
+    wrapper.unmount();
+    host.remove();
+  });
+
+  it("flips a flyout at the right edge when it is opened without a hover", async () => {
+    // The flip used to be measured in `onFlyoutMouseenter` alone, so a flyout
+    // opened by click or by Enter — the whole keyboard path — kept whatever the
+    // last hover left behind, which on a first open is "not flipped", and the
+    // panel painted off the right of the screen with nothing to clamp it.
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const wrapper = mount(AddToEntityControl, {
+      props: {
+        type: "face",
+        backendUrl: "http://x",
+        faceId: 4,
+        subjectIds: [],
+        placement: "right",
+      },
+      attachTo: host,
+      ...globalStubs(),
+    });
+    const root = wrapper.find(".ate").element;
+    // jsdom lays nothing out, so the trigger is told where it is: hard against
+    // the right edge, where 185px of flyout cannot fit beside it.
+    root.getBoundingClientRect = () => ({
+      left: window.innerWidth - 200,
+      right: window.innerWidth,
+      top: 0,
+      bottom: 24,
+      width: 200,
+      height: 24,
+    });
+    await wrapper.find(".ate-btn").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".ate").classes()).toContain("ate--flip");
+    wrapper.unmount();
+    host.remove();
+  });
+
   it("keeps the menu in place without the prop, so other call sites are untouched", async () => {
     const { wrapper, host } = await mountInScroller();
     const menu = host.querySelector(".ate-menu");

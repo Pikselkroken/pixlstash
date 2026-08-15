@@ -30,7 +30,7 @@
       }}</v-icon>
     </button>
 
-    <Teleport :disabled="!floatMenu" to="body">
+    <Teleport :disabled="!floating" to="body">
       <div
         ref="menuRef"
         class="ate-menu"
@@ -39,7 +39,7 @@
           open: menuOpen,
           flyout: placement === 'right',
           'force-dark': forceDark,
-          'ate-menu--floating': floatMenu,
+          'ate-menu--floating': floating,
         }"
         @keydown="onMenuKeydown"
       >
@@ -270,7 +270,9 @@ const props = defineProps({
   // Host layout, not entity type, decides this, which is why it is a prop and
   // not tied to `type === "face"`. Incompatible with `placement="right"`: the
   // `.ate--flyout` rules position the menu at `left: 100%` of the root, which
-  // has no meaning once the node has left its parent.
+  // has no meaning once the node has left its parent. That is now ENFORCED and
+  // not merely stated — see `floating`, which drops the request rather than
+  // honouring a pair with no coherent behaviour.
   floatMenu: { type: Boolean, default: false },
   // Face mode only: which face the menu acts on, and who it currently shows.
   faceId: { type: [String, Number], default: null },
@@ -416,6 +418,20 @@ const picturesWithFaces = ref(new Set());
 const flyoutFlipped = ref(false);
 const flyoutClickedOpen = ref(false);
 
+/**
+ * Whether the menu actually floats, which is `floatMenu` MINUS the combination
+ * it cannot serve.
+ *
+ * The prop doc has said "incompatible with `placement="right"`" since it was
+ * written, and saying it was not enough: the model shelf's row context menu
+ * passed both, and the flyout came out below the row it hangs off and outside
+ * the `.ate` root it hovers off, so reaching for it fired `mouseleave` and shut
+ * it. Refused here rather than at each call site — the guard belongs where all
+ * of them route through, and a combination that is documented as meaningless
+ * should not be representable.
+ */
+const floating = computed(() => props.floatMenu && props.placement !== "right");
+
 // Dynamic max-height so the menu never runs off the bottom of the screen: measure
 // the menu's top in the viewport and cap its height to what's left below it. The
 // inner .ate-list scrolls; the search box and status stay pinned. Recomputed on
@@ -433,7 +449,7 @@ function sizeMenu() {
   nextTick(() => {
     const el = menuRef.value;
     if (!el) return;
-    if (!props.floatMenu) {
+    if (!floating.value) {
       const top = el.getBoundingClientRect().top;
       const avail = window.innerHeight - top - 12;
       menuStyle.value = {
@@ -695,8 +711,25 @@ function toggleMenu() {
   }
 }
 
+/**
+ * Which side a flyout opens on, measured off the trigger.
+ *
+ * 185px is the flyout's fixed width (`.ate--flyout .ate-menu`), and 8px is the
+ * same keep-off distance `sizeMenu` uses. Called on every open and not only on
+ * hover: it used to live in `onFlyoutMouseenter` alone, so a flyout opened from
+ * the KEYBOARD near the right edge kept the last measurement — `false` on the
+ * first open — and painted off-screen with nothing to clamp it.
+ */
+function measureFlyoutSide() {
+  if (props.placement !== "right") return;
+  const rect = rootRef.value?.getBoundingClientRect();
+  if (!rect) return;
+  flyoutFlipped.value = rect.right + 185 > window.innerWidth - 8;
+}
+
 function openMenu() {
   menuOpen.value = true;
+  measureFlyoutSide();
   // Stale-while-revalidate, both halves fired without awaiting: the list is
   // already on screen from the store's cache, and revalidating on open is the
   // only invalidation a share/scoped session gets (the ws stream is owner-only).
@@ -799,10 +832,9 @@ function onMenuKeydown(event) {
 
 function onFlyoutMouseenter() {
   if (props.placement !== "right" || props.disabled) return;
-  if (rootRef.value) {
-    const rect = rootRef.value.getBoundingClientRect();
-    flyoutFlipped.value = rect.right + 185 > window.innerWidth - 8;
-  }
+  // Re-measured on a hover of an ALREADY-open menu too, which is the one case
+  // `openMenu` cannot cover: the window may have been resized under it.
+  measureFlyoutSide();
   if (menuOpen.value) return;
   openMenu();
 }
