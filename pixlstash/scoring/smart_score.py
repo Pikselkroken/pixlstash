@@ -313,7 +313,7 @@ def attach_anomaly_inputs(
         penalised_tag_weights: The owner's ``{tag: weight}`` table, resolved by the
             caller from the hub (see :func:`resolve_penalised_tag_weights`) — it cannot
             be read from *this* session, which is a vault one. ``None`` uses the shipped
-            seed.
+            seed; ``{}`` is honoured as "penalise nothing".
 
     Returns:
         Config overrides for
@@ -325,8 +325,13 @@ def attach_anomaly_inputs(
     """
     config = {
         "tag_precisions": get_latest_tag_precisions(session),
+        # ``is None``, not falsiness: ``{}`` is a meaningful table meaning "penalise
+        # nothing" (see test_anomaly_penalty.py), and turning it into the full shipped
+        # seed would charge every default tag instead.
         "penalised_tag_weights": dict(
-            penalised_tag_weights or DEFAULT_SMART_SCORE_PENALIZED_TAGS
+            DEFAULT_SMART_SCORE_PENALIZED_TAGS
+            if penalised_tag_weights is None
+            else penalised_tag_weights
         ),
         "tag_thresholds": dict(apply_thresholds or {}),
     }
@@ -357,13 +362,13 @@ def fetch_smart_score_data(
     ``scorer_config`` carries the per-tag precisions and the owner's penalised-tag
     weights (see :func:`attach_anomaly_inputs`). ``penalised_tags`` is the caller's
     already-resolved table (the routes resolve it per request via
-    :func:`get_smart_score_penalised_tags_from_request`); when omitted it is read from
-    the hub here, so the request path and the background task resolve it identically.
+    :func:`get_smart_score_penalised_tags_from_request`); only ``None`` is read from the
+    hub here, so the request path and the background task resolve it identically while
+    an explicit ``{}`` still means "penalise nothing".
     """
     apply_thresholds = resolve_anomaly_apply_thresholds(server.vault)
-    penalised_tags = penalised_tags or resolve_penalised_tag_weights(
-        getattr(server, "auth", None)
-    )
+    if penalised_tags is None:
+        penalised_tags = resolve_penalised_tag_weights(getattr(server, "auth", None))
 
     def fetch_data(session: Session):
         # Anchors

@@ -1104,6 +1104,12 @@ def test_on_demand_fetch_resolves_the_users_penalised_tags_from_the_hub():
 
         # And the same resolution stands alone, so the background task gets it too.
         assert resolve_penalised_tag_weights(server.auth) == weights
+
+        # An explicit empty table means "penalise nothing" one layer down (see
+        # test_anomaly_penalty.py), so it must survive the plumbing rather than be
+        # read as "not supplied" and replaced by the shipped seed.
+        *_, empty_config = fetch_smart_score_data(server, None, penalised_tags={})
+        assert empty_config["penalised_tag_weights"] == {}
     finally:
         server.close()
         temp_dir.cleanup()
