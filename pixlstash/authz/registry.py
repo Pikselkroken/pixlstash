@@ -672,6 +672,18 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Returns protected reference-original file paths; owner only",
     ),
+    # OWNER_ONLY and NOT picture_scoped, unlike every other per-picture mutation
+    # on this surface. This is the first write path on which a non-owner
+    # principal would permanently alter the OWNER'S ORIGINAL BYTES: it rewrites
+    # the file in place rather than producing a derived row or a copy. The
+    # copy-producing rotate (POST /pictures/plugins/{name}) stays open to scoped
+    # principals, so nothing a share token could do before is newly denied — the
+    # narrow tier is the price of the in-place write, not a narrowing of the
+    # feature. (#950)
+    ("POST", "/api/v1/pictures/rotate"): RoutePolicy(
+        _OWNER,
+        justification="In-place rotate REWRITES the owner's original file (EXIF orientation splice); the only write path that mutates source bytes, so no resource-scoped grant may reach it. The copy-producing rotate plugin remains picture-reachable. POST not in READ_SAFE; gate-enforced owner_only",
+    ),
     # ── tags.py: single-picture tag mutations (enforce_picture_scope) ────────
     ("POST", "/api/v1/pictures/{id}/tags"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/{id}/tags"): RoutePolicy(_PIC, id_param="id"),

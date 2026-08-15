@@ -661,7 +661,9 @@ class ImageUtils:
 
     @staticmethod
     def thumbnail_cache_token(
-        thumbnail_width: Optional[int], thumbnail_height: Optional[int]
+        thumbnail_width: Optional[int],
+        thumbnail_height: Optional[int],
+        orientation: Optional[int] = None,
     ) -> str:
         """The ``?v=`` cache-buster for a picture's thumbnail URL.
 
@@ -669,21 +671,38 @@ class ImageUtils:
         repopulates them changes the URL and the browser refetches instead of
         painting a stale bitmap. ``"0"`` until the picture has been processed.
 
+        **The orientation is part of the key, and it is not optional polish.**
+        Thumbnails are served ``Cache-Control: private, max-age=3600,
+        must-revalidate``, and a 180° in-place rotate — or a 90° one of a square
+        picture — regenerates a bitmap with exactly the dimensions it had before.
+        On dimensions alone the URL would be identical and the browser would go
+        on painting the pre-rotate bitmap for up to an hour.
+
         Single source of truth on purpose: the batch-thumbnail endpoint and the
         duplicate queue both hand this token to the same frontend cache, and two
-        independent copies of the ``WxH`` formula would eventually disagree and
+        independent copies of the formula would eventually disagree and
         reintroduce the stale-thumbnail bug this token exists to fix.
 
         Args:
             thumbnail_width: Stored bitmap width, or ``None`` when unprocessed.
             thumbnail_height: Stored bitmap height, or ``None`` when unprocessed.
+            orientation: The picture's stored EXIF orientation, 1-8, or ``None``
+                when it has not been read yet. ``None`` and ``1`` produce the
+                same token: an unrotated picture keeps the URL it has always had,
+                so backfilling the mirror does not invalidate every thumbnail in
+                the library at once.
 
         Returns:
-            ``"<width>x<height>"``, or ``"0"`` when either dimension is missing.
+            ``"<width>x<height>"`` for an unrotated picture,
+            ``"<width>x<height>o<orientation>"`` for a rotated one, or ``"0"``
+            when either dimension is missing.
         """
-        if thumbnail_width and thumbnail_height:
-            return f"{thumbnail_width}x{thumbnail_height}"
-        return "0"
+        if not (thumbnail_width and thumbnail_height):
+            return "0"
+        token = f"{thumbnail_width}x{thumbnail_height}"
+        if orientation and int(orientation) != 1:
+            token = f"{token}o{int(orientation)}"
+        return token
 
     @staticmethod
     def calculate_hash_from_bytes(image_bytes: bytes) -> str:

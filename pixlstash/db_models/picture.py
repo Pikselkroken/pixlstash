@@ -175,8 +175,19 @@ class Picture(SQLModel, table=True):
     file_path: Optional[str] = None
     description: Optional[str] = None
     format: Optional[str] = None
+    # RAW, un-rotated pixel dimensions as stored in the file. They do NOT swap
+    # when the EXIF orientation changes — an in-place rotate rewrites one tag and
+    # copies every pixel byte through, so the stored bitmap keeps its shape.
     width: Optional[int] = None
     height: Optional[int] = None
+    # The EXIF orientation (1-8) the file on disk currently carries, mirrored
+    # here so it can be read without opening the file. It is a *mirror*, not the
+    # source of truth: the file is. The column exists because
+    # ``capture_state_in_session`` runs for every recorded operation, and reading
+    # the tag off disk there would make a 2,700-row tag edit do 5,400 file opens
+    # on the single DB writer thread. NULL means "not yet read" —
+    # ``MissingOrientationFinder`` backfills it.
+    orientation: Optional[int] = Field(default=None)
     size_bytes: Optional[int] = None
     size_bin_index: Optional[int] = Field(default=None, index=True)
     created_at: Optional[datetime] = Field(
@@ -463,6 +474,15 @@ class Picture(SQLModel, table=True):
             "deleted",
             "id",
             sqlite_where=text("smart_score IS NULL"),
+        ),
+        # MissingOrientationFinder: orientation IS NULL AND deleted IS 0. Same
+        # idle-probe shape and the same column order for the same reason.
+        Index(
+            "ix_picture_orientation_missing",
+            "orientation",
+            "deleted",
+            "id",
+            sqlite_where=text("orientation IS NULL"),
         ),
     )
 

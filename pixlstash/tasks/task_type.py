@@ -29,6 +29,7 @@ class TaskType(str, Enum):
     PENDING_SCORE_INVALIDATION = "PendingScoreInvalidationTask"
     THUMBNAIL_GENERATION = "ThumbnailGenerationTask"
     PIXEL_SHA = "PixelShaTask"
+    ORIENTATION = "OrientationTask"
     DEDUP_SCAN = "DedupScanTask"
     STACK_COHESION = "StackCohesionTask"
     SNAPSHOT_IDENTITY_SCRUB = "SnapshotIdentityScrubTask"

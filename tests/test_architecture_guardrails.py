@@ -1484,6 +1484,10 @@ _PICTURE_METADATA_FIELDS = {
     "is_video",
     "metadata_hash",
     "original_file_name",
+    # (#950) The picture's own EXIF orientation, 1-8. Carries no membership,
+    # ownership or host information, and a token that may read this payload may
+    # already fetch the file itself, which carries the very same tag.
+    "orientation",
     "pending_character_id",
     "perceptual_hash",
     "pixel_sha",

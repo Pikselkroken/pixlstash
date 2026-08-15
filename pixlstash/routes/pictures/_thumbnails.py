@@ -567,6 +567,7 @@ def register_routes(router, server):
                 v = ImageUtils.thumbnail_cache_token(
                     getattr(pic, "thumbnail_width", None),
                     getattr(pic, "thumbnail_height", None),
+                    getattr(pic, "orientation", None),
                 )
                 thumbnail_url = f"/pictures/thumbnails/{pic.id}.webp?v={v}"
                 # Whole-frame AR-bitmap dimensions and the face-weighted square-crop

@@ -567,6 +567,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/impossible-tags/restore                                      | tags            | Undo a bulk impossible-tags clear                          |
 | POST   | /api/v1/pictures/likeness-search                                              | pictures        | Search by image likeness                                   |
 | PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                                   |
+| POST   | /api/v1/pictures/rotate                                                       | pictures        | Rotate pictures in place                                   |
 | POST   | /api/v1/pictures/score_character_likeness                                     | pictures        | Score uploaded images by character likeness                |
 | DELETE | /api/v1/pictures/scrapheap                                                    | pictures        | Permanently delete scrapheap pictures                      |
 | POST   | /api/v1/pictures/scrapheap/delete-preview                                     | pictures        | Preview a scrapheap delete-forever                         |
@@ -2953,7 +2954,9 @@ Instead of teaching each mutating endpoint how to invert itself, the log snapsho
 - The stored payload is exactly the `{before, after}` shape the roadmap specifies for the audit log, so the feed needs no second representation.
 - Restoring is idempotent: applying a state twice is a no-op, so a retried undo cannot corrupt anything.
 
-**Reversible facets** (the DAM 1.2 metadata scope, `FACETS` in [services/operation_log_service.py](../pixlstash/services/operation_log_service.py)): tags, the tag-prediction rows and their human-label ledger (see §21.2), description/caption, score (rating), picture-set membership, project membership (`PictureProjectMember` + the `Picture.project_id` FK), per-face character assignment + `pending_character_id`, stacking (`stack_id` / `stack_position`, with the stack's name so a dissolved stack can be recreated on undo; symmetrically, a `PictureStack` row a restore empties of its last member is deleted after all states are applied — `_delete_emptied_stacks` — never leaving an orphaned empty row, while a stack that still has members, e.g. a picture outside the restored operations, is kept), and the scrapheap soft-delete state (`deleted` + `deleted_at`, see §21.1). A file-mutating operation may be *recorded* with `undoable=False` for audit, but it is not reversible until copy-on-write versions land (v2.1).
+**Reversible facets** (the DAM 1.2 metadata scope, `FACETS` in [services/operation_log_service.py](../pixlstash/services/operation_log_service.py)): tags, the tag-prediction rows and their human-label ledger (see §21.2), description/caption, score (rating), picture-set membership, project membership (`PictureProjectMember` + the `Picture.project_id` FK), per-face character assignment + `pending_character_id`, stacking (`stack_id` / `stack_position`, with the stack's name so a dissolved stack can be recreated on undo; symmetrically, a `PictureStack` row a restore empties of its last member is deleted after all states are applied — `_delete_emptied_stacks` — never leaving an orphaned empty row, while a stack that still has members, e.g. a picture outside the restored operations, is kept), the scrapheap soft-delete state (`deleted` + `deleted_at`, see §21.1), and the EXIF **orientation** (see §21.5).
+
+**`undoable=True` iff the log stores the whole prior state.** That is the rule; "file-mutating operations are not undoable" is the consequence of it that holds for almost every file mutation, not the rule itself. A crop, a re-encode or a scale destroys information that exists nowhere but the prior file, so no snapshot short of the file itself can reverse them — they are *recorded* with `undoable=False` for audit and stay irreversible until copy-on-write versions land (v2.1). An in-place rotate is the one file mutation that does not: it replaces a single enumerated value 1–8 and copies the entropy-coded stream through byte for byte, so `{"orientation": n}` **is** the whole prior state and the ordinary facet machinery reverses it exactly (§21.5).
 
 **Derived values are re-derived, never snapshotted.** `Picture.anomaly_tag_uncertainty` is a function of the label state and `Picture.smart_score` is a cache of a function of it, so `apply_state_in_session` recomputes the first and drops the second — through the very same `recompute_anomaly_tag_uncertainty` / `invalidate_on_anomaly_change` guards the forward write paths use — instead of restoring a recorded copy. Snapshotting a derived value creates a second source of truth, and the moment its inputs are restored by one path and its cached value by another they drift.
 
@@ -3123,6 +3126,95 @@ Note the deliberate asymmetry between the two: an unusable *header* is dropped
 and ignored because a header is ambient; an unusable *body* field is a refusal,
 because the client named it on purpose and silently ignoring it would mis-group
 its undo.
+
+### 21.5 In-place rotate: orientation is a facet, not an inverse (#950)
+
+`POST /pictures/rotate` turns a photo by rewriting **only** its EXIF orientation
+tag. No pixel byte is re-encoded — `utils/image_processing/orientation.py` splices
+the JPEG APP1 segment or the PNG `eXIf` chunk and copies everything else through —
+so a JPEG takes no generational loss and a PNG keeps the `tEXt`/`iTXt` chunks the
+ComfyUI provenance lives in. A format with no writer (and any reference-folder
+original) is reported in `unsupported_picture_ids`, and the caller falls back to
+the `rotate` **image plugin**, which produces a rotated copy.
+
+| `op_type` | Recorded by | Undo | Redo | `summary` |
+|---|---|---|---|---|
+| `pictures.rotate` | `POST /pictures/rotate` (one row + a `batch_id`) | writes the orientation the files had | writes the orientation the rotate produced | "Rotated 5 pictures right" |
+
+**One `op_type` for all three directions, and the direction is not in the
+recorded state.** `before_state` / `after_state` of a `pictures.rotate` row
+contain exactly `{"orientation": n}` and nothing else. That is the whole design,
+and the alternative was built and rejected:
+
+- **A recorded *delta* ("this was turned CCW") is not idempotent.** Every other
+  restore in this log can be applied twice with no effect; a delta applied twice
+  turns the picture twice. Idempotence is not a nicety here — a retried undo is
+  ordinary.
+- **An empty diff would have walked around the locked-set freeze.** Encoding the
+  direction in the `op_type` and applying the inverse from a post-restore hook
+  (§21.3) leaves the recorded state empty, and `_restore` skips
+  `apply_state_in_session` entirely for an empty state — which is exactly where
+  `enforce_pictures_not_locked` lives. The rotate would have been the one write
+  path around a locked set.
+- **An absolute value converges.** If something outside PixlStash turned the file
+  in the meantime, `apply_orientation` reads what the file carries *now* and turns
+  it to the recorded value, rather than compounding a stale assumption.
+
+So there is no post-restore hook, no `empty_diff_target_ids`, no direction in the
+`op_type`, and **no second inverse function anywhere in the feature**:
+`operation_log_service.apply_orientation` is the single applier behind both the
+forward rotate and its undo/redo, which is what makes the two agree by
+construction rather than by review.
+
+**Backed by an additive `Picture.orientation` column** (migration
+`0104_add_picture_orientation`), which is a **mirror of the file, not the source
+of truth**. It exists because `capture_state_in_session` runs twice for every
+recorded operation over every affected picture: reading the tag off disk there
+would make a 2,700-row tag edit do 5,400 file opens on the single DB writer
+thread. The capture therefore reads the column; the *applier* reads the file.
+`MissingOrientationFinder` backfills rows predating the column, and the endpoint
+primes its own targets first — a target still `NULL` at capture time would record
+`{"orientation": null}` and its undo would have nothing to write back.
+
+**Everything except the orientation is derived and re-derived**, never
+snapshotted, exactly as §21's derived-value rule requires. `apply_orientation`
+re-derives, per picture:
+
+- `Face.bbox` **and** `Detection.bbox`. Both are stored in **EXIF-corrected**
+  space (the extraction tasks load through `load_image_bgr_reduced`, which runs
+  `ImageOps.exif_transpose`), so they move even though no pixel did. The corner
+  maths is *reused* from the `rotate` image plugin's `get_bbox_transform` rather
+  than copied. `Picture.width` / `height` are RAW and stay put; the display size
+  the transform needs is those two swapped iff the *current* orientation is one
+  of 5–8.
+- `pixel_sha` and `size_bytes` — the container changed even though the pixels
+  did not, so the tier-1 duplicate key must be recomputed (§22.6).
+- `thumbnail_width` / `thumbnail_height`, NULLed so `MissingThumbnailFinder`
+  regenerates the bitmap.
+
+**The thumbnail cache token had to grow an orientation component.**
+`ImageUtils.thumbnail_cache_token` was `"<W>x<H>"`, and thumbnails are served
+`Cache-Control: private, max-age=3600, must-revalidate`. A 180° rotate leaves W
+and H unchanged, as does a 90° rotate of a square picture — so the regenerated
+bitmap would have arrived at a byte-identical URL and the browser would have gone
+on painting the pre-rotate image for up to an hour. The token is now
+`"<W>x<H>o<orientation>"` for a rotated picture and unchanged for an unrotated
+one, so backfilling the mirror does not invalidate every thumbnail at once.
+
+**Authorization: `OWNER_ONLY`, and it is the odd one out on purpose.** Every other
+per-picture mutation on this surface is `PICTURE_SCOPED`. This is the first write
+path on which a non-owner principal would permanently alter the owner's original
+bytes, and a share grant is a grant to view content, never to alter the original.
+The copy-producing rotate plugin stays reachable by scoped principals, so no live
+caller is narrowed. See the matrix row in `docs/authz-coverage-matrix.md`.
+
+**Known limits, stated rather than hidden.** `perceptual_hash` and
+`image_embedding` are computed from the *decoded* (transposed) image, so a rotate
+makes them stale; they are not invalidated here and near-duplicate detection can
+mis-group a rotated picture until they are recomputed. And the file write happens
+inside the DB transaction: if that transaction rolls back afterwards, the file
+stays turned while the mirror does not. The applier reads the file rather than the
+mirror precisely so the next rotate converges instead of compounding that.
 
 ---
 

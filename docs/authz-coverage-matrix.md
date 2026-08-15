@@ -216,6 +216,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | GET | `/api/v1/pictures/plugins` | any_token |  |  |
 | POST | `/api/v1/pictures/plugins/{name}` | scoped_list |  |  |
 | PATCH | `/api/v1/pictures/project` | scoped_list |  |  |
+| POST | `/api/v1/pictures/rotate` | owner_only |  | (#950, in-place rotate) **The only write path that mutates the owner's original file bytes**, so it is `owner_only` rather than the `picture_scoped` every other per-picture mutation on this surface carries. It splices the EXIF orientation of the file itself; there is no derived row and no copy to bound the damage a resource-scoped principal could do, and a share grant is a grant to *view* content, never to alter the original. The copy-producing rotate (`POST /pictures/plugins/{name}`, `scoped_list`) is unchanged, so no live caller is narrowed. POST not in READ_SAFE; gate-enforced |
 | POST | `/api/v1/pictures/score_character_likeness` | owner_only |  | Owner scoring op; POST not in READ_SAFE; owner only |
 | DELETE | `/api/v1/pictures/scrapheap` | owner_only |  | require_unscoped_owner |
 | POST | `/api/v1/pictures/scrapheap/delete-preview` | owner_only |  | (v1.8.0) Authoritative delete-forever preview. Returns absolute on-disk paths of protected reference-folder originals; per-object data → owner_only, not any_token (POST not in READ_SAFE; gate-enforced). Rows constrained to `Picture.deleted.is_(True)`, so it cannot leak paths of live/non-scrapheap ids |
