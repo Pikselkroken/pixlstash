@@ -244,28 +244,42 @@ def fetch_anomaly_confidences(
     return probs_map, human_map
 
 
-def resolve_penalised_tag_weights(session: Session) -> dict:
+def resolve_penalised_tag_weights(auth_service) -> dict:
     """Return the owner's effective ``{tag: weight}`` penalised-tag table.
 
-    PixlStash is single-user, so "the owner" is the single row in ``user`` (the same
-    resolution :mod:`pixlstash.auth` uses). The user's table *replaces* the shipped
-    defaults rather than merging with them — that is the contract of
+    PixlStash is single-user, so "the owner" is the single row in ``user``. **That row
+    lives in the hub, never in a vault** (``tests/test_identity_storage_guardrail.py``),
+    so it is resolved through the auth service rather than the scoring session: querying
+    the open vault session found no user row on every call, logged a warning per batch,
+    and scored with the shipped seed while the owner's edited table sat in the hub.
+
+    The user's table *replaces* the shipped defaults rather than merging with them — that
+    is the contract of
     :func:`~pixlstash.utils.quality.smart_score_utils.smart_score_penalised_tags`, which
     only returns the fallback when the stored value is absent or unparseable. A tag the
     user deleted is therefore genuinely no longer penalised.
 
-    Resolving this inside the scoring session is what lets the background
-    :class:`~pixlstash.tasks.smart_score_task.SmartScoreTask` honour the user's config;
-    the request-scoped :func:`get_smart_score_penalised_tags_from_request` cannot, since
-    a background task has no request.
+    This is the resolution the background
+    :class:`~pixlstash.tasks.smart_score_task.SmartScoreTask` uses; the request-scoped
+    :func:`get_smart_score_penalised_tags_from_request` cannot serve it, since a
+    background task has no request.
+
+    It reads ``auth_service.user`` — the process-local owner cache — rather than issuing
+    a hub query per batch. That cache is not a start-up snapshot for these fields:
+    ``PATCH /users/me/config`` writes it back precisely so background scoring sees an
+    edit (``pixlstash/routes/config.py``, "keep the process-local owner cache
+    coherent"). Querying instead would add a second engine's DB round-trip to every
+    scoring batch, and the Windows gate segfaults at teardown on that kind of added
+    volume (``tests/conftest.py``).
 
     Args:
-        session: Active DB session.
+        auth_service: The server's :class:`~pixlstash.auth.AuthService`, whose ``user``
+            is the hub's owner row. ``None`` falls back to the shipped seed.
 
     Returns:
         ``{tag: weight}`` with lowercase tags and weights clamped to 1-5.
     """
-    user = session.exec(select(User)).first()
+    user = getattr(auth_service, "user", None)
     if user is None:
         logger.warning(
             "No user row found while resolving penalised-tag weights; falling back to "
@@ -280,7 +294,10 @@ def resolve_penalised_tag_weights(session: Session) -> dict:
 
 
 def attach_anomaly_inputs(
-    session: Session, candidates, apply_thresholds: dict | None = None
+    session: Session,
+    candidates,
+    apply_thresholds: dict | None = None,
+    penalised_tag_weights: dict | None = None,
 ) -> dict:
     """Attach calibrated anomaly inputs to candidates; return the scorer's config block.
 
@@ -293,18 +310,29 @@ def attach_anomaly_inputs(
         candidates: Candidate dicts to annotate in place.
         apply_thresholds: Confidence gate per anomaly tag; see
             :func:`fetch_anomaly_confidences`.
+        penalised_tag_weights: The owner's ``{tag: weight}`` table, resolved by the
+            caller from the hub (see :func:`resolve_penalised_tag_weights`) — it cannot
+            be read from *this* session, which is a vault one. ``None`` uses the shipped
+            seed; ``{}`` is honoured as "penalise nothing".
 
     Returns:
         Config overrides for
         :meth:`~pixlstash.utils.quality.smart_score_utils.SmartScoreUtils.calculate_smart_score_batch_numpy`:
         ``tag_precisions`` from the latest evaluated :class:`TaggerRun`,
-        ``penalised_tag_weights`` resolved from the owner's config, and ``tag_thresholds``
-        — the same gate applied here, forwarded so the penalty can grade each detection's
-        confidence relative to its own acceptance threshold rather than in absolute terms.
+        ``penalised_tag_weights`` as passed in, and ``tag_thresholds`` — the same gate
+        applied here, forwarded so the penalty can grade each detection's confidence
+        relative to its own acceptance threshold rather than in absolute terms.
     """
     config = {
         "tag_precisions": get_latest_tag_precisions(session),
-        "penalised_tag_weights": resolve_penalised_tag_weights(session),
+        # ``is None``, not falsiness: ``{}`` is a meaningful table meaning "penalise
+        # nothing" (see test_anomaly_penalty.py), and turning it into the full shipped
+        # seed would charge every default tag instead.
+        "penalised_tag_weights": dict(
+            DEFAULT_SMART_SCORE_PENALIZED_TAGS
+            if penalised_tag_weights is None
+            else penalised_tag_weights
+        ),
         "tag_thresholds": dict(apply_thresholds or {}),
     }
     ids = [c.get("id") for c in candidates if c.get("id") is not None]
@@ -332,12 +360,15 @@ def fetch_smart_score_data(
 
     Returns ``(good_anchors, bad_anchors, candidates, scorer_config)``, where
     ``scorer_config`` carries the per-tag precisions and the owner's penalised-tag
-    weights (see :func:`attach_anomaly_inputs`). ``penalised_tags`` is retained for
-    signature compatibility but is not used: the weights are resolved from the owner's
-    stored config inside the read session, so the request path and the background task
-    resolve them identically.
+    weights (see :func:`attach_anomaly_inputs`). ``penalised_tags`` is the caller's
+    already-resolved table (the routes resolve it per request via
+    :func:`get_smart_score_penalised_tags_from_request`); only ``None`` is read from the
+    hub here, so the request path and the background task resolve it identically while
+    an explicit ``{}`` still means "penalise nothing".
     """
     apply_thresholds = resolve_anomaly_apply_thresholds(server.vault)
+    if penalised_tags is None:
+        penalised_tags = resolve_penalised_tag_weights(getattr(server, "auth", None))
 
     def fetch_data(session: Session):
         # Anchors
@@ -418,7 +449,10 @@ def fetch_smart_score_data(
         # Calibrated anomaly inputs, per-tag precision, and the owner's penalised-tag
         # weights.
         scorer_config = attach_anomaly_inputs(
-            session, candidates, apply_thresholds=apply_thresholds
+            session,
+            candidates,
+            apply_thresholds=apply_thresholds,
+            penalised_tag_weights=penalised_tags,
         )
 
         # Supplement with built-in anchors when the user has few rated images.

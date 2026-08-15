@@ -143,7 +143,7 @@ frontend/src/
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
-    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), and `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors)
+    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors), and `BaseModelInput` (the completing base-model field, shared by the shelf's bulk dialog and its inline row editor)
 ```
 
 ---
@@ -1577,6 +1577,20 @@ undo by accident:
   row is the control, and a pencil per row would be 1,800 new tab stops. The
   field stops its own keys, or Arrow, Space and Escape would walk and clear the
   list from under it.
+- **The base model is a field too, on the same gesture.** Double-clicking the
+  Base cell — including the "not set" chip, which is a value like any other and
+  is the row that most needs correcting — opens the same inline field, committed
+  on Enter or blur, abandoned on Escape, writing the whole run of a stack cover
+  because one training run was trained against one base. Its keyboard half is
+  **Shift+F2** beside the name's F2, both advertised in the row's
+  `aria-keyshortcuts`, because a double click is not a keyboard gesture and a
+  pointer-only field is a field some readers do not have. Focus returns to the
+  row when a KEY closed the field and stays put when a click did, or committing
+  by clicking elsewhere would drag the reader back. It is seeded from the stored
+  value, unlike the name field: nothing infers a base model, so what the row
+  shows is what the file said and a correction is one word rather than a retype.
+  The bulk verb keeps its dialog, which is a different gesture with the
+  overwrite count in front of it.
 - **`unknown` is never rendered as a checkpoint.** `file_kind='unknown'` is a
   first-class stored value with its own glyph and the word "Unclassified". It is
   never folded into either other list and is fetched only from the *adapters*
@@ -2364,6 +2378,29 @@ It sends **only** the field its verb owns, which is why the route distinguishes
 an absent field from a null one. Fields are seeded from the selection on open
 (shared value, or empty when the selection disagrees) so the box shows what is
 there rather than something the reader has to interpret.
+
+**The base-model field completes; it never constrains.** Both places it appears
+— the dialog above and the inline editor on a row — are `BaseModelInput.vue`,
+which offers `GET /models/base-models`: the labels `known_base_models` ships, so
+the field is useful on a fresh install where nothing records a base model at
+all, plus every distinct string this machine already stores. The column is free
+text by rule and stays that way, so a name released after this build is typed
+and stored verbatim. Matching folds case, spacing and punctuation away (`sdxl`
+finds `SDXL 1.0`), and the keys follow the tag field as far as that field goes —
+Arrow highlights, **Tab fills without committing**, and the highlighted row
+wears the same TAB hint. The two it adds are the two `OverlayTagsPanel` has no
+answer for: that list has no open state (it is visible whenever the prefix
+matches, inside a panel that is itself a mode), while this field sits on a row
+and in a dialog that both own Escape. So **ArrowDown opens the menu**, Escape
+closes it, and only a second Escape reaches the host; Enter commits and takes
+the highlight if there is one. **The menu
+opens on a keystroke and never on focus**, because both hosts focus the field as
+they draw it: a menu that opened with them would cover the dialog unasked and
+would eat the Escape that dismisses it. A scroll or resize closes it — it is
+positioned `fixed` from one measurement, and the shelf's row list scrolls under
+it. The list is held in the shelf store and
+fetched once, invalidated by the write that could change it — an edit carrying
+`base_model` — rather than polled.
 
 **The two confirmations are deliberately different shapes.**
 

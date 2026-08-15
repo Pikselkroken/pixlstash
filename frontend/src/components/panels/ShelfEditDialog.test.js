@@ -9,6 +9,20 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
+// The base-model field asks the server for its completion list the moment
+// somebody types in it. Left real that is a live request from a unit test, and
+// the failure lands as a console line after teardown — which kills the whole
+// run, not just this file (see the note in ModelShelf.test.js).
+vi.mock("../../api/modelShelf", () => ({
+  BASE_MODEL_UNASSIGNED: "UNASSIGNED",
+  listAdapters: vi.fn().mockResolvedValue([]),
+  listCheckpoints: vi.fn().mockResolvedValue([]),
+  listBaseModelCompletions: vi.fn().mockResolvedValue([]),
+  editModels: vi.fn().mockResolvedValue({ updated: [], fields: [] }),
+  forgetModels: vi.fn().mockResolvedValue({ forgotten: [], refused: [] }),
+  setAdapterAttachments: vi.fn().mockResolvedValue({}),
+}));
+
 import ShelfEditDialog from "./ShelfEditDialog.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 

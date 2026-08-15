@@ -23,13 +23,14 @@
 
     <label v-else-if="verb === 'base-model'" class="sed-field">
       <span class="sed-label">Base model</span>
-      <input
+      <!-- Completing, never constraining: the column is free text and anything
+           typed here is stored verbatim whether the list knows it or not. -->
+      <BaseModelInput
         ref="firstFieldEl"
         v-model="baseModel"
         class="sed-input"
-        type="text"
         placeholder="e.g. FLUX.2, SDXL 1.0. Leave empty to clear it"
-        @keydown.enter.prevent="submit"
+        @confirm="submit"
       />
     </label>
 
@@ -103,6 +104,7 @@ import { computed, nextTick, ref, watch } from "vue";
 
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
+import BaseModelInput from "../widgets/BaseModelInput.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { adapterKindKey } from "../../utils/modelShelf";
 

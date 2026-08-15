@@ -22,6 +22,7 @@ const listEngines = vi.fn();
 const listUnclassified = vi.fn();
 
 const editModels = vi.fn();
+const listBaseModelCompletions = vi.fn();
 const forgetModels = vi.fn();
 const setAdapterAttachments = vi.fn();
 const setModelIcon = vi.fn();
@@ -36,6 +37,7 @@ vi.mock("../api/modelShelf", () => ({
   },
   listCheckpoints: (...args) => listCheckpoints(...args),
   editModels: (...args) => editModels(...args),
+  listBaseModelCompletions: (...args) => listBaseModelCompletions(...args),
   forgetModels: (...args) => forgetModels(...args),
   setAdapterAttachments: (...args) => setAdapterAttachments(...args),
 }));
@@ -78,6 +80,7 @@ beforeEach(() => {
   listCheckpoints.mockReset().mockResolvedValue([]);
   listEngines.mockReset().mockResolvedValue([]);
   listUnclassified.mockReset().mockResolvedValue([]);
+  listBaseModelCompletions.mockReset().mockResolvedValue([]);
 });
 
 describe("defaults", () => {
@@ -1513,5 +1516,95 @@ describe("capabilities", () => {
     expect(store.activeCount).toBe(0);
     await store.setFilters({ capabilities: ["detector"] });
     expect(store.activeCount).toBe(1);
+  });
+});
+
+describe("what the base-model field completes against", () => {
+  /** One adapter row, as `/adapters` really returns it. */
+  function row(overrides = {}) {
+    return {
+      id: 1,
+      sha256: "a".repeat(64),
+      file_kind: "adapter",
+      kind: "lora",
+      filename: "a.safetensors",
+      base_model: null,
+      base_model_folded: null,
+      locations: [{ state: "present", folder_path: "/m", relpath: "a" }],
+      attachments: [],
+      ...overrides,
+    };
+  }
+
+  it("drops a row spelling the server already folded, and keeps one it did not", async () => {
+    // The server drops an alias of a label it ships, so re-adding every row
+    // verbatim would offer `sdxl base` beside the `SDXL 1.0` it means — and
+    // with eight slots in the menu, push the canonical label off it. The client
+    // cannot fold on its own; `base_model_folded` is the server's answer for
+    // this row, and it is the only thing that can carry the rule.
+    listBaseModelCompletions.mockResolvedValue(["SDXL 1.0"]);
+    listAdapters.mockResolvedValue([
+      row({ id: 1, base_model: "sdxl base", base_model_folded: "SDXL 1.0" }),
+      row({ id: 2, base_model: "Clementine ZIB 3B", base_model_folded: null }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.loadBaseModelCompletions();
+
+    expect(store.baseModelCompletions).toEqual([
+      "SDXL 1.0",
+      "Clementine ZIB 3B",
+    ]);
+  });
+
+  it("fetches once, and again after a write that could have changed it", async () => {
+    listBaseModelCompletions.mockResolvedValue(["SDXL 1.0"]);
+    editModels.mockResolvedValue({ updated: [1], fields: ["base_model"] });
+    const store = useModelShelfStore();
+
+    await store.loadBaseModelCompletions();
+    await store.loadBaseModelCompletions();
+    expect(listBaseModelCompletions).toHaveBeenCalledTimes(1);
+
+    // A base model the server had never seen is a completion target the moment
+    // it is stored.
+    await store.editModelIds([1], { base_model: "Brand New 9" });
+    await store.loadBaseModelCompletions();
+    expect(listBaseModelCompletions).toHaveBeenCalledTimes(2);
+
+    // A write that does not touch the column leaves the list alone.
+    editModels.mockResolvedValue({ updated: [1], fields: ["display_name"] });
+    await store.editModelIds([1], { display_name: "Nope" });
+    await store.loadBaseModelCompletions();
+    expect(listBaseModelCompletions).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not ask again on every keystroke when the fetch failed", async () => {
+    // The field calls this as the reader types. Clearing the stamp on the error
+    // path turned one dead endpoint into one request per character.
+    listBaseModelCompletions.mockRejectedValue(new Error("nope"));
+    const store = useModelShelfStore();
+
+    await store.loadBaseModelCompletions();
+    await store.loadBaseModelCompletions();
+    await store.loadBaseModelCompletions();
+
+    expect(listBaseModelCompletions).toHaveBeenCalledTimes(1);
+  });
+
+  it("forgets the list when the session resets", async () => {
+    // It is derived from this machine's model rows and the credential that
+    // could read them has just changed. Left alone, the stamp beside it would
+    // also say "already fetched" forever.
+    listBaseModelCompletions.mockResolvedValue(["SDXL 1.0"]);
+    const store = useModelShelfStore();
+    await store.loadBaseModelCompletions();
+    expect(store.baseModelCompletions).toEqual(["SDXL 1.0"]);
+
+    store.resetForSession();
+    expect(store.baseModelCompletions).toEqual([]);
+
+    await store.loadBaseModelCompletions();
+    expect(listBaseModelCompletions).toHaveBeenCalledTimes(2);
   });
 });

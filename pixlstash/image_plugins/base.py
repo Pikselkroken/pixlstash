@@ -94,13 +94,21 @@ class ImagePlugin(ABC):
 
         Each entry in the list is a dict describing one user-facing parameter.
         Required keys: ``name`` (str, snake_case identifier), ``label`` (str,
-        display label), ``type`` (str, one of ``"number"``, ``"string"``,
-        ``"boolean"``, ``"select"``), ``default`` (Any, value used when the
-        parameter is omitted). Optional keys: ``description`` (str),
-        ``options`` (list[str], required for ``"select"`` type).
+        display label), ``type`` (str, one of ``"number"``, ``"integer"``,
+        ``"boolean"``, ``"string"``), ``default`` (Any, value used when the
+        parameter is omitted). Optional keys: ``description`` (str, help text).
+
+        **A dropdown is ``"string"`` plus an ``enum`` list**, optionally with an
+        ``enumLabels`` map from value to display text. This docstring used to
+        describe a ``"select"`` type with an ``"options"`` key; no such branch
+        exists in ``PluginParametersUI.vue``, so a field declared that way
+        renders as a free-text input. Every built-in uses ``string`` + ``enum``.
+        (Tagger plugins are a different schema and *do* have a real ``select``.)
 
         Returns:
             List of parameter definition dicts, one per parameter.
+
+        See ``docs/writing-image-filter-plugins.md`` for the full contract.
         """
 
     @abstractmethod
