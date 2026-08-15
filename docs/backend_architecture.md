@@ -18,7 +18,7 @@
 5. [Routes / HTTP API](#5-routes--http-api)
 6. [Database Models](#6-database-models)
 7. [Task System](#7-task-system)
-8. [Image Plugins](#8-image-plugins)
+8. [Image Plugins](#8-image-plugins) — incl. [8.1 Installing plugins from the CLI](#81-installing-plugins-from-the-cli-issue-958)
 9. [Tagger Plugins](#9-tagger-plugins)
 10. [Services Layer](#10-services-layer)
 11. [Utility Modules](#11-utility-modules)
@@ -312,6 +312,8 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | [pixlstash/pixl_logging.py](../pixlstash/pixl_logging.py) | Uvicorn log config + coloured formatter. |
 | [pixlstash/stacking.py](../pixlstash/stacking.py) | Picture stacking (duplicates / variants). |
 | [pixlstash/image_loading_dataset_prepper.py](../pixlstash/image_loading_dataset_prepper.py) | Dataset preparation utilities for offline training scripts. |
+| [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (create/attach/detach/relocate/backup/rename) and `plugins` (install/list/remove). Only the `libraries` group opens the hub — see §8.1. |
+| [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it. See §8.1. |
 
 ---
 
@@ -894,9 +896,89 @@ Located in [pixlstash/image_plugins/](../pixlstash/image_plugins/).
 
 Built-in plugins: `brightness_contrast`, `blur_sharpen`, `colour_filter`, `pixelate`, `rotate`, `scaling`, plus `plugin_template.py` as a starter for custom plugins.
 
-User-supplied image plugins are loaded from `user_data_dir("pixlstash")/image-plugins/user`. **The tagger plugins use the same discovery mechanism** (§9, "User-supplied plugins") — keep the two in step rather than letting them drift, and note where they already differ: taggers also accept a package folder, built-ins win a name collision instead of losing it, and `TaggerPluginManager.plugin_dirs()` returns a `{source: path}` dict (the JSON `GET /taggers/plugin-diagnostics` emits) where `ImagePluginManager.plugin_dirs()` returns a list of tuples it iterates internally. Neither folder is served on an `ANY_TOKEN` route: the tagger path is behind the `LOCAL_OWNER_ONLY` route named above, and for image plugins both the folders and the load errors — whose `file` field was the *full* path of the failing plugin — are no longer served at all (§16.3, 2026-08-15). A consequence worth knowing before debugging one: **a broken image plugin is now reported only in the server log**, where the tagger equivalent has a local-owner-only route to render it.
+User-supplied image plugins are loaded from `user_data_dir("pixlstash")/image-plugins/user` (`registry.user_plugin_dir()`). **The tagger plugins use the same discovery mechanism** (§9, "User-supplied plugins") — keep the two in step rather than letting them drift, and note where they already differ: taggers also accept a package folder, built-ins win a name collision instead of losing it, and `TaggerPluginManager.plugin_dirs()` returns a `{source: path}` dict (the JSON `GET /taggers/plugin-diagnostics` emits) where `ImagePluginManager.plugin_dirs()` returns a list of tuples it iterates internally. Neither folder is served on an `ANY_TOKEN` route: the tagger path is behind the `LOCAL_OWNER_ONLY` route named above, and for image plugins both the folders and the load errors — whose `file` field was the *full* path of the failing plugin — are no longer served at all (§16.3, 2026-08-15). A consequence worth knowing before debugging one: **a broken image plugin is now reported only in the server log**, where the tagger equivalent has a local-owner-only route to render it.
 
 [docs/writing-image-filter-plugins.md](writing-image-filter-plugins.md) is the contract, and its §10 tabulates every divergence from the tagger system. Three of those are silent rather than loud, and all three are the image side being the looser of the two: a **user plugin replaces a built-in of the same name** (taggers reject it), **only the first `ImagePlugin` subclass in a module is registered** and the search does not check where the class was defined, so an imported one wins over the one you wrote (taggers register every class the module *defines*), and the **parameter schema is a different schema** — a dropdown is `type: "string"` plus `enum`, with no `select` branch in `PluginParametersUI.vue` at all. `ImagePlugin.parameter_schema`'s docstring and the shipped template both described the `select`/`options` form that does not render; both were corrected when the guide was written.
+
+### 8.1 Installing plugins from the CLI (issue #958)
+
+`pixlstash-cli plugins install|list|remove` ([pixlstash/plugin_install.py](../pixlstash/plugin_install.py))
+puts a plugin in the right directory instead of asking the user to. The
+destination differs by kind *and* by shape, and getting it wrong fails silently:
+a folder in the image directory is skipped without a message, and a single
+module in the tagger directory named after the wrong thing simply never loads.
+
+| Detected | Destination | Installed as |
+|---|---|---|
+| Captioning, folder source with `__init__.py` | `tagger-plugins/user/<name>/` | the folder |
+| Captioning, single module | `tagger-plugins/user/<name>.py` | the file |
+| Image | `image-plugins/user/<name>.py` | the file, always |
+
+Four properties are load-bearing:
+
+- **Nothing is imported.** The kind, the plugin's `name` and the shape are read
+  out of the source with `ast`, because importing to classify means running
+  third-party code before the user has agreed to install it. The cost is that
+  some checks can only warn (a missing abstract method, a captioner with neither
+  capability flag, an image module defining more than one `ImagePlugin`
+  subclass, a folder image plugin whose sibling modules are being left behind);
+  `--strict` promotes them all to refusals, in `_analyse` for the per-file ones
+  and again at the end of `plan_install` for the ones about the plan itself.
+  The same choice is why `plugins list` cannot report an import-time failure
+  such as a missing `torch`: for a captioning plugin that surfaces in
+  `GET /taggers/plugin-diagnostics`, and for an image filter it surfaces
+  nowhere at all (the load errors were taken off `GET /pictures/plugins` in the
+  §8 sweep above), so the command points at the server log for that case.
+- **The destination is named after the plugin's `name`, not the source file**, so
+  `install ./Downloads/plugin(1).py` lands as `my_filter.py`. A computed or
+  non-snake_case `name` is a refusal, since it is also the collision key.
+- **Built-in names are refused**, and read out of the shipped sources
+  (`image_plugins/built-in/*.py`, `_FIRST_PARTY_PLUGINS`) rather than listed a
+  second time. The two kinds fail in opposite directions and both fail quietly:
+  a user image plugin *replaces* a built-in with no message anywhere, and a user
+  captioning plugin loses to one and never loads.
+- **`plugins remove` is the first CLI verb that deletes.** It is scoped by
+  location, not provenance — anything in the two user directories, however it
+  got there — so what it guarantees instead is containment, and it takes two
+  checks to hold: a name carrying a path separator is refused (so it can only
+  ever address a direct child), **and** a symlinked entry is refused rather than
+  followed (so nothing can reach out of the directory that way). Following the
+  link would stay inside the letter of "only delete plugin files" while deleting
+  a file the user did not name. Zip extraction is checked entry by entry the
+  same way — traversal and symlink both — before anything is written.
+- **Installing never deletes before it has the replacement.** The copy is staged
+  as `_<name>.installing` beside the destination and moved into place, so a copy
+  that fails part-way leaves the previous plugin intact; the leading underscore
+  keeps the staging entry out of both registries' scans. Installing a plugin
+  over itself (`install <the installed path> --force`, which a tab-completion
+  makes easy) is refused outright rather than deleting the only copy.
+
+`main()` opens the hub only for the `libraries` group (`needs_hub` on the group
+parser). Plugin installation touches no library, and a machine that has never
+started the server has no hub to open; opening one would exit `3` where the work
+would have succeeded.
+
+The two user directories are named in `plugin_install._SUBDIRS` rather than
+imported, because importing `image_plugins.registry` pulls in cv2 and Pillow on
+every CLI run. (The *tagger* registry is cheap and **is** imported, for
+`_FIRST_PARTY_PLUGINS` in `builtin_names` — so the rule is about cv2, not about
+registries in general.) `tests/test_plugin_install.py::test_the_installer_writes_where_the_registries_read`
+pins the duplicated paths to `tagger_plugins.registry.user_plugin_dir()` and
+`image_plugins.registry.user_plugin_dir()` so they cannot drift.
+
+**The `--ref` flag is validated, not just interpolated.** `requests` collapses
+dot segments before sending, so an unchecked ref (`../../../someone/evil/zip/main`)
+walks out of `PLUGINS_REPO` entirely and installs code this CLI then runs
+unsandboxed in the server process. `_REF_RE` plus an explicit `..` component
+check is what keeps "a named plugin from one repository" true.
+
+**There is deliberately no manifest.** An optional `pixlstash-plugin.toml` was
+considered and dropped: static detection already answers what the thing is and
+which kind, no plugin written so far ships one, so the parse path would be dead
+on arrival. The one thing it would genuinely add is a declared minimum
+PixlStash version — a captioning plugin installed on 1.9.0 lands on disk and can
+never load, and only a declaration could say so. Add it when there is something
+that writes it.
 
 ---
 
@@ -934,6 +1016,9 @@ are load-bearing:
 - **Every concrete class the module *defines* is registered**, not just the first one found,
   so a package may bundle two engines. A subclass merely imported into the module is
   excluded by comparing `__module__`.
+- **`pixlstash-cli plugins install` writes here**, working the destination out
+  from the source rather than asking for it — §8.1. It is the same directory and
+  the same two shapes; nothing about discovery changes.
 - **Start-up scan only.** There is no reload endpoint: re-instantiating a plugin whose model
   is resident would orphan the model and make `is_loaded()` lie. Adding a plugin requires a
   restart, which the guide and the Auto-tagging settings section both say. The directory is

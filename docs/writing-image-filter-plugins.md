@@ -25,6 +25,10 @@ defaults to the app name. It is not a typo.)
 **The folder does not exist until you create it, and a folder in the wrong place is
 skipped in silence.** The path is logged at start-up.
 
+`pixlstash-cli plugins install ./my_filter.py` works out the folder and the filename for
+you, and refuses the shapes that fail silently; `plugins list` and `plugins remove` are
+its siblings. Copying the file in by hand still works and is what the command does.
+
 **Only single `.py` files are loaded.** Unlike tagger plugins, a folder with an
 `__init__.py` is *not* scanned, so a plugin that wants helper modules has to inline them
 or install them as a normal importable package.
