@@ -8,7 +8,7 @@ vi.mock("../utils/apiClient", () => ({
 import { apiClient } from "../utils/apiClient";
 import {
   listTaggers,
-  listTaggerPluginDirs,
+  listTaggerPluginDiagnostics,
   getLabelThresholds,
 } from "./taggers";
 
@@ -32,15 +32,19 @@ describe("api/taggers", () => {
     expect(apiClient.get).toHaveBeenCalledWith("/taggers");
   });
 
-  // Its own route because the folder is a host path: /taggers is any-token and
-  // must never carry it.
-  it("listTaggerPluginDirs GETs the separate plugin-dirs route", async () => {
+  // Its own route because both halves name host paths: /taggers is any-token
+  // and must never carry them.
+  it("listTaggerPluginDiagnostics GETs the separate diagnostics route", async () => {
     apiClient.get.mockResolvedValue({
-      data: { plugin_dirs: { user: "/somewhere/tagger-plugins/user" } },
+      data: {
+        plugin_dirs: { user: "/somewhere/tagger-plugins/user" },
+        load_errors: [{ name: "broken", message: "boom" }],
+      },
     });
-    const result = await listTaggerPluginDirs();
-    expect(apiClient.get).toHaveBeenCalledWith("/taggers/plugin-dirs");
+    const result = await listTaggerPluginDiagnostics();
+    expect(apiClient.get).toHaveBeenCalledWith("/taggers/plugin-diagnostics");
     expect(result.plugin_dirs.user).toBe("/somewhere/tagger-plugins/user");
+    expect(result.load_errors[0].name).toBe("broken");
   });
 
   it("getLabelThresholds sends the previewed offset", async () => {

@@ -68,7 +68,6 @@ class ImagePluginListResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     plugins: list = []
-    plugin_errors: list = []
 
 
 class PicturePluginRunResponse(BaseModel):

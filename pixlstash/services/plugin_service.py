@@ -23,25 +23,25 @@ logger = get_logger(__name__)
 def list_plugins(vault: "Vault") -> dict:
     """Return available image plugins and their load errors.
 
-    The scanned folders are deliberately **not** returned: they are host paths
-    on the server's disk and ``GET /pictures/plugins`` is ANY_TOKEN, so a
-    share-link holder would be handed the owner's home directory. Nothing in
-    the UI read them. The tagger equivalent is behind its own
-    LOCAL_OWNER_ONLY route (``GET /taggers/plugin-dirs``).
+    Neither the scanned folders nor the load errors are returned, and both
+    omissions are the same rule: ``GET /pictures/plugins`` is ANY_TOKEN, the
+    folders are host paths under the owner's home directory, and an error row
+    carries the absolute ``file`` it failed on plus exception text from
+    third-party code. Nothing in the UI ever read either — the failures are in
+    the server log, where they were being read from anyway. The tagger
+    equivalents are served instead by ``GET /taggers/plugin-diagnostics``,
+    which is LOCAL_OWNER_ONLY, because the Auto-tagging screen does show them.
 
     Args:
         vault: Application vault (unused currently; reserved for future
             vault-scoped plugin discovery).
 
     Returns:
-        Dict with keys: ``plugins``, ``plugin_errors``.
+        Dict with the single key ``plugins``.
     """
     manager = get_image_plugin_manager()
     manager.reload()
-    return {
-        "plugins": manager.list_plugins(),
-        "plugin_errors": manager.list_errors(),
-    }
+    return {"plugins": manager.list_plugins()}
 
 
 async def run_plugin_on_pictures(

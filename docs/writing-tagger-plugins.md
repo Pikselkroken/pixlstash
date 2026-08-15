@@ -22,10 +22,11 @@ defaults to the app name. It is not a typo.)
 **The folder does not exist until you create it, and a folder in the wrong place is
 skipped in silence.** So take the exact path for your install from **Settings →
 Auto-tagging**, where it is displayed, rather than from the table above; it is also
-logged at start-up. The path is shown only to the owner, on the machine running the
-server or on its LAN — a browser reached over the internet, or a share link, gets no
-folder at all. Installing a plugin means writing a file into that folder, so there is
-nothing to do remotely anyway.
+logged at start-up. The path — and the list of plugins that failed to load — is shown
+only to the owner, on the machine running the server or on its LAN (or from anywhere if
+the server sets `allow_remote_host_ops`, the same flag that governs every other
+host-filesystem operation). A share link never sees either. Installing a plugin means
+writing a file into that folder, so there is nothing to do remotely anyway.
 
 Two shapes are accepted:
 

@@ -1,8 +1,8 @@
 <script setup>
-import { computed, onUnmounted, ref, watch } from "vue";
+import { onUnmounted, ref, watch } from "vue";
 import { getUserConfig, patchUserConfig } from "../../api/config";
 import { getWorkerProgress } from "../../api/workers";
-import { listTaggers, listTaggerPluginDirs } from "../../api/taggers";
+import { listTaggers, listTaggerPluginDiagnostics } from "../../api/taggers";
 import { VSlider, VSwitch } from "vuetify/components";
 import PluginsTable from "../widgets/PluginsTable.vue";
 import SettingsSection from "./SettingsSection.vue";
@@ -21,11 +21,10 @@ const taggerPlugins = ref([]);
 const taggerSettings = ref({});
 const taggerLoading = ref(false);
 const taggerPluginDir = ref("");
-// PluginsTable filters on the capability flags, and a plugin that failed to
-// load has neither — so these rows render nowhere unless we list them here.
-const taggerPluginErrors = computed(() =>
-  taggerPlugins.value.filter((p) => p.load_error),
-);
+// Both come from the diagnostics route rather than the plugin list: a load
+// error is exception text from a third-party plugin and can name any path on
+// the host, so it is owner-and-local like the folder itself.
+const taggerPluginErrors = ref([]);
 
 // ── VRAM budget ───────────────────────────────────────────────────────────────
 const VRAM_BUDGET_MIN_GB = 2;
@@ -183,14 +182,16 @@ async function fetchTaggerPlugins() {
   } finally {
     taggerLoading.value = false;
   }
-  // Separate request: the folder is a host path, so it is local-owner-only and
-  // 403s for a remote or share-scoped caller. That is not an error — there is
-  // simply no folder to show them.
+  // Separate request: these name host paths, so the route is local-owner-only
+  // and 403s for a remote or share-scoped caller. That is not an error — there
+  // is simply nothing to show them.
   try {
-    const dirs = await listTaggerPluginDirs();
-    taggerPluginDir.value = dirs?.plugin_dirs?.user ?? "";
+    const diagnostics = await listTaggerPluginDiagnostics();
+    taggerPluginDir.value = diagnostics?.plugin_dirs?.user ?? "";
+    taggerPluginErrors.value = diagnostics?.load_errors ?? [];
   } catch {
     taggerPluginDir.value = "";
+    taggerPluginErrors.value = [];
   }
 }
 
@@ -330,7 +331,7 @@ watch(
         class="settings-tagger-plugin-errors"
       >
         <li v-for="(p, i) in taggerPluginErrors" :key="`${p.name}-${i}`">
-          <strong>{{ p.name }}</strong> failed to load: {{ p.load_error }}
+          <strong>{{ p.name }}</strong> failed to load: {{ p.message }}
         </li>
       </ul>
       <div v-if="taggerPluginDir" class="settings-tagger-plugin-dir">

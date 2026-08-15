@@ -533,7 +533,7 @@ and the declarations themselves are pinned by
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
 | GET | `/api/v1/taggers` | any_token |  |  |
-| GET | `/api/v1/taggers/plugin-dirs` | local_owner_only |  | §16.3 host-path disclosure: names the scanned tagger-plugin folders on the server's disk; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1) |
+| GET | `/api/v1/taggers/plugin-diagnostics` | local_owner_only |  | §16.3 host-path disclosure: names the scanned tagger-plugin folders on the server's disk and returns plugin import errors carrying host paths; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1) |
 | DELETE | `/api/v1/taggers/{name}/artifacts/{artifact_id}` | owner_only |  | Delete tagger artifact; DELETE blocked for READ tokens; owner only |
 | POST | `/api/v1/taggers/{name}/download` | owner_only |  | Download tagger plugin; POST blocked for READ tokens; owner only |
 

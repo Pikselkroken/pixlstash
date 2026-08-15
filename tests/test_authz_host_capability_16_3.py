@@ -2,11 +2,13 @@
 
 Covers the three-lens (CSO/Principal/CEO) decided design landing before Step 5:
 
-* ``LOCAL_OWNER_ONLY`` (13 filesystem/folder routes + the library switch) — loopback / RFC1918 LAN /
+* ``LOCAL_OWNER_ONLY`` (the filesystem/folder routes, the library switch, and the
+  host-path disclosures; the live count is the one asserted by the tier-split
+  test below, never a number written in prose) — loopback / RFC1918 LAN /
   **Tailscale CGNAT ``100.64.0.0/10``** all count as local; a genuinely remote
   owner is 403'd with a message NAMING ``allow_remote_host_ops`` unless that
   dedicated flag is set, which then admits the remote owner.
-* ``LOOPBACK_OWNER_ONLY`` (3 host-shell red-line routes) — strictly loopback; the
+* ``LOOPBACK_OWNER_ONLY`` (the host-shell red-line routes) — strictly loopback; the
   ``allow_remote_host_ops`` flag can NEVER loosen them (RFC1918 + flag-on is still
   403).
 * Reverse-proxy: with ``trusted_proxies`` set the owner's real (spoofed) client IP
@@ -303,10 +305,11 @@ def _is_loopback_403(resp):
 
 _BROWSE = f"{API}/filesystem/browse"  # a LOCAL_OWNER_ONLY route
 _OPEN_LOCATION = f"{API}/pictures/999999/open-location"  # a LOOPBACK_OWNER_ONLY route
-_TAGGER_DIRS = f"{API}/taggers/plugin-dirs"  # LOCAL_OWNER_ONLY for disclosure alone
+# LOCAL_OWNER_ONLY for disclosure alone.
+_TAGGER_DIAGNOSTICS = f"{API}/taggers/plugin-diagnostics"
 
 
-# ---- LOCAL_OWNER_ONLY (13) ------------------------------------------------
+# ---- LOCAL_OWNER_ONLY (27) ------------------------------------------------
 
 
 def test_local_owner_only_allows_loopback_lan_and_tailscale():
@@ -339,8 +342,8 @@ def test_local_owner_only_remote_public_403s_naming_the_flag():
 
 
 def test_local_owner_only_remote_public_allowed_with_flag_on():
-    """The dedicated flag admits a remote authenticated owner on the 13
-    LOCAL_OWNER_ONLY routes."""
+    """The dedicated flag admits a remote authenticated owner on the
+    LOCAL_OWNER_ONLY tier."""
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
         with _enforcing(server), _remote_host_ops(server, True):
@@ -351,35 +354,75 @@ def test_local_owner_only_remote_public_allowed_with_flag_on():
             )
 
 
-def test_tagger_plugin_dirs_is_local_and_the_listing_carries_no_host_path():
+def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path():
     """Both directions on the #326 split, plus the reason it exists.
 
-    The folder is a host path, so a remote owner is refused it (flag off); a
-    loopback owner still gets it, because over-blocking is its own regression.
-    And the ANY_TOKEN sibling it came off must not carry it any more — that
-    route is reachable by every share-link holder.
+    The plugin folder and the load-failure messages are host-path disclosures,
+    so a remote owner is refused them (flag off) and a share-scoped token is
+    refused them from anywhere; a loopback owner still gets them, because
+    over-blocking is its own regression.
+
+    The negatives assert on the **path string**, not on a field name: an
+    earlier version of this test checked that ``plugin_dirs`` was absent from
+    ``GET /taggers``, which the ``load_error`` row beside it satisfied while
+    still carrying the folder. Grepping the serialised body is the assertion
+    that cannot be satisfied by moving the leak to another key.
     """
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
         with _enforcing(server), _remote_host_ops(server, False):
-            allowed = owner.get(_TAGGER_DIRS)
+            allowed = owner.get(_TAGGER_DIAGNOSTICS)
             assert allowed.status_code == 200, allowed.text
-            assert allowed.json()["plugin_dirs"]["user"], "the folder must be named"
+            plugin_dir = allowed.json()["plugin_dirs"]["user"]
+            assert plugin_dir, "the folder must be named"
 
-            refused = owner.get(_TAGGER_DIRS, headers=_xff("8.8.8.8"))
+            refused = owner.get(_TAGGER_DIAGNOSTICS, headers=_xff("8.8.8.8"))
             assert _is_locality_403(refused), (
                 f"a remote owner must not read the host path; "
                 f"got {refused.status_code}: {refused.text}"
             )
 
-            listing = owner.get(f"{API}/taggers", headers=_xff("8.8.8.8"))
-            assert listing.status_code == 200, listing.text
-            assert "plugin_dirs" not in listing.json(), (
-                "GET /taggers is ANY_TOKEN and must disclose no host path"
+            # The actual threat model: a share link, from anywhere at all.
+            minted = owner.post(
+                f"{API}/users/me/token",
+                json={
+                    "description": "set share",
+                    "scope": "READ",
+                    "resource_type": "picture_set",
+                    "resource_id": 1,
+                },
+            )
+            assert minted.status_code == 200, minted.text
+            # A cookie-less client: the middleware prefers the owner's session
+            # cookie over a Bearer token, which would never exercise the scope.
+            from starlette.testclient import TestClient
+
+            anon = TestClient(server.api, raise_server_exceptions=True)
+            share = {"Authorization": f"Bearer {minted.json()['token']}"}
+            scoped = anon.get(_TAGGER_DIAGNOSTICS, headers=share)
+            assert scoped.status_code == 403, (
+                f"a resource-scoped token must never reach it; got {scoped.status_code}"
             )
 
+            # ...and the ANY_TOKEN routes it came off carry no path from the
+            # data directory, under any key, for that same share token. The
+            # data dir rather than the plugin folder: it is the common parent
+            # of the tagger folder, the image-plugin folder and the workflow
+            # folder, so one string covers all three siblings.
+            data_dir = os.path.dirname(os.path.dirname(plugin_dir))
+            for route in (
+                f"{API}/taggers",
+                f"{API}/pictures/plugins",
+                f"{API}/comfyui/workflows",
+            ):
+                body = anon.get(route, headers=share)
+                assert body.status_code == 200, f"{route}: {body.text}"
+                assert data_dir not in body.text, (
+                    f"{route} is ANY_TOKEN and disclosed a host path"
+                )
 
-# ---- LOOPBACK_OWNER_ONLY (3) — the flag-immune red line --------------------
+
+# ---- LOOPBACK_OWNER_ONLY (5) — the flag-immune red line --------------------
 
 
 def test_loopback_owner_only_allows_loopback():

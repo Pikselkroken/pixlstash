@@ -1288,14 +1288,16 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/tagger-runs"): RoutePolicy(_ANY),
     # ── taggers.py ──────────────────────────────────────────────────────────
     ("GET", "/api/v1/taggers"): RoutePolicy(_ANY),
-    # The plugin folders came off GET /taggers so this tier could hold them:
-    # they are host paths under the owner's home directory, and that route is
-    # ANY_TOKEN, so every share-link holder was reading them. Local, not merely
+    # The plugin folders and the load failures both came off GET /taggers so
+    # this tier could hold them: the folders are host paths under the owner's
+    # home directory, a load-failure message is exception text from third-party
+    # code that can carry any path it was reaching for, and that route is
+    # ANY_TOKEN, so every share-link holder was reading both. Local, not merely
     # owner, because a host path is the §16.3 disclosure class — and nothing is
-    # lost remotely, since installing a plugin means writing to that folder.
-    ("GET", "/api/v1/taggers/plugin-dirs"): RoutePolicy(
+    # lost remotely, since acting on either means editing a file in that folder.
+    ("GET", "/api/v1/taggers/plugin-diagnostics"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 host-path disclosure: names the scanned tagger-plugin folders on the server's disk; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 host-path disclosure: names the scanned tagger-plugin folders on the server's disk and returns plugin import errors carrying host paths; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("POST", "/api/v1/taggers/{name}/download"): RoutePolicy(
         _OWNER,

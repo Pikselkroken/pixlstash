@@ -16,14 +16,17 @@ export async function listTaggers() {
 }
 
 /**
- * Read the host folders scanned for user-supplied tagger plugins.
+ * Read the plugin installation diagnostics: the scanned host folders and the
+ * plugins that failed to import.
  *
  * Local owner only — a remote or share-scoped caller gets 403, which the
- * caller is expected to treat as "no folder to show" rather than an error.
- * @returns {Promise<Object>} the response body: `plugin_dirs`.
+ * caller is expected to treat as "nothing to show" rather than an error. Both
+ * halves name paths on the server's disk, which is why they are not on
+ * `/taggers`.
+ * @returns {Promise<Object>} the body: `plugin_dirs` and `load_errors`.
  */
-export async function listTaggerPluginDirs() {
-  return unwrap(apiClient.get(`/taggers/plugin-dirs`));
+export async function listTaggerPluginDiagnostics() {
+  return unwrap(apiClient.get(`/taggers/plugin-diagnostics`));
 }
 
 /**
