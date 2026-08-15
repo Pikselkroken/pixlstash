@@ -4557,6 +4557,7 @@ const selectedExpandedCount = computed(() => {
     (filterStore.comfyuiLoraFilter || []).length === 0 &&
     filterStore.minScoreFilter == null &&
     filterStore.maxScoreFilter == null &&
+    !filterStore.unscoredOnlyFilter &&
     filterStore.smartScoreBucketFilter == null &&
     filterStore.resolutionBucketFilter == null;
 
@@ -5840,6 +5841,7 @@ const {
   triggerNewImageHighlight,
   updateVisibleThumbnails,
   maybeRefreshOverlayForComfyui,
+  removeImagesById,
 });
 
 // ============================================================
@@ -6260,6 +6262,7 @@ watch(
     () => filterStore.comfyuiLoraFilter,
     () => filterStore.minScoreFilter,
     () => filterStore.maxScoreFilter,
+    () => filterStore.unscoredOnlyFilter,
     () => filterStore.smartScoreBucketFilter,
     () => filterStore.resolutionBucketFilter,
     () => filterStore.tagFilter,

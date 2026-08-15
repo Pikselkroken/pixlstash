@@ -28,6 +28,10 @@ vi.mock("../../api/modelShelf", () => ({
     return listAdapters(...args);
   },
   listCheckpoints: (...args) => listCheckpoints(...args),
+  // The base-model field asks for its completion list as it opens. Answered
+  // with nothing here: the list is the widget's own suite's business, and left
+  // unmocked this is a network call on a double-click.
+  listBaseModelCompletions: vi.fn().mockResolvedValue([]),
 }));
 
 // The shelf reads the drives to band its folder groups. Left unmocked this
@@ -92,6 +96,7 @@ import ModelShelf from "./ModelShelf.vue";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const globalOpts = {
@@ -141,12 +146,17 @@ function adapter(overrides = {}) {
   };
 }
 
-async function mountShelf(rows, checkpoints = [], unclassified = []) {
+async function mountShelf(
+  rows,
+  checkpoints = [],
+  unclassified = [],
+  extra = {},
+) {
   listAdapters.mockResolvedValue(rows);
   listCheckpoints.mockResolvedValue(checkpoints);
   listEngines.mockResolvedValue([]);
   listUnclassified.mockResolvedValue(unclassified);
-  const wrapper = mount(ModelShelf, globalOpts);
+  const wrapper = mount(ModelShelf, { ...globalOpts, ...extra });
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
   return wrapper;
@@ -332,6 +342,175 @@ describe("renaming a row in place", () => {
       .find(".shelf-row-rename")
       .trigger("keydown", { key: "Enter" });
     expect(edit).toHaveBeenCalledWith([1, 2], { display_name: "Cyanwood" });
+  });
+});
+
+describe("editing a base model in place", () => {
+  it("opens the field on a double-click and commits it on Enter", async () => {
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    expect(field.exists()).toBe(true);
+    // Seeded from the stored value, unlike the name field: nothing infers a
+    // base model, so what the row shows is what the file said and a correction
+    // is one word rather than a retype.
+    expect(field.element.value).toBe("flux.1-dev");
+
+    await field.setValue("FLUX.2");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(edit).toHaveBeenCalledWith([7], { base_model: "FLUX.2" });
+    expect(wrapper.find(".shelf-row-base-edit").exists()).toBe(false);
+  });
+
+  it("opens on the `not set` chip too, which is a value like any other", async () => {
+    // The row that most needs this gesture is the one with nothing recorded,
+    // and a chip that cannot be double-clicked is exactly the row you have to
+    // go to a dialog for.
+    const wrapper = await mountShelf([adapter({ id: 7, base_model: null })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-chip--none").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    expect(field.element.value).toBe("");
+
+    await field.setValue("SDXL 1.0");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(edit).toHaveBeenCalledWith([7], { base_model: "SDXL 1.0" });
+  });
+
+  it("clears the column with an explicit null rather than an empty string", async () => {
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    await field.setValue("   ");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(edit).toHaveBeenCalledWith([7], { base_model: null });
+  });
+
+  it("gives the first Escape to the menu and the second to the edit", async () => {
+    // With a menu open the first Escape must only take the menu back, or one
+    // press aimed at a dropdown throws away what was typed. The completion list
+    // is seeded here for that reason: mocked empty, this test would pass while
+    // the two-stage Escape was broken.
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+    store.rows = [
+      ...store.rows,
+      { ...adapter({ id: 9 }), base_model: "Nope 1" },
+    ];
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    await field.setValue("Nope");
+    await field.trigger("keydown", { key: "Escape" });
+    expect(wrapper.find(".shelf-row-base-edit").exists()).toBe(true);
+
+    await field.trigger("keydown", { key: "Escape" });
+    expect(edit).not.toHaveBeenCalled();
+    expect(wrapper.find(".shelf-row-base-edit").exists()).toBe(false);
+  });
+
+  it("commits when the field loses focus, and only once", async () => {
+    // The riskiest line in the gesture: clicking away writes, with no undo and
+    // no prompt. It has to fire — and it must not fire a second time behind the
+    // Enter that already wrote, which is why the field closes before it writes.
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    await field.setValue("FLUX.2");
+    await field.trigger("blur");
+
+    expect(edit).toHaveBeenCalledWith([7], { base_model: "FLUX.2" });
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not write twice when Enter is followed by the unmount's blur", async () => {
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    await field.setValue("FLUX.2");
+    await field.trigger("keydown", { key: "Enter" });
+    await field.trigger("blur");
+
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands focus back to the row on a key, and leaves it alone on a click", async () => {
+    // The grid's tab stop roves, so a field that closes without giving focus
+    // back drops a keyboard reader at the top of the document — the defect the
+    // rename path fixed and this one had to inherit. A blur is the opposite
+    // case: the reader has already chosen where to go.
+    const wrapper = await mountShelf([adapter({ id: 7 })], [], [], {
+      attachTo: document.body,
+    });
+    const store = useModelShelfStore();
+    vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    const rowEl = wrapper.find(".shelf-row");
+    await rowEl.find(".shelf-col--base span").trigger("dblclick");
+    await wrapper.find(".shelf-row-base-edit").trigger("keydown", {
+      key: "Enter",
+    });
+    await wrapper.vm.$nextTick();
+    expect(document.activeElement).toBe(rowEl.element);
+
+    await rowEl.find(".shelf-col--base span").trigger("dblclick");
+    document.body.focus();
+    await wrapper.find(".shelf-row-base-edit").trigger("blur");
+    await wrapper.vm.$nextTick();
+    expect(document.activeElement).not.toBe(rowEl.element);
+    wrapper.unmount();
+  });
+
+  it("is reachable from the keyboard, like the name beside it", async () => {
+    // A double click is not a keyboard gesture, and the row advertises the key
+    // it answers to. Without this the field is pointer-only.
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const row = wrapper.find(".shelf-row");
+    expect(row.attributes("aria-keyshortcuts")).toContain("Shift+F2");
+
+    await row.trigger("keydown", { key: "F2", shiftKey: true });
+    expect(wrapper.find(".shelf-row-base-edit").exists()).toBe(true);
+    // And plain F2 still opens the OTHER field, not this one.
+    expect(wrapper.find(".shelf-row-rename").exists()).toBe(false);
+  });
+
+  it("keeps the field's keys off the list underneath", async () => {
+    const wrapper = await mountShelf([adapter({ id: 7 }), adapter({ id: 8 })]);
+    const store = useModelShelfStore();
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    await wrapper.find(".shelf-row-base-edit").trigger("keydown", { key: " " });
+    expect(store.selectedRows).toHaveLength(0);
+  });
+
+  it("writes every member of a run, which was trained against one base", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1, stack_id: 5, training_step: 250 }),
+      adapter({ id: 2, stack_id: 5, training_step: 500 }),
+    ]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    await field.setValue("FLUX.2");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(edit).toHaveBeenCalledWith([1, 2], { base_model: "FLUX.2" });
   });
 });
 
@@ -790,6 +969,9 @@ describe("selecting rows", () => {
       adapter({ id: 2 }),
       adapter({ id: 3 }),
     ]);
+    // Attached, because Escape is handled on the window: a keydown on a
+    // detached row bubbles into nothing and would pass for the wrong reason.
+    document.body.appendChild(wrapper.element);
     const store = useModelShelfStore();
     await rowAt(wrapper, 0).trigger("keydown", { key: " " });
     await rowAt(wrapper, 0).trigger("keydown", {
@@ -800,6 +982,7 @@ describe("selecting rows", () => {
 
     await rowAt(wrapper, 0).trigger("keydown", { key: "Escape" });
     expect(store.selectedRows).toHaveLength(0);
+    wrapper.unmount();
   });
 
   it("shows no selection bar until something is selected", async () => {
@@ -867,7 +1050,7 @@ describe("drive bands", () => {
     const bands = wrapper.findAll(".shelf-band");
     expect(bands).toHaveLength(1);
     // The volume's name, not its mount point: a Linux mount point runs to
-    // `/media/glindkvist/102AB4B6757AF9A3` and crowds the header out.
+    // `/media/<user>/A1B2C3D4E5F60789` and crowds the header out.
     expect(textOf(bands[0])).toContain("FastModels");
     // And the mount point beside it, in the mono face: the volume label answers
     // "which disk" and the path answers "which one is that", which on a machine
@@ -2151,11 +2334,20 @@ describe("the manual stack verb", () => {
 });
 
 describe("Escape", () => {
+  // The key is handled on the WINDOW, so every assertion here needs a real
+  // event path out of the shelf — a detached wrapper's keydown bubbles into
+  // nothing and would pass or fail for the wrong reason.
+  async function mountAttachedShelf() {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    document.body.appendChild(wrapper.element);
+    return wrapper;
+  }
+
   it("clears the selection from anywhere in the shelf, not only from a row", async () => {
     // It used to be handled on the row, so it only worked while a row held the
     // roving tab stop — not after a click moved focus, and not from the
     // toolbar. "Escape clears the selection" has to mean everywhere.
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const wrapper = await mountAttachedShelf();
     const store = useModelShelfStore();
     store.toggleSelected(1);
     await wrapper.vm.$nextTick();
@@ -2163,12 +2355,64 @@ describe("Escape", () => {
 
     await wrapper.find(".shelf-toolbar").trigger("keydown", { key: "Escape" });
     expect(store.selectedRows).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("clears the selection when focus has left the shelf entirely", async () => {
+    // The listener used to sit on the shelf's own root, so the key only
+    // reached it while focus was inside that subtree. Click the sidebar, the
+    // app bar, or anything else after picking rows and Escape did nothing —
+    // which is how "Escape clears the selection" reads as broken.
+    const wrapper = await mountAttachedShelf();
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(store.selectedRows).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("stops listening once the shelf is gone", async () => {
+    // The view is v-else-if'd away when another one opens, and a window
+    // listener outlives its element unless it is taken down.
+    const wrapper = await mountAttachedShelf();
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    wrapper.unmount();
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(store.selectedRows).toHaveLength(1);
+  });
+
+  it("leaves the key to whoever is being typed in", async () => {
+    // The bare input stands in for the app's search field, whose own Escape
+    // clears the search. Clearing the shelf's selection underneath at the same
+    // time is the same unasked-for second effect a dialog gets protected from.
+    const wrapper = await mountAttachedShelf();
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(store.selectedRows).toHaveLength(1);
+    input.remove();
+    wrapper.unmount();
   });
 
   it("leaves the selection alone when a dialog owns the key", async () => {
     // Escape inside a dialog means "close me". Clearing the selection
     // underneath at the same time is a second, unasked-for effect.
-    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const wrapper = await mountAttachedShelf();
     const store = useModelShelfStore();
     store.toggleSelected(1);
     await wrapper.find(".shelf-toolbar").trigger("click");
@@ -2177,6 +2421,80 @@ describe("Escape", () => {
 
     await wrapper.find(".shelf-toolbar").trigger("keydown", { key: "Escape" });
     expect(store.selectedRows).toHaveLength(1);
+
+    // Every dialog the shelf owns, not only the edit one: a press with nothing
+    // focused targets `<body>`, so the ref is the only thing that can see them.
+    wrapper.vm.editVerb = "";
+    wrapper.vm.foldersOpen = true;
+    await wrapper.vm.$nextTick();
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(store.selectedRows).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("leaves the key to an open menu, whose activator still holds the focus", async () => {
+    // Vuetify only pulls focus into a menu's content on a later `focusin`, so a
+    // menu opened with the MOUSE leaves focus on its activator inside the
+    // shelf. Read off the target alone, the shelf's own Sort, Show and verb
+    // menus would close and drop the selection in one press.
+    const wrapper = await mountAttachedShelf();
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    const overlay = document.createElement("div");
+    overlay.className = "v-overlay v-overlay--active";
+    document.body.appendChild(overlay);
+    await wrapper.find(".shelf-toolbar").trigger("keydown", { key: "Escape" });
+    expect(store.selectedRows).toHaveLength(1);
+
+    // A tooltip is not an owner: hovering one elsewhere must not swallow the key.
+    overlay.className = "v-overlay v-overlay--active v-tooltip";
+    await wrapper.find(".shelf-toolbar").trigger("keydown", { key: "Escape" });
+    expect(store.selectedRows).toHaveLength(0);
+    overlay.remove();
+    wrapper.unmount();
+  });
+
+  it("leaves the key to a full-screen surface over the shelf", async () => {
+    // The review overlay renders outside `App.vue`'s view switch, so the shelf
+    // is still mounted underneath it — and a selection nobody can see must not
+    // be cleared by the press that dismisses what is covering it.
+    const wrapper = await mountAttachedShelf();
+    const store = useModelShelfStore();
+    const reviews = useReviewSessionsStore();
+    store.toggleSelected(1);
+    reviews.overlayOpen = true;
+    await wrapper.vm.$nextTick();
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(store.selectedRows).toHaveLength(1);
+    reviews.overlayOpen = false;
+    wrapper.unmount();
+  });
+
+  it("leaves the key to the auto-hide sidebar it is dismissing", async () => {
+    // `useGlobalKeydown` hides the revealed sidebar on Escape and deliberately
+    // does not stop the event, so one press would otherwise hide the sidebar
+    // and wipe the selection behind it.
+    const wrapper = await mountAttachedShelf();
+    const store = useModelShelfStore();
+    const sidebar = useSidebarStore();
+    store.toggleSelected(1);
+    // Both flags are computed: unpinning makes it an overlay and reveals it.
+    sidebar.setSidebarPinned(false);
+    sidebar.revealSidebar();
+    await wrapper.vm.$nextTick();
+
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(store.selectedRows).toHaveLength(1);
+    wrapper.unmount();
   });
 });
 

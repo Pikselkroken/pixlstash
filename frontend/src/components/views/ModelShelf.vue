@@ -9,7 +9,6 @@
     tabindex="-1"
     aria-label="Model shelf"
     aria-describedby="shelf-help"
-    @keydown.escape="onShelfEscape"
   >
     <p id="shelf-help" class="visually-hidden">
       Every adapter and checkpoint PixlStash has found on this machine. Group
@@ -632,10 +631,14 @@
                   row.memberCount > 1 ? isStackOpen(row.stack_id) : undefined
                 "
                 :aria-selected="store.isSelected(row.id)"
-                aria-keyshortcuts="F2"
+                aria-keyshortcuts="F2 Shift+F2"
                 :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
                 :data-row-key="row.rowKey"
-                :draggable="canDrag(row) && editingRowKey !== row.rowKey"
+                :draggable="
+                  canDrag(row) &&
+                  editingRowKey !== row.rowKey &&
+                  editingBaseKey !== row.rowKey
+                "
                 @click="pickRow(row, $event)"
                 @contextmenu.prevent="openRowMenu(row, $event)"
                 @keydown="onRowKeydown(row, $event)"
@@ -782,10 +785,38 @@
                      the field a reader scans a shelf for, and it can only be
                      scanned if it aligns. -->
                 <span role="gridcell" class="shelf-col shelf-col--base">
-                  <span v-if="row.base_model">{{ row.base_model }}</span>
-                  <span v-else class="shelf-chip shelf-chip--none"
-                    >not set</span
-                  >
+                  <!-- Double-click edits it here, on the row, for the same
+                       reason the name is edited here: this is where the value
+                       is read, and "not set" is a value like any other, so it
+                       opens the field rather than being the one state you have
+                       to go to a dialog for. The dialog stays for the bulk
+                       verb, which is a different gesture with a different
+                       warning in front of it. -->
+                  <BaseModelInput
+                    v-if="editingBaseKey === row.rowKey"
+                    v-model="editingBase"
+                    class="shelf-row-base-edit"
+                    placeholder="Base model"
+                    :aria-label="`Base model for ${row.filename || 'this model'}`"
+                    @click.stop
+                    @keydown.stop
+                    @confirm="commitBaseModel(true)"
+                    @cancel="cancelBaseModel"
+                    @blur="commitBaseModel()"
+                  />
+                  <template v-else>
+                    <span
+                      v-if="row.base_model"
+                      @dblclick.stop="startBaseModelEdit(row)"
+                      >{{ row.base_model }}</span
+                    >
+                    <span
+                      v-else
+                      class="shelf-chip shelf-chip--none"
+                      @dblclick.stop="startBaseModelEdit(row)"
+                      >not set</span
+                    >
+                  </template>
                 </span>
                 <span role="gridcell" class="shelf-col shelf-col--size">{{
                   row.file_size ? formatModelSize(row.file_size) : ""
@@ -905,10 +936,19 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref, shallowRef, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  ref,
+  shallowRef,
+  watch,
+} from "vue";
 import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
+import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
@@ -928,7 +968,10 @@ import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { errorDetail } from "../../utils/apiError";
+import { isTypingTarget } from "../../utils/dom.js";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
   adapterKindLabel,
@@ -958,6 +1001,10 @@ const store = useModelShelfStore();
 const entityLists = useEntityListsStore();
 const foldersStore = useModelFoldersStore();
 const moves = useModelMovesStore();
+// Both read by the window-level Escape, which has to know what else on screen
+// owns the key before it clears anything. See `onShelfEscape`.
+const reviewSessionsStore = useReviewSessionsStore();
+const sidebarStore = useSidebarStore();
 const rootEl = ref(null);
 const showMenuOpen = ref(false);
 const sortMenuOpen = ref(false);
@@ -1346,32 +1393,70 @@ function onBandDrop(band, event) {
 }
 
 /**
- * Escape clears the selection, from anywhere in the shelf.
+ * Escape clears the selection, from anywhere — including outside the shelf.
  *
- * On the ROOT rather than on the row: a selection made by clicking leaves focus
- * on the row, but a selection survives Tab to the toolbar, a dialog opening and
- * closing, or a click on empty space — and "Escape clears the selection" has to
- * mean that everywhere, not only while a row holds the roving tab stop.
+ * On the WINDOW rather than on the shelf root, because a keydown only reaches
+ * an element that contains the focus: bound to the root it worked from a row
+ * and from the toolbar, and did nothing at all once the sidebar, the app bar or
+ * anything else outside this view had been clicked. The selection is still on
+ * screen at that point, so "Escape clears the selection" reads as broken. The
+ * shelf is `v-else-if`'d away with the view, so the listener is only live while
+ * there is a shelf to clear.
  *
- * A dialog is checked for first. Vuetify's own overlays stop the key before it
- * reaches here, but the shelf's `AppDialog`s and the entity picker are inside
- * this subtree, and Escape inside one of those means "close me" — clearing the
- * selection underneath at the same time would be a second, unasked-for effect.
+ * Everything that can own the key ahead of the shelf gets it handed back
+ * rather than taken from it, all one rule — Escape means "undo the thing in
+ * front of you", and clearing the selection underneath would be a second,
+ * unasked-for effect. What that means in practice, and why each one is checked
+ * the way it is:
+ *   * one of the shelf's OWN dialogs is open. By ref, not by target: those are
+ *     `AppDialog`s inside this subtree and a press with nothing focused targets
+ *     `<body>`, which no ancestor test can see. `docs/frontend_architecture.md`
+ *     §"the create-person dialog" records that same body-target hole.
+ *   * any Vuetify overlay that is not a tooltip is up — a menu, a dialog, a
+ *     select. On the OVERLAY rather than on the target, because `VMenu` only
+ *     pulls focus into its content on a later `focusin`: a menu opened with the
+ *     mouse leaves focus on its activator, so the shelf's own Sort, Show and
+ *     verb menus would close AND drop the selection. Tooltips are exempt or a
+ *     hovered button elsewhere would swallow the key.
+ *   * a full-screen surface is over the shelf. The review overlay renders
+ *     OUTSIDE `App.vue`'s view switch, so the shelf is still mounted under it
+ *     and would clear a selection nobody can see.
+ *   * the auto-hide sidebar is showing. Escape dismisses it (WCAG 1.4.13) and
+ *     `useGlobalKeydown` deliberately does not stop the event, so without this
+ *     one press would hide the sidebar and wipe the selection behind it.
+ *   * something is being typed in — the search field's own Escape clears the
+ *     search.
+ *
+ * Bubble phase, not capture: every owner above is meant to resolve the key
+ * FIRST, and a capture-phase listener would take it from them.
  */
 function onShelfEscape(event) {
+  if (event.key !== "Escape") return;
   if (
     moveOpen.value ||
     importOpen.value ||
     stacksOpen.value ||
+    foldersOpen.value ||
+    addFileOpen.value ||
     editVerb.value
   ) {
     return;
   }
+  if (
+    reviewSessionsStore.overlayOpen ||
+    document.querySelector(".v-overlay--active:not(.v-tooltip), .image-overlay")
+  ) {
+    return;
+  }
+  if (sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible) return;
   if (event.target?.closest?.(".ate, [role='dialog']")) return;
+  if (isTypingTarget(event.target)) return;
   if (!store.selectedRows.length) return;
-  event.preventDefault();
   store.clearSelection();
 }
+
+onMounted(() => window.addEventListener("keydown", onShelfEscape));
+onUnmounted(() => window.removeEventListener("keydown", onShelfEscape));
 
 // ── The icon verb ───────────────────────────────────────────────────────────
 
@@ -1719,6 +1804,7 @@ const rovingRowKey = computed(
  */
 function pickRow(row, event) {
   if (editingRowKey.value === row.rowKey) return;
+  if (editingBaseKey.value === row.rowKey) return;
   focusedRowKey.value = row.rowKey;
   store.selectFromClick(
     row.id,
@@ -1788,7 +1874,12 @@ function onRowKeydown(row, event) {
   // new tab stops for the gesture one key already covers.
   if (event.key === "F2") {
     event.preventDefault();
-    startRename(row);
+    // Shift+F2 edits the other field on the row. The base model needs a
+    // keyboard path for the same reason the name does — the gesture is a double
+    // click and a double click is not reachable without a pointer — and it
+    // stays off the tab order for the same reason too.
+    if (event.shiftKey) startBaseModelEdit(row);
+    else startRename(row);
     return;
   }
   if (event.key === " " || event.key === "Enter") {
@@ -1800,9 +1891,9 @@ function onRowKeydown(row, event) {
     );
     return;
   }
-  // Escape is NOT handled here. It is owned by the shelf root, so it works
-  // wherever focus happens to be — on a row, on the toolbar, or nowhere at all
-  // after a click — rather than only while a row holds the roving tab stop,
+  // Escape is NOT handled here. It is owned by a window listener, so it works
+  // wherever focus happens to be — on a row, on the toolbar, on the sidebar, or
+  // nowhere at all — rather than only while a row holds the roving tab stop,
   // which is what it used to mean and is not what a reader expects from
   // "Escape clears the selection".
 }
@@ -1921,6 +2012,70 @@ function onRenameKeydown(event) {
   // Focus goes back to the row it came from: the field is gone and a keyboard
   // reader would otherwise be dropped at the top of the document.
   nextTick(() => focusDrawnRow(key));
+}
+
+const editingBaseKey = ref("");
+const editingBase = ref("");
+let editingBaseRow = null;
+
+/**
+ * Put the base-model field on a row, seeded with what is recorded.
+ *
+ * Seeded from the stored value and not from a guess — unlike the name field,
+ * which opens empty on a derived row because the string it shows was inferred.
+ * Nothing infers a base model: what the row shows is what the file said, so
+ * editing it starts from that and a correction is one word, not a retype.
+ */
+function startBaseModelEdit(row) {
+  editingBaseRow = row;
+  editingBaseKey.value = row.rowKey;
+  editingBase.value = row.base_model || "";
+  nextTick(() => {
+    const el = rootEl.value?.querySelector(".shelf-row-base-edit");
+    el?.focus();
+    el?.select();
+  });
+}
+
+function endBaseModelEdit() {
+  editingBaseRow = null;
+  editingBaseKey.value = "";
+  editingBase.value = "";
+}
+
+function cancelBaseModel() {
+  const key = editingBaseKey.value;
+  endBaseModelEdit();
+  // Focus goes back to the row it came from, exactly as the rename field does:
+  // the field is gone, and the grid's roving tab stop would otherwise be left
+  // at the top of the document.
+  nextTick(() => focusDrawnRow(key));
+}
+
+/**
+ * Commit the field, on Enter or on losing focus.
+ *
+ * Closes BEFORE it writes, so the blur the unmount fires finds nothing to do
+ * and the row cannot be written twice — the same order the rename above uses.
+ * An empty box clears the base model back to `NULL`, which is the state the
+ * shelf draws as "not set" and filters as `UNASSIGNED`.
+ */
+async function commitBaseModel(restoreFocus = false) {
+  const row = editingBaseRow;
+  if (!row) return;
+  const next = editingBase.value.trim();
+  const key = editingBaseKey.value;
+  endBaseModelEdit();
+  // Only when a KEY committed it. A blur committed it by moving the focus
+  // somewhere the reader chose, and dragging it back to the row would undo
+  // their click.
+  if (restoreFocus) nextTick(() => focusDrawnRow(key));
+  if (next === String(row.base_model || "").trim()) return;
+  // A cover stands for every file of the run, and one run was trained against
+  // one base model.
+  await store.editModelIds(row.memberIds ?? [row.id], {
+    base_model: next || null,
+  });
 }
 
 /**
@@ -3002,7 +3157,11 @@ watch(
    to the text it replaces so committing does not jump the row. Selectable
    against the panel's `user-select: none`, or the one place a name is genuinely
    edited would be a field whose text cannot be dragged over or double-clicked. */
-.shelf-row-rename {
+/* One inline field, two columns. Two class names and not one, because
+   `startRename` finds its field with a first-match `querySelector` and a shared
+   class would let it land on whichever of the two was drawn first. */
+.shelf-row-rename,
+.shelf-row-base-edit {
   min-width: 0;
   -webkit-user-select: text;
   user-select: text;
@@ -3017,7 +3176,8 @@ watch(
   border-radius: var(--radius-sm);
 }
 
-.shelf-row-rename:focus {
+.shelf-row-rename:focus,
+.shelf-row-base-edit:focus {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -3132,6 +3292,16 @@ watch(
 
 .shelf-col--base {
   width: var(--shelf-col-base);
+}
+
+/* The field fills the cell it replaces rather than widening the row: every
+   other column is fixed, so a field that sized itself would shift the whole
+   grid the moment somebody double-clicked one row. Regular weight, because the
+   Base column is not the row's title and the name field's semibold would make
+   it read as one. */
+.shelf-row-base-edit {
+  width: 100%;
+  font-weight: var(--weight-regular);
 }
 
 /* Right-aligned and tabular, which is what makes a column of sizes scannable:

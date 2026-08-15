@@ -9,9 +9,6 @@ folder.
 the hub file *is* the credential, the same model as ``psql`` or ``docker``.
 There is no login here and no stored credential; Docker deployments reach it
 with ``docker exec``.
-
-Nothing in the command set destroys data. ``detach`` deregisters a library and
-never touches its files, and there is deliberately no ``--delete`` flag.
 """
 
 from __future__ import annotations

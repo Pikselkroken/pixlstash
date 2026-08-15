@@ -2,6 +2,7 @@
 
 Provides:
     GET  /taggers                          — list all registered plugins + current settings
+    GET  /taggers/plugin-diagnostics       — scanned folders + load failures (local owner)
     POST /taggers/{name}/download          — kick off an artifact download for a plugin
     DELETE /taggers/{name}/artifacts/{id}  — remove a downloaded artifact
 """
@@ -34,7 +35,6 @@ class TaggerPluginResponse(BaseModel):
     parameter_schema: list[dict] = []
     downloaded_artifacts: list[dict] = []
     is_loaded: bool = False
-    load_error: Optional[str] = None
 
 
 class TaggerListResponse(BaseModel):
@@ -42,6 +42,26 @@ class TaggerListResponse(BaseModel):
 
     plugins: list[TaggerPluginResponse] = []
     settings: dict = {}
+
+
+class TaggerPluginDiagnosticsResponse(BaseModel):
+    """Everything about plugin *installation* — a §16.3 host-path disclosure.
+
+    Deliberately its own route rather than fields on ``GET /taggers``, which
+    used to be ANY_TOKEN and handed a share-link holder the owner's home
+    directory. (That route is OWNER_ONLY now as well, for the settings it
+    carries; this one is stricter still because a host path is the §16.3
+    locality class.) Both halves disclose it. ``plugin_dirs`` says so plainly,
+    and a ``load_errors`` message is built from an exception raised by
+    third-party code at import — an ``OSError`` out of a plugin's module body
+    carries whatever absolute path it was reaching for. Sanitising that text is
+    guesswork; not serving it to a share token is not.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    plugin_dirs: dict = {}
+    load_errors: list[dict] = []
 
 
 class TaggerDownloadResponse(BaseModel):
@@ -103,13 +123,21 @@ def create_router(server) -> APIRouter:
                   "default_enabled": true,
                   "parameter_schema": [...],
                   "downloaded_artifacts": [],
-                  "is_loaded": false,
-                  "load_error": null
+                  "is_loaded": false
                 },
                 ...
               ],
               "settings": { ... }
             }
+
+        Neither the scanned folders nor the plugins that failed to load are
+        here: both name paths on the server's disk, and this route's job is the
+        plugin list, not installation. See ``GET /taggers/plugin-diagnostics``,
+        which is local-owner-only.
+
+        OWNER_ONLY: ``settings`` is the caller's own ``tagger_settings``, and a
+        plugin is free to declare a free-text parameter the owner has typed a
+        path into.
         """
         mgr = get_tagger_plugin_manager()
 
@@ -128,31 +156,31 @@ def create_router(server) -> APIRouter:
                     "parameter_schema": plugin.parameter_schema(),
                     "downloaded_artifacts": plugin.list_downloaded_artifacts(),
                     "is_loaded": bool(plugin.is_loaded()),
-                    "load_error": None,
-                }
-            )
-
-        # Surface plugins that failed to import.
-        for err in mgr.list_errors():
-            plugins_out.append(
-                {
-                    "name": err["name"],
-                    "display_name": err["name"],
-                    "description": "",
-                    "supports_tags": False,
-                    "supports_descriptions": False,
-                    "requires_download": False,
-                    "default_enabled": False,
-                    "parameter_schema": [],
-                    "downloaded_artifacts": [],
-                    "is_loaded": False,
-                    "load_error": err["message"],
                 }
             )
 
         return {
             "plugins": plugins_out,
             "settings": _current_settings(request),
+        }
+
+    @router.get(
+        "/taggers/plugin-diagnostics",
+        summary="Plugin folders and load failures (installation diagnostics)",
+        response_model=TaggerPluginDiagnosticsResponse,
+    )
+    def plugin_diagnostics(request: Request):
+        """Return the scanned folders and every plugin that failed to import.
+
+        LOCAL_OWNER_ONLY: both halves name paths on the server's disk, which is
+        the §16.3 disclosure class. Nothing is lost by gating them — acting on
+        either means editing a file in that folder and restarting.
+        """
+        server.auth.ensure_secure_when_required(request)
+        mgr = get_tagger_plugin_manager()
+        return {
+            "plugin_dirs": mgr.plugin_dirs(),
+            "load_errors": mgr.list_errors(),
         }
 
     @router.post(

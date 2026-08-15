@@ -93,7 +93,7 @@ frontend/src/
 │   ├── tagSuggestions.js        # /tag_suggestions — per-card review decisions
 │   ├── tagHealth.js             # /tag_health — board rows + cache rebuild
 │   ├── comfyui.js               # /comfyui/* — workflows, run, recipe read/replay, abort
-│   ├── taggers.js               # /taggers, /tagger/label-thresholds
+│   ├── taggers.js               # /taggers, /taggers/plugin-diagnostics, /tagger/label-thresholds
 │   ├── folders.js               # /reference-folders, /import-folders, /filesystem/*
 │   ├── characters.js            # /characters + faces + reference pictures
 │   ├── projects.js              # /projects + membership
@@ -144,7 +144,7 @@ frontend/src/
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
-    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), and `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors)
+    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors), and `BaseModelInput` (the completing base-model field, shared by the shelf's bulk dialog and its inline row editor)
 ```
 
 ---
@@ -218,7 +218,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 |-------|------|-----------|
 | `useViewStore` | `useViewStore.js` | The route's parsed reflection: `view` (the resolved view descriptor) and `activeFolderKey`. Owns the app's **single route watcher** and is the only writer of route-derived selection/project state. Never pushes a route. See §4.5. |
 | `useSelectionStore` | `useSelectionStore.js` | `selectedCharacter`, `selectedCharacterIds`, `selectedSet`, `selectedSetIds`, `selectedFolderFilter` |
-| `useFilterStore` | `useFilterStore.js` | `mediaTypeFilter`, `minScoreFilter`, `maxScoreFilter`, `tagFilter`, `tagRejectedFilter`, `faceBboxFilter`, `sharedOnlyFilter`, `unassignedOnlyFilter`, etc. |
+| `useFilterStore` | `useFilterStore.js` | `mediaTypeFilter`, `minScoreFilter`, `maxScoreFilter`, `unscoredOnlyFilter`, `tagFilter`, `tagRejectedFilter`, `faceBboxFilter`, `sharedOnlyFilter`, `unassignedOnlyFilter`, etc. `minScoreFilter`/`maxScoreFilter`/`unscoredOnlyFilter` are writable computeds, not bare refs: "unscored" (`unscored=1`, i.e. `score IS NULL OR score = 0`) is the complement of a score range rather than a point on it, so the setters keep the two mutually exclusive and every surface that writes them inherits the rule. |
 | `useSortStore` | `useSortStore.js` | `selectedSort`, `selectedDescending`, `sortOptions`, `similarityCharacterOptions`, `selectedSimilarityCharacter` |
 | `useGridStore` | `useGridStore.js` | `columns`, `thumbnailSize`, `sidebarThumbnailSize`, `gridVersion`, `wsUpdateKey`, `showStars`, `showFaceBboxes`, `showProblemIcon`, `showStacks`, `stackThreshold`, `expandedStackCount`, `totalStackCount`, `compactMode`, `visibleRangeLabel` |
 | `useExportStore` | `useExportStore.js` | `exportType`, `exportCaptionMode`, `exportResolution`, `exportTagFormat`, `exportIncludeCharacterName`, `exportUseOriginalFileNames`, etc. |
@@ -517,7 +517,7 @@ Right-side statistics panel. Responsibilities:
 - Tag frequency charts (top tags, tag co-occurrence).
 - Confidence-score histogram.
 - Tag-count histogram.
-- Score distribution.
+- Score distribution. Every row is clickable, including **Unscored**: it toggles `unscoredOnlyFilter` (`unscored=1`) the same way a star row toggles a one-star range, so the count it has always shown is now a way in. The same toggle sits between the two star rows in the Filters menu (`GbFilterPanel`, `mdi-star-off`), and both write the one store field.
 - **Agreement matrix** (`score_agreement`): a 5x4 heatmap cross-tabulating the user's star rating (rows 1-5, same order as the Score chart) against the smart-score buckets (columns, same bucketing as the Smart Score chart), **Composite encoding**: hue is a traffic light for how far apart the two scores are, opacity is the count on a sqrt ramp. The gap is measured in **smart-score points, not grid steps** — a star rating is a rounded smart score, so rating 4 covers 3.5-4.5 and matches both the 3-4 and the 4-5 bucket. Distance is from the rating to the nearest edge of the bucket's interval: 0 (green, within half a point), 1 (amber), 2 or more (red). Middle ratings therefore get a two-bucket green band and the end ratings one, which is correct rather than an artefact. Hue is redundant with cell position and every populated cell prints its count, so nothing is carried by colour alone. Status hues come from the theme's own `success`/`warning`/`error` tokens, with the matching `on-*` ink for counts on strong fills. Axis titles ("Your rating" rotated on the left, "Smart score" below) plus Pearson r and Spearman ρ, each named and tooltipped, over a rated-coverage line. A cell click is a **compound** filter (`minScoreFilter` + `maxScoreFilter` + `smartScoreBucketFilter` at once); clicking the active cell clears all three. Keyboard: the grid is one tab stop with roving `tabindex`, arrow keys/Home/End move, Enter/Space activate. **The backend deliberately computes this section with those three filters excluded** so a cell click cannot collapse the matrix to the cell you just clicked (see backend_architecture, `_agreement_scope`); the selected cell is ringed instead. Empty cells are inert, since filtering to one would empty the grid.
 - Filter controls that emit back to `App.vue`: tag filter, score range, resolution bucket, media type.
 - Mirrors the same filter props as `ImageGrid` so its stats always match the active view.
@@ -1389,7 +1389,7 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/tagSuggestions.js` | `/tag_suggestions`, the per-card decisions |
 | `api/tagHealth.js` | `/tag_health`, the board and its cache rebuild |
 | `api/comfyui.js` | `/comfyui/*`, PixlStash's own ComfyUI proxy routes |
-| `api/taggers.js` | `/taggers` and `/tagger/label-thresholds` |
+| `api/taggers.js` | `/taggers`, `/taggers/plugin-diagnostics` and `/tagger/label-thresholds` |
 | `api/folders.js` | `/reference-folders`, `/import-folders`, and the `/filesystem/*` picker |
 | `api/characters.js` | `/characters`, including face membership and reference pictures |
 | `api/projects.js` | `/projects` and project membership |
@@ -1587,6 +1587,20 @@ undo by accident:
   row is the control, and a pencil per row would be 1,800 new tab stops. The
   field stops its own keys, or Arrow, Space and Escape would walk and clear the
   list from under it.
+- **The base model is a field too, on the same gesture.** Double-clicking the
+  Base cell — including the "not set" chip, which is a value like any other and
+  is the row that most needs correcting — opens the same inline field, committed
+  on Enter or blur, abandoned on Escape, writing the whole run of a stack cover
+  because one training run was trained against one base. Its keyboard half is
+  **Shift+F2** beside the name's F2, both advertised in the row's
+  `aria-keyshortcuts`, because a double click is not a keyboard gesture and a
+  pointer-only field is a field some readers do not have. Focus returns to the
+  row when a KEY closed the field and stays put when a click did, or committing
+  by clicking elsewhere would drag the reader back. It is seeded from the stored
+  value, unlike the name field: nothing infers a base model, so what the row
+  shows is what the file said and a correction is one word rather than a retype.
+  The bulk verb keeps its dialog, which is a different gesture with the
+  overwrite count in front of it.
 - **`unknown` is never rendered as a checkpoint.** `file_kind='unknown'` is a
   first-class stored value with its own glyph and the word "Unclassified". It is
   never folded into either other list and is fetched only from the *adapters*
@@ -1840,7 +1854,7 @@ for.
     of a list of empty folders, because "add the folder where you keep them" is
     the better answer on a fresh install than an inventory of nothing.
 - **The band is named by the volume, not by the mount point.** A Linux mount
-  point runs to `/media/glindkvist/102AB4B6757AF9A3` and crowds the header out,
+  point runs to `/media/<user>/A1B2C3D4E5F60789` and crowds the header out,
   so the band shows `label` behind a disk glyph and keeps `mount_point` as its
   `title`. The server reads the label from `/dev/disk/by-label` on Linux,
   `GetVolumeInformationW` on Windows and the `/Volumes` mount name on macOS, and
@@ -2234,6 +2248,34 @@ double click on the name, or F2 on the row for the keyboard.
 Arrows move the stop **without** selecting, so a reader can walk the list
 without arming a verb against every row they pass; Space and Enter pick;
 Shift+arrow extends from the anchor, the keyboard's Shift+click; Escape clears.
+**Escape is bound on the `window`, not on the shelf's root**, because a keydown
+only reaches an element that contains the focus: bound to the root it worked
+from a row and from the toolbar and did nothing once the sidebar or the app bar
+had been clicked, while the selection was still on screen. A window listener
+then has to know what else owns the key, and hand it back rather than clear
+underneath. Five checks, in this order, each for its own reason:
+
+- **The shelf's own dialogs, by REF** (`moveOpen`, `importOpen`, `stacksOpen`,
+  `foldersOpen`, `addFileOpen`, `editVerb`) — they are `AppDialog`s inside this
+  subtree, and a press with nothing focused targets `<body>`, which no ancestor
+  test can see. Same body-target hole the create-person dialog documents above.
+- **Any active Vuetify overlay that is not a tooltip**, plus `.image-overlay` —
+  read off the OVERLAY, not the event target, because `VMenu` only pulls focus
+  into its content on a later `focusin`: a menu opened with the mouse leaves
+  focus on its activator, so a target test would let the shelf's own Sort, Show
+  and verb menus close *and* drop the selection in one press. Tooltips are
+  exempt, or a hovered button anywhere in the app would swallow the key.
+- **`reviewSessionsStore.overlayOpen`** — that overlay renders outside `App.vue`'s
+  view switch, so the shelf is still mounted under it.
+- **The revealed auto-hide sidebar** — `useGlobalKeydown` dismisses it on Escape
+  and deliberately does not stop the event, so without this one press would hide
+  the sidebar and wipe the selection behind it.
+- **A `[role="dialog"]`/`.ate` target, and any typing target** (`isTypingTarget`,
+  so the search field's own Escape stays its own).
+
+Bubble phase, not capture: every owner above is meant to resolve the key first.
+The view is `v-else-if`'d away with the route, so the listener is only live while
+there is a shelf to clear.
 **The panel's text is not selectable** (`user-select: none` on `.shelf`, #932).
 Picking rows is the gesture here and the browser's own text selection rode along
 with it: Shift+click extends a text range from the last click and a fast double
@@ -2346,6 +2388,29 @@ It sends **only** the field its verb owns, which is why the route distinguishes
 an absent field from a null one. Fields are seeded from the selection on open
 (shared value, or empty when the selection disagrees) so the box shows what is
 there rather than something the reader has to interpret.
+
+**The base-model field completes; it never constrains.** Both places it appears
+— the dialog above and the inline editor on a row — are `BaseModelInput.vue`,
+which offers `GET /models/base-models`: the labels `known_base_models` ships, so
+the field is useful on a fresh install where nothing records a base model at
+all, plus every distinct string this machine already stores. The column is free
+text by rule and stays that way, so a name released after this build is typed
+and stored verbatim. Matching folds case, spacing and punctuation away (`sdxl`
+finds `SDXL 1.0`), and the keys follow the tag field as far as that field goes —
+Arrow highlights, **Tab fills without committing**, and the highlighted row
+wears the same TAB hint. The two it adds are the two `OverlayTagsPanel` has no
+answer for: that list has no open state (it is visible whenever the prefix
+matches, inside a panel that is itself a mode), while this field sits on a row
+and in a dialog that both own Escape. So **ArrowDown opens the menu**, Escape
+closes it, and only a second Escape reaches the host; Enter commits and takes
+the highlight if there is one. **The menu
+opens on a keystroke and never on focus**, because both hosts focus the field as
+they draw it: a menu that opened with them would cover the dialog unasked and
+would eat the Escape that dismisses it. A scroll or resize closes it — it is
+positioned `fixed` from one measurement, and the shelf's row list scrolls under
+it. The list is held in the shelf store and
+fetched once, invalidated by the write that could change it — an edit carrying
+`base_model` — rather than polled.
 
 **The two confirmations are deliberately different shapes.**
 

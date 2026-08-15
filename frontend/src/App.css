@@ -557,6 +557,9 @@ kbd {
 .tbm-label--right {
   text-align: right;
 }
+.tbm-label--center {
+  text-align: center;
+}
 
 /* Two-column grids used for option toggles and checkboxes. */
 .tbm-grid-2 {
