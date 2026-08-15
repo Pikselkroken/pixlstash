@@ -220,6 +220,7 @@ function buildQueryParams() {
     params.append("min_score", filterStore.minScoreFilter);
   if (filterStore.maxScoreFilter != null)
     params.append("max_score", filterStore.maxScoreFilter);
+  if (filterStore.unscoredOnlyFilter) params.append("unscored", "1");
   if (filterStore.smartScoreBucketFilter != null)
     params.append("smart_score_bucket", filterStore.smartScoreBucketFilter);
   if (filterStore.resolutionBucketFilter != null)
@@ -823,13 +824,20 @@ function clearConfidenceFilters(entries) {
     filterStore.tagConfidenceAboveFilter.filter((e) => !entries.includes(e));
 }
 
+// "Unscored" is not a star, so it maps to its own filter rather than to a score
+// range — the same shape as the smart-score chart's Unscored bucket below.
 function isScoreBarActive(label) {
+  if (label === "Unscored") return filterStore.unscoredOnlyFilter;
   const n = parseInt(label);
   if (isNaN(n)) return false;
   return filterStore.minScoreFilter === n && filterStore.maxScoreFilter === n;
 }
 
 function handleScoreBarClick(label) {
+  if (label === "Unscored") {
+    filterStore.unscoredOnlyFilter = !filterStore.unscoredOnlyFilter;
+    return;
+  }
   const n = parseInt(label);
   if (isNaN(n)) return;
   if (isScoreBarActive(label)) {
@@ -1564,7 +1572,8 @@ defineExpose({ focusTasksTab });
               <button
                 v-if="
                   filterStore.minScoreFilter != null ||
-                  filterStore.maxScoreFilter != null
+                  filterStore.maxScoreFilter != null ||
+                  filterStore.unscoredOnlyFilter
                 "
                 class="stats-clear-btn"
                 type="button"
@@ -1572,6 +1581,7 @@ defineExpose({ focusTasksTab });
                 @click="
                   filterStore.minScoreFilter = null;
                   filterStore.maxScoreFilter = null;
+                  filterStore.unscoredOnlyFilter = false;
                 "
               >
                 <v-icon size="11">mdi-close</v-icon>
@@ -1582,7 +1592,6 @@ defineExpose({ focusTasksTab });
                 :buckets="picStats.score_distribution"
                 aria-label="Manual score distribution"
                 fill="secondary"
-                :interactive="(item) => item.label !== 'Unscored'"
                 :active="(item) => isScoreBarActive(item.label)"
                 @select="(item) => handleScoreBarClick(item.label)"
               />

@@ -8,6 +8,11 @@ const BUCKETS = [
   { label: "2", count: 10 },
 ];
 
+const CONF_BUCKETS = [
+  { label: "0.9+", count: 4 },
+  { label: "0.8", count: 2 },
+];
+
 const mountHist = (props = {}) =>
   mount(StatsHistogram, {
     props: { buckets: BUCKETS, ariaLabel: "Score distribution", ...props },
@@ -51,27 +56,41 @@ describe("StatsHistogram", () => {
   });
 
   // The reason interactivity is a predicate: a row that announces itself as a
-  // button and then ignores the press is worse than one that never claimed to be.
-  it("gives role and tabindex only to interactive rows", () => {
-    const rows = mountHist({
-      interactive: (item) => item.label !== "Unscored",
-    }).findAll("g");
+  // button and then ignores the press is worse than one that never claimed to
+  // be. The live case is the confidence chart, which is inert until a tag is
+  // selected (StatsSidebar passes `() => !!selectedConfTag`).
+  it("gives a dead row no role, no tabindex and no select", async () => {
+    const w = mountHist({ buckets: CONF_BUCKETS, interactive: () => false });
+    const rows = w.findAll("g");
     expect(rows[0].attributes("role")).toBeUndefined();
     expect(rows[0].attributes("tabindex")).toBeUndefined();
     expect(rows[0].classes()).toContain("hist-bar-row--disabled");
-    expect(rows[1].attributes("role")).toBe("button");
-    expect(rows[1].attributes("tabindex")).toBe("0");
+    await rows[0].trigger("click");
+    await rows[0].trigger("keydown.enter");
+    expect(w.emitted("select")).toBeUndefined();
   });
 
-  it("emits select with the bucket and its index, but not for a dead row", async () => {
-    const w = mountHist({ interactive: (item) => item.label !== "Unscored" });
+  it("emits select with the bucket and its index", async () => {
+    const w = mountHist({ interactive: (item) => item.label !== "1" });
     const rows = w.findAll("g");
-    await rows[0].trigger("click");
+    await rows[1].trigger("click");
     expect(w.emitted("select")).toBeUndefined();
     await rows[2].trigger("click");
     expect(w.emitted("select")[0]).toEqual([BUCKETS[2], 2]);
-    await rows[1].trigger("keydown.enter");
-    expect(w.emitted("select")[1]).toEqual([BUCKETS[1], 1]);
+  });
+
+  // The score chart passes no predicate at all now: "Unscored" is a filter of
+  // its own (`unscored=1`), so its row is as clickable as any star's.
+  it("makes every row interactive when no predicate is passed", async () => {
+    const w = mountHist();
+    const rows = w.findAll("g");
+    expect(rows[0].attributes("role")).toBe("button");
+    expect(rows[0].attributes("tabindex")).toBe("0");
+    expect(rows[0].classes()).toContain("hist-bar-row");
+    await rows[0].trigger("click");
+    expect(w.emitted("select")[0]).toEqual([BUCKETS[0], 0]);
+    await rows[0].trigger("keydown.enter");
+    expect(w.emitted("select")[1]).toEqual([BUCKETS[0], 0]);
   });
 
   it("marks the active row", () => {

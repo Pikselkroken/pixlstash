@@ -381,6 +381,9 @@ export function useGridFetch(
     if (filterStore.maxScoreFilter != null) {
       params.append("max_score", filterStore.maxScoreFilter);
     }
+    if (filterStore.unscoredOnlyFilter) {
+      params.append("unscored", "1");
+    }
     if (filterStore.smartScoreBucketFilter != null) {
       params.append("smart_score_bucket", filterStore.smartScoreBucketFilter);
     }
@@ -456,6 +459,9 @@ export function useGridFetch(
     }
     if (filterStore.maxScoreFilter != null) {
       params.append("max_score", filterStore.maxScoreFilter);
+    }
+    if (filterStore.unscoredOnlyFilter) {
+      params.append("unscored", "1");
     }
     if (filterStore.smartScoreBucketFilter != null) {
       params.append("smart_score_bucket", filterStore.smartScoreBucketFilter);
@@ -937,6 +943,7 @@ export function useGridFetch(
           _filterP.set("min_score", String(filterStore.minScoreFilter));
         if (filterStore.maxScoreFilter != null)
           _filterP.set("max_score", String(filterStore.maxScoreFilter));
+        if (filterStore.unscoredOnlyFilter) _filterP.set("unscored", "1");
         // Filter params: smart score bucket
         if (filterStore.smartScoreBucketFilter != null)
           _filterP.set(
