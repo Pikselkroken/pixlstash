@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vitest";
 import { contrastRatio } from "./contrastAudit.js";
-import { SET_COLORS } from "./setAppearance";
+import { ICON_CARDS, SET_COLORS } from "./setAppearance";
 import {
   assignmentRing,
   RING_STYLES,
@@ -1189,6 +1189,16 @@ describe("assignmentRing", () => {
   it("carries no icon for a set still on the thumbnail", () => {
     // `cards` is the sentinel for "keep the thumbnail", so treating it as an
     // icon name would draw an mdi glyph that does not exist.
+    //
+    // The fixtures below spell the sentinel out rather than using
+    // `ICON_CARDS`, because the value they stand for is what the BACKEND
+    // stored: `picture_sets.py` hardcodes `!= "cards"` too, and rows written
+    // before any rename would still hold the old string. A fixture built from
+    // the constant would rename itself alongside the source and prove nothing
+    // about them agreeing. The drift that leaves — the constant moving away
+    // from the stored value — is what this line catches, in one place instead
+    // of at every fixture.
+    expect(ICON_CARDS).toBe("cards");
     for (const set of [
       { id: 5, name: "Studio", set_icon: "cards" },
       { id: 5, name: "Studio" },
