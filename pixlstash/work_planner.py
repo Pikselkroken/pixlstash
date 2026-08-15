@@ -35,6 +35,7 @@ class WorkPlanner:
         engine_getter,
         image_root=None,
         path_mapper=None,
+        notifier=None,
     ):
         from pixlstash.tasks import TaskType
         from pixlstash.tasks.missing_description_finder import MissingDescriptionFinder
@@ -151,6 +152,7 @@ class WorkPlanner:
             ),
             TaskType.THUMBNAIL_GENERATION: MissingThumbnailFinder(
                 database=database,
+                notifier=notifier,
             ),
             TaskType.PIXEL_SHA: MissingPixelShaFinder(
                 database=database,

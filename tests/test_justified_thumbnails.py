@@ -283,3 +283,79 @@ def test_mode_patch_only_touches_the_user_preference():
     apply_user_config_patch(user, {"thumbnail_mode": "justified"})
     assert user.thumbnail_mode == "justified"
     assert user.thumbnail_width == 999  # untouched
+
+
+# ---------------------------------------------------------------------------
+# Regeneration announces itself
+# ---------------------------------------------------------------------------
+
+
+class _RecordingDB(_FakeDB):
+    """A fake DB whose ``run_task`` just runs the persist callable's contract."""
+
+    def run_task(self, fn, *args, **kwargs):
+        # The real persist writes columns and returns a count; the announcement
+        # is driven off the update dict, not off this value.
+        return len(args[0]) if args else 0
+
+
+def test_regeneration_announces_the_pictures_it_repaired(tmp_path):
+    """Silence here is why a rotate's undo needed a full page reload.
+
+    While a picture sits at ``thumbnail_width IS NULL`` it has no stored aspect
+    ratio, so its card lays out with the wrong shape, and its cache token is
+    ``"0"``. This task fixes both — and used to tell nobody, so an open grid kept
+    painting the pre-rotate tile until the whole view was reloaded by hand.
+    """
+    _write_source(tmp_path, "announced.png", 800, 400)
+    pic = SimpleNamespace(
+        id=77, file_path="announced.png", width=800, height=400, faces=[]
+    )
+    announcements = []
+    task = ThumbnailGenerationTask(
+        _RecordingDB(str(tmp_path)),
+        [pic],
+        notifier=lambda event, data: announcements.append((event, data)),
+    )
+
+    task._run_task()
+
+    assert len(announcements) == 1, "one batch, one announcement"
+    _event, data = announcements[0]
+    assert data["picture_ids"] == [77]
+    assert data["change_kind"] == "updated"
+    assert data["fields"] == ["pixels"], (
+        "the client repairs a changed thumbnail off `pixels`; any other field "
+        "name means it re-reads metadata and keeps the stale bitmap"
+    )
+
+
+def test_regeneration_announces_nothing_when_it_changed_nothing(tmp_path):
+    """A batch whose sources are all missing must not raise a phantom repaint."""
+    pic = SimpleNamespace(id=78, file_path="gone.png", width=10, height=10, faces=[])
+    announcements = []
+    task = ThumbnailGenerationTask(
+        _RecordingDB(str(tmp_path)),
+        [pic],
+        notifier=lambda event, data: announcements.append((event, data)),
+    )
+
+    task._run_task()
+
+    assert announcements == []
+
+
+def test_a_broken_notifier_cannot_fail_a_persisted_batch(tmp_path):
+    """The bitmap is already on disk by then; losing the announcement is the
+    lesser failure and must not be escalated into a failed task."""
+    _write_source(tmp_path, "noisy.png", 800, 400)
+    pic = SimpleNamespace(id=79, file_path="noisy.png", width=800, height=400, faces=[])
+
+    def _explode(event, data):
+        raise RuntimeError("socket is gone")
+
+    task = ThumbnailGenerationTask(
+        _RecordingDB(str(tmp_path)), [pic], notifier=_explode
+    )
+
+    assert task._run_task() == {"changed_count": 1}
