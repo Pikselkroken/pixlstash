@@ -512,10 +512,15 @@
                 }"
                 >mdi-chevron-right</v-icon
               >
-              <!-- Under `Folder` the glyph is the TIER's — one mdi folder
-                   family, never a hand-drawn box — and an unreachable folder
-                   wears the disconnected mark instead, which is the shape half
-                   of the offline treatment. -->
+              <!-- The GROUP's own glyph where it has one, and the axis's only
+                   where it does not. Under `Folder` that is the TIER's — one
+                   mdi folder family, never a hand-drawn box — and an
+                   unreachable folder wears the disconnected mark instead, which
+                   is the shape half of the offline treatment. Under `Feature`
+                   it is the feature's own mark, or eight headers read as eight
+                   copies of one star. The fallback is what the unset group and
+                   an unrecognised value get, both of which mean "no feature
+                   here to name" and so are exactly the axis. -->
               <v-icon size="16" class="shelf-group-mark">{{
                 group.icon || GROUP_BY_LABELS[store.view.groupBy].icon
               }}</v-icon>

@@ -29,7 +29,27 @@ import {
   trainingStep,
   withFolderSignals,
   FOLDER_TIERS,
+  CAPABILITY_LABELS,
+  capabilityIcon,
 } from "./modelShelf";
+
+describe("capabilityIcon", () => {
+  it("gives every named capability its own glyph", () => {
+    // The bug: the feature axis drew its own glyph on every header, so eight
+    // headers read as one star. A duplicate here would put two features back
+    // under one mark, and a missing one drops that header to the star again.
+    const icons = Object.keys(CAPABILITY_LABELS).map(capabilityIcon);
+    expect(icons.filter(Boolean)).toHaveLength(icons.length);
+    expect(new Set(icons).size).toBe(icons.length);
+  });
+
+  it("returns nothing for a capability this build has never seen", () => {
+    // The caller falls back to the axis's glyph. Inventing one would be the
+    // confident wrong answer.
+    expect(capabilityIcon("segmenter")).toBe("");
+    expect(capabilityIcon(null)).toBe("");
+  });
+});
 
 describe("cleanAssetName", () => {
   it("matches the Python it mirrors", () => {

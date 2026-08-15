@@ -173,6 +173,49 @@ export function capabilityLabel(capability) {
   return CAPABILITY_LABELS[key] || key;
 }
 
+/**
+ * The glyph that stands for each capability, in the app's OWN vocabulary.
+ *
+ * Not a new icon family. Where the product already marks a feature, that mark
+ * is the one used here and it is not re-drawn somewhere else: the face from
+ * `ImageOverlay` and the toolbar, the SHAPE from the same two — it is what
+ * "Object boxes" and "Detect objects" wear, so `detector` takes it and the
+ * catch-all does not — the tag, the star and the caption box from the operation
+ * log's icon rules. The two features nothing else in the app marks take glyphs
+ * nothing else in the app uses: a whole packaged model for `checkpoint` (NOT
+ * the cube, which is the base-model axis's), and the overflow dots for `other`.
+ *
+ * Grouped by feature, the shelf otherwise drew the AXIS's glyph on every
+ * header, so eight different headers all read as one star and the mark carried
+ * no information at all.
+ */
+export const CAPABILITY_ICONS = {
+  captioner: "mdi-text-box-outline",
+  tagger: "mdi-tag-outline",
+  detector: "mdi-shape-outline",
+  face: "mdi-face-recognition",
+  search: "mdi-magnify",
+  scorer: "mdi-star-outline",
+  checkpoint: "mdi-package-variant-closed",
+  other: "mdi-dots-horizontal-circle-outline",
+};
+
+/**
+ * The glyph for one capability.
+ *
+ * Returns "" for a capability this build has never seen, so the caller falls
+ * back to the grouping axis's own glyph rather than drawing a wrong one. Unlike
+ * {@link capabilityLabel}, which falls through to the STORED WORD, there is no
+ * such fallback for a glyph: an unknown capability has a name to show and no
+ * picture to show, and inventing one would be the confident wrong answer.
+ *
+ * @param {string} capability - a stored `model_capability.capability`.
+ * @returns {string} an mdi class name, or `""`.
+ */
+export function capabilityIcon(capability) {
+  return CAPABILITY_ICONS[String(capability || "")] || "";
+}
+
 const SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"];
 
 /**

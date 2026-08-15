@@ -1232,6 +1232,19 @@ describe("capabilities", () => {
     expect(byKey.detector.label).toBe("Detection");
   });
 
+  it("marks each feature header with that feature's own glyph", async () => {
+    // The header falls back to the AXIS's glyph when a group carries none, so
+    // every feature used to wear one star. Two headers, two marks.
+    listEngines.mockResolvedValue([engine()]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "feature" });
+
+    const byKey = Object.fromEntries(store.groups.map((g) => [g.key, g]));
+    expect(byKey.captioner.icon).toBe("mdi-text-box-outline");
+    expect(byKey.detector.icon).toBe("mdi-shape-outline");
+  });
+
   it("gives each draw its own rowKey, so focus cannot land on two at once", async () => {
     // The collision `folder` already had: one key across several draws put
     // `tabindex="0"` on all of them and made `indexOf` return the first.

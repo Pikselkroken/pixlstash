@@ -1142,6 +1142,38 @@ describe("the group header's reserved column", () => {
     expect(mark.exists()).toBe(true);
     expect(mark.element.tagName.toLowerCase()).toBe("v-icon-stub");
   });
+
+  it("draws each FEATURE's own glyph there, not one axis glyph on every header", async () => {
+    // The bug: the header fell back to the axis's glyph for want of its own, so
+    // every feature wore one star. Asserted on the rendered mark rather than on
+    // the store's field, because the fallback lives in the template and the
+    // store test passes either way.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, capabilities: ["tagger"] }),
+      adapter({ id: 2, capabilities: ["face"] }),
+    ]);
+    listCheckpoints.mockResolvedValue([]);
+    // The auto-stub swallows its slot, which is why the test above can only
+    // reach the tag name. This one has to read the glyph, so `v-icon` renders.
+    const wrapper = mount(ModelShelf, {
+      global: {
+        ...globalOpts.global,
+        stubs: {
+          ...globalOpts.global.stubs,
+          "v-icon": { template: "<i><slot /></i>" },
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+    useModelShelfStore().setView({ groupBy: "feature" });
+    await wrapper.vm.$nextTick();
+
+    const marks = wrapper
+      .findAll(".shelf-group-mark")
+      .map((mark) => mark.text());
+    expect(marks.sort()).toEqual(["mdi-face-recognition", "mdi-tag-outline"]);
+  });
 });
 
 describe("selection and drive bands together", () => {
