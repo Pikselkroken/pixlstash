@@ -14,11 +14,12 @@
     <p id="shelf-help" class="visually-hidden">
       Every adapter and checkpoint PixlStash has found on this machine. Group
       and Sort choose the order and whether the list is cut into groups; Show
-      chooses which kinds are listed and which base models. A ring around a
-      model's mark says who it is assigned to. A name in italics has not been
-      given one. A row that stands for a training run says how many files it
-      holds; Right and Left open and close it. Right-click a row for everything
-      that can be done to it. Escape clears the selection.
+      chooses which kinds are listed and which base models; the bar ends in the
+      app-wide pair, Undo and Settings, and the stats sidebar toggle. A ring
+      around a model's mark says who it is assigned to. A name in italics has
+      not been given one. A row that stands for a training run says how many
+      files it holds; Right and Left open and close it. Right-click a row for
+      everything that can be done to it. Escape clears the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -247,6 +248,20 @@
           </template>
           <ShelfShowPanel />
         </v-menu>
+
+        <!-- The canonical tail, whole and in the documented order:
+             [separator] [UndoControl] [TbGlobalActions]
+             (docs/design/toolbar-responsive-decisions.md). The shelf replaces
+             the grid, and with it the grid's toolbar, so it owes the same
+             app-wide chrome the duplicates queue does — including undo, which
+             is about RECOVERY: the shelf writes nothing to the operation log
+             itself, but a library action undone from here is one the reader
+             does not have to navigate back to reach. The separator is required
+             at every width: proximity alone cannot separate identical icon
+             buttons into "this view's controls" and "the app's". -->
+        <span class="bar-separator" aria-hidden="true"></span>
+        <UndoControl />
+        <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
     </div>
 
@@ -885,6 +900,8 @@ import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
+import TbGlobalActions from "../panels/TbGlobalActions.vue";
+import UndoControl from "../panels/UndoControl.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
@@ -916,6 +933,11 @@ import {
   trainingStep,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
+
+// Settings lives in App.vue's sidebar dialog, so the toolbar's Settings button
+// asks for it the way the duplicates queue does. The stats toggle needs no
+// event: TbGlobalActions flips the sidebar store itself.
+const emit = defineEmits(["open-settings"]);
 
 const store = useModelShelfStore();
 const entityLists = useEntityListsStore();
@@ -2327,6 +2349,12 @@ watch(
   display: flex;
   align-items: center;
   gap: var(--space-4);
+  /* `shelfbar` for this bar's own ladder, and the shared `toolbar` name the
+     app-wide chrome (UndoControl, TbGlobalActions) writes its scoped
+     @container rules against — so it degrades here exactly as it does in the
+     grid bar (`selbar toolbar`) and the queue's (`dqbar toolbar`). */
+  container-type: inline-size;
+  container-name: shelfbar toolbar;
   height: var(--bar-height);
   padding: 0 var(--space-5);
   border-bottom: 1px solid rgb(var(--v-theme-divider));
