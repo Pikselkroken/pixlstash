@@ -1,12 +1,17 @@
 // Rotate a photo in place — the copy and the gates, as pure functions.
 //
-// Three surfaces offer the same action (the lightbox toolbar, its `[` / `]`
-// shortcuts, and the grid context menu) and every one of them has to answer the
-// same two questions before it renders: *can this picture be rotated at all*,
-// and *what does the control say when it cannot*. Answering them three times is
-// how a control ends up enabled on one surface and greyed on another, so they
-// are answered once here and tested without a mounted view — the same argument
-// `keepCoverOnly.js` makes for its own copy.
+// Four surfaces offer the same action (the lightbox toolbar, its `[` / `]`
+// shortcuts, the grid context menu and the selection bar's overflow) and every
+// one of them has to answer the same two questions before it renders: *can this
+// picture be rotated at all*, and *what does the control say when it cannot*.
+// Answering them four times is how a control ends up enabled on one surface and
+// greyed on another, so they are answered once here and tested without a
+// mounted view — the same argument `keepCoverOnly.js` makes for its own copy.
+//
+// The context menu and the selection menu are held to a stricter rule still:
+// #403's parity spec fails the build if a multi-picture selection can reach an
+// action from one of them and not the other, which is what caught this pair
+// being wired to the context menu alone.
 //
 // **In-place rotate is an EXIF edit, not a re-encode.** The backend rewrites the
 // orientation tag and copies every other byte through, which is why it is

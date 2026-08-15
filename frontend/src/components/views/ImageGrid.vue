@@ -1064,6 +1064,7 @@
           :keep-cover-only-stack-count="keepCoverOnlyStackCount"
           :keep-cover-only-lock-reason="keepCoverOnlyLockReason"
           :grouping-lock-reason="partialStackGroupingReason"
+          :rotate-block-reason="selectionRotateBlockReason"
           :available-plugins="availablePlugins"
           :tagger-plugins="taggerPlugins"
           :captioner-plugins="captionerPlugins"
@@ -1091,6 +1092,8 @@
           @generate-description="handleGenerateDescription"
           @reverse-image-search="handleReverseImageSearch"
           @segment="openSegmentDialog"
+          @rotate-left="rotateSelectedPictures(ROTATE_CCW)"
+          @rotate-right="rotateSelectedPictures(ROTATE_CW)"
           @selection-menu-open="toolbarSelectionMenuOpen = $event"
         />
       </template>
