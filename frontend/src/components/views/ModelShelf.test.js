@@ -92,6 +92,7 @@ import ModelShelf from "./ModelShelf.vue";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const globalOpts = {
   global: {
@@ -2428,5 +2429,58 @@ describe("a long move, in the panel that is running it", () => {
     expect(card().attributes("percent")).toBe("100");
     expect(card().attributes("message")).toContain("could not be moved");
     expect(card().attributes("abortlabel")).toBe("Dismiss");
+  });
+});
+
+// #938-follow-up: the shelf is a destination like Duplicates, so it carries the
+// app-wide tail — undo, Settings and the stats toggle — rather than dropping all
+// three the moment the grid unmounts.
+describe("the app-wide toolbar tail", () => {
+  it("asks App.vue for Settings and toggles the stats sidebar itself", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const sidebar = useSidebarStore();
+    const settings = wrapper.find(".shelf-toolbar button[title='Settings']");
+
+    await settings.trigger("click");
+    expect(wrapper.emitted("open-settings")).toHaveLength(1);
+
+    // Directional, not a flip: the rail opens on the first press and closes on
+    // the second, from the shut state a fresh session starts in.
+    sidebar.statsOpen = false;
+    await wrapper.find(".shelf-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(true);
+    await wrapper.find(".shelf-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(false);
+  });
+
+  it("orders the tail separator → UndoControl → TbGlobalActions, last in the bar", async () => {
+    // The documented canonical tail
+    // (docs/design/toolbar-responsive-decisions.md). Asserted as PLACEMENT and
+    // not merely as presence: the whole point of the rule is that the pair sits
+    // after the view controls, ruled off from them, at the end of the bar.
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const cluster = wrapper.find(".shelf-bar-cluster").element;
+    const undo = wrapper.findComponent({ name: "UndoControl" }).element;
+    // TbGlobalActions is multi-root; its Settings button is a stable anchor.
+    const settings = wrapper.find("button[title='Settings']").element;
+    // The Show menu — the LAST of this view's own controls, and the one the
+    // tail has to come after. (`.bar-btn--boxed` alone would find the stack
+    // sweep, which sits outside the cluster and proves nothing.)
+    const showBtn = wrapper
+      .findAll(".shelf-bar-cluster .bar-btn--boxed")
+      .at(-1).element;
+    const follows = (a, b) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    expect(
+      undo.previousElementSibling.classList.contains("bar-separator"),
+    ).toBe(true);
+    expect(follows(showBtn, undo)).toBe(true);
+    expect(follows(undo, settings)).toBe(true);
+    // Nothing of this view's own follows the app-wide pair. TbGlobalActions is
+    // multi-root, so its stats button IS the bar's last element.
+    expect(cluster.lastElementChild.classList.contains("tb-stats-btn")).toBe(
+      true,
+    );
   });
 });

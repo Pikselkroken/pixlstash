@@ -19,6 +19,17 @@ container queries today**):
 - Right: size slider + label → Auto-stack button (conditional, accent) →
   separator → **UndoControl** → TbGlobalActions
 
+**Model shelf toolbar** (`ModelShelf.vue`, `.shelf-toolbar`, container
+`shelfbar toolbar`) — added 2026-08-15, after this record was written:
+
+- Left: title → count → Add (accent) → stack sweep
+- Right: Group → Sort split-button → Show → separator → **UndoControl** →
+  TbGlobalActions
+
+It was shipped without the tail at all, so both app-wide controls simply
+vanished on `/models`; it now follows Decision 1 as written rather than
+inventing a third arrangement.
+
 So undo/redo sits mid-left in the grid and right-adjacent-to-TbGlobalActions in
 Duplicates. A user who learns one position loses it in the other view. That is
 the inconsistency to resolve.

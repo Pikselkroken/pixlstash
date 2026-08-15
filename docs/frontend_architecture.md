@@ -1519,6 +1519,17 @@ express that. Like Duplicates it is excluded from `selectionOwnsHighlight` in
 `SideBar.vue`, or the underlying picture selection would light a second active
 destination in the rail.
 
+**And like Duplicates its bar carries the shell chrome.** Replacing the grid
+also replaces the grid's toolbar, so `.shelf-toolbar` ends in the canonical tail
+whole — `[separator] [UndoControl] [TbGlobalActions]`, the same components the
+grid and the queue mount, with `TbGlobalActions` emitting `open-settings` up to
+`App.vue`. The shelf writes nothing to the operation log itself, but
+`useOperationStore` is a read model over the backend's app-wide log, so undo
+here is live for whatever library work preceded the visit — which is the point
+of a recovery control that survives a change of destination. `.shelf-toolbar`
+declares `container-name: shelfbar toolbar` for the same reason both other
+hosts do: the shared chrome's scoped `@container toolbar` rules must reach it.
+
 These rules come from measurement against real adapter folders and are easy to
 undo by accident:
 
