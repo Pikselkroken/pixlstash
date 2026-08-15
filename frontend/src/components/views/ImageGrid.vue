@@ -109,6 +109,7 @@
       :keep-cover-only-stack-count="keepCoverOnlyStackCount"
       :keep-cover-only-lock-reason="keepCoverOnlyLockReason"
       :grouping-lock-reason="partialStackGroupingReason"
+      :rotate-block-reason="selectionRotateBlockReason"
       :lock-reason="selectionLockReason"
       :locked-set-ids="lockedSetsStore.lockedSetIds"
       :available-plugins="availablePlugins"
@@ -143,6 +144,8 @@
       @remove-picture-shares="openRevokeSharesDialog"
       @reverse-image-search="handleReverseImageSearch"
       @find-similar-faces="handleFindSimilarFaces"
+      @rotate-left="rotateSelectedPictures(ROTATE_CCW)"
+      @rotate-right="rotateSelectedPictures(ROTATE_CW)"
     />
 
     <!-- ── Overlay (lightbox) context menu ─────────────────────
@@ -1205,6 +1208,7 @@ import {
   getExportStatus,
   downloadExport,
   listPicturesByIds,
+  rotatePictures,
 } from "../../api/pictures";
 import { addPictureTag } from "../../api/tags";
 import {
@@ -1218,6 +1222,13 @@ import {
   keepCoverOnlySkipNote,
   selectedKeepCoverOnlyStacks,
 } from "../../utils/keepCoverOnly";
+import {
+  ROTATE_CCW,
+  ROTATE_CW,
+  ROTATE_OP_TYPE,
+  rotateBlockReason as buildRotateBlockReason,
+  rotateSkipNote,
+} from "../../utils/rotate";
 import {
   getCharacter,
   listCharacters,
@@ -3925,6 +3936,138 @@ async function runKeepCoverOnly() {
   }
 }
 
+// ── Rotate in place ─────────────────────────────────────────────────────────
+// Applied on click, with no dialog and no confirmation: the step is instant,
+// lossless and reversible, so the safety net is the receipt's Undo rather than
+// a question asked before every quarter-turn.
+//
+// Gestures are SERIALISED rather than refused while one is in flight, for the
+// same reason as in the lightbox: two rotates the same way are a legitimate
+// 180°, and each request reads a picture's current orientation and writes the
+// next one, so two in flight over the same picture lose a turn between them.
+let rotateQueue = Promise.resolve();
+
+/**
+ * Re-read these cards' thumbnail URLs from the server.
+ *
+ * The card's `?v=` token is the server's, and it moves when the bitmap does —
+ * but only if the client actually asks for it again. It does not by default:
+ * `fetchThumbnailsBatch` pre-fills `?v=<imported_at>` so a tile paints before
+ * the thumbnails POST answers, and that pre-fill then wins for the rest of the
+ * card's life, because a card that already carries a URL is not in
+ * `missingThumbIds`. An in-place rotate does not move `imported_at`, so nothing
+ * about the local URL would ever change and the browser would keep serving the
+ * pre-rotate bitmap for the life of its cache entry.
+ *
+ * Taking the server's URL verbatim — never stamping a buster here — is what
+ * keeps the token a server contract rather than a mirror of one. Its shape
+ * (`?v=<W>x<H>` plus an `o<orientation>` suffix once a picture has been turned)
+ * is deliberately not parsed here for the same reason.
+ *
+ * @param {Array<number|string>} pictureIds
+ * @returns {Promise<void>}
+ */
+async function refreshThumbnailUrls(pictureIds) {
+  const ids = [
+    ...new Set(
+      (Array.isArray(pictureIds) ? pictureIds : [])
+        .map((id) => getPictureId(id))
+        .filter((id) => id !== null),
+    ),
+  ];
+  if (!ids.length) return;
+  let thumbData;
+  try {
+    thumbData = await getThumbnails(ids);
+  } catch (e) {
+    console.error(
+      `refreshThumbnailUrls: could not re-read the thumbnails of pictures ` +
+        `[${ids.join(", ")}]; their tiles keep the bitmap they last painted`,
+      e,
+    );
+    return;
+  }
+  const next = allGridImages.value.slice();
+  let changed = false;
+  for (let i = 0; i < next.length; i++) {
+    const img = next[i];
+    if (!img || img.id == null) continue;
+    const record = thumbData?.[getPictureId(img.id)];
+    const url = record?.thumbnail;
+    if (!url) continue;
+    const absolute = appendShareToken(
+      url.startsWith("http") ? url : `${props.backendUrl}${url}`,
+    );
+    if (absolute === img.thumbnail) continue;
+    next[i] = {
+      ...img,
+      thumbnail: absolute,
+      thumbnail_width: Number(record.thumbnail_width) || img.thumbnail_width,
+      thumbnail_height: Number(record.thumbnail_height) || img.thumbnail_height,
+    };
+    changed = true;
+  }
+  if (changed) allGridImages.value = next;
+}
+
+/**
+ * One 90° step over a set of pictures, plus the refresh it owes.
+ *
+ * Mixed selections are the normal case and are handled by DOING the work that
+ * can be done: the server splits its answer into rotated / unsupported /
+ * skipped, and everything it left alone rides the receipt as a second sentence
+ * rather than a notice of its own.
+ *
+ * @param {Array<number|string>} pictureIds - captured at gesture time.
+ * @param {string} direction - `"cw"` or `"ccw"`.
+ * @returns {Promise<void>}
+ */
+async function runRotate(pictureIds, direction) {
+  try {
+    const result = await rotatePictures(pictureIds, direction);
+    // The note is armed immediately before the refresh that narrates the
+    // action, so the two arrive together.
+    operationStore.noteNextReceipt(ROTATE_OP_TYPE, rotateSkipNote(result));
+    operationStore.refresh();
+    const rotated = Array.isArray(result?.rotated_picture_ids)
+      ? result.rotated_picture_ids
+      : [];
+    if (!rotated.length) return;
+    // Two reads, because neither covers the other: the metadata read refreshes
+    // the card's record, and the thumbnail read is the ONLY source of the new
+    // cache token — `/pictures/{id}/metadata` carries no thumbnail URL at all.
+    await Promise.all(
+      rotated.map((id) => refreshGridImage(id, { force: true })),
+    );
+    await refreshThumbnailUrls(rotated);
+  } catch (e) {
+    console.error(
+      `Rotate ${direction} failed for pictures [${pictureIds.join(", ")}]`,
+      e,
+    );
+    noticeStore.error(`Couldn't rotate those pictures. ${errorDetail(e)}`, {
+      key: "rotate-pictures",
+    });
+  }
+}
+
+/**
+ * Take one rotate gesture over the selection, behind anything already running.
+ *
+ * @param {string} direction - `"cw"` or `"ccw"`.
+ * @returns {Promise<void>} settles when THIS step has landed.
+ */
+function rotateSelectedPictures(direction) {
+  // Snapshotted now, not when the turn comes up: the selection is the one the
+  // user was looking at when they asked.
+  const pictureIds = (
+    Array.isArray(selectedImageIds.value) ? selectedImageIds.value : []
+  ).slice();
+  if (!pictureIds.length) return rotateQueue;
+  rotateQueue = rotateQueue.then(() => runRotate(pictureIds, direction));
+  return rotateQueue;
+}
+
 async function handleSetProjectForSelected(payload) {
   if (partialStackGroupingReason.value) {
     noticeStore.warning(partialStackGroupingReason.value, {
@@ -4185,6 +4328,26 @@ const selectedMediaSupport = computed(() => {
 
   return { hasImages, hasVideos };
 });
+
+// The selection's picture records, in selection order, for the gates that need
+// to look at the files rather than only count them.
+function selectedPictureRecords() {
+  const ids = Array.isArray(selectedImageIds.value) ? selectedImageIds.value : [];
+  if (!ids.length) return [];
+  const byId = new Map(
+    (Array.isArray(allGridImages.value) ? allGridImages.value : [])
+      .filter((img) => img && img.id != null)
+      .map((img) => [String(img.id), img]),
+  );
+  return ids.map((id) => byId.get(String(id))).filter(Boolean);
+}
+
+// Why the context menu's rotate items are greyed, or null while at least one
+// selected picture can be rotated in place.
+const selectionRotateBlockReason = computed(() =>
+  buildRotateBlockReason(selectedPictureRecords()),
+);
+
 const scrapheapEmptying = ref(false);
 const showSelectionBar = computed(() => {
   return selectedImageIds.value.length > 0 || selectedFaceIds.value.length > 0;
@@ -5914,6 +6077,18 @@ function handleOverlayChange(payload) {
     return;
   }
   if (!imageId) return;
+  // The picture's own bytes changed (an in-place rotate from the lightbox).
+  // Nothing is inserted, removed or reordered — the card is the same card — but
+  // its thumbnail URL has to be re-read from the server or the tile keeps
+  // painting the pre-rotate bitmap. `refreshGridImage` alone cannot do it: the
+  // metadata endpoint carries no thumbnail URL.
+  if (fields.pixels) {
+    void (async () => {
+      await refreshGridImage(imageId, { force: true });
+      await refreshThumbnailUrls([imageId]);
+    })();
+    return;
+  }
   if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
     if (overlayOpen.value) {
       // Smart-score re-ranking would reorder allGridImages mid-viewing, so the

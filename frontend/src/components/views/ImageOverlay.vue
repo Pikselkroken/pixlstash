@@ -377,6 +377,62 @@
             <v-icon size="20">mdi-account-plus</v-icon>
           </button>
 
+          <!-- Rotate, in place and immediately: one click is one 90° step, no
+               dialog, no direction picker and no confirmation. The safety net
+               is undo (the receipt below narrates every step and offers it),
+               which is the right net for an action that is instant, lossless
+               and reversible — a confirm on every quarter-turn would cost more
+               than the mistake it prevents.
+
+               Greyed rather than hidden when the file cannot carry a rotation
+               every renderer agrees on: the tooltip is what teaches that
+               Filters > Rotate still makes a rotated copy, and a hidden control
+               teaches nothing. -->
+          <template v-if="image && !isReadOnly">
+            <v-tooltip
+              location="bottom"
+              :text="rotateLeftTitle"
+              :disabled="!rotateDisabledReason"
+            >
+              <template #activator="{ props: rotateLeftTipProps }">
+                <button
+                  v-bind="rotateLeftTipProps"
+                  class="overlay-icon-btn"
+                  type="button"
+                  :title="rotateLeftTitle"
+                  :aria-label="rotateLeftTitle"
+                  aria-keyshortcuts="["
+                  :disabled="!canRotateCurrent"
+                  @click.stop="rotateCurrentImage(ROTATE_CCW)"
+                  :class="{ hidden: chromeHidden }"
+                >
+                  <v-icon size="20">mdi-rotate-left</v-icon>
+                </button>
+              </template>
+            </v-tooltip>
+            <v-tooltip
+              location="bottom"
+              :text="rotateRightTitle"
+              :disabled="!rotateDisabledReason"
+            >
+              <template #activator="{ props: rotateRightTipProps }">
+                <button
+                  v-bind="rotateRightTipProps"
+                  class="overlay-icon-btn"
+                  type="button"
+                  :title="rotateRightTitle"
+                  :aria-label="rotateRightTitle"
+                  aria-keyshortcuts="]"
+                  :disabled="!canRotateCurrent"
+                  @click.stop="rotateCurrentImage(ROTATE_CW)"
+                  :class="{ hidden: chromeHidden }"
+                >
+                  <v-icon size="20">mdi-rotate-right</v-icon>
+                </button>
+              </template>
+            </v-tooltip>
+          </template>
+
           <!-- The zoom readout lives ON the control (owner ruling): a live
                whole-percent of natural size beside the retained icon. The
                label width is reserved once (5ch, tabular numerals) so the
@@ -817,6 +873,7 @@ import {
   listPictureDetections,
   addPictureFace,
   downloadPicture,
+  rotatePictures,
 } from "../../api/pictures";
 import {
   listCharacters,
@@ -862,6 +919,14 @@ import {
   sortStackMembers,
 } from "../../utils/stack.js";
 import { dedupeTagList, getTagList } from "../../utils/tags.js";
+import {
+  ROTATE_CCW,
+  ROTATE_CW,
+  ROTATE_OP_TYPE,
+  canRotateInPlace,
+  rotateBlockReason,
+  rotateSkipNote,
+} from "../../utils/rotate.js";
 import { errorDetail } from "../../utils/apiError";
 
 // Failures report through the notice surface instead of a blocking native
@@ -1199,6 +1264,103 @@ const isCurrentLocked = computed(() =>
 const currentLockReason = computed(() =>
   lockedSetsStore.lockReason(image.value?.id),
 );
+
+// ── Rotate in place ────────────────────────────────────────────────────────
+// One click (or one `[` / `]`) is one 90° step, applied immediately.
+//
+// Presses are SERIALISED, never dropped. Two quick presses are a legitimate
+// 180° and the second one has to land, so a busy flag is the wrong guard here —
+// it would throw away exactly the gesture the design promises. Letting them run
+// concurrently is not an option either: each request reads the file's current
+// orientation and writes the next one, so two in flight over one picture race,
+// and one of the turns is silently lost. A chain gives both properties.
+let rotateQueue = Promise.resolve();
+
+/** Why the rotate controls are greyed, or `null` when they are live. */
+const rotateDisabledReason = computed(() =>
+  image.value ? rotateBlockReason([image.value]) : null,
+);
+const canRotateCurrent = computed(
+  () => !isReadOnly.value && !isCurrentLocked.value && canRotateInPlace(image.value),
+);
+
+/**
+ * The tooltip and the accessible name, which have to carry the refusal.
+ *
+ * A locked picture already has its own sentence (the toolbar chip states it),
+ * so the lock wins over the format reason: naming the format when the real
+ * blocker is a locked set would send the user off to convert a file that would
+ * still be refused.
+ */
+function rotateTitle(side, shortcut) {
+  if (isCurrentLocked.value) return currentLockReason.value;
+  if (rotateDisabledReason.value) return rotateDisabledReason.value;
+  return `Rotate ${side} (${shortcut})`;
+}
+const rotateLeftTitle = computed(() => rotateTitle("left", "["));
+const rotateRightTitle = computed(() => rotateTitle("right", "]"));
+
+/**
+ * One 90° step on one picture, plus the three refreshes it owes.
+ *
+ * They travel three different paths, which is why this is not a one-liner:
+ *
+ *   * the **operation log**, so the receipt narrates the step and offers undo.
+ *     Anything the server refused rides that same pill as a second sentence —
+ *     a separate notice would be the half the user dismisses;
+ *   * the **overlay's own record**, so `orientation` moves and `mediaVersion`
+ *     rebuilds the `<img>`'s cache-buster. A rotate leaves the pixels (and
+ *     therefore `pixel_sha`) exactly where they were, so this read is the ONLY
+ *     thing that can tell the browser the file it decoded is now sideways;
+ *   * the **grid card behind us**, whose thumbnail URL carries a token only the
+ *     server can recompute. `overlay-change` is the existing channel, and
+ *     `fields.pixels` is what tells the grid this was a bitmap change rather
+ *     than a metadata one.
+ *
+ * @param {number|string} imageId - captured when the gesture was made, not read
+ *   at run time: the user may have navigated on while this waited its turn.
+ * @param {string} direction - {@link ROTATE_CW} or {@link ROTATE_CCW}.
+ * @returns {Promise<void>}
+ */
+async function runRotate(imageId, direction) {
+  try {
+    const result = await rotatePictures([imageId], direction);
+    operationStore.noteNextReceipt(ROTATE_OP_TYPE, rotateSkipNote(result));
+    operationStore.refresh();
+    const rotated = Array.isArray(result?.rotated_picture_ids)
+      ? result.rotated_picture_ids.map((id) => String(id))
+      : [];
+    // Nothing turned: the server refused this picture after all (a lock taken
+    // between render and click, or a container the client gate misread). The
+    // receipt already says so, so there is nothing left to refresh.
+    if (!rotated.includes(String(imageId))) return;
+    await fetchOverlayMetadata(imageId);
+    // The boxes are drawn in the file's own coordinate space, which the turn
+    // just redefined. Re-read rather than transform them here: whatever the
+    // server now reports is what the grid and every other surface will draw.
+    fetchFaceBboxes(imageId);
+    fetchDetections(imageId);
+    emit("overlay-change", { imageId, fields: { pixels: true } });
+  } catch (e) {
+    console.error(`Rotate ${direction} failed for picture ${imageId}`, e);
+    noticeStore.error(`Couldn't rotate that picture. ${errorDetail(e)}`, {
+      key: "rotate-picture",
+    });
+  }
+}
+
+/**
+ * Take one rotate gesture, behind whatever is already in flight.
+ *
+ * @param {string} direction - {@link ROTATE_CW} or {@link ROTATE_CCW}.
+ * @returns {Promise<void>} settles when THIS step has landed.
+ */
+function rotateCurrentImage(direction) {
+  const imageId = image.value?.id;
+  if (!imageId || !canRotateCurrent.value) return rotateQueue;
+  rotateQueue = rotateQueue.then(() => runRotate(imageId, direction));
+  return rotateQueue;
+}
 
 // Remembered "stack outputs with originals" prefs (persisted in localStorage).
 const genStackPrefs = useGenStackPrefsStore();
@@ -2250,6 +2412,15 @@ function handleKeydown(e) {
       e.preventDefault();
       addToSetControlRef.value.addToLastSet();
     }
+  } else if (e.key === "[" || e.key === "]") {
+    // One press is one 90° step, same as the toolbar buttons; two presses make
+    // 180°. Unmodified only — Ctrl+[ / Cmd+[ is the browser's own Back on
+    // several platforms, and a bracket that both navigated history and turned
+    // the picture would be the worst kind of collision.
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && canRotateCurrent.value) {
+      e.preventDefault();
+      void rotateCurrentImage(e.key === "[" ? ROTATE_CCW : ROTATE_CW);
+    }
   } else if ((e.key === "t" || e.key === "T") && sidebarOpen.value) {
     if (!isReadOnly.value) {
       e.preventDefault();
@@ -2803,8 +2974,34 @@ function buildFullImageSrc(data) {
   return getFullImageUrl(data);
 }
 
-// The media URL carries `?v=<pixel_sha>` so an in-place pixel edit busts any
-// cached copy. `pixel_sha` is not part of the grid payload, though, so on a
+/**
+ * The version string baked into the media URL's `?v=`.
+ *
+ * `pixel_sha` alone stopped being enough when rotate-in-place shipped. That
+ * rewrites the file's EXIF orientation tag and leaves every pixel exactly where
+ * it was, so the sampled content hash does not move — and the browser, which
+ * applies the orientation tag itself, would go on painting the bytes it had
+ * already decoded. Folding the orientation into the buster is the same decision
+ * the thumbnail token makes on the server (`ImageUtils.thumbnail_cache_token`),
+ * for the same reason and in the same shape.
+ *
+ * Orientation 1 — and an orientation nobody has read yet — contributes nothing,
+ * so a picture that has never been rotated keeps the URL it has always had.
+ *
+ * @param {Object|null} data - a picture record.
+ * @returns {string|null} `null` when the record says nothing about the bytes.
+ */
+function mediaVersion(data) {
+  const sha = data?.pixel_sha ?? null;
+  if (sha === null) return null;
+  const orientation = Number(data?.orientation);
+  return Number.isFinite(orientation) && orientation > 1
+    ? `${sha}o${orientation}`
+    : String(sha);
+}
+
+// The media URL carries `?v=<media version>` so an in-place edit busts any
+// cached copy. That version is not part of the grid payload, though, so on a
 // normal open it only arrives with fetchOverlayMetadata — a beat AFTER the
 // <img> has already started (usually finished) loading the un-busted URL.
 // Letting that late arrival rewrite the src remounts the element
@@ -2813,23 +3010,24 @@ function buildFullImageSrc(data) {
 // also wasted the neighbour preloads, which build the un-busted URL from the
 // same grid records.
 //
-// Learning the sha is not a pixel change, so the buster baked into the shown
-// URL is pinned for as long as that picture keeps displaying the same bytes. It
+// Learning the version is not an edit, so the buster baked into the shown URL
+// is pinned for as long as that picture keeps displaying the same bytes. It
 // only moves when the picture changes, when nothing was on screen yet (the cold
-// route, still waiting on the format), or when the sha goes from one KNOWN
-// value to another — a genuine in-place edit, where the reload is the point.
+// route, still waiting on the format), or when the version goes from one KNOWN
+// value to another — a genuine in-place edit (a rotate, a filter run), where
+// the reload is the point.
 // Freshness is not at risk in between: the media route answers `no-cache,
 // must-revalidate` with an mtime+size ETag, so the pinned URL is revalidated on
 // every load regardless of the buster.
-const displayedPixelSha = ref(null); // baked into the URL currently rendered
-const knownPixelSha = ref(null); // latest sha observed for that picture
+const displayedMediaVersion = ref(null); // baked into the URL currently rendered
+const knownMediaVersion = ref(null); // latest version observed for that picture
 
 watch(
   () => {
     const data = image.value;
     return {
       id: data?.id ?? null,
-      sha: data?.pixel_sha ?? null,
+      version: mediaVersion(data),
       hasMedia: Boolean(buildFullImageSrc(data)),
     };
   },
@@ -2837,16 +3035,16 @@ watch(
     const samePicture =
       prev && next.id !== null && String(next.id) === String(prev.id);
     if (!samePicture || !prev.hasMedia) {
-      displayedPixelSha.value = next.sha;
-      knownPixelSha.value = next.sha;
+      displayedMediaVersion.value = next.version;
+      knownMediaVersion.value = next.version;
       return;
     }
-    // A record that simply doesn't carry the field (any grid-shaped refresh of
-    // the same picture) says nothing about the pixels — keep what we know.
-    if (next.sha === null || next.sha === knownPixelSha.value) return;
-    const firstSighting = knownPixelSha.value === null;
-    knownPixelSha.value = next.sha;
-    if (!firstSighting) displayedPixelSha.value = next.sha;
+    // A record that simply doesn't carry the fields (any grid-shaped refresh of
+    // the same picture) says nothing about the bytes — keep what we know.
+    if (next.version === null || next.version === knownMediaVersion.value) return;
+    const firstSighting = knownMediaVersion.value === null;
+    knownMediaVersion.value = next.version;
+    if (!firstSighting) displayedMediaVersion.value = next.version;
   },
   { immediate: true },
 );
@@ -2854,12 +3052,14 @@ watch(
 const fullImageSrc = computed(() => {
   const data = image.value;
   if (!data) return "";
-  const pinned = displayedPixelSha.value;
+  const pinned = displayedMediaVersion.value;
   // Rebuilt from the live record so a backend-url, format or share-token change
-  // still flows through; only the cache-buster is held back.
-  return buildFullImageSrc(
-    pinned === (data.pixel_sha ?? null) ? data : { ...data, pixel_sha: pinned },
-  );
+  // still flows through; only the cache-buster is held back. The pinned version
+  // rides in as `pixel_sha` because that is the field `buildMediaUrl`
+  // interpolates — and it is substituted UNCONDITIONALLY, because the version is
+  // no longer the same string as the sha: leaving the live record alone when the
+  // two "agree" would drop the orientation half of the buster.
+  return buildFullImageSrc({ ...data, pixel_sha: pinned });
 });
 const overlayDims = ref({
   width: 1,
@@ -3310,6 +3510,18 @@ async function fetchOverlayMetadata(imageId) {
     if (!image.value || image.value.id !== imageId) return;
     if (!data || Array.isArray(data)) return;
     const merged = { ...data, ...image.value };
+    // The picture's own BYTES, where the server is unconditionally
+    // authoritative and this component never holds an optimistic value. The
+    // local-wins default above is right for everything the overlay can edit and
+    // wrong for these two: they are what `mediaVersion` builds the cache-buster
+    // from, so keeping a stale copy pins `fullImageSrc` to the file the `<img>`
+    // has already decoded. An in-place rotate moves `orientation` and nothing
+    // else, which is exactly the case a local-wins merge would swallow whole.
+    for (const field of ["pixel_sha", "orientation"]) {
+      if (data[field] !== undefined && data[field] !== null) {
+        merged[field] = data[field];
+      }
+    }
     const existingSmartScore =
       typeof image.value?.smartScore === "number"
         ? image.value.smartScore
