@@ -447,6 +447,12 @@ const MENU_MIN_HEIGHT_PX = 140;
 
 function sizeMenu() {
   nextTick(() => {
+    // A flyout's SIDE is as viewport-dependent as its height, and this is the
+    // function the `resize` and capture-phase `scroll` listeners call — so a
+    // menu that is already open follows the window rather than keeping the side
+    // it was opened on. Hover cannot stand in for this: a keyboard user never
+    // fires one, and that is the case the flip used to depend on entirely.
+    measureFlyoutSide();
     const el = menuRef.value;
     if (!el) return;
     if (!floating.value) {
@@ -715,10 +721,16 @@ function toggleMenu() {
  * Which side a flyout opens on, measured off the trigger.
  *
  * 185px is the flyout's fixed width (`.ate--flyout .ate-menu`), and 8px is the
- * same keep-off distance `sizeMenu` uses. Called on every open and not only on
- * hover: it used to live in `onFlyoutMouseenter` alone, so a flyout opened from
- * the KEYBOARD near the right edge kept the last measurement — `false` on the
- * first open — and painted off-screen with nothing to clamp it.
+ * same keep-off distance `sizeMenu` uses. It used to live in
+ * `onFlyoutMouseenter` alone, so a flyout opened from the KEYBOARD near the
+ * right edge kept the last measurement — `false` on the first open — and
+ * painted off-screen with nothing to clamp it.
+ *
+ * Three callers, and each covers a case the others cannot: `openMenu`
+ * synchronously, so the first paint is already on the correct side; `sizeMenu`,
+ * which is what the `resize` / `scroll` listeners call, so an open menu follows
+ * the window; and `onFlyoutMouseenter`, which is the only one that sees a hover
+ * of an already-open menu.
  */
 function measureFlyoutSide() {
   if (props.placement !== "right") return;
