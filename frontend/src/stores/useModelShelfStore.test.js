@@ -322,6 +322,12 @@ describe("the badge", () => {
     await store.setFilters({ unclassified: false }, { refetch: true });
     expect(store.activeCount).toBe(1);
   });
+
+  it("counts turning engines off, for the same reason", async () => {
+    const store = useModelShelfStore();
+    await store.setFilters({ engines: false }, { refetch: true });
+    expect(store.activeCount).toBe(1);
+  });
 });
 
 describe("empty states", () => {
@@ -329,10 +335,27 @@ describe("empty states", () => {
     const store = useModelShelfStore();
     expect(store.nothingSelected).toBe(false);
     await store.setFilters(
-      { adapters: false, checkpoints: false, unclassified: false },
+      {
+        adapters: false,
+        checkpoints: false,
+        unclassified: false,
+        engines: false,
+      },
       { refetch: true },
     );
     expect(store.nothingSelected).toBe(true);
+  });
+
+  it("does not call a shelf showing engines alone empty", async () => {
+    // The block was added to the fetch and to the row buckets but not to this
+    // check, so ticking Engines alone fetched its rows, counted them in the
+    // toolbar, and drew "Nothing is selected in Show" over the top of them.
+    const store = useModelShelfStore();
+    await store.setFilters(
+      { adapters: false, checkpoints: false, unclassified: false },
+      { refetch: true },
+    );
+    expect(store.nothingSelected).toBe(false);
   });
 });
 

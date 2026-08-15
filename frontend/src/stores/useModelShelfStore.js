@@ -813,21 +813,36 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * narrowing and the number would stop meaning anything.
    */
   const activeCount = computed(() => {
-    let n = 0;
-    if (!filters.adapters || filters.adapterKinds.length) n += 1;
-    if (!filters.checkpoints) n += 1;
-    // Counted the way `checkpoints` is, because it now defaults the same way:
-    // the badge says how far the selection has moved from the default, so the
-    // departure is turning it OFF.
-    if (!filters.unclassified) n += 1;
+    // Every block defaults to ON, so the departure is turning one OFF — and
+    // read off {@link BLOCKS} rather than named one by one, which is how
+    // `engines` came to be uncounted: a shelf showing engines alone reported
+    // "3 filters active" while the fourth block was the only one showing
+    // anything.
+    let n = BLOCKS.filter((block) => !filters[block]).length;
+    // The nested kinds are part of the Adapters section, so they add nothing
+    // when that block is already counted.
+    if (filters.adapters && filters.adapterKinds.length) n += 1;
     if (filters.baseModels.length) n += 1;
     if (filters.capabilities.length) n += 1;
     return n;
   });
 
-  /** True when the selection asks for no rows at all — a distinct empty state. */
+  /**
+   * True when the selection asks for no rows at all — a distinct empty state.
+   *
+   * Read off {@link BLOCKS} rather than named block by block, which is how
+   * `engines` came to be left out of it: a shelf showing engines alone asks
+   * for plenty of rows, fetched them, and then drew "Nothing is selected in
+   * Show" over the top of them.
+   *
+   * This and `activeCount` now derive; `defaultFilters`, `storedFilters`,
+   * `blockOf` and `fetchRows` still spell the blocks out, because each says
+   * something different about each one. A fifth block is four deliberate
+   * edits, not five — the two that could silently disagree with the fetch are
+   * the two that no longer can.
+   */
   const nothingSelected = computed(
-    () => !filters.adapters && !filters.checkpoints && !filters.unclassified,
+    () => !BLOCKS.some((block) => filters[block]),
   );
 
   /**
