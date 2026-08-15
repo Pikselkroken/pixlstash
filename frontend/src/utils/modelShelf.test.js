@@ -1190,17 +1190,16 @@ describe("assignmentRing", () => {
     // `cards` is the sentinel for "keep the thumbnail", so treating it as an
     // icon name would draw an mdi glyph that does not exist.
     //
-    // The fixtures below spell the sentinel out rather than using
-    // `ICON_CARDS`, because the value they stand for is what the BACKEND
-    // stored: `picture_sets.py` hardcodes `!= "cards"` too, and rows written
-    // before any rename would still hold the old string. A fixture built from
-    // the constant would rename itself alongside the source and prove nothing
-    // about them agreeing. The drift that leaves — the constant moving away
-    // from the stored value — is what this line catches, in one place instead
-    // of at every fixture.
+    // The literal is pinned HERE, once, and the fixtures use the constant.
+    // What they stand for is a value the BACKEND stored — `picture_sets.py`
+    // hardcodes `!= "cards"` too, and rows written before any rename would
+    // still hold the old string — so a suite built only from `ICON_CARDS`
+    // would rename itself alongside the source and stay green while the two
+    // sides had stopped agreeing. One pin closes that without making every
+    // fixture repeat the string.
     expect(ICON_CARDS).toBe("cards");
     for (const set of [
-      { id: 5, name: "Studio", set_icon: "cards" },
+      { id: 5, name: "Studio", set_icon: ICON_CARDS },
       { id: 5, name: "Studio" },
     ]) {
       expect(assignmentRing([attach("set", 5)], { sets: [set] }).icon).toBe("");
@@ -1240,7 +1239,7 @@ describe("assignmentRing", () => {
     // cache keyed on anything longer-lived would leave the mark on the face the
     // set no longer shows.
     const icon = (sets) => assignmentRing([attach("set", 5)], { sets }).icon;
-    const before = [{ id: 5, name: "Studio", set_icon: "cards" }];
+    const before = [{ id: 5, name: "Studio", set_icon: ICON_CARDS }];
     const after = [{ id: 5, name: "Studio", set_icon: "mdi-star" }];
     expect(icon(before)).toBe("");
     expect(icon(after)).toBe("mdi-star");
