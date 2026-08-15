@@ -105,6 +105,41 @@ def _violations_in(path: pathlib.Path, relative: str) -> list[str]:
     return problems
 
 
+def _identity_on_a_borrowed_session(path: pathlib.Path, relative: str) -> list[str]:
+    """Return one message per module-level function that reads identity from a session.
+
+    The ``vault.db`` detector above only sees a query whose *call site* names the vault.
+    A module-level helper that takes a ``session`` argument hides that: the DB is
+    whichever one the caller happened to open, and every caller of the smart scorer
+    opens a vault, so ``resolve_penalised_tag_weights(session)`` silently answered "no
+    user" for months while the owner's row sat in the hub.
+
+    Nested closures are exempt because they are passed straight to one engine's
+    ``run_task`` and are read together with it; a module-level ``def`` has no such
+    context. Identity there must come from the hub engine or the auth service.
+    """
+    source = path.read_text(encoding="utf-8")
+    if not any(model in source for model in _IDENTITY_MODELS):
+        return []
+
+    problems = []
+    for node in ast.parse(source, filename=str(path)).body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        params = [arg.arg for arg in node.args.args + node.args.kwonlyargs]
+        if not any(name == "session" or name.endswith("_session") for name in params):
+            continue
+        models = _mentions_identity(node)
+        if models:
+            problems.append(
+                f"{relative}:{node.lineno} {node.name}() reads "
+                f"{', '.join(sorted(models))} from a caller-supplied session; the "
+                "caller's session is a vault, and identity lives in the hub (take the "
+                "auth service or the hub engine instead)"
+            )
+    return problems
+
+
 def test_identity_is_never_queried_through_a_vault():
     """Every ``User``/``UserToken`` access goes to the hub.
 
@@ -118,6 +153,19 @@ def test_identity_is_never_queried_through_a_vault():
         problems.extend(_violations_in(path, relative))
 
     assert not problems, "Identity accessed through a vault:\n" + "\n".join(problems)
+
+
+def test_identity_is_never_read_from_a_caller_supplied_session():
+    """No module-level helper resolves identity from a session it did not open."""
+    problems = []
+    for path, relative in _iter_python_files():
+        if relative in _ALLOWLIST:
+            continue
+        problems.extend(_identity_on_a_borrowed_session(path, relative))
+
+    assert not problems, "Identity read from a borrowed session:\n" + "\n".join(
+        problems
+    )
 
 
 def test_the_allowlist_stays_small_and_justified():
@@ -140,3 +188,25 @@ def test_the_guardrail_actually_catches_the_pattern(snippet, tmp_path):
     module = tmp_path / "offender.py"
     module.write_text(snippet, encoding="utf-8")
     assert _violations_in(module, "offender.py")
+
+
+def test_the_borrowed_session_detector_catches_the_shipped_bug(tmp_path):
+    """The exact shape that shipped, plus the closure shape that must stay allowed."""
+    offender = tmp_path / "offender.py"
+    offender.write_text(
+        "def resolve_penalised_tag_weights(session):\n"
+        "    return session.exec(select(User)).first()\n",
+        encoding="utf-8",
+    )
+    assert _identity_on_a_borrowed_session(offender, "offender.py")
+
+    innocent = tmp_path / "innocent.py"
+    innocent.write_text(
+        "class Auth:\n"
+        "    def get_user(self):\n"
+        "        def read(session):\n"
+        "            return session.exec(select(User)).first()\n"
+        "        return self._hub.run_task(read)\n",
+        encoding="utf-8",
+    )
+    assert not _identity_on_a_borrowed_session(innocent, "innocent.py")
