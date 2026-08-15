@@ -3267,7 +3267,7 @@ _LINUX_ONLY = pytest.mark.skipif(
 def test_a_band_is_named_by_its_volume_label_when_it_has_one(
     shelf_env, tmp_path, monkeypatch
 ):
-    """A Linux mount point runs to `/media/glindkvist/102AB4B6757AF9A3`, which
+    """A Linux mount point runs to `/media/<user>/A1B2C3D4E5F60789`, which
     crowds a band header out. The volume's own name is what the owner recognises;
     the mount point stays on the response for the tooltip."""
     from pixlstash.utils import system_utils

@@ -18,7 +18,7 @@ def test_docker_accepts_windows_absolute_host_paths(monkeypatch):
     """Windows absolute host paths should be accepted in Linux Docker mode."""
 
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
-    windows_host_path = "C:\\Users\\lindk\\Pictures\\Test"
+    windows_host_path = "C:\\Users\\<user>\\Pictures\\Test"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = f"{temp_dir}/server-config.json"
@@ -52,7 +52,7 @@ def test_docker_rejects_relative_host_paths(monkeypatch):
     """Relative host paths must still be rejected in Docker mode."""
 
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
-    relative_host_path = "Users\\lindk\\Pictures\\Test"
+    relative_host_path = "Users\\<user>\\Pictures\\Test"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = f"{temp_dir}/server-config.json"

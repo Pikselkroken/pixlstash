@@ -854,7 +854,7 @@ describe("drive bands", () => {
     const bands = wrapper.findAll(".shelf-band");
     expect(bands).toHaveLength(1);
     // The volume's name, not its mount point: a Linux mount point runs to
-    // `/media/glindkvist/102AB4B6757AF9A3` and crowds the header out.
+    // `/media/<user>/A1B2C3D4E5F60789` and crowds the header out.
     expect(textOf(bands[0])).toContain("FastModels");
     // And the mount point beside it, in the mono face: the volume label answers
     // "which disk" and the path answers "which one is that", which on a machine
