@@ -1189,6 +1189,7 @@ def create_router(server) -> APIRouter:
         # Intrinsic tag/confidence query params are parsed by the shared parser; the
         # remaining filters (format/scores/buckets) arrive as typed Query args above.
         _predicate_filter = PredicateFilter.from_query_params(request)
+        unscored = _predicate_filter.unscored
         tags_filter = _predicate_filter.tags_filter
         tags_rejected_filter = _predicate_filter.tags_rejected_filter
         tags_confidence_above_filter = _predicate_filter.tags_confidence_above_filter
@@ -1375,6 +1376,7 @@ def create_router(server) -> APIRouter:
                 stack_leaders_only=deduplicate_stacks,
                 min_score=min_score,
                 max_score=max_score,
+                unscored=unscored,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 tags_filter=tags_filter,
