@@ -405,11 +405,50 @@ describe("empty states", () => {
       adapters: false,
       checkpoints: false,
       unclassified: false,
+      engines: false,
     });
     await wrapper.vm.$nextTick();
     expect(textOf(wrapper.find(".shelf-state"))).toContain(
       "Nothing is selected in Show",
     );
+  });
+
+  it("draws the engines when Engines is the only block ticked", async () => {
+    // The reported bug, at the layer it was seen: the toolbar counted the
+    // engine rows and the body drew "Nothing is selected in Show" over the
+    // top of them, because the check knew about three blocks out of four.
+    const wrapper = await mountShelf([adapter()]);
+    listEngines.mockResolvedValue([
+      adapter({
+        id: 900,
+        file_kind: "engine",
+        kind: "captioner",
+        display_name: "JoyCaption",
+      }),
+    ]);
+    await useModelShelfStore().setFilters(
+      { adapters: false, checkpoints: false, unclassified: false },
+      { refetch: true },
+    );
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-state").exists()).toBe(false);
+    expect(textOf(wrapper.find(".shelf-row"))).toContain("JoyCaption");
+  });
+
+  it("offers Reset rather than 'add a folder' when a narrowed shelf is empty", async () => {
+    // A narrowed selection only FETCHES the blocks it asks for, so a shelf
+    // reopened with one empty block ticked arrives with no rows at all on a
+    // machine full of models. Reading that as the terminal "there is nothing
+    // here" leaves the reader no way back.
+    const wrapper = await mountShelf([]);
+    await useModelShelfStore().setFilters(
+      { adapters: false, checkpoints: false, unclassified: false },
+      { refetch: true },
+    );
+    await wrapper.vm.$nextTick();
+    const state = textOf(wrapper.find(".shelf-state"));
+    expect(state).toContain("No models match these filters");
+    expect(state).toContain("Reset filters");
   });
 });
 

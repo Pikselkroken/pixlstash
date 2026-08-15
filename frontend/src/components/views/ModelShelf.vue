@@ -318,7 +318,27 @@
           Reset filters
         </button>
       </div>
-      <div v-else-if="!store.rows.length" class="shelf-state">
+      <!-- Ahead of the terminal state, and gated on the selection rather than
+           on `rows`: a narrowed selection only FETCHES the blocks it asks for,
+           so a shelf reopened with one block ticked and nothing in it arrives
+           with `rows` empty for a machine holding 1,800 adapters. Reading that
+           as "there is nothing here" dead-ends the reader with no Reset — the
+           exact conflation the note above forbids. Reset refetches every block
+           and the terminal state below then says so truthfully. -->
+      <div
+        v-else-if="!store.visibleRows.length && store.activeCount"
+        class="shelf-state"
+      >
+        <p>No models match these filters.</p>
+        <button
+          class="tbm-action tbm-action--secondary"
+          type="button"
+          @click="store.resetFilters()"
+        >
+          Reset filters
+        </button>
+      </div>
+      <div v-else-if="!store.visibleRows.length" class="shelf-state">
         <p>No models found.</p>
         <p>
           PixlStash lists what it finds in the model folders registered on this
@@ -330,16 +350,6 @@
           @click="openFolders()"
         >
           Add a model folder
-        </button>
-      </div>
-      <div v-else-if="!store.visibleRows.length" class="shelf-state">
-        <p>No models match these filters.</p>
-        <button
-          class="tbm-action tbm-action--secondary"
-          type="button"
-          @click="store.resetFilters()"
-        >
-          Reset filters
         </button>
       </div>
 

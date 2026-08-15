@@ -1562,6 +1562,23 @@ undo by accident:
   would have defeated the change on exactly the machines that had used the shelf
   longest, so `pixlstash:modelShelfFilters` gained `FILTERS_SCHEMA_VERSION` and
   a blob from another `v` is discarded whole — the same trade `storedView` makes.
+- **The four blocks are one list, and the empty states read it.** `nothingSelected`
+  and `activeCount` both derive from `BLOCKS`, never from a hand-written run of
+  `filters.adapters && filters.checkpoints && …`: naming three of the four is how
+  a shelf with **only Engines ticked** fetched its engines, counted them in the
+  toolbar, and then drew "Nothing is selected in Show" over the top of them.
+  `activeCount` therefore counts turning `engines` off exactly as it counts
+  `unclassified`, which also un-greys the panel's Reset button. The remaining
+  block-by-block lists (`defaultFilters`, `storedFilters`, `blockOf`,
+  `fetchRows`) each say something different per block and stay explicit.
+- **A narrowed selection that comes back empty is not "there is nothing here".**
+  Only the ticked blocks are fetched, so a shelf reopened with one empty block
+  selected has `rows` empty on a machine holding 1,800 adapters. The three empty
+  states are therefore ordered `nothingSelected` → *no models match these
+  filters* (whenever `activeCount` is non-zero) → the terminal *no models found*,
+  so the reader is only sent to "add a model folder" when nothing is narrowing
+  the shelf. Reset refetches every block and the terminal state then tells the
+  truth.
 
 **The assignment ring** (`assignmentRing` in `utils/modelShelf.js`, drawn by
 `ModelMark.vue`) is what the shelf says about who a model belongs to. It
