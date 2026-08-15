@@ -359,6 +359,15 @@ describe("file kinds", () => {
       "Checkpoint",
     );
   });
+
+  it("still names an adapter whose algorithm folds to nothing", async () => {
+    // The hub CHECK is `kind IS NOT NULL`, not non-empty, so a whitespace-only
+    // kind is reachable over the raw API. The cell falls back to `Adapter`
+    // rather than going blank: an empty Kind column reads as a broken row, and
+    // "it is an adapter, we cannot name the algorithm" is the actual fact.
+    const wrapper = await mountShelf([adapter({ kind: "  " })]);
+    expect(textOf(wrapper.find(".shelf-row .shelf-col"))).toContain("Adapter");
+  });
 });
 
 describe("location state", () => {

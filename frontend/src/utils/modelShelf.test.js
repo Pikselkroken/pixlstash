@@ -6,12 +6,15 @@ import { describe, it, expect } from "vitest";
 import { contrastRatio } from "./contrastAudit.js";
 import { ICON_CARDS, SET_COLORS } from "./setAppearance";
 import {
+  adapterKindKey,
+  adapterKindLabel,
   assignmentRing,
   RING_STYLES,
   bandGroups,
   bandProjection,
   bandUsage,
   baseModelKey,
+  capabilityLabel,
   collapseStacks,
   withEmptyFolders,
   cleanAssetName,
@@ -118,6 +121,59 @@ describe("modelName", () => {
     // like a name, sorted like one and read as inert. The row draws this state
     // as a field asking to be filled (#897).
     expect(modelName({})).toEqual({ text: "", state: "needs-a-name" });
+  });
+});
+
+describe("adapterKindLabel", () => {
+  it("spells the algorithm one way, whatever the trainer wrote", () => {
+    expect(adapterKindLabel("lora")).toBe("LoRA");
+    expect(adapterKindLabel("LORA")).toBe("LoRA");
+    // `model.kind` is free text and the edit dialog takes it verbatim. An
+    // untrimmed value would sort to the TOP of a grouped shelf, because
+    // `localeCompare` puts a leading space before every letter.
+    expect(adapterKindLabel("  lokr  ")).toBe("LoKr");
+  });
+
+  it("shows an algorithm it has not heard of rather than hiding it", () => {
+    // Same rule as `capabilityLabel`: a LyCORIS variant that ships after this
+    // table should appear under its own name, not under "Unknown".
+    expect(adapterKindLabel("glora")).toBe("glora");
+    expect(adapterKindLabel(null)).toBe("");
+    expect(adapterKindLabel(undefined)).toBe("");
+  });
+
+  it("returns a STRING for a key that names something on Object.prototype", () => {
+    // `kind` is free text, and a plain index on an object literal answers
+    // `constructor` with a FUNCTION — truthy, so a `|| key` fallback never
+    // fires. That value became a group label, where `localeCompare` throws and
+    // takes the whole `groups` computed with it.
+    expect(adapterKindLabel("constructor")).toBe("constructor");
+    expect(adapterKindLabel("__proto__")).toBe("__proto__");
+  });
+});
+
+describe("adapterKindKey", () => {
+  it("folds what everything else keys on, and keeps it a key", () => {
+    // Exported because the group key, the facet, the filter, the remembered
+    // selection and the edit dialog all have to agree on ONE value. The label
+    // is a separate question: this stays the stored vocabulary.
+    expect(adapterKindKey(" LoRA ")).toBe("lora");
+    expect(adapterKindKey("lora")).toBe("lora");
+    expect(adapterKindKey("  ")).toBe("");
+    expect(adapterKindKey(null)).toBe("");
+  });
+});
+
+describe("capabilityLabel", () => {
+  it("names a capability in the screen's words and passes an unknown through", () => {
+    expect(capabilityLabel("scorer")).toBe("Quality score");
+    expect(capabilityLabel("newthing")).toBe("newthing");
+  });
+
+  it("returns a STRING for a key that names something on Object.prototype", () => {
+    // Same hole as `adapterKindLabel`'s, and this input comes off the wire.
+    expect(capabilityLabel("constructor")).toBe("constructor");
+    expect(capabilityLabel("toString")).toBe("toString");
   });
 });
 

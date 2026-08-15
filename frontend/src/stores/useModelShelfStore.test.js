@@ -180,6 +180,42 @@ describe("base model", () => {
 });
 
 describe("adapter kinds", () => {
+  it("facets and filters on the folded algorithm, so one box means one algorithm", async () => {
+    // `model.kind` is free text and `PATCH /models` stores what it is given,
+    // so `LoRA` and `lora` are one algorithm and two strings. Faceting raw
+    // offered two boxes the panel now draws with the SAME label, each ticking
+    // half the rows — and the `feature` axis folds them into one group, so
+    // ticking either emptied half of a group the user can see.
+    const store = useModelShelfStore();
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, kind: "lora" }),
+      adapter({ id: 2, kind: "LoRA" }),
+      adapter({ id: 3, kind: " lokr " }),
+    ]);
+    await store.fetchRows();
+    expect(store.adapterKindOptions).toEqual(["lokr", "lora"]);
+    await store.setFilters({ adapterKinds: ["lora"] });
+    expect(store.visibleRows.map((r) => r.id)).toEqual([1, 2]);
+  });
+
+  it("never hides a row the facet offers no box for", async () => {
+    // An adapter whose kind folds to nothing gets no checkbox — an unlabelled
+    // one is not a control — so a kind selection holds no opinion about it and
+    // must not exclude it. Hiding it would leave a row no box can bring back,
+    // which is the failure the base-model facet already carries a sentinel to
+    // avoid.
+    const store = useModelShelfStore();
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, kind: "lora" }),
+      adapter({ id: 2, kind: "lokr" }),
+      adapter({ id: 3, kind: "  " }),
+    ]);
+    await store.fetchRows();
+    expect(store.adapterKindOptions).toEqual(["lokr", "lora"]);
+    await store.setFilters({ adapterKinds: ["lora"] });
+    expect(store.visibleRows.map((r) => r.id)).toEqual([1, 3]);
+  });
+
   it("keeps the kind selection when the parent is unchecked", async () => {
     // Greys, does not clear: re-checking Adapters has to restore exactly what
     // was picked, or the parent checkbox is a destructive control.
@@ -389,6 +425,32 @@ describe("persistence", () => {
     const store = useModelShelfStore();
     expect(store.filters.unclassified).toBe(true);
     expect(store.filters.adapters).toBe(true);
+  });
+
+  it("folds a remembered algorithm rather than leaving an unclearable ghost filter", async () => {
+    // A shipped build faceted on the RAW `model.kind` and persisted it, so a
+    // blob holding `LoRA` outlives the fold. Matched raw it selects nothing and
+    // appears in no checkbox: an empty shelf with the Adapters box reading
+    // fully on, the one algorithm box reading off, and nothing on screen naming
+    // the filter doing it — escapable only by `Reset filters`, which also
+    // discards the base models and capabilities the user did not ask to lose.
+    //
+    // Folded on read rather than discarded by a `FILTERS_SCHEMA_VERSION` bump,
+    // because the selection is still exactly what the user chose.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfFilters",
+      // `"  "` is the other half of the migration: the shipped facet gated on
+      // raw truthiness, so a whitespace-only kind DID get a tickable box that
+      // could be persisted. Folded it is `""`, which no box offers and every
+      // row fails — the same unclearable ghost, arrived at from the other side.
+      JSON.stringify({ v: 1, adapterKinds: ["LoRA", "lora", " LORA ", "  "] }),
+    );
+    listAdapters.mockResolvedValue([adapter({ id: 1, kind: "LoRA" })]);
+    const store = useModelShelfStore();
+    // Three spellings of one algorithm are also one remembered selection.
+    expect(store.filters.adapterKinds).toEqual(["lora"]);
+    await store.fetchRows();
+    expect(store.visibleRows.map((r) => r.id)).toEqual([1]);
   });
 });
 
@@ -1281,11 +1343,113 @@ describe("capabilities", () => {
     expect(new Set(keys).size).toBe(2);
   });
 
-  it("files a row with no capabilities under its own header, not under a guess", async () => {
-    // Most of the shelf: `kind` on a scanned adapter is an algorithm, and
-    // calling `lokr` a feature would be the confident wrong answer the
-    // classifier refuses to give.
-    listAdapters.mockResolvedValue([adapter({ id: 1, capabilities: [] })]);
+  it("files an adapter under its algorithm, spelled as the Kind column spells it", async () => {
+    // Most of the shelf. The row's own Kind cell has always read `LoRA`, so
+    // "No feature recorded" was the axis contradicting the cell beside it and
+    // collapsing the whole shelf into one bucket. Two spellings of one
+    // algorithm fold, which is why the key is the label and not `row.kind`.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, capabilities: [] }),
+      adapter({
+        id: 2,
+        sha256: "b".repeat(64),
+        kind: "LORA",
+        capabilities: [],
+      }),
+      adapter({
+        id: 3,
+        sha256: "c".repeat(64),
+        kind: "lokr",
+        capabilities: [],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "feature" });
+
+    expect(store.groups.map((g) => g.label)).toEqual(["LoKr", "LoRA"]);
+    expect(store.groups.find((g) => g.label === "LoRA").rows).toHaveLength(2);
+    // Keyed on the FOLDED value, never the label: the key is what a collapsed
+    // group is remembered by, so a key of `kind:LoRA` would orphan every
+    // stored collapse the day the label table learns a new spelling. Prefixed
+    // to keep an algorithm out of the capability keyspace.
+    expect(store.groups.map((g) => g.key)).toEqual(["kind:lokr", "kind:lora"]);
+    // `name`, never `path`: `path` is the mono, un-uppercased face the folder
+    // axis owns, and an algorithm is not a filesystem path.
+    expect(store.groups[0].labelKind).toBe("name");
+  });
+
+  it("groups on the algorithm only for an ADAPTER, whatever else carries a kind", async () => {
+    // The `file_kind` guard. A checkpoint's `kind` is null, so the truthiness
+    // check alone catches it and it cannot pin this; the row that can is one
+    // carrying a kind while not being an adapter. An engine keeps its ROLE in
+    // `model.kind`, so the shape is the engine's — though today's declarations
+    // always emit that role as a capability too (`declared_capabilities`), so
+    // this exact row is synthetic. It is the guard that is being pinned, not a
+    // state the hub currently writes: without it, anything that grows a `kind`
+    // starts heading feature groups.
+    listEngines.mockResolvedValue([
+      engine({ id: 4, kind: "tagger", capabilities: [] }),
+    ]);
+    listCheckpoints.mockResolvedValue([
+      adapter({ id: 5, file_kind: "checkpoint", kind: null, capabilities: [] }),
+    ]);
+    listAdapters.mockResolvedValue([]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "feature" });
+
+    expect(store.groups).toHaveLength(1);
+    expect(store.groups[0].label).toBe("No feature recorded");
+    expect(store.groups[0].rows).toHaveLength(2);
+  });
+
+  it("says nothing for an adapter whose kind is blank, rather than heading a group with it", async () => {
+    // The hub CHECK makes an adapter's `kind` NOT NULL but not NON-EMPTY, and
+    // `PATCH /models` stores free text, so a whitespace-only kind is reachable
+    // over the raw API. Folded it is `""`, which would head a group with no
+    // label at all — and put an unlabelled checkbox in the Show panel.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 7, kind: "   ", capabilities: [] }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "feature" });
+
+    expect(store.groups).toHaveLength(1);
+    expect(store.groups[0].label).toBe("No feature recorded");
+    expect(store.adapterKindOptions).toEqual([]);
+  });
+
+  it("gives a file_kind this build does not know no algorithm at all", async () => {
+    // `blockOf` funnels an unrecognised `file_kind` into the adapters bucket so
+    // the row is never dropped from the shelf — which is why the guards here
+    // test `file_kind === "adapter"` and not `blockOf(row) === "adapters"`.
+    // Widening them would let a kind PixlStash cannot interpret head a feature
+    // group, and this is the row that proves the narrow test is deliberate.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 8, file_kind: "sidecar", kind: "lora", capabilities: [] }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "feature" });
+
+    // Still on the shelf...
+    expect(store.visibleRows.map((r) => r.id)).toEqual([8]);
+    // ...and still without a feature, or a checkbox claiming it has one.
+    expect(store.groups).toHaveLength(1);
+    expect(store.groups[0].label).toBe("No feature recorded");
+    expect(store.adapterKindOptions).toEqual([]);
+  });
+
+  it("refuses to call the classifier's shrug an algorithm", async () => {
+    // `detect_adapter_kind` returns the literal `unknown` (`KIND_UNKNOWN`) for
+    // an adapter whose tensor markers match nothing it knows, and the file is
+    // still `file_kind=adapter`. Heading that `UNKNOWN` would stand a second
+    // shrug beside the real one and call it a feature.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 6, kind: "unknown", capabilities: [] }),
+    ]);
     const store = useModelShelfStore();
     await store.fetchRows();
     store.setView({ groupBy: "feature" });

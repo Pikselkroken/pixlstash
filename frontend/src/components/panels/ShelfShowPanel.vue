@@ -43,7 +43,10 @@
            selection survives in the store, so re-checking Adapters restores
            exactly what was picked before. `disabled` is also what takes them
            out of the tab order while they are inert. -->
-      <div v-if="store.adapterKindOptions.length" class="shelf-show-nested">
+      <div
+        v-if="store.adapterKindOptions.length"
+        class="shelf-show-nested shelf-show-nested--kinds"
+      >
         <label
           v-for="kind in store.adapterKindOptions"
           :key="kind"
@@ -56,7 +59,11 @@
             :checked="filters.adapterKinds.includes(kind)"
             @change="toggleKind(kind, $event.target.checked)"
           />
-          {{ kind }}
+          <!-- The label, not the stored word — the capability boxes below have
+               always done this, and the shelf now spells the algorithm `LoRA`
+               on both the row and the group header. A raw `lokr` here was the
+               third spelling of one thing on one screen. -->
+          {{ adapterKindLabel(kind) }}
         </label>
       </div>
       <label class="tbm-check">
@@ -170,7 +177,7 @@
 <script setup>
 import { computed } from "vue";
 import { BASE_MODEL_UNASSIGNED } from "../../api/modelShelf";
-import { capabilityLabel } from "../../utils/modelShelf";
+import { adapterKindLabel, capabilityLabel } from "../../utils/modelShelf";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
 const store = useModelShelfStore();

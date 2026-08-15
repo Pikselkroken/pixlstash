@@ -915,6 +915,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
+  adapterKindLabel,
   assignmentRing,
   bandGroups,
   bandKeyFor,
@@ -1635,15 +1636,6 @@ const LOC_TITLE = {
 // copy left at all. They share the row treatment because they share the fact.
 const BROKEN_STATES = new Set(["missing", "forgotten"]);
 
-// Trainers spell these however they like; the shelf spells them one way.
-const ALGO_LABEL = {
-  lora: "LoRA",
-  lokr: "LoKr",
-  loha: "LoHa",
-  dora: "DoRA",
-  oft: "OFT",
-};
-
 /**
  * Every drawn row, in order, as `{key, id}`.
  *
@@ -2241,8 +2233,10 @@ function kindLabel(row) {
   if (row.file_kind === "unknown") return "Unclassified";
   const capabilities = Array.isArray(row.capabilities) ? row.capabilities : [];
   if (capabilities.length) return capabilities.map(capabilityLabel).join(", ");
-  const kind = String(row.kind || "").toLowerCase();
-  return ALGO_LABEL[kind] || kind || "Adapter";
+  // One vocabulary with the `feature` group axis, though not always the same
+  // heading: that axis files `unknown`, and anything that is not an adapter,
+  // under "No feature recorded". The CELL still names what the row is.
+  return adapterKindLabel(row.kind) || "Adapter";
 }
 
 onMounted(() => {

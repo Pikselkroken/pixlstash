@@ -169,8 +169,79 @@ export const CAPABILITY_LABELS = {
  * @returns {string} e.g. `Captioning`.
  */
 export function capabilityLabel(capability) {
-  const key = String(capability || "");
-  return CAPABILITY_LABELS[key] || key;
+  return labelFrom(CAPABILITY_LABELS, String(capability || ""));
+}
+
+/**
+ * Look a free-text value up in a label table, falling through to itself.
+ *
+ * `Object.hasOwn` rather than a plain index, because both tables are keyed by
+ * strings that come off the wire or out of a file header. `kind` reaches this
+ * as `constructor` and the index returns `Object`'s constructor FUNCTION —
+ * truthy, so `|| key` never fires, and it lands in a group label where
+ * `localeCompare` throws and takes the whole `groups` computed with it.
+ */
+function labelFrom(table, key) {
+  return Object.hasOwn(table, key) ? table[key] : key;
+}
+
+/**
+ * How the shelf spells each adapter algorithm. Trainers spell them however
+ * they like; `model.kind` stores whatever was read out of the header.
+ *
+ * Not exported: `adapterKindLabel` is the only way in, so no caller can index
+ * it raw and reintroduce the `Object.prototype` hole `labelFrom` closes.
+ */
+const ADAPTER_KIND_LABELS = {
+  lora: "LoRA",
+  lokr: "LoKr",
+  loha: "LoHa",
+  dora: "DoRA",
+  oft: "OFT",
+  // `KIND_UNKNOWN` — `detect_adapter_kind` found adapter markers but no
+  // algorithm it knows. A real thing to filter on ("which of these could we
+  // not identify") and a real thing to print in the Kind cell, so it is
+  // spelled here like the rest. It is only the GROUP axis that declines it,
+  // because a heading called `UNKNOWN` beside `NO FEATURE RECORDED` is two
+  // shrugs presented as one feature and one not.
+  unknown: "Unknown",
+};
+
+/**
+ * Fold one stored `model.kind` to the value everything keys on.
+ *
+ * `model.kind` is free text — the scanner writes a constant, but `PATCH
+ * /models` stores whatever reaches it verbatim — so `LoRA`, `lora` and ` lora `
+ * are one algorithm spelled three ways. The shelf folds them here, once: the
+ * group key, the `Show` panel's checkbox list and the kind filter all read this
+ * rather than the raw column, or the panel offers two boxes labelled `LoRA`
+ * where the axis draws one group and ticking either hides half of it.
+ *
+ * Both halves earn their place. The CASE is reachable from the app's own edit
+ * dialog, which trims but does not fold. The WHITESPACE only arrives over the
+ * raw API, and an untrimmed value sorts to the very TOP of a grouped shelf,
+ * ahead of every letter.
+ *
+ * @param {string} kind - a stored `model.kind`.
+ * @returns {string} e.g. `lora`, or `""` when the row records no algorithm.
+ */
+export function adapterKindKey(kind) {
+  return String(kind || "")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Name one adapter algorithm for display.
+ *
+ * Falls through to the folded word, like `capabilityLabel`: an algorithm this
+ * table has not heard of should show its own name rather than be hidden.
+ *
+ * @param {string} kind - a stored `model.kind`, or an `adapterKindKey`.
+ * @returns {string} e.g. `LoRA`, or `""` when the row records no algorithm.
+ */
+export function adapterKindLabel(kind) {
+  return labelFrom(ADAPTER_KIND_LABELS, adapterKindKey(kind));
 }
 
 /**
