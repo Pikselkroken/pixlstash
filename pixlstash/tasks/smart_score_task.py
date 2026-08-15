@@ -68,9 +68,8 @@ class SmartScoreTask(BaseTask):
             return {"changed_count": 0}
 
         apply_thresholds = resolve_anomaly_apply_thresholds(self._vault)
-        # Read live from the hub rather than from ``auth_service.user``: that is a
-        # start-up snapshot, so a penalised-tag edit made since would not reach the
-        # rescore the edit itself queued.
+        # The owner's table comes from the hub's user row, never from ``self._db`` —
+        # that is the vault, and identity does not live there.
         owner_penalised_tags = resolve_penalised_tag_weights(
             getattr(self._vault, "auth_service", None)
         )

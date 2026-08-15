@@ -264,14 +264,22 @@ def resolve_penalised_tag_weights(auth_service) -> dict:
     :func:`get_smart_score_penalised_tags_from_request` cannot serve it, since a
     background task has no request.
 
+    It reads ``auth_service.user`` — the process-local owner cache — rather than issuing
+    a hub query per batch. That cache is not a start-up snapshot for these fields:
+    ``PATCH /users/me/config`` writes it back precisely so background scoring sees an
+    edit (``pixlstash/routes/config.py``, "keep the process-local owner cache
+    coherent"). Querying instead would add a second engine's DB round-trip to every
+    scoring batch, and the Windows gate segfaults at teardown on that kind of added
+    volume (``tests/conftest.py``).
+
     Args:
-        auth_service: The server's :class:`~pixlstash.auth.AuthService`, which reads
-            identity from the hub. ``None`` falls back to the shipped seed.
+        auth_service: The server's :class:`~pixlstash.auth.AuthService`, whose ``user``
+            is the hub's owner row. ``None`` falls back to the shipped seed.
 
     Returns:
         ``{tag: weight}`` with lowercase tags and weights clamped to 1-5.
     """
-    user = auth_service.get_user() if auth_service is not None else None
+    user = getattr(auth_service, "user", None)
     if user is None:
         logger.warning(
             "No user row found while resolving penalised-tag weights; falling back to "
