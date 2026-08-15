@@ -156,10 +156,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_27_local_5_loopback():
+def test_host_capability_tier_split_is_28_local_5_loopback():
     """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 32 routes carry a
-    locality tier = 27 local + 5 loopback.
+    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 33 routes carry a
+    locality tier = 28 local + 5 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -230,6 +230,20 @@ def test_host_capability_tier_split_is_27_local_5_loopback():
     ``owner_only`` in the same change, which is not a locality tier and so does
     not move this arithmetic.)
 
+    33 = 28 + 5 with ``GET /adapters/{sha256}/file``, which streams one
+    registered adapter's bytes so a generator on another machine can use what
+    this one catalogues — the locations the detail route serves are *this*
+    host's paths and mean nothing over there. It is the **first shelf read off
+    the ``owner_only`` tier**, and the line that kept the others on it says why:
+    they "surface host paths but take none". This one takes none either, but it
+    does not surface a path — it returns the raw bytes of a file inside a
+    registered model folder, which is the ``.../runs/{run_name}/samples/
+    {filename}`` authority class exactly: reads inside a registered host root,
+    writes nothing, and is a new capability rather than a narrower view of the
+    metadata route beside it. Loopback/LAN/Tailscale is the deployment the route
+    exists for, so the tier costs it nothing; a genuinely remote generator needs
+    ``allow_remote_host_ops``, which is the safe direction to fail in.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -243,7 +257,7 @@ def test_host_capability_tier_split_is_27_local_5_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 27, sorted(local)
+    assert len(local) == 28, sorted(local)
 
 
 # ===========================================================================
@@ -556,6 +570,18 @@ def test_every_untemplated_locality_get_is_on_the_read_blocked_belt():
     They are pinned as a known set rather than ignored: adding a fourth fails
     here, and closing the gap needs prefix matching (the follow-up recorded in
     ``tests/test_model_shelf_api.py`` and ``docs/backend_architecture.md`` §16.3).
+
+    **``GET /adapters/{sha256}/file`` joined that set on 2026-08-15, and it is
+    the sharpest member of it.** The other two serve a run listing and a preview
+    image; this one streams model weights. So under the documented
+    ``AUTHZ_GATE_ENFORCING = False`` rollback a share token would not read a
+    directory — it would download every adapter on the shelf. It is on the list
+    rather than closed here because closing it means prefix matching in a belt
+    every route passes through, which is its own change with its own review, and
+    a bespoke ``startswith`` for one route is the kind of special case that rots.
+    The gate refuses it today and
+    ``tests/test_model_shelf_api.py::test_no_share_token_can_download_a_model_file``
+    proves that by mutation; this note is about the rollback, not about today.
     """
     tier = (AccessPolicy.LOCAL_OWNER_ONLY, AccessPolicy.LOOPBACK_OWNER_ONLY)
     tier_gets = {
@@ -573,6 +599,7 @@ def test_every_untemplated_locality_get_is_on_the_read_blocked_belt():
 
     templated_gap = sorted(path for path in tier_gets if "{" in path)
     assert templated_gap == [
+        "/api/v1/adapters/{sha256}/file",
         "/api/v1/model-folders/{folder_id}/runs",
         "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
     ], templated_gap
