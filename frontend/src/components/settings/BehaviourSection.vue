@@ -357,9 +357,8 @@ watch(
         class="settings-tagger-plugin-dir"
       >
         Custom plugins are installed by putting a file into a folder on the
-        machine running PixlStash. That folder is only named to a browser on
-        that machine or its local network, so it cannot be shown here — open
-        this screen from the server itself to see the path.
+        machine running PixlStash. The path is only shown to a browser on that
+        machine or its local network, so open this screen from there to see it.
       </div>
     </SettingsSection>
   </div>
