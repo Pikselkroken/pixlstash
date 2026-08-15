@@ -1913,8 +1913,21 @@ def _emit(
             data["fields"] = list(fields)
         vault.notify(event, data)
 
+    # Restoring an orientation rewrites the FILE, so the card's thumbnail URL
+    # changes — and that URL comes from the batch-thumbnail endpoint, not from
+    # `GET /pictures/{id}/metadata`. A bare `updated` therefore makes the client
+    # re-read metadata it already has and go on painting the pre-rotate bitmap,
+    # which is exactly what `stack_count` below exists to solve for a different
+    # listing-only value. Naming the field is what lets the client know a
+    # metadata refresh is not enough.
+    #
+    # `facets` is the union over the whole restore rather than per picture, so a
+    # mixed batch re-reads a few thumbnails it did not need to. That costs one
+    # request against a conditional-GET-friendly URL; guessing wrong the other
+    # way leaves a visibly stale photo on screen.
+    updated_fields = ["pixels"] if FACET_ORIENTATION in facets else None
     for event in events:
-        _notify(event, updated, "updated")
+        _notify(event, updated, "updated", updated_fields)
     _notify(EventType.CHANGED_PICTURES, scrapheaped, "removed")
     _notify(EventType.CHANGED_PICTURES, restored, "restored")
     _notify(EventType.CHANGED_PICTURES, stack_siblings, "updated", ["stack_count"])

@@ -7341,6 +7341,11 @@ defineExpose({
   // `stack_count` is derived per stack and is absent from a card's /metadata
   // read, so the per-card refresh cannot repair it.
   refreshStackFacets,
+  // Same shape, different value: a card's thumbnail URL comes from the batch
+  // thumbnail endpoint and is absent from /metadata, so refreshGridImage alone
+  // cannot repair a tile whose FILE changed (an in-place rotate, or an undo of
+  // one arriving over the socket).
+  refreshThumbnailUrls,
   repositionImageByScore,
   repositionImageBySmartScore,
   refreshSmartScoreForImage,
