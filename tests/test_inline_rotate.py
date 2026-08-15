@@ -492,12 +492,65 @@ def test_a_bad_direction_is_refused(client, server):
 # ---------------------------------------------------------------------------
 
 
+def test_the_batch_thumbnail_endpoint_serves_a_token_carrying_the_orientation(
+    client, server
+):
+    """Through the real endpoint, because the helper alone proves nothing.
+
+    ``POST /pictures/thumbnails`` loads pictures with an explicit
+    ``select_fields`` allowlist, and the rows outlive that session — so a field
+    the handler reads but the allowlist omits is DEFERRED, and reading it raises
+    ``DetachedInstanceError`` for every picture in the batch. ``getattr(pic, …,
+    None)`` does not soften it: SQLAlchemy raises that, not ``AttributeError``.
+
+    This shipped broken and was caught by hand, because the sibling test below
+    calls ``thumbnail_cache_token`` inside a DB task on a session-bound row — it
+    exercises the formula and never the endpoint that has to produce it. Assert
+    on the response.
+    """
+    picture_id = _upload(client)
+
+    def _set_dims(session):
+        picture = session.get(Picture, picture_id)
+        picture.thumbnail_width = 320
+        picture.thumbnail_height = 240
+        session.add(picture)
+        session.commit()
+
+    server.vault.db.run_task(_set_dims)
+
+    def _thumbnail_url():
+        resp = client.post(f"{API}/pictures/thumbnails", json={"ids": [picture_id]})
+        assert resp.status_code == 200, resp.text
+        entry = resp.json().get(str(picture_id))
+        assert entry is not None, (
+            f"the endpoint returned no entry for picture {picture_id}; a deferred "
+            f"field read on a detached row is logged and swallowed per picture, "
+            f"so the symptom is a missing entry rather than a 500"
+        )
+        return entry["thumbnail"]
+
+    before = _thumbnail_url()
+    assert "v=320x240" in before
+
+    assert _rotate(client, [picture_id], "180").status_code == 200
+    server.vault.db.run_task(_set_dims)  # a regenerated 180° bitmap is the same size
+
+    assert _thumbnail_url() != before, (
+        "the served URL must change after a 180° rotate, or the browser paints "
+        "the pre-rotate bitmap from an identical URL for up to an hour"
+    )
+
+
 def test_a_180_rotate_changes_the_thumbnail_cache_token(client, server):
     """W and H are unchanged by a 180° turn, so the token needs the orientation.
 
     Thumbnails are served ``max-age=3600``. On dimensions alone the URL would be
     byte-identical after the rotate and the browser would paint the pre-rotate
     bitmap for up to an hour.
+
+    This is the formula; the endpoint test above is the one that proves a client
+    can actually obtain it.
     """
     picture_id = _upload(client)
 

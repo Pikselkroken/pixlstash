@@ -26,6 +26,7 @@ except Exception:  # pragma: no cover - optional import
 from pixlstash.pixl_logging import get_logger
 from pixlstash.db_models.picture import Picture
 from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
+from pixlstash.utils.image_processing.orientation import ORIENTATION_TAG
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 logger = get_logger(__name__)
@@ -785,6 +786,7 @@ class ImageUtils:
 
         img_format = None
         width = height = None
+        orientation = None
         thumbnail_bytes = None
         # Thumbnail column values (AR-bitmap dims + faceless square crop). Faces
         # are not known at import; ``FaceExtractionTask`` refines the square crop
@@ -795,6 +797,19 @@ class ImageUtils:
             with Image.open(BytesIO(image_bytes)) as img:
                 img_format = img.format or "PNG"
                 width, height = img.size
+                # Read here, from the image that is already open, rather than
+                # left to `MissingOrientationFinder`. That finder exists to fill
+                # rows that predate the column; a NEW picture whose orientation
+                # is NULL for an indeterminate window is a value anything reading
+                # it right after import races — and the operation log records it
+                # as a facet, so a rotate landing in that window would snapshot
+                # `None` as the prior state and its undo would have nothing to
+                # write back.
+                try:
+                    raw_orientation = int((img.getexif() or {}).get(ORIENTATION_TAG, 1))
+                except (TypeError, ValueError):
+                    raw_orientation = 1
+                orientation = raw_orientation if 1 <= raw_orientation <= 8 else 1
                 rendered = ImageUtils.render_thumbnail(img)
                 if rendered is not None:
                     thumbnail_bytes, bmp_w, bmp_h, crop = rendered
@@ -922,6 +937,7 @@ class ImageUtils:
             format=img_format,
             width=width,
             height=height,
+            orientation=orientation,
             size_bytes=size_bytes,
             created_at=created_at,
             pixel_sha=pixel_sha,

@@ -1532,38 +1532,46 @@ def apply_state_in_session(
                             vacated_stack_ids=vacated_stack_ids,
                         )
                 elif facet == FACET_ORIENTATION:
-                    if value is not None:
-                        # The only facet whose write leaves the database, so the
-                        # only one that can fail for reasons the rest of the batch
-                        # has nothing to do with — a read-only file, a full disk,
-                        # a photo replaced by something that is no longer an
-                        # image. The forward path degrades those to `skipped`;
-                        # letting them out of this loop instead would fail the
-                        # whole undo, including every unrelated facet and picture
-                        # sharing the transaction.
-                        try:
-                            apply_orientation(
-                                session,
-                                picture_id,
-                                value,
-                                image_root=image_root,
-                            )
-                        # ImportError belongs here with the IO errors: the box
-                        # rotation resolves the rotate plugin through importlib
-                        # (its package directory is hyphenated, so it cannot be a
-                        # plain import), and that runs AFTER the file is written.
-                        # A damaged install would otherwise leave the file turned
-                        # and abort an undo that has nothing to do with rotation.
-                        except (OSError, ValueError, ImportError) as exc:
-                            logger.error(
-                                "operation_log: could not restore orientation %s "
-                                "on picture %d (%s); the rest of this restore "
-                                "still applies, and the file keeps the rotation "
-                                "it has until the picture is turned again",
-                                value,
-                                picture_id,
-                                exc,
-                            )
+                    # Deliberately NOT guarded on `value is not None` like its
+                    # siblings. A recorded `None` means the row predates the
+                    # orientation mirror being backfilled, so its undo genuinely
+                    # cannot turn the file — and `apply_orientation` says so, at
+                    # warning level, naming the picture. Skipping here instead
+                    # would make an incomplete undo indistinguishable from a
+                    # complete one, and silence the one message that explains it.
+                    #
+                    # This is also the only facet whose write leaves the
+                    # database, so the only one that can fail for reasons the
+                    # rest of the batch has nothing to do with — a read-only
+                    # file, a full disk, a photo replaced by something that is no
+                    # longer an image. The forward path degrades those to
+                    # `skipped`; letting them out of this loop instead would fail
+                    # the whole undo, including every unrelated facet and picture
+                    # sharing the transaction.
+                    #
+                    # ImportError belongs with the IO errors: the box rotation
+                    # resolves the rotate plugin through importlib (its package
+                    # directory is hyphenated, so it cannot be a plain import),
+                    # and that runs AFTER the file is written. A damaged install
+                    # would otherwise leave the file turned and abort an undo
+                    # that has nothing to do with rotation.
+                    try:
+                        apply_orientation(
+                            session,
+                            picture_id,
+                            value,
+                            image_root=image_root,
+                        )
+                    except (OSError, ValueError, ImportError) as exc:
+                        logger.error(
+                            "operation_log: could not restore orientation %s "
+                            "on picture %d (%s); the rest of this restore "
+                            "still applies, and the file keeps the rotation "
+                            "it has until the picture is turned again",
+                            value,
+                            picture_id,
+                            exc,
+                        )
                 elif facet == FACET_DELETED:
                     if value is not None:
                         _apply_deleted(session, picture, value)

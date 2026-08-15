@@ -1767,7 +1767,16 @@ def register_routes(router, server):
                     unsupported.append(pid)
                     continue
                 path = ImageUtils.resolve_picture_path(image_root, pic.file_path)
-                if not path or not supports_in_place_rotation(path):
+                if not path:
+                    # A file problem, not a format one — so `skipped`, beside the
+                    # other "there is nothing on disk to turn" cases above. The
+                    # two buckets are advice, not bookkeeping: the client answers
+                    # `unsupported` with "use Filters > Rotate to make a rotated
+                    # copy", which is the wrong thing to tell someone whose file
+                    # cannot be located.
+                    skipped.append(pid)
+                    continue
+                if not supports_in_place_rotation(path):
                     unsupported.append(pid)
                     continue
                 # Read INSIDE the DB task, never in the handler: two concurrent

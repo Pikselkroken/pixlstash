@@ -546,3 +546,63 @@ def test_reading_orientation_never_raises(tmp_path):
     corrupt = tmp_path / "corrupt.jpg"
     corrupt.write_bytes(b"not an image at all")
     assert read_orientation(corrupt) == ORIENTATION_NORMAL
+
+
+# ---------------------------------------------------------------------------
+# Import records the orientation, rather than leaving it to the backfill
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("stored,expected", [(None, 1), (1, 1), (6, 6), (8, 8)])
+def test_import_records_the_orientation_up_front(tmp_path, stored, expected):
+    """A newly imported picture must never sit at ``orientation IS NULL``.
+
+    ``MissingOrientationFinder`` exists to fill rows that predate the column, not
+    to finish importing a new one. Left to the finder, the value is a race for
+    anything reading it just after import — and because orientation is an
+    operation-log facet, a rotate landing in that window would snapshot ``None``
+    as the prior state and its undo would have nothing to write back.
+
+    Asserted against ``create_picture_from_bytes`` directly, NOT through an
+    upload: with a server running, the backfill finder fills the column either
+    way, so an end-to-end assertion passes whether or not the import does its
+    job. That version of this test was written first and proved to be vacuous —
+    removing the import-time write left it green.
+    """
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+    buffer = io.BytesIO()
+    image = _tile()
+    if stored is None:
+        image.save(buffer, "JPEG", quality=95)
+    else:
+        exif = image.getexif()
+        exif[0x0112] = stored
+        image.save(buffer, "JPEG", quality=95, exif=exif)
+
+    picture = ImageUtils.create_picture_from_bytes(
+        image_root_path=str(tmp_path),
+        image_bytes=buffer.getvalue(),
+        picture_uuid="imported.jpg",
+    )
+
+    assert picture.orientation == expected
+
+
+def test_import_records_a_corrupt_orientation_as_normal(tmp_path):
+    """An out-of-range tag must import as 1, not as itself or as NULL."""
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+    buffer = io.BytesIO()
+    image = _tile()
+    exif = image.getexif()
+    exif[0x0112] = 99
+    image.save(buffer, "JPEG", quality=95, exif=exif)
+
+    picture = ImageUtils.create_picture_from_bytes(
+        image_root_path=str(tmp_path),
+        image_bytes=buffer.getvalue(),
+        picture_uuid="corrupt.jpg",
+    )
+
+    assert picture.orientation == ORIENTATION_NORMAL
