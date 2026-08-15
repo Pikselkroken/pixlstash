@@ -628,11 +628,12 @@ const VerbMenu = (props) => {
       ],
     );
   const sep = () => h("span", { class: "shelf-mi-sep" });
+  // No `floatMenu`: it teleports the panel below the row, which a flyout cannot
+  // use, and the picker now refuses the pair anyway.
   const assign = (type, label) =>
     h(AddToEntityControl, {
       type,
       label,
-      floatMenu: true,
       placement: "right",
       subjectIds: props.assignableIds,
       membership: props.membership[type],
@@ -881,5 +882,34 @@ defineExpose({
   border-radius: var(--radius-sm);
   background: transparent;
   font-size: var(--text-sm);
+}
+
+/* The flyout skin is drawn for the grid's context menu, whose rows are
+   `.ctx-item`: 14px inset, square full-bleed hover, an 18px glyph at full
+   strength. Every one of those is wrong beside a `.shelf-mi`, and the indent is
+   only the one that is obvious — the two Assign rows also drew a square hover
+   wash in a menu of rounded ones, in neutral grey where every neighbour uses
+   the accent `--hover-wash`.
+
+   `.ate` is repeated to reach (0,4,0). The rule being overridden is SCOPED, so
+   it compiles to `.ate--flyout .ate-btn[data-v-…]` and counts three — which is
+   also why the plain `.shelf-menu .ate-btn` above it has never applied to a
+   flyout. */
+.shelf-menu .ate.ate--flyout .ate-btn {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+}
+
+.shelf-menu .ate.ate--flyout .ate-btn:hover:not(:disabled) {
+  background: var(--hover-wash);
+}
+
+/* The trigger's own glyph, not the trailing chevron, which the flyout skin
+   already dims. Colour only: a `v-icon` with a numeric `size` writes `font-size`
+   as an INLINE style, so the 18px glyph cannot be brought down to the 16px the
+   `.shelf-mi` rows use without `!important`. Its box is 18px either way, so the
+   labels still line up — the glyph is a shade larger and that is all. */
+.shelf-menu .ate--flyout .ate-btn > .v-icon:not(.ate-chevron) {
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 </style>
