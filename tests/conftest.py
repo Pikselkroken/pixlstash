@@ -3,9 +3,11 @@ Pytest configuration and fixtures for test suite.
 """
 
 import gc
+import hashlib
 import json
 import math
 import os
+import re
 import socket
 import statistics
 import sys
@@ -23,6 +25,9 @@ from pixlstash.server import Server
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
 from pixlstash.tasks.tag_task import TagTask
+
+# pytest appends the phase it is in to PYTEST_CURRENT_TEST.
+_PYTEST_PHASE = re.compile(r" \((setup|call|teardown)\)$")
 
 _API_V1_PREFIX = "/api/v1"
 _NON_API_ROOT_PATHS = {
@@ -416,6 +421,147 @@ def pytest_configure(config):
     Server.DEFAULT_FAST_CAPTIONS = config.getoption("--fast-captions")
     Server.DEFAULT_MAX_VRAM_GB = config.getoption("--max-vram-gb")
     Server.DEFAULT_INSIGHTFACE_MODEL_PACK = config.getoption("--insightface-model-pack")
+
+
+@pytest.fixture(autouse=True, scope="session")
+def sandbox_the_recorded_model_locations(tmp_path_factory):
+    """Put both recorded-location files somewhere the suite may safely write.
+
+    A relocation records where PixlStash downloads its engines
+    (``downloaded_models.location``) and where the InsightFace packs live
+    (``insightface.location``). Both are **machine-global** — one download
+    serves every library and every server instance on the host — so both live in
+    the platform user data directory, next to nothing else the suite touches,
+    and both outlive the process that wrote them.
+
+    Which is how the developer's real machine ended up with a record naming a
+    ``tmp_path`` from a finished test run. pytest deleted the directory; the
+    accessor kept naming it; every start after that re-created the path and
+    downloaded ~750 MB of engines into it, while the real ones sat untouched in
+    the default folder. Nothing failed and nothing said so.
+
+    ``pytest_configure`` above already stops the suite *declaring* these roots,
+    for the same reason in the other direction: they describe the developer's
+    home, not the test's. This is the write half of that decision, and it is
+    made mechanically rather than remembered — three test modules redirect
+    ``_pixlstash_data_dir`` per test to stay out of the way, which works right up
+    until a relocation's worker thread finishes after the redirection is undone,
+    or a fourth module forgets. Redirecting ``_pointer_path`` for the whole
+    session leaves nothing to remember: no test can name the machine's file, so
+    no test can write it.
+
+    Only the machine's own directory is replaced. A test that redirects
+    ``_pixlstash_data_dir`` itself still gets its pointer beside the directory it
+    chose, which is what those modules assert on.
+
+    **The sandbox is per test, not one shared file**, even though it is one
+    directory. A record is read back on every call, so a single shared file
+    would let one test's write change where every *later* test in the shard
+    downloads — a flake the sharder reshuffles between runs. The redirected name
+    carries the writing test's id instead, and the check below fails the run
+    with whatever the sandbox holds.
+
+    **That check is a tripwire, not a census.** It sees a write made while no
+    test had redirected the seam. A write from a worker thread that lands
+    *during* a later test which has redirected it goes to that test's own
+    ``tmp_path`` instead — safe, which is the point, but invisible here and
+    attributed to the wrong test if it does show up, since
+    ``PYTEST_CURRENT_TEST`` is process-global. So an empty sandbox is not proof
+    that nothing wrote; the protection is the redirection, and this only reports
+    the cases it can see.
+
+    Nothing is restored at the end. The rebinding has to outlive the session:
+    a relocation records its new location from a daemon worker thread
+    (``model_moves._start_job``), and the suite leaves such a thread unjoined —
+    restoring the original here would reopen the machine's file for exactly the
+    write this fixture exists to stop.
+    """
+    from pixlstash.services import builtin_models
+    from pixlstash.utils import insightface_model_utils
+
+    sandbox = str(tmp_path_factory.mktemp("recorded-model-locations"))
+    machine_data_dir = os.path.realpath(builtin_models._pixlstash_data_dir())
+
+    def _redirected(module, constant):
+        def _pointer_path() -> str:
+            # Both the seam and the filename are read per call: a test may have
+            # redirected the first, and the second is a module constant.
+            filename = getattr(module, constant)
+            directory = builtin_models._pixlstash_data_dir()
+            # `realpath`, not `==`: a trailing slash, a `..` or a symlink are
+            # all the machine's own directory spelled differently, and a
+            # redirection that reached it by one of those names would write the
+            # real file. `is_builtin_model_dir` compares the same way.
+            if os.path.realpath(directory) != machine_data_dir:
+                return os.path.join(directory, filename)
+            # One file per test. A shared one would let a record written by one
+            # test change where a later test in the shard downloads, which is a
+            # flake the sharder reshuffles. Hashed rather than spelled out: a
+            # node id can carry spaces and run past NAME_MAX once the pointer's
+            # own name is appended, and two ids must never collide here.
+            # Only pytest's own phase suffix is stripped, so a record written
+            # by a fixture is not invisible to the test body it was written for
+            # and two parametrised ids whose params contain " (" stay apart.
+            current = _PYTEST_PHASE.sub(
+                "", os.environ.get("PYTEST_CURRENT_TEST", "session")
+            )
+            unique = hashlib.blake2b(current.encode(), digest_size=8).hexdigest()
+            readable = "".join(c if c.isalnum() or c in "._-" else "_" for c in current)
+            return os.path.join(sandbox, f"{unique}.{readable[-60:]}.{filename}")
+
+        return _pointer_path
+
+    builtin_models._pointer_path = _redirected(
+        builtin_models, "BUILTIN_MODEL_DIR_POINTER"
+    )
+    insightface_model_utils._pointer_path = _redirected(
+        insightface_model_utils, "INSIGHTFACE_ROOT_POINTER"
+    )
+    yield sandbox
+    leaked = sorted(os.listdir(sandbox))
+    assert not leaked, (
+        "these tests recorded a machine-global model location, which outside "
+        f"the suite lands in {machine_data_dir} and outlives the run: {leaked}. "
+        "Every relocation a test starts has to finish inside it (await the 202) "
+        "and the test has to redirect builtin_models._pixlstash_data_dir to a "
+        "tmp_path first — tests/test_builtin_models.py::data_dir is the shape."
+    )
+
+
+@pytest.fixture(autouse=True)
+def no_model_move_outlives_its_test():
+    """Fail a test that leaves a model move running rather than the next one.
+
+    A relocation or an import runs on a daemon thread (``_start_job``) whose
+    *ending* is where the work lands: folder rows are repointed, and for the
+    folder PixlStash downloads into, a machine-global location is recorded. A
+    test that starts one and does not wait hands all of that to whichever test
+    runs next — at a moment no fixture is holding the seams still, which is the
+    shape that lets a recorded location escape the redirection above.
+
+    Suite-wide rather than in the one module that noticed: ``_job`` is a global,
+    and three test modules drive the same route. Await the ``202``.
+
+    Not reset at set-up on purpose. Nulling a running job here would orphan the
+    thread and hide the leak instead of reporting it; a slow one may accuse a
+    later test as well, but the test that actually leaked it fails first and is
+    the one named at the top of the report.
+    """
+    yield
+    from pixlstash.routes import model_moves
+
+    # Under the readers' lock, which is the contract the module states and
+    # `test_the_move_worker_writes_the_job_under_the_readers_lock` pins: the
+    # worker writes `status` while holding it.
+    with model_moves._job_lock:
+        job = model_moves._job
+        status = None if job is None else job["status"]
+    assert status != "running", (
+        "this test left a model move running. Await it (`_await_move`) before "
+        "the test ends, or its ending lands inside the next test. Tests after "
+        "this one may fail for the same reason until that move finishes; this "
+        "is the one that started it."
+    )
 
 
 def _measured_test_seconds(reporter) -> float:

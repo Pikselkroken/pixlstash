@@ -2551,6 +2551,16 @@ def test_relocate_is_owner_only_and_local_only(shelf_env, relocatable_store):
     # Positive control: the local owner is not blocked.
     local = shelf_env.owner.post(path, headers=_xff("192.168.1.9"), **body)
     assert "restricted to local" not in local.text, local.text
+    # Accepted, and then waited for. The status code is asserted because
+    # `_await_move` cannot tell "the job finished" from "there was never a job":
+    # the fixture nulls `_job`, and a snapshot of nothing reads `idle`, so a
+    # positive control that regressed to a 409 would be awaited in name only.
+    # And it is waited for because it really relocates — the job runs on a
+    # daemon thread whose ending repoints folder rows, and for the download
+    # folder, which shares this route, records a machine-global location. Left
+    # running it finishes inside whichever test comes next.
+    assert local.status_code == 202, local.text
+    _await_move(shelf_env)
 
 
 def test_relocating_keeps_the_stores_subdirectories(shelf_env, relocatable_store):

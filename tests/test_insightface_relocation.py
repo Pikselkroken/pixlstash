@@ -139,7 +139,11 @@ def face_env(tmp_path, data_dir, monkeypatch):
     finally:
         server.__exit__(None, None, None)
         tmp.cleanup()
-        model_moves._job = None
+        # `_job` is deliberately NOT cleared here. Set-up already nulls it, and
+        # an autouse fixture tears down after this one, so clearing it here
+        # would hide a move this module left running from
+        # `no_model_move_outlives_its_test` — in the one module whose route
+        # records the InsightFace root.
 
 
 class _FaceEnv:
