@@ -19,21 +19,26 @@ The assertions here are the ones that fail if that stops being true:
    recorded state twice must leave the file byte-identical.
 3. **Undo does not walk around a locked set.** The freeze lives at
    ``apply_state_in_session``; an empty-diff design would have skipped it.
-4. **Authorization in both directions.** ``OWNER_ONLY`` is the odd tier on this
-   surface, so the negative (a scoped share token is refused) and the positive
-   (the owner still works) are asserted side by side — over-blocking would be its
-   own regression.
+4. **Authorization in both directions, at both layers.** The route is
+   ``PICTURE_SCOPED`` on ``body_ids="picture_ids"``, so *write-enabled* is
+   settled by the auth middleware (a READ token cannot POST here at all) and
+   *reaches this picture* by the gate. Section 6 asserts each layer's negative
+   next to the positive it must not over-block, and pins that a batch mixing an
+   in-scope and an out-of-scope id is refused **whole**.
 """
 
 import gc
 import io
 import json
 import os
+import secrets
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
+from passlib.hash import bcrypt
 from PIL import Image
 from sqlmodel import delete, select
 
@@ -44,6 +49,8 @@ from pixlstash.db_models import (
     Picture,
     PictureSet,
     PictureSetMember,
+    User,
+    UserToken,
 )
 from pixlstash.db_models.reference_folder import ReferenceFolder
 from pixlstash.server import Server
@@ -553,24 +560,22 @@ def test_two_concurrent_rotates_do_not_lose_one(client, server):
 # ---------------------------------------------------------------------------
 
 
-def test_a_scoped_share_token_cannot_rotate_but_the_owner_can(client, server):
-    """OWNER_ONLY: the first write path that alters the owner's original bytes.
-
-    Both directions in one test on purpose — a negative that passes because the
-    credential was missing rather than because the scope was refused is a silent
-    coverage loss, and over-blocking the owner is its own regression.
-    """
-    picture_id = _upload(client)
-    set_id = client.post(f"{API}/picture_sets", json={"name": "shared"}).json()[
+def _shared_set(client, server, picture_ids, name):
+    """Create a picture set holding ``picture_ids`` and return its id."""
+    set_id = client.post(f"{API}/picture_sets", json={"name": name}).json()[
         "picture_set"
     ]["id"]
 
     def _add(session):
-        session.add(PictureSetMember(set_id=set_id, picture_id=picture_id))
+        for picture_id in picture_ids:
+            session.add(PictureSetMember(set_id=set_id, picture_id=picture_id))
         session.commit()
 
     server.vault.db.run_task(_add)
+    return set_id
 
+
+def _mint_read_token(client, set_id):
     minted = client.post(
         f"{API}/users/me/token",
         json={
@@ -581,34 +586,199 @@ def test_a_scoped_share_token_cannot_rotate_but_the_owner_can(client, server):
         },
     )
     assert minted.status_code == 200, minted.text
-    token = minted.json()["token"]
+    return minted.json()["token"]
 
+
+def _forge_write_token(server, set_id):
+    """Mint a *write-enabled* picture-set-scoped token by writing the hub row.
+
+    ``create_token`` refuses any scope but ``ALL``/``READ``, so a write-enabled
+    resource-scoped token has no mint path through the API today — the shape is
+    nonetheless fully honoured downstream, and it is the principal this route's
+    ``PICTURE_SCOPED`` declaration exists for. The auth middleware builds a
+    ``TokenScope`` for **every** non-``ALL`` scope and only blocks non-GET for
+    ``scope == "READ"``, and ``enforce_picture_scope`` reads
+    ``resource_type``/``resource_id`` and never ``scope`` — so this row exercises
+    exactly the "write-enabled, and does the grant reach the picture" path the
+    gate is being asked to decide. Forged rather than minted for the same reason
+    ``tests/test_snapshots_auth.py`` forges: the row is the thing under test.
+
+    **These tests encode a fail-open that ought to be closed, and a future fix
+    will turn them red.** ``auth.py``'s middleware refuses a non-GET only when
+    ``scope == "READ"``, so an unrecognised scope string — like this forged
+    ``"WRITE"`` — skips the write refusal rather than being denied by default.
+    That is what lets this row through, and it is a pre-existing property of 43
+    already-``*_SCOPED`` mutation routes (``DELETE /pictures`` among them), not
+    of rotate. When someone allowlists known scopes and fails closed, this test
+    goes red — and the right response is to grant ``"WRITE"`` write-ness
+    deliberately, NOT to conclude the hardening broke rotate.
+    """
+    token_value = secrets.token_urlsafe(32)
+
+    def _add(session):
+        owner = session.exec(select(User)).first()
+        assert owner is not None, "owner user must exist for the token to match"
+        session.add(
+            UserToken(
+                user_id=owner.id,
+                library_uuid=server._active_library_uuid(),
+                token_hash=bcrypt.hash(token_value),
+                token_prefix=token_value[:8],
+                created_at=datetime.utcnow(),
+                description="write-enabled picture-set token (test only)",
+                scope="WRITE",
+                resource_type="picture_set",
+                resource_id=set_id,
+            )
+        )
+        session.commit()
+
+    server.hub_engine.run_task(_add)
+    return token_value
+
+
+def _as(server, token):
+    """A client that presents ``token`` as a bearer credential."""
     scoped = TestClient(server.api)
-    # Positive control: the route resolves and the credential works elsewhere, so
-    # the 403 below is a scope refusal rather than a 404 or a dead path.
-    reachable = scoped.get(
-        f"{API}/pictures/{picture_id}/metadata",
-        headers={"Authorization": f"Bearer {token}"},
+    scoped.headers["Authorization"] = f"Bearer {token}"
+    return scoped
+
+
+def test_a_write_enabled_grant_that_reaches_the_picture_can_rotate_it(client, server):
+    """The positive the PICTURE_SCOPED declaration exists for.
+
+    The in-place write is a metadata-only orientation splice — pixels byte for
+    byte identical, exactly reversible, refused at the sink for a reference
+    folder — so a write-enabled grant that already reaches the picture is
+    entitled to it, the same as every other per-picture mutation here.
+    """
+    picture_id = _upload(client)
+    set_id = _shared_set(client, server, [picture_id], "write-grant")
+    scoped = _as(server, _forge_write_token(server, set_id))
+
+    resp = scoped.post(
+        f"{API}/pictures/rotate",
+        json={"picture_ids": [picture_id], "direction": "cw"},
     )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["rotated_picture_ids"] == [picture_id]
+    assert read_orientation(_file_path(server, picture_id)) == 6, (
+        "the grant covers this picture, so the orientation must actually change"
+    )
+    assert _picture_row(server, picture_id)["orientation"] == 6
+
+
+def test_a_write_enabled_grant_that_excludes_the_picture_is_refused_by_the_gate(
+    client, server
+):
+    """The gate's negative: write-enabled, but this picture is not in the grant."""
+    granted_id = _upload(client)
+    outside_id = _upload(client)
+    set_id = _shared_set(client, server, [granted_id], "write-grant-partial")
+    scoped = _as(server, _forge_write_token(server, set_id))
+
+    # Positive control: the credential works and the route resolves, so the 403
+    # below is a membership refusal and not a dead path or a bad token. The
+    # middleware runs ahead of routing and answers a nonexistent path with the
+    # same 403, which is what this control rules out.
+    allowed = scoped.post(
+        f"{API}/pictures/rotate",
+        json={"picture_ids": [granted_id], "direction": "cw"},
+    )
+    assert allowed.status_code == 200, allowed.text
+
+    refused = scoped.post(
+        f"{API}/pictures/rotate",
+        json={"picture_ids": [outside_id], "direction": "cw"},
+    )
+    assert refused.status_code == 403, refused.text
+    assert read_orientation(_file_path(server, outside_id)) == 1, (
+        "a refused rotate must not touch the file"
+    )
+    assert _picture_row(server, outside_id)["orientation"] == 1
+
+
+def test_a_mixed_batch_is_refused_whole_and_rotates_neither(client, server):
+    """One out-of-scope id poisons the whole batch — no partial application.
+
+    The gate resolves ``picture_ids`` element by element and raises on the first
+    id outside the grant, *before* the handler body runs, so there is no window
+    in which the in-scope picture is already turned. A partial application here
+    would be a bug: the caller's next retry would turn it a second time.
+    """
+    granted_id = _upload(client)
+    outside_id = _upload(client)
+    set_id = _shared_set(client, server, [granted_id], "write-grant-mixed")
+    scoped = _as(server, _forge_write_token(server, set_id))
+
+    refused = scoped.post(
+        f"{API}/pictures/rotate",
+        json={"picture_ids": [granted_id, outside_id], "direction": "cw"},
+    )
+    assert refused.status_code == 403, refused.text
+    assert read_orientation(_file_path(server, granted_id)) == 1, (
+        "the in-scope picture must NOT have been rotated: a mixed batch is "
+        "refused as a whole, never partially applied"
+    )
+    assert read_orientation(_file_path(server, outside_id)) == 1
+    assert _operations(server) == [], "a wholly refused batch records nothing"
+
+    # And the order of the ids does not decide it.
+    refused_reversed = scoped.post(
+        f"{API}/pictures/rotate",
+        json={"picture_ids": [outside_id, granted_id], "direction": "cw"},
+    )
+    assert refused_reversed.status_code == 403, refused_reversed.text
+    assert read_orientation(_file_path(server, granted_id)) == 1
+    assert _operations(server) == []
+
+
+def test_a_read_only_token_is_refused_by_the_middleware_not_the_gate(client, server):
+    """The other layer: READ tokens never reach the gate on this route.
+
+    ``POST /pictures/rotate`` is deliberately absent from
+    ``READ_SAFE_POST_PATHS``, so the auth middleware refuses a READ token's POST
+    before routing. That is what makes *write-enabled* the operative condition
+    and leaves the gate to answer only *does this grant reach this picture*. The
+    ``"Token is read-only"`` body is how the two refusals are told apart — the
+    gate's says "not authorised to access this picture".
+    """
+    picture_id = _upload(client)
+    set_id = _shared_set(client, server, [picture_id], "read-only-share")
+    token = _mint_read_token(client, set_id)
+    scoped = _as(server, token)
+
+    # Positive control: the credential is live and the picture is in its grant,
+    # so the refusal below is about the *method*, not a dead path or a bad token.
+    reachable = scoped.get(f"{API}/pictures/{picture_id}/metadata")
     assert reachable.status_code == 200, reachable.text
 
     refused = scoped.post(
         f"{API}/pictures/rotate",
         json={"picture_ids": [picture_id], "direction": "cw"},
-        headers={"Authorization": f"Bearer {token}"},
     )
     assert refused.status_code == 403, refused.text
-    # And through the ?token= query-param path, which bypasses the header.
-    refused_query = scoped.post(
+    assert refused.json()["detail"] == "Token is read-only", (
+        "the READ refusal must come from the auth middleware's non-GET block, "
+        "not from the gate — if this ever reads as a membership refusal the "
+        "route has been added to READ_SAFE_POST_PATHS"
+    )
+
+    # The ?token= query-param path bypasses the header and must refuse identically.
+    refused_query = TestClient(server.api).post(
         f"{API}/pictures/rotate",
         params={"token": token},
         json={"picture_ids": [picture_id], "direction": "cw"},
     )
     assert refused_query.status_code == 403, refused_query.text
+    assert refused_query.json()["detail"] == "Token is read-only"
 
     assert read_orientation(_file_path(server, picture_id)) == 1
     assert _operations(server) == []
 
-    # Positive: the owner is not over-blocked.
+
+def test_the_owner_is_not_over_blocked(client, server):
+    """Over-blocking is its own regression; the owner path stays open."""
+    picture_id = _upload(client)
     assert _rotate(client, [picture_id], "cw").status_code == 200
     assert read_orientation(_file_path(server, picture_id)) == 6

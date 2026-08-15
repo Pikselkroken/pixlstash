@@ -3951,13 +3951,14 @@ let rotateQueue = Promise.resolve();
  * Re-read these cards' thumbnail URLs from the server.
  *
  * The card's `?v=` token is the server's, and it moves when the bitmap does —
- * but only if the client actually asks for it again. It does not by default:
- * `fetchThumbnailsBatch` pre-fills `?v=<imported_at>` so a tile paints before
- * the thumbnails POST answers, and that pre-fill then wins for the rest of the
- * card's life, because a card that already carries a URL is not in
- * `missingThumbIds`. An in-place rotate does not move `imported_at`, so nothing
- * about the local URL would ever change and the browser would keep serving the
- * pre-rotate bitmap for the life of its cache entry.
+ * but only if the client actually asks for it again. This is the AWAITED way to
+ * ask, for a named set of cards, which is what a rotate needs: it has to settle
+ * before the receipt narrates the turn.
+ *
+ * `fetchThumbnailsBatch` now also applies the server's URL over its own
+ * `?v=<imported_at>` pre-fill, so `refreshGridImage`'s trailing batch would
+ * eventually repair these tiles too — but it fires that batch un-awaited, and
+ * "eventually" is not something a caller can sequence against.
  *
  * Taking the server's URL verbatim — never stamping a buster here — is what
  * keeps the token a server contract rather than a mirror of one. Its shape
@@ -6637,8 +6638,11 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
       square_crop_side: img?.square_crop_side,
     }));
     // Synchronously pre-fill thumbnail URLs from imported_at so <img> elements
-    // render immediately without waiting for the POST round trip. The POST
-    // still runs to enrich face overlays and penalised-tag hints.
+    // render immediately without waiting for the POST round trip. This is a
+    // placeholder with a placeholder's lifetime: the POST below replaces it
+    // with the server's own URL the moment that answers, because only the
+    // server's `?v=` token moves when a bitmap is regenerated. The POST also
+    // enriches face overlays and penalised-tag hints.
     for (let i = 0; i < gridImages.length; i++) {
       const gridImg = gridImages[i];
       if (!gridImg.thumbnail && gridImg.id && gridImg.imported_at) {
@@ -6653,17 +6657,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         };
       }
     }
-    // Separate images: those missing a thumbnail need a full fetch; those that
-    // already have one still need penalised_tags refreshed (e.g. after a tag
-    // removal on a stack-head image whose thumbnail was carried over from the
-    // previous grid state and was therefore never re-fetched).
-    const missingThumbIds = new Set(
-      gridImages
-        .filter(
-          (img) => img.id !== null && img.id !== undefined && !img.thumbnail,
-        )
-        .map((img) => String(img.id)),
-    );
     ids = Array.from(
       new Set(
         gridImages
@@ -6683,33 +6676,37 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
           continue;
         }
         const thumbObj = thumbData[String(gridImg.id)];
-        // Only overwrite thumbnail URL for images that didn't already have one.
-        if (missingThumbIds.has(String(gridImg.id))) {
-          const thumbnailUrl =
-            thumbObj && thumbObj.thumbnail ? thumbObj.thumbnail : null;
+        // The server owns the thumbnail URL. Its `?v=` token is the only thing
+        // that moves when a bitmap is regenerated — the upgrade NULL-reset in
+        // thumbnail_generation_task, a reference-folder source swap, an in-place
+        // rotate — so the answer always replaces whatever the card is carrying,
+        // including the `?v=<imported_at>` placeholder pre-filled just above.
+        // That placeholder is a stand-in until this arrives, never a
+        // replacement for it: gating on "didn't already have one" meant every
+        // card with an imported_at kept a token derived from its import date,
+        // which never changes again, and no regenerated thumbnail ever
+        // repainted. A card the server reports no URL for keeps what it has,
+        // so a still-processing picture is not blanked; a card that never had
+        // one stays null and goes down the retry path below.
+        const thumbnailUrl =
+          thumbObj && thumbObj.thumbnail ? thumbObj.thumbnail : null;
+        if (thumbnailUrl) {
           const previousThumbnail = gridImg.thumbnail || null;
-          gridImg.thumbnail = thumbnailUrl
-            ? appendShareToken(
-                thumbnailUrl.startsWith("http")
-                  ? thumbnailUrl
-                  : `${props.backendUrl}${thumbnailUrl}`,
-              )
-            : null;
-          if (
-            gridImg.id != null &&
-            gridImg.thumbnail &&
-            gridImg.thumbnail !== previousThumbnail
-          ) {
-            thumbnailAssignedAtMap[gridImg.id] = performance.now();
-          }
-          if (gridImg.id != null && thumbObj && thumbObj.thumbnail) {
+          gridImg.thumbnail = appendShareToken(
+            thumbnailUrl.startsWith("http")
+              ? thumbnailUrl
+              : `${props.backendUrl}${thumbnailUrl}`,
+          );
+          if (gridImg.id != null) {
+            if (gridImg.thumbnail !== previousThumbnail) {
+              thumbnailAssignedAtMap[gridImg.id] = performance.now();
+            }
             thumbnailLoadedMap[gridImg.id] =
               (thumbnailLoadedMap[gridImg.id] || 0) + 1;
           }
         }
-        // Always refresh faces, thumbnail dimensions, and penalised_tags
-        // from authoritative server data, even when the thumbnail URL was
-        // pre-filled from imported_at.
+        // Faces, thumbnail dimensions and penalised_tags come from the same
+        // authoritative record, whether or not it carried a URL.
         if (thumbObj) {
           const thumbWidth = Number(thumbObj.thumbnail_width);
           const thumbHeight = Number(thumbObj.thumbnail_height);

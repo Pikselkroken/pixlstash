@@ -19,6 +19,7 @@ casually undone.
 from __future__ import annotations
 
 import io
+import os
 import struct
 
 import piexif
@@ -405,6 +406,42 @@ def test_the_file_permissions_survive_a_rotate(tmp_path):
     write_orientation(photo, 6)
 
     assert photo.stat().st_mode & 0o777 == 0o644
+
+
+def test_extended_attributes_survive_a_rotate(tmp_path):
+    """Finder tags and other `user.*` labels are part of the user's file.
+
+    The premise of an in-place rotate is that it preserves everything except one
+    enumerated value; silently dropping xattrs on a NAS or a tagged library
+    breaks that promise in a way nobody would look for.
+    """
+    photo = tmp_path / "photo.jpg"
+    _tile().save(photo, "JPEG", quality=95)
+    try:
+        os.setxattr(photo, "user.finder_tag", b"holiday")
+    except (AttributeError, OSError) as exc:
+        pytest.skip(f"extended attributes unavailable here: {exc}")
+
+    write_orientation(photo, 6)
+
+    assert os.getxattr(photo, "user.finder_tag") == b"holiday"
+
+
+def test_the_modification_time_is_bumped_not_preserved(tmp_path):
+    """The one piece of file metadata a rotate must NOT carry over.
+
+    `ImageUtils._extract_embedded_metadata_cached` is an lru_cache keyed on
+    `(path, mtime)`. Restoring the old stamp would serve the pre-rotate EXIF out
+    of that cache for as long as the entry lived — and the bytes really did
+    change, so a fresh stamp is also just true.
+    """
+    photo = tmp_path / "photo.jpg"
+    _tile().save(photo, "JPEG", quality=95)
+    os.utime(photo, (1_000_000, 1_000_000))
+
+    write_orientation(photo, 6)
+
+    assert photo.stat().st_mtime > 1_000_000
 
 
 def test_contents_that_do_not_match_the_extension_are_refused_cleanly(tmp_path):

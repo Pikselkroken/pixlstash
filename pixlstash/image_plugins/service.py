@@ -6,7 +6,7 @@ from datetime import datetime
 from io import BytesIO
 from typing import Any
 
-from PIL import Image
+from PIL import ExifTags, Image, PngImagePlugin
 from sqlmodel import Session, select
 
 from pixlstash.db_models import (
@@ -32,6 +32,12 @@ _VIDEO_FORMATS = {"MP4", "WEBM", "MOV", "AVI", "MKV"}
 
 # Standard TIFF/EXIF tag id for the Orientation field.
 _EXIF_ORIENTATION_TAG = 0x0112
+
+# EXIF fields that describe the *source's* pixel geometry. A plugin is allowed
+# to change geometry (scaling upscales, rotate swaps the axes), so carrying
+# these onto the output would publish a measurement that is simply wrong.
+_EXIF_GEOMETRY_TAGS = (0x0100, 0x0101)  # ImageWidth, ImageLength (IFD0)
+_EXIF_SUBIFD_GEOMETRY_TAGS = (0xA002, 0xA003)  # PixelXDimension, PixelYDimension
 
 
 def _load_input_images(
@@ -70,7 +76,69 @@ def _load_input_images(
     return loaded
 
 
-def _save_output_images(image: Any, source_format: str) -> tuple[bytes, str]:
+def _source_png_text(source_path: str | None) -> PngImagePlugin.PngInfo | None:
+    """Rebuild the source PNG's text chunks so provenance follows the output.
+
+    ``metadata["png"]["workflow"]`` / ``["prompt"]`` — the ComfyUI graph this
+    product recovers in :mod:`pixlstash.utils.comfyui_utilities` — live in those
+    chunks and nowhere else, so a plugin run that dropped them destroyed them.
+    Returns ``None`` when the source has no text chunks; never fabricates.
+    """
+    if not source_path:
+        return None
+    try:
+        with Image.open(source_path) as src:
+            text = dict(getattr(src, "text", None) or {})
+    except Exception as exc:
+        logger.warning(
+            "Could not read PNG text chunks from %s; plugin output will carry no "
+            "embedded metadata: %s",
+            source_path,
+            exc,
+        )
+        return None
+    if not text:
+        return None
+    info = PngImagePlugin.PngInfo()
+    for key, value in text.items():
+        info.add_text(str(key), str(value))
+    return info
+
+
+def _source_exif_bytes(source_path: str | None) -> bytes | None:
+    """Return the source's EXIF minus orientation and geometry, or ``None``.
+
+    Orientation must go: :meth:`ImageUtils.load_image_or_video` runs
+    ``ImageOps.exif_transpose`` on load, so the pixels a plugin hands back are
+    already upright and re-stamping the source's orientation would rotate the
+    output a second time on display.
+    """
+    if not source_path:
+        return None
+    try:
+        with Image.open(source_path) as src:
+            exif = src.getexif()
+            if not exif:
+                return None
+            for tag in (_EXIF_ORIENTATION_TAG, *_EXIF_GEOMETRY_TAGS):
+                exif.pop(tag, None)
+            sub_ifd = exif.get_ifd(ExifTags.IFD.Exif)
+            for tag in _EXIF_SUBIFD_GEOMETRY_TAGS:
+                sub_ifd.pop(tag, None)
+            return exif.tobytes()
+    except Exception as exc:
+        logger.warning(
+            "Could not read EXIF from %s; plugin output will carry no embedded "
+            "metadata: %s",
+            source_path,
+            exc,
+        )
+        return None
+
+
+def _save_output_images(
+    image: Any, source_format: str, source_path: str | None = None
+) -> tuple[bytes, str]:
     normalized = (source_format or "PNG").upper()
 
     if (
@@ -91,6 +159,8 @@ def _save_output_images(image: Any, source_format: str) -> tuple[bytes, str]:
                 "Plugin output for video sources must be PIL image or encoded bytes"
             )
         normalized = "PNG"
+        # A video frame saved as PNG has no still-image metadata to inherit.
+        source_path = None
 
     if isinstance(image, (bytes, bytearray)):
         if normalized in {"JPG", "JPEG"}:
@@ -126,10 +196,18 @@ def _save_output_images(image: Any, source_format: str) -> tuple[bytes, str]:
 
     out = image.convert("RGB")
     buf = BytesIO()
+    save_kwargs: dict[str, Any] = {}
+    if save_format == "PNG":
+        pnginfo = _source_png_text(source_path)
+        if pnginfo is not None:
+            save_kwargs["pnginfo"] = pnginfo
+    elif save_format in {"JPEG", "WEBP"}:
+        exif_bytes = _source_exif_bytes(source_path)
+        if exif_bytes:
+            save_kwargs["exif"] = exif_bytes
     if save_format == "JPEG":
-        out.save(buf, format=save_format, quality=95)
-    else:
-        out.save(buf, format=save_format)
+        save_kwargs["quality"] = 95
+    out.save(buf, format=save_format, **save_kwargs)
     return buf.getvalue(), ext
 
 
@@ -549,8 +627,10 @@ def apply_plugin_to_pictures(
     source_file_names: list[str | None] = []
     source_picture_ids: list[int] = []
     for idx, output in enumerate(outputs):
-        pic, _, source_format, _source_path = loaded[idx]
-        output_bytes, ext = _save_output_images(output, source_format)
+        pic, _, source_format, source_path = loaded[idx]
+        # The in-memory PIL image came from ``Image.fromarray`` and so has an
+        # empty ``.info``; embedded metadata has to be re-read from the file.
+        output_bytes, ext = _save_output_images(output, source_format, source_path)
         output_entries.append((output_bytes, ext))
         source_picture_ids.append(pic.id)
         if (

@@ -277,10 +277,10 @@ def write_orientation(file_path: str, orientation: int) -> None:
             handle.write(updated)
             handle.flush()
             os.fsync(handle.fileno())
-        # mkstemp creates 0600. os.replace keeps the *replacement's* mode, so
-        # without this every rotate would quietly tighten the user's file
-        # permissions — a rotate must not change who can read the photo.
-        shutil.copymode(file_path, temp_path)
+            # Inside the `with`, so the ownership change goes through the open
+            # descriptor rather than the name. Nothing can be substituted for a
+            # descriptor we already hold.
+            _carry_file_identity(file_path, temp_path, handle.fileno())
         os.replace(temp_path, file_path)
     except Exception:
         # Leaving a stray temp beside a user's photo would show up in their
@@ -295,6 +295,70 @@ def write_orientation(file_path: str, orientation: int) -> None:
                 cleanup_exc,
             )
         raise
+
+
+def _carry_file_identity(
+    source_path: str, temp_path: str, temp_fd: int | None = None
+) -> None:
+    """Give the replacement everything about the original except its mtime.
+
+    ``os.replace`` keeps the *replacement's* metadata, and ``mkstemp`` creates a
+    0600 file owned by the server process — so without this a rotate would
+    quietly tighten the photo's permissions, drop its extended attributes (Finder
+    tags, `user.*` labels) and, on a multi-user vault, change who owns it. This
+    change's whole premise is that a rotate preserves everything but one
+    enumerated value, and file metadata is part of "everything".
+
+    **mtime is deliberately NOT preserved.** ``copystat`` carries it, and we undo
+    that: the bytes genuinely changed, and
+    ``ImageUtils._extract_embedded_metadata_cached`` is an ``lru_cache`` keyed on
+    ``(path, mtime)``, so restoring the old stamp would serve the pre-rotate EXIF
+    out of cache for as long as the entry lived.
+
+    Ownership is best-effort by design: ``chown`` needs privilege the server
+    usually does not have, and failing to change it is the *normal* case on a
+    single-user install, where the file is already owned correctly.
+
+    Not preserved, and not fixable here: **hard links**. ``os.replace`` gives the
+    path a new inode, so other links to the old one keep the pre-rotate bytes.
+    Writing in place would preserve them and give up atomicity, which would trade
+    a rare surprise for a way to truncate someone's photo.
+    """
+    try:
+        # mode + flags + xattrs (Linux) + times; the times are re-stamped below.
+        shutil.copystat(source_path, temp_path)
+    except OSError as exc:
+        logger.warning(
+            "Could not carry file metadata from %s onto the rotated copy (%s); "
+            "the photo keeps its contents but may lose extended attributes or "
+            "revert to default permissions",
+            source_path,
+            exc,
+        )
+    try:
+        source_stat = os.stat(source_path)
+        if temp_fd is not None:
+            # Through the descriptor we opened, not the name: `os.chown` follows
+            # symlinks, and a name can be substituted between the two calls.
+            os.fchown(temp_fd, source_stat.st_uid, source_stat.st_gid)
+        else:
+            os.chown(temp_path, source_stat.st_uid, source_stat.st_gid)
+    except (OSError, AttributeError) as exc:
+        # Expected without privilege, and on platforms with no chown at all.
+        logger.debug(
+            "Could not carry ownership of %s onto the rotated copy: %s",
+            source_path,
+            exc,
+        )
+    try:
+        os.utime(temp_path)  # now: the content really did change
+    except OSError as exc:
+        logger.warning(
+            "Could not stamp the rotated %s with the current time (%s); a cache "
+            "keyed on (path, mtime) may serve its pre-rotate metadata",
+            source_path,
+            exc,
+        )
 
 
 def _exif_payload(orientation: int) -> bytes:

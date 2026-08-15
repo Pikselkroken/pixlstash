@@ -893,6 +893,46 @@ Located in [pixlstash/image_plugins/](../pixlstash/image_plugins/).
 
 Built-in plugins: `brightness_contrast`, `blur_sharpen`, `colour_filter`, `pixelate`, `rotate`, `scaling`, plus `plugin_template.py` as a starter for custom plugins.
 
+### 8.1 Embedded metadata follows the source into the output
+
+**Provenance is inherited, not regenerated.** A plugin run creates a *new*
+picture, and the source's embedded metadata is the only copy of things that
+cannot be recomputed — above all the ComfyUI graph in a PNG's `workflow` /
+`prompt` / `parameters` text chunks, which `utils/comfyui_utilities.find_comfy_workflow`
+reads back as `metadata["png"][…]`. Saving the output without them destroyed
+them permanently, for every plugin, on every run.
+
+`service._save_output_images(image, source_format, source_path)` therefore
+re-reads the metadata **from the source file**, not from the in-memory image:
+`_load_input_images` builds its PIL image with `Image.fromarray(...)`, so
+`img.info` is already empty before any plugin sees it. The source path is
+carried in the 4-tuples `_load_input_images` returns and threaded into the save.
+
+| Output format | Carried | Mechanism |
+|---|---|---|
+| PNG | all tEXt/zTXt/iTXt chunks (`workflow`, `prompt`, `parameters`, …) | `_source_png_text` → `pnginfo=` |
+| JPEG, WebP | EXIF IFD0 + Exif sub-IFD, minus the fields below | `_source_exif_bytes` → `exif=` |
+| BMP, TIFF | nothing | — |
+| video source, or bytes a plugin already encoded | nothing — returned untouched | early return |
+
+**Dropped on purpose**, because a plugin may legitimately change geometry
+(`scaling` upscales, `rotate` swaps the axes) and a carried-over measurement
+would then be false:
+
+- **Orientation (`0x0112`) — the highest-risk one.** `ImageUtils.load_image_or_video`
+  applies `ImageOps.exif_transpose` on load, so the pixels a plugin returns are
+  *already upright*. Re-stamping the source's orientation would turn the output
+  a second time on display, and its displayed size would disagree with its
+  stored size.
+- `ImageWidth` (`0x0100`) / `ImageLength` (`0x0101`), and `PixelXDimension`
+  (`0xA002`) / `PixelYDimension` (`0xA003`) in the Exif sub-IFD.
+- The IFD1 thumbnail, which `Exif.tobytes()` does not write — it would show the
+  un-transformed image.
+
+Nothing is fabricated: a source with no metadata yields an output with none.
+Failing to read the source's metadata is logged at warning level and the run
+continues without it; it never fails the plugin.
+
 ---
 
 ## 9. Tagger Plugins
@@ -3201,12 +3241,27 @@ on painting the pre-rotate image for up to an hour. The token is now
 `"<W>x<H>o<orientation>"` for a rotated picture and unchanged for an unrotated
 one, so backfilling the mirror does not invalidate every thumbnail at once.
 
-**Authorization: `OWNER_ONLY`, and it is the odd one out on purpose.** Every other
-per-picture mutation on this surface is `PICTURE_SCOPED`. This is the first write
-path on which a non-owner principal would permanently alter the owner's original
-bytes, and a share grant is a grant to view content, never to alter the original.
-The copy-producing rotate plugin stays reachable by scoped principals, so no live
-caller is narrowed. See the matrix row in `docs/authz-coverage-matrix.md`.
+**Authorization: `PICTURE_SCOPED` on `body_ids="picture_ids"`, the same tier and
+the same shape as `DELETE /pictures`.** It shipped `OWNER_ONLY` on the argument
+that an in-place write to the owner's original bytes is categorically different;
+that argument does not survive what the write actually is. The splice replaces one
+enumerated EXIF value and copies the entropy-coded stream through byte for byte,
+so the pixels are unchanged, `{"orientation": n}` **is** the whole prior state and
+the ordinary facet machinery reverses it exactly; a file on a reference folder is
+refused at the sink and reported `unsupported` rather than rewritten. A
+write-enabled grant that already reaches the picture is the right level for that,
+and holding the route at `OWNER_ONLY` was over-blocking rather than defence.
+
+Two layers, and only the second is this declaration. A **READ** token never
+reaches the gate on this route: the auth middleware refuses a non-GET from a READ
+token unless the path is in `READ_SAFE_POST_PATHS`, and this path deliberately is
+not (do not add it). That is what makes *write-enabled* the operative condition,
+leaving the gate to answer only *does this grant reach this picture*. The gate
+resolves `picture_ids` element by element and raises on the first id out of scope,
+before the handler body runs — so a batch naming one in-scope and one out-of-scope
+picture is refused **whole** and rotates neither file. Both directions, plus the
+mixed batch, are pinned in `tests/test_inline_rotate.py`. See the matrix row in
+`docs/authz-coverage-matrix.md`.
 
 **Known limits, stated rather than hidden.** `perceptual_hash` and
 `image_embedding` are computed from the *decoded* (transposed) image, so a rotate
