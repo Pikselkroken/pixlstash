@@ -177,6 +177,9 @@ async function fetchTaggerPlugins() {
     taggerPlugins.value = body?.plugins ?? [];
     taggerSettings.value = body?.settings ?? {};
   } catch {
+    // Both, not just the list: a failed refresh that cleared the plugins but
+    // kept the settings showed the previous library's values against an empty
+    // table (review of #937).
     taggerPlugins.value = [];
     taggerSettings.value = {};
   } finally {
@@ -341,6 +344,13 @@ watch(
         >, creating the folder if it does not exist. Restart the server
         afterwards — plugins are only discovered at start-up. Plugins run as
         ordinary Python with your permissions, so only add ones you trust.
+      </div>
+      <!-- Without it the block above just vanishes, which reads as a missing
+           feature rather than a deliberate restriction. -->
+      <div v-else class="settings-tagger-plugin-dir">
+        Your own plugins live in a folder on the machine running PixlStash. The
+        path is shown there, not here — installing one means putting a file in
+        it and restarting the server.
       </div>
     </SettingsSection>
   </div>

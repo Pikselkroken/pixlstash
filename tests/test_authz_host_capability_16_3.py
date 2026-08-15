@@ -211,13 +211,18 @@ def test_host_capability_tier_split_is_27_local_5_loopback():
     inside a registered folder). It never unlinks: the source is the owner's own
     file.
 
-    32 = 27 + 5 with ``GET /taggers/plugin-dirs`` (#326). It is the first route
-    on this tier for **disclosure alone**: it takes no path, walks nothing and
-    writes nothing — it names the folder the tagger registry scans, which is
-    under the owner's home directory. It exists because that path was a field
-    on ``GET /taggers``, which is ANY_TOKEN, so every share-link holder was
-    reading it. Splitting it out costs a remote owner nothing real: installing
-    a plugin means writing to that folder, which they cannot do from there.
+    32 = 27 + 5 with ``GET /taggers/plugin-diagnostics`` (#326). It is the
+    first route on this tier for **disclosure alone**: it takes no path, walks
+    nothing and writes nothing. It returns two things and both name paths on
+    the host — the folder the tagger registry scans, which is under the owner's
+    home directory, and the import failures of the plugins in it, whose message
+    is ``str(exc)`` from third-party code and so carries whatever path that code
+    was reaching for. Both were fields on ``GET /taggers``, which was ANY_TOKEN,
+    so every share-link holder was reading them. Splitting them out costs a
+    remote owner nothing real: acting on either means editing a file in that
+    folder and restarting. (``GET /taggers`` itself went ``any_token`` ->
+    ``owner_only`` in the same change, which is not a locality tier and so does
+    not move this arithmetic.)
 
     Arithmetic, not judgement."""
     loopback = {
@@ -365,8 +370,12 @@ def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path
     The negatives assert on the **path string**, not on a field name: an
     earlier version of this test checked that ``plugin_dirs`` was absent from
     ``GET /taggers``, which the ``load_error`` row beside it satisfied while
-    still carrying the folder. Grepping the serialised body is the assertion
-    that cannot be satisfied by moving the leak to another key.
+    still carrying the folder. Grepping the serialised body for the owner's
+    home directory is the assertion that cannot be satisfied by moving the leak
+    to another key — or to another directory.
+
+    ``GET /taggers`` is now owner-only and gets the stronger check of the two:
+    a share token may not read it at all.
     """
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
@@ -404,20 +413,26 @@ def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path
                 f"a resource-scoped token must never reach it; got {scoped.status_code}"
             )
 
-            # ...and the ANY_TOKEN routes it came off carry no path from the
-            # data directory, under any key, for that same share token. The
-            # data dir rather than the plugin folder: it is the common parent
-            # of the tagger folder, the image-plugin folder and the workflow
-            # folder, so one string covers all three siblings.
-            data_dir = os.path.dirname(os.path.dirname(plugin_dir))
-            for route in (
-                f"{API}/taggers",
-                f"{API}/pictures/plugins",
-                f"{API}/comfyui/workflows",
-            ):
+            # GET /taggers itself is no longer reachable by that token at all:
+            # it carries the caller's own tagger_settings, so a plugin with a
+            # "string" parameter puts whatever the owner typed into it — a
+            # model path as easily as a prompt — in front of a share link.
+            listing = anon.get(f"{API}/taggers", headers=share)
+            assert listing.status_code == 403, (
+                f"the plugin list is owner-only; got {listing.status_code}"
+            )
+
+            # ...and the ANY_TOKEN routes that remain disclose no path under
+            # the owner's home directory, under any key, for that same token.
+            # The home directory rather than the plugin folder: a check anchored
+            # on the folder passes any leak one directory over, which is how the
+            # first version of this test passed while `load_error` still carried
+            # the path.
+            home = os.path.expanduser("~")
+            for route in (f"{API}/pictures/plugins", f"{API}/comfyui/workflows"):
                 body = anon.get(route, headers=share)
                 assert body.status_code == 200, f"{route}: {body.text}"
-                assert data_dir not in body.text, (
+                assert home not in body.text, (
                     f"{route} is ANY_TOKEN and disclosed a host path"
                 )
 

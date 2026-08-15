@@ -32,7 +32,8 @@ Quick-start
 -----------
 1. Copy this file into the user tagger plugin directory below (create it if it
    does not exist).  PixlStash logs the path on startup and shows it under
-   Settings → Auto-tagging.
+   Settings → Auto-tagging — to the owner, on the machine running the server or
+   its LAN; a share link or a remote browser is shown no folder at all.
 2. Rename it and give the class a unique ``name``.
 3. Fill in the parameters and ``generate_descriptions`` (and/or ``tag_images``).
 4. **Restart PixlStash Server** — discovery only runs at start-up.
@@ -47,8 +48,8 @@ User plugin directories
   Windows : %LOCALAPPDATA%\\pixlstash\\pixlstash\\tagger-plugins\\user\\
 
 The doubled folder on Windows is not a typo.  Take the exact path from Settings →
-Auto-tagging, where PixlStash prints it — a folder in the wrong place is skipped
-in silence.
+Auto-tagging, where PixlStash prints it for a local owner — a folder in the wrong
+place is skipped in silence.
 
 A plugin may be a single ``.py`` file, or a folder containing ``__init__.py``
 plus any helper modules it imports relatively.
@@ -68,7 +69,8 @@ class MyCaptioner(TaggerPlugin):
 
     # Unique snake_case identifier.  A name already taken by a built-in
     # plugin is rejected — the plugin is skipped and the reason is listed
-    # under Settings → Auto-tagging.
+    # under Settings → Auto-tagging (local owner only, like the folder: the
+    # reason is exception text and can name any path on the host).
     name = "my_captioner"
 
     # Label shown in the settings table.

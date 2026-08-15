@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 
 
 def list_plugins(vault: "Vault") -> dict:
-    """Return available image plugins and their load errors.
+    """Return the available image plugins.
 
     Neither the scanned folders nor the load errors are returned, and both
     omissions are the same rule: ``GET /pictures/plugins`` is ANY_TOKEN, the

@@ -71,7 +71,8 @@ replacing (or being silently bypassed by) the built-in.
 
 A plugin that raises on import, that raises on construction, or whose
 `parameter_schema()` raises does not stop the others: the failure is logged, listed under
-**Settings → Auto-tagging** with its message, and the server boots normally. (The schema
+**Settings → Auto-tagging** with its message (to a local owner — the message is exception
+text and can name any path on the host), and the server boots normally. (The schema
 is exercised once at load precisely so a later failure cannot take the settings screen —
 or the boot — down with it.)
 

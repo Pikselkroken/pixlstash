@@ -35,7 +35,6 @@ class TaggerPluginResponse(BaseModel):
     parameter_schema: list[dict] = []
     downloaded_artifacts: list[dict] = []
     is_loaded: bool = False
-    load_error: Optional[str] = None
 
 
 class TaggerListResponse(BaseModel):
@@ -122,8 +121,7 @@ def create_router(server) -> APIRouter:
                   "default_enabled": true,
                   "parameter_schema": [...],
                   "downloaded_artifacts": [],
-                  "is_loaded": false,
-                  "load_error": null
+                  "is_loaded": false
                 },
                 ...
               ],
@@ -151,7 +149,6 @@ def create_router(server) -> APIRouter:
                     "parameter_schema": plugin.parameter_schema(),
                     "downloaded_artifacts": plugin.list_downloaded_artifacts(),
                     "is_loaded": bool(plugin.is_loaded()),
-                    "load_error": None,
                 }
             )
 
