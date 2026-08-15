@@ -125,8 +125,8 @@
 
       <!-- Score range -->
       <div class="tbm-section">
-        <div class="tbm-grid-2">
-          <div>
+        <div class="tbm-grid-2 gb-score-grid">
+          <div :class="{ 'gb-score-dimmed': gbUnscoredOnly }">
             <span class="tbm-label">Min score</span>
             <div class="gb-score-stars">
               <button
@@ -153,7 +153,26 @@
               </button>
             </div>
           </div>
-          <div>
+          <div class="gb-score-unscored">
+            <span class="tbm-label tbm-label--center">Unscored</span>
+            <div class="gb-score-stars gb-score-stars--center">
+              <button
+                class="gb-score-star-btn"
+                type="button"
+                title="Only unscored pictures"
+                aria-label="Only unscored pictures"
+                :aria-pressed="gbUnscoredOnly"
+                @click="gbToggleUnscored"
+              >
+                <v-icon
+                  size="16"
+                  :color="gbUnscoredOnly ? 'warning' : undefined"
+                  >mdi-star-off</v-icon
+                >
+              </button>
+            </div>
+          </div>
+          <div :class="{ 'gb-score-dimmed': gbUnscoredOnly }">
             <span class="tbm-label tbm-label--right">Max score</span>
             <div class="gb-score-stars gb-score-stars--right">
               <button
@@ -625,6 +644,12 @@ const gbMaxScoreFilter = computed({
     filterStore.maxScoreFilter = v ?? null;
   },
 });
+const gbUnscoredOnly = computed({
+  get: () => filterStore.unscoredOnlyFilter,
+  set: (v) => {
+    filterStore.unscoredOnlyFilter = Boolean(v);
+  },
+});
 const gbStackStateFilter = computed({
   get: () => filterStore.stackStateFilter,
   set: (v) => {
@@ -776,6 +801,12 @@ function gbSetMaxScore(n) {
   ) {
     gbMinScoreFilter.value = newMax;
   }
+}
+
+// A toggle, like every star either side of it: clicking the lit control clears
+// it. The store's setter drops the score range when this goes on.
+function gbToggleUnscored() {
+  gbUnscoredOnly.value = !gbUnscoredOnly.value;
 }
 
 const gbTagFilterInput = ref("");
@@ -1054,11 +1085,31 @@ watch(
 }
 
 /* ── Score stars ──────────────────────────────────────────────────────────── */
+/* Local widening of the shared two-column grid: the two five-star rows are
+   100px inside 172px columns, so there is ~152px of dead centre between them
+   and the Unscored toggle costs no new row. Overridden here rather than in
+   .tbm-grid-2, which ShelfSortPanel, TbExportPanel and Toolbar also use. */
+.gb-score-grid {
+  grid-template-columns: 1fr auto 1fr;
+}
+.gb-score-unscored {
+  min-width: 0;
+}
+/* Unscored is the complement of a score range, not a point on it. Dimming the
+   two star rows while it is on shows they are off without disabling them —
+   clicking a star still turns Unscored back off. */
+.gb-score-dimmed {
+  opacity: 0.4;
+  transition: opacity var(--dur-1) var(--ease-standard);
+}
 .gb-score-stars {
   display: flex;
 }
 .gb-score-stars--right {
   justify-content: flex-end;
+}
+.gb-score-stars--center {
+  justify-content: center;
 }
 .gb-score-star-btn {
   display: inline-flex;
