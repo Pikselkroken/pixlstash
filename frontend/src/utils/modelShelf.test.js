@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vitest";
 import { contrastRatio } from "./contrastAudit.js";
-import { SET_COLORS } from "./setAppearance";
+import { ICON_CARDS, SET_COLORS } from "./setAppearance";
 import {
   assignmentRing,
   RING_STYLES,
@@ -1176,6 +1176,37 @@ describe("assignmentRing", () => {
     expect(ring.label).toBe("#1 (person), #2 (set), #3 (person)");
   });
 
+  it("carries the icon a set chose instead of its thumbnail", () => {
+    const ring = assignmentRing([attach("set", 5)], {
+      sets: [
+        { id: 5, name: "Studio", set_icon: "mdi-star", set_color: "#fdd835" },
+      ],
+    });
+    expect(ring.icon).toBe("mdi-star");
+    expect(ring.hue).toBe("#fdd835");
+  });
+
+  it("carries no icon for a set still on the thumbnail", () => {
+    // `cards` is the sentinel for "keep the thumbnail", so treating it as an
+    // icon name would draw an mdi glyph that does not exist.
+    //
+    // The literal is pinned HERE, once, and the fixtures use the constant.
+    // What they stand for is a value the BACKEND stored — `picture_sets.py`
+    // hardcodes `!= "cards"` too, and rows written before any rename would
+    // still hold the old string — so a suite built only from `ICON_CARDS`
+    // would rename itself alongside the source and stay green while the two
+    // sides had stopped agreeing. One pin closes that without making every
+    // fixture repeat the string.
+    expect(ICON_CARDS).toBe("cards");
+    for (const set of [
+      { id: 5, name: "Studio", set_icon: ICON_CARDS },
+      { id: 5, name: "Studio" },
+    ]) {
+      expect(assignmentRing([attach("set", 5)], { sets: [set] }).icon).toBe("");
+    }
+    expect(assignmentRing([attach("character", 5)], {}).icon).toBe("");
+  });
+
   it("draws the dashed grey ring for a model assigned to nothing", () => {
     // Never an ABSENT ring: an unringed mark under a design where every other
     // mark has one reads as a rendering gap rather than as a state.
@@ -1199,5 +1230,35 @@ describe("assignmentRing", () => {
     expect(label(before)).toBe("Ada (person)");
     expect(label(before)).toBe("Ada (person)");
     expect(label(after)).toBe("Ada Lovelace (person)");
+  });
+
+  it("picks up a set's new icon when the entity list is replaced", () => {
+    // The other half of "it has to update when the icon changes": the shelf
+    // reads the sets off `useEntityListsStore`, which REPLACES the array on
+    // every refresh, and the id map above is cached per array reference. A
+    // cache keyed on anything longer-lived would leave the mark on the face the
+    // set no longer shows.
+    const icon = (sets) => assignmentRing([attach("set", 5)], { sets }).icon;
+    const before = [{ id: 5, name: "Studio", set_icon: ICON_CARDS }];
+    const after = [{ id: 5, name: "Studio", set_icon: "mdi-star" }];
+    expect(icon(before)).toBe("");
+    expect(icon(after)).toBe("mdi-star");
+    expect(icon(before)).toBe("");
+  });
+
+  it("takes the icon's colour from the set, never from the ring's fallback", () => {
+    // `hue` invents a hashed palette entry so the ring is never invisible;
+    // `iconHue` must not, or a set with no colour is drawn in theme ink by the
+    // sidebar and in an arbitrary hue by the shelf, on one screen.
+    const ring = assignmentRing([attach("set", 5)], {
+      sets: [{ id: 5, name: "Studio", set_icon: "mdi-star" }],
+    });
+    expect(ring.iconHue).toBe("");
+    expect(ring.hue).not.toBe("");
+    expect(
+      assignmentRing([attach("set", 5)], {
+        sets: [{ id: 5, set_icon: "mdi-star", set_color: "#00897b" }],
+      }).iconHue,
+    ).toBe("#00897b");
   });
 });

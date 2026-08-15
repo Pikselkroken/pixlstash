@@ -10,7 +10,7 @@
 //   * A missing value is still rendered. "Base model not set" occupies the same
 //     slot in the same type as a real value; a blank cell is the failure mode.
 
-import { SET_COLORS } from "./setAppearance";
+import { ICON_CARDS, SET_COLORS } from "./setAppearance";
 
 /** Trailing tokens that record where in a training run a file was saved.
  *
@@ -1134,7 +1134,15 @@ const ATTACHMENT_KIND = {
     noun: "person",
     colorKey: "character_color",
   },
-  set: { list: "sets", noun: "set", colorKey: "set_color" },
+  // `iconKey` is what a set may carry INSTEAD of a thumbnail; a character has
+  // no such column, and the absence here is what keeps the lookup per-type
+  // rather than a hardcoded field read in the loop below.
+  set: {
+    list: "sets",
+    noun: "set",
+    colorKey: "set_color",
+    iconKey: "set_icon",
+  },
 };
 
 /**
@@ -1167,7 +1175,10 @@ const ATTACHMENT_KIND = {
  * @param {Array<Object>} [lists.characters] - `useEntityListsStore().characters`.
  * @param {Array<Object>} [lists.sets] - `useEntityListsStore().pictureSets`.
  * @returns {{style: string, hue: string, type: string, id: ?number,
- *   label: string, count: number}} `style`
+ *   icon: string, iconHue: string, label: string, count: number}} `icon` is
+ *   the mdi name a picture set carries instead of its thumbnail, empty
+ *   otherwise, and `iconHue` is that set's own colour — empty when it has none,
+ *   which is theme ink and NOT the ring's hashed fallback. `style`
  *   is `"none"` and `hue` empty when nothing is attached, which is the dashed
  *   grey ring — never an absent ring, because a mark with no edge at all would
  *   read as a rendering gap rather than as a state.
@@ -1190,6 +1201,23 @@ export function assignmentRing(
       type,
       id: att.entity_id,
       label: `${name} (${kind.noun})`,
+      // A set carrying an icon has said what its face is; the thumbnail is what
+      // an icon REPLACES, in the sidebar and here alike, so borrowing the
+      // picture would draw a face no other surface shows. `cards` is the
+      // sentinel for "keep the thumbnail", not an icon name.
+      icon:
+        kind.iconKey &&
+        entity?.[kind.iconKey] &&
+        entity[kind.iconKey] !== ICON_CARDS
+          ? entity[kind.iconKey]
+          : "",
+      // The icon's own colour, and deliberately NOT `hue` below: `hue` always
+      // resolves to something so the ring is never invisible, while an icon
+      // with no `set_color` is drawn in theme ink by the sidebar. Inventing a
+      // hashed hue here would paint one set two different colours on one
+      // screen, which is exactly what the ring's "the hue is the entity's own"
+      // rule exists to prevent.
+      iconHue: entity?.[kind.colorKey] || "",
       hue:
         entity?.[kind.colorKey] ||
         SET_COLORS[hash32(`${type}:${att.entity_id}`) % SET_COLORS.length]
@@ -1202,6 +1230,8 @@ export function assignmentRing(
       hue: "",
       type: "",
       id: null,
+      icon: "",
+      iconHue: "",
       label: "Unassigned",
       count: 0,
     };
@@ -1215,6 +1245,8 @@ export function assignmentRing(
     // which attachment owns the ring and which owns the face cannot drift.
     type: first.type,
     id: first.id,
+    icon: first.icon,
+    iconHue: first.iconHue,
     label: named.map((one) => one.label).join(", "),
     count: named.length,
   };

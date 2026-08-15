@@ -1604,17 +1604,30 @@ shared and cached, never a lookup per attachment.
   contrast problem per image, and detached, its inner edge sits on the row
   background — a known colour in both themes. That is also why `ModelMark` is
   two boxes: one element cannot both clip an image and draw outside its own edge.
-- **The face inside the ring falls back twice.** The model's own icon wins,
-  because somebody chose that picture for this file; failing that the mark
-  borrows the thumbnail of whoever it is assigned to, since a LoRA of Sarah with
-  no icon is better identified by Sarah's reference face than by two letters —
-  and the ring around it is already her colour, so the halves say one thing;
-  failing that the generated mark. Thumbnails are `<img src>` from
-  `characterThumbnailUrl` / `pictureSetThumbnailUrl` rather than blobs, so one
-  response is cached however many rows borrow that face. **Each step is skipped
-  once its own URL has failed**, so the chain runs all the way down: a model
-  pointing at an icon whose file is gone falls to the assigned face and then to
-  the initials, rather than sitting on a broken image. `ModelMark` therefore
+- **The face inside the ring falls back three times.** In order: the model's own
+  icon, because somebody chose that picture for this file; then the `set_icon`
+  of the set it is assigned to, if that set carries one; then the thumbnail of
+  whoever it is assigned to, since a LoRA of Sarah with no icon is better
+  identified by Sarah's reference face than by two letters — and the ring around
+  it is already her colour, so the halves say one thing; then the generated mark.
+  A set's icon comes SECOND rather than last because `set_icon` is what its
+  thumbnail was replaced by: the sidebar rows and the set editor already draw
+  the set as that glyph, so lending the picture here would be the one surface
+  still showing a face the rest of the app has stopped showing. `assignmentRing`
+  carries the mdi name as `ring.icon` — empty for the `cards` sentinel, which
+  means "keep the thumbnail" — and the set's own colour as `ring.iconHue`,
+  deliberately not the ring's `hue`: `hue` invents a hashed palette entry so the
+  ring is never invisible, while a set with no `set_color` is drawn in theme ink
+  by the sidebar, and one set wearing two colours on one screen is the thing the
+  ring's "the hue is the entity's own" rule exists to prevent. Thumbnails are
+  `<img src>` from `characterThumbnailUrl` / `pictureSetThumbnailUrl` rather
+  than blobs, so one response is cached however many rows borrow that face.
+  **Each step that is a URL is skipped once that URL has failed**, so the chain
+  runs all the way down: a model pointing at an icon whose file is gone falls to
+  the assigned face and then to the initials, rather than sitting on a broken
+  image. The icon step is the one that cannot fail and the one that is therefore
+  terminal — a glyph is a name in a font, there is no `error` to catch, and a
+  set carrying an icon never reaches the thumbnail below it. `ModelMark` therefore
   records the URLs that 404ed, not one "it failed" flag — and clears that record
   on a *string* of the row's icon and ring identity, because the shelf builds a
   fresh ring object on every render and an identity comparison would reset the
