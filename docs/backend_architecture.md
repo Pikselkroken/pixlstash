@@ -523,6 +523,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/model-stacks                                                          | model_shelf     | Collapse models into one stack                             |
 | GET    | /api/v1/model-stacks/proposals                                                | model_shelf     | Groups of loose adapters that look like one training run   |
 | PATCH  | /api/v1/models                                                                | model_shelf     | Correct what the shelf records about one or more models    |
+| GET    | /api/v1/models/base-models                                                    | model_shelf     | Completion targets for the base-model field                |
 | POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                         |
 | POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                       |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                         |

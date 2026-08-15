@@ -631,10 +631,14 @@
                   row.memberCount > 1 ? isStackOpen(row.stack_id) : undefined
                 "
                 :aria-selected="store.isSelected(row.id)"
-                aria-keyshortcuts="F2"
+                aria-keyshortcuts="F2 Shift+F2"
                 :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
                 :data-row-key="row.rowKey"
-                :draggable="canDrag(row) && editingRowKey !== row.rowKey"
+                :draggable="
+                  canDrag(row) &&
+                  editingRowKey !== row.rowKey &&
+                  editingBaseKey !== row.rowKey
+                "
                 @click="pickRow(row, $event)"
                 @contextmenu.prevent="openRowMenu(row, $event)"
                 @keydown="onRowKeydown(row, $event)"
@@ -781,10 +785,38 @@
                      the field a reader scans a shelf for, and it can only be
                      scanned if it aligns. -->
                 <span role="gridcell" class="shelf-col shelf-col--base">
-                  <span v-if="row.base_model">{{ row.base_model }}</span>
-                  <span v-else class="shelf-chip shelf-chip--none"
-                    >not set</span
-                  >
+                  <!-- Double-click edits it here, on the row, for the same
+                       reason the name is edited here: this is where the value
+                       is read, and "not set" is a value like any other, so it
+                       opens the field rather than being the one state you have
+                       to go to a dialog for. The dialog stays for the bulk
+                       verb, which is a different gesture with a different
+                       warning in front of it. -->
+                  <BaseModelInput
+                    v-if="editingBaseKey === row.rowKey"
+                    v-model="editingBase"
+                    class="shelf-row-base-edit"
+                    placeholder="Base model"
+                    :aria-label="`Base model for ${row.filename || 'this model'}`"
+                    @click.stop
+                    @keydown.stop
+                    @confirm="commitBaseModel(true)"
+                    @cancel="cancelBaseModel"
+                    @blur="commitBaseModel()"
+                  />
+                  <template v-else>
+                    <span
+                      v-if="row.base_model"
+                      @dblclick.stop="startBaseModelEdit(row)"
+                      >{{ row.base_model }}</span
+                    >
+                    <span
+                      v-else
+                      class="shelf-chip shelf-chip--none"
+                      @dblclick.stop="startBaseModelEdit(row)"
+                      >not set</span
+                    >
+                  </template>
                 </span>
                 <span role="gridcell" class="shelf-col shelf-col--size">{{
                   row.file_size ? formatModelSize(row.file_size) : ""
@@ -916,6 +948,7 @@ import {
 import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
+import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
@@ -1771,6 +1804,7 @@ const rovingRowKey = computed(
  */
 function pickRow(row, event) {
   if (editingRowKey.value === row.rowKey) return;
+  if (editingBaseKey.value === row.rowKey) return;
   focusedRowKey.value = row.rowKey;
   store.selectFromClick(
     row.id,
@@ -1840,7 +1874,12 @@ function onRowKeydown(row, event) {
   // new tab stops for the gesture one key already covers.
   if (event.key === "F2") {
     event.preventDefault();
-    startRename(row);
+    // Shift+F2 edits the other field on the row. The base model needs a
+    // keyboard path for the same reason the name does — the gesture is a double
+    // click and a double click is not reachable without a pointer — and it
+    // stays off the tab order for the same reason too.
+    if (event.shiftKey) startBaseModelEdit(row);
+    else startRename(row);
     return;
   }
   if (event.key === " " || event.key === "Enter") {
@@ -1973,6 +2012,70 @@ function onRenameKeydown(event) {
   // Focus goes back to the row it came from: the field is gone and a keyboard
   // reader would otherwise be dropped at the top of the document.
   nextTick(() => focusDrawnRow(key));
+}
+
+const editingBaseKey = ref("");
+const editingBase = ref("");
+let editingBaseRow = null;
+
+/**
+ * Put the base-model field on a row, seeded with what is recorded.
+ *
+ * Seeded from the stored value and not from a guess — unlike the name field,
+ * which opens empty on a derived row because the string it shows was inferred.
+ * Nothing infers a base model: what the row shows is what the file said, so
+ * editing it starts from that and a correction is one word, not a retype.
+ */
+function startBaseModelEdit(row) {
+  editingBaseRow = row;
+  editingBaseKey.value = row.rowKey;
+  editingBase.value = row.base_model || "";
+  nextTick(() => {
+    const el = rootEl.value?.querySelector(".shelf-row-base-edit");
+    el?.focus();
+    el?.select();
+  });
+}
+
+function endBaseModelEdit() {
+  editingBaseRow = null;
+  editingBaseKey.value = "";
+  editingBase.value = "";
+}
+
+function cancelBaseModel() {
+  const key = editingBaseKey.value;
+  endBaseModelEdit();
+  // Focus goes back to the row it came from, exactly as the rename field does:
+  // the field is gone, and the grid's roving tab stop would otherwise be left
+  // at the top of the document.
+  nextTick(() => focusDrawnRow(key));
+}
+
+/**
+ * Commit the field, on Enter or on losing focus.
+ *
+ * Closes BEFORE it writes, so the blur the unmount fires finds nothing to do
+ * and the row cannot be written twice — the same order the rename above uses.
+ * An empty box clears the base model back to `NULL`, which is the state the
+ * shelf draws as "not set" and filters as `UNASSIGNED`.
+ */
+async function commitBaseModel(restoreFocus = false) {
+  const row = editingBaseRow;
+  if (!row) return;
+  const next = editingBase.value.trim();
+  const key = editingBaseKey.value;
+  endBaseModelEdit();
+  // Only when a KEY committed it. A blur committed it by moving the focus
+  // somewhere the reader chose, and dragging it back to the row would undo
+  // their click.
+  if (restoreFocus) nextTick(() => focusDrawnRow(key));
+  if (next === String(row.base_model || "").trim()) return;
+  // A cover stands for every file of the run, and one run was trained against
+  // one base model.
+  await store.editModelIds(row.memberIds ?? [row.id], {
+    base_model: next || null,
+  });
 }
 
 /**
@@ -3054,7 +3157,11 @@ watch(
    to the text it replaces so committing does not jump the row. Selectable
    against the panel's `user-select: none`, or the one place a name is genuinely
    edited would be a field whose text cannot be dragged over or double-clicked. */
-.shelf-row-rename {
+/* One inline field, two columns. Two class names and not one, because
+   `startRename` finds its field with a first-match `querySelector` and a shared
+   class would let it land on whichever of the two was drawn first. */
+.shelf-row-rename,
+.shelf-row-base-edit {
   min-width: 0;
   -webkit-user-select: text;
   user-select: text;
@@ -3069,7 +3176,8 @@ watch(
   border-radius: var(--radius-sm);
 }
 
-.shelf-row-rename:focus {
+.shelf-row-rename:focus,
+.shelf-row-base-edit:focus {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -3184,6 +3292,16 @@ watch(
 
 .shelf-col--base {
   width: var(--shelf-col-base);
+}
+
+/* The field fills the cell it replaces rather than widening the row: every
+   other column is fixed, so a field that sized itself would shift the whole
+   grid the moment somebody double-clicked one row. Regular weight, because the
+   Base column is not the row's title and the name field's semibold would make
+   it read as one. */
+.shelf-row-base-edit {
+  width: 100%;
+  font-weight: var(--weight-regular);
 }
 
 /* Right-aligned and tabular, which is what makes a column of sizes scannable:

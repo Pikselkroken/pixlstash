@@ -81,6 +81,7 @@ from pixlstash.services.model_shelf_service import (
     attached_hashes,
     fetch_attachments,
     fetch_capabilities,
+    fetch_distinct_base_models,
     fetch_locations,
     fetch_model_by_hash,
     fetch_models,
@@ -94,7 +95,7 @@ from pixlstash.utils.adapter_header import (
     FILE_ENGINE,
     FILE_UNKNOWN,
 )
-from pixlstash.utils.known_base_models import fold
+from pixlstash.utils.known_base_models import completions, fold
 
 logger = get_logger(__name__)
 
@@ -392,6 +393,21 @@ class ModelEditRequest(BaseModel):
             "the correction `unknown` exists for. Never null, and never "
             "re-derived away by a later scan."
         ),
+    )
+
+
+class BaseModelCompletionsResponse(BaseModel):
+    """Body of ``GET /models/base-models``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    base_models: list[str] = Field(
+        description=(
+            "Completion targets for the free-text `base_model` field: the "
+            "labels `known_base_models` ships, plus every distinct string this "
+            "machine has already recorded that folds to none of them. One flat "
+            "sorted list, filtered client-side as the user types."
+        )
     )
 
 
@@ -707,6 +723,29 @@ def create_router(server) -> APIRouter:
                 sort=sort,
                 direction=direction,
             )
+        )
+
+    @router.get(
+        "/models/base-models",
+        summary="Completion targets for the base-model field",
+        description=(
+            "`base_model` is free text and stays that way, so this constrains "
+            "nothing — it is what the *Set base model* field completes against. "
+            "The list is the canonical labels `known_base_models` ships (so the "
+            "field is useful on a fresh install) plus every distinct string "
+            "already recorded here that folds to none of them, deduplicated so "
+            "a user who typed `sdxl` sees `SDXL 1.0` once.\n\n"
+            "Whole list, no prefix parameter: it is a few dozen strings, the "
+            "field filters it as the user types, and one fetch beats a request "
+            "per keystroke."
+        ),
+        tags=["model_shelf"],
+        response_model=BaseModelCompletionsResponse,
+    )
+    def list_base_model_completions(request: Request):
+        server.auth.ensure_secure_when_required(request)
+        return BaseModelCompletionsResponse(
+            base_models=completions(extra=fetch_distinct_base_models(server.hub))
         )
 
     @router.put(

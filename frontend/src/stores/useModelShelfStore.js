@@ -6,6 +6,7 @@ import {
   editModels,
   forgetModels,
   listAdapters,
+  listBaseModelCompletions,
   listCheckpoints,
   setAdapterAttachments,
 } from "../api/modelShelf";
@@ -681,6 +682,71 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return hasUnset ? [...named, BASE_MODEL_UNASSIGNED] : named;
   });
 
+  /**
+   * What the base-model FIELD completes against, which is not what the FILTER
+   * facets on.
+   *
+   * `baseModelOptions` above is built from the rows on screen and is folded,
+   * because a filter checkbox must tick exactly the rows behind it. A
+   * completion list has the opposite job: it offers strings that are NOT on the
+   * shelf yet — the labels the server ships, so the field is useful on a fresh
+   * install where nothing records a base model at all — and it offers them in
+   * the spelling they will be stored in. Two lists, two jobs; deriving one from
+   * the other would break whichever one lost.
+   */
+  const fetchedCompletions = ref([]);
+  let completionsFetchedAt = 0;
+
+  /**
+   * The fetched list, plus whatever the rows on screen already say.
+   *
+   * The fetch is not the only writer of `base_model`: the scanner and the
+   * importer write it too, and neither goes anywhere near this store — so a
+   * value that arrived with a scan would not be offered until a reload. The
+   * rows carry their own raw spellings, so unioning them in costs no request
+   * and closes that window. Deduplicated on the FOLDED key, with the fetched
+   * label winning, or a row spelling `sdxl base` would be offered beside the
+   * `SDXL 1.0` it means.
+   */
+  const baseModelCompletions = computed(() => {
+    const seen = new Set();
+    const out = [];
+    for (const value of fetchedCompletions.value) {
+      const key = value.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(value);
+    }
+    for (const row of rows.value) {
+      const value = String(row.base_model || "").trim();
+      const key = value.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(value);
+    }
+    return out;
+  });
+
+  /**
+   * Fetch the completion list once, then leave it alone.
+   *
+   * The field is opened and closed constantly and the list only moves when
+   * somebody saves a base model the server has never seen, so it is fetched on
+   * first use and invalidated by the write that could change it rather than
+   * polled. A failure is not worth a notice: the field still takes free text,
+   * which is what it took before there was a list at all.
+   */
+  async function loadBaseModelCompletions() {
+    if (completionsFetchedAt) return;
+    completionsFetchedAt = Date.now();
+    try {
+      fetchedCompletions.value = await listBaseModelCompletions();
+    } catch (err) {
+      completionsFetchedAt = 0;
+      console.debug("[shelf] could not load base-model completions", err);
+    }
+  }
+
   /** The rows the current selection actually shows, with display fields. */
   const visibleRows = computed(() => {
     const kinds = filters.adapterKinds;
@@ -1125,6 +1191,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (!ids.length) return false;
     try {
       const body = await editModels(ids, changes);
+      // A base model the server had never seen is a completion target the
+      // moment it is stored, so the list it came from is now one entry short.
+      if ("base_model" in changes) completionsFetchedAt = 0;
       await fetchRows();
       notices.push({
         level: "success",
@@ -1395,6 +1464,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     adapterKindOptions,
     capabilityOptions,
     baseModelOptions,
+    baseModelCompletions,
+    loadBaseModelCompletions,
     visibleRows,
     groups,
     offlineMounts,
