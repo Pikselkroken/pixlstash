@@ -677,9 +677,9 @@
                        guessed" from "there is nothing here" without opening
                        anything. Rendering all four as one string is what made
                        an unnamed row look inert, and an inert row never gets
-                       named (#897). The tag beside the name is the carrier;
-                       the type and the accent are hints on top of it, so the
-                       distinction survives greyscale. -->
+                       named (#897). Type and the accent rule carry the
+                       distinction; only the file's own string gets a tag on
+                       top, so the shelf is not a column of chips. -->
                   <input
                     v-if="editingRowKey === row.rowKey"
                     v-model="editingName"
@@ -699,11 +699,10 @@
                       >{{ row.name.text || "Name this model" }}</span
                     >
                     <span
-                      v-if="NAME_TAG[row.name.state]"
+                      v-if="row.name.state === 'from-file'"
                       class="shelf-name-tag"
-                      :class="`shelf-name-tag--${row.name.state}`"
-                      :title="NAME_TAG[row.name.state].title"
-                      >{{ NAME_TAG[row.name.state].label }}</span
+                      :title="FROM_FILE_TAG_TITLE"
+                      >from filename</span
                     >
                   </template>
                   <!-- Beside the name rather than in a column of its own: the
@@ -1787,24 +1786,16 @@ function onRowKeydown(row, event) {
 }
 
 /**
- * What the two "nobody has named this" states say out loud.
+ * One state gets a word beside the name, and it is `from-file`.
  *
- * Words, not colour: the accent on the from-file chip is a hint and the label
- * is what carries the meaning, so the pair still reads in greyscale. They are
- * different news — one string is the file's own and one is ours — and the whole
- * point of #897 is that a reader can tell which without opening the row.
+ * `derived` used to carry one too, and it was a chip on most of the column
+ * saying nothing a reader acts on: it is the commonest state on the shelf, and
+ * a name we made already reads as ours from its face and its accent rule. The
+ * file's own string is different news — that one is worth a word, and the word
+ * is what carries it, so it survives greyscale (§4).
  */
-const NAME_TAG = {
-  derived: {
-    label: "derived",
-    title:
-      "PixlStash made this name from the file. Nobody has named this model.",
-  },
-  "from-file": {
-    label: "from filename",
-    title: "This is the file's own name. Nobody has named this model.",
-  },
-};
+const FROM_FILE_TAG_TITLE =
+  "This is the file's own name. Nobody has named this model.";
 
 // Inline rename. One row at a time, held by row key: the field is what makes
 // the dashed rule and the pencil honest — an affordance that opened a dialog
@@ -2943,8 +2934,8 @@ watch(
 
 /* A readable name we generated. The UI face, because this string is OURS and
    is not in the file — mono would claim it were. Regular weight, so it does
-   not carry the authority of a title somebody chose; the tag beside it and the
-   accent rule under it say the rest. */
+   not carry the authority of a title somebody chose, and the accent rule under
+   it says the rest. */
 .shelf-row-name--derived {
   font-weight: var(--weight-regular);
   border-bottom-color: rgba(var(--v-theme-accent), 0.7);
@@ -2960,26 +2951,20 @@ watch(
   font-weight: var(--weight-regular);
 }
 
-/* The two "nobody has named this" tags. Both are shapes with words in them, so
-   which is which survives greyscale (§4): the accent is a hint on the
-   from-file one, never the thing carrying the meaning. */
+/* The "this is the file's own string" tag. A shape with a word in it, so it
+   survives greyscale (§4): the accent is a hint, never the thing carrying the
+   meaning. */
 .shelf-name-tag {
   flex: none;
   padding: 0 var(--space-2);
-  border: 1px solid rgba(var(--v-theme-on-background), 0.35);
+  border: 1px solid rgba(var(--v-theme-accent), 0.6);
   border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-accent), 0.14);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   white-space: nowrap;
-  /* 0.7 and not 0.6: at 11px the lower alpha misses the contrast floor (#836). */
-  color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-.shelf-name-tag--from-file {
-  border-color: rgba(var(--v-theme-accent), 0.6);
-  background: rgba(var(--v-theme-accent), 0.14);
   /* The surface's own ink on a 14% wash, NOT `on-accent`: that pairing is for a
      solid fill and measures near-invisible over a tint (§4, §11). */
   color: rgb(var(--v-theme-on-background));

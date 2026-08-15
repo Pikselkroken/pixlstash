@@ -1538,8 +1538,10 @@ undo by accident:
   so telling them apart is the column's main job (#897):
   - `named` — somebody chose it. Plain, at `--weight-semibold`.
   - `derived` — we made a readable string the file does not contain. The **UI**
-    face at `--weight-regular` (mono would claim the string were the file's),
-    plus an outline tag reading `derived`.
+    face at `--weight-regular` (mono would claim the string were the file's)
+    over a soft accent rule. **No tag**: it is the commonest state on the shelf,
+    so a `derived` chip stamped most of the column with a word the reader could
+    not act on (owner call, 2026-08-15).
   - `from-file` — nothing survived the strip, so what is shown *is* the
     filename. `--font-mono` (§3 gives mono to file paths) plus a small **accent**
     tag reading `from filename`.
@@ -1549,10 +1551,10 @@ undo by accident:
     looks like a name and reads as inert, so the row that most needed naming was
     the one that least invited it.
   Rank is type, shape and words — **never opacity** (`visual-language.md` §5.1):
-  a third of the rows faded would be a column of ghosts, and the two "nobody has
-  named this" tags carry their meaning in the label so the pair survives
-  greyscale. The empty `text` is already handled by `compareOn`, which sorts a
-  row that cannot answer the key last in both directions.
+  a third of the rows faded would be a column of ghosts, and the one remaining
+  tag carries its meaning in the label so it survives greyscale. The empty
+  `text` is already handled by `compareOn`, which sorts a row that cannot answer
+  the key last in both directions.
 - **The name is a field, and the affordance is not hover-only.** The dashed rule
   and the pencil appear on `.shelf-row:hover` **and** `:focus-within`, or a
   keyboard reader would have no sign the name is editable. Editing happens

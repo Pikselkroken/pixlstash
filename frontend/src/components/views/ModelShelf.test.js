@@ -201,14 +201,19 @@ describe("a row with nothing in its header", () => {
     const wrapper = await mountShelf([
       adapter({ id: 1, display_name: null }),
       adapter({ id: 2, display_name: "Clementine" }),
+      // Nothing survives the strip, so this one IS the filename — the positive
+      // control, or the two negatives below would also pass with the tag ripped
+      // out of the component altogether.
+      adapter({ id: 3, display_name: null, filename: "000002750.st" }),
     ]);
     const names = wrapper.findAll(".shelf-row-name");
     expect(names[0].classes()).toContain("shelf-row-name--derived");
     expect(names[1].classes()).toContain("shelf-row-name--named");
-    // ...and the mark is a WORD, because a font swap is silent to a screen
-    // reader and invisible in greyscale.
+    // ...and it carries no tag: "DERIVED" on most of the column said nothing a
+    // reader acts on.
     const rows = wrapper.findAll(".shelf-row");
-    expect(rows[0].find(".shelf-name-tag").text()).toBe("derived");
+    expect(rows[2].find(".shelf-name-tag").text()).toBe("from filename");
+    expect(rows[0].find(".shelf-name-tag").exists()).toBe(false);
     expect(rows[1].find(".shelf-name-tag").exists()).toBe(false);
   });
 });
@@ -242,13 +247,11 @@ describe("the four naming states", () => {
 
   it("tells derived from the file's own name without opening anything", async () => {
     const rows = (await mountStates()).findAll(".shelf-row");
-    // The two "nobody named this" states are different news, and the words are
-    // what carry it: the accent on the from-file tag is a hint on top.
-    expect(rows[2].find(".shelf-name-tag").text()).toBe("derived");
+    // Only the file's own string gets a word: a derived name already reads as
+    // ours from its type and rule, so tagging it was a chip on most of the
+    // column that a reader could not act on.
+    expect(rows[2].find(".shelf-name-tag").exists()).toBe(false);
     expect(rows[3].find(".shelf-name-tag").text()).toBe("from filename");
-    expect(rows[3].find(".shelf-name-tag").classes()).toContain(
-      "shelf-name-tag--from-file",
-    );
   });
 
   it("shows an unnamed model an empty field, not inert text", async () => {
