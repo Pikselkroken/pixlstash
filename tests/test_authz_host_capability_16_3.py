@@ -46,6 +46,7 @@ from pixlstash.authz.policy import (
     validate_policy_declarations,
 )
 from pixlstash.authz.registry import ROUTE_POLICIES
+from pixlstash.route_inventory import api_endpoint_set
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -453,12 +454,32 @@ def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path
             # JSON escapes backslashes, so the raw form never substring-matches
             # a Windows path in a serialised body.
             home_forms = (home, home.replace("\\", "\\\\"))
+            #
+            # Two filters on the derivation, both about what the probe can
+            # honestly reach rather than about which routes matter:
+            #
+            # * ``/api/v1`` only. ``tests/conftest.py`` wraps ``TestClient.get``
+            #   and prefixes ``/api/v1`` to any path that lacks it, bar three
+            #   root paths. So a probe of the registry's ``/docs``, ``/scalar``
+            #   or ``/openapi.json`` is sent as ``/api/v1/docs``, where nothing
+            #   is mounted and the SPA catch-all answers 200 — a vacuous
+            #   assertion, and `no_spa_fallback` says so. It fails on CI (which
+            #   builds the frontend) and passed locally (which does not), which
+            #   is exactly the shape of bug that guard exists for.
+            # * Mounted on this app. The registry also declares
+            #   conditionally-mounted routes, and an unmounted one lands on the
+            #   same catch-all.
+            mounted = {
+                path for method, path in api_endpoint_set(server.api) if method == "GET"
+            }
             reachable = sorted(
                 path
                 for (method, path), rp in ROUTE_POLICIES.items()
                 if method == "GET"
                 and rp.policy in (AccessPolicy.ANY_TOKEN, AccessPolicy.PUBLIC)
                 and "{" not in path
+                and path.startswith(f"{API}/")
+                and path in mounted
             )
             inspected = 0
             for route in reachable:
