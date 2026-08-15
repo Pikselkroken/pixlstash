@@ -461,7 +461,7 @@ def test_a_machine_that_has_never_run_face_detection_declares_nothing(
     is a normal machine and must not raise on the start-up path — nor warn."""
     with caplog.at_level("WARNING"):
         assert declare_insightface_packs(server_hub, str(tmp_path / "nope")) is None
-    assert "should have emptied" not in caplog.text, caplog.text
+    assert _warnings(caplog) == [], caplog.text
 
 
 def test_a_relocated_pack_root_that_is_gone_is_not_called_normal(
