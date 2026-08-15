@@ -538,6 +538,7 @@ jobs:
           tests/test_picture_sets_query_cost.py
           tests/test_picture_stack_utils.py
           tests/test_pictures_stream.py
+          tests/test_plugin_install.py
           tests/test_project_membership_service.py
           tests/test_projects_api.py
           tests/test_rate_limiter.py
