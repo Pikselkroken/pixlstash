@@ -2926,7 +2926,7 @@ watch(
 /* A readable name we generated. The UI face, because this string is OURS and
    is not in the file — mono would claim it were. Regular weight, so it does
    not carry the authority of a title somebody chose, and the accent rule under
-   it says the rest. No tag beside it — see NAME_TAG. */
+   it says the rest. */
 .shelf-row-name--derived {
   font-weight: var(--weight-regular);
   border-bottom-color: rgba(var(--v-theme-accent), 0.7);
