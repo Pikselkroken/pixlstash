@@ -26,7 +26,11 @@ from pixlstash.db_models import Picture, Tag
 from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.event_types import EventType
-from pixlstash.scoring import fetch_anomaly_confidences
+from pixlstash.scoring import (
+    fetch_anomaly_confidences,
+    fetch_smart_score_data,
+    resolve_penalised_tag_weights,
+)
 from pixlstash.server import Server
 from pixlstash.tasks import TaskType
 from pixlstash.tasks.base_task import TaskStatus
@@ -1063,6 +1067,43 @@ def test_background_task_scores_and_honours_the_users_penalised_tags():
             f"({charged:.4f} -> {uncharged:.4f}); the background scorer is still using "
             "the hardcoded defaults"
         )
+    finally:
+        server.close()
+        temp_dir.cleanup()
+
+
+def test_on_demand_fetch_resolves_the_users_penalised_tags_from_the_hub():
+    """The sort path's scorer config carries the owner's table, not the shipped seed.
+
+    Identity lives in the hub, so resolving it from the scoring session — which is a
+    *vault* session — found no user row on every call and quietly scored with
+    ``DEFAULT_SMART_SCORE_PENALIZED_TAGS`` while the owner's edited table sat in the hub
+    (one ``No user row found`` warning per batch was the only symptom).
+    """
+    temp_dir, client, server = _setup()
+    try:
+        edited = {k: v for k, v in DEFAULT_SMART_SCORE_PENALIZED_TAGS.items()}
+        edited.pop(PENALISED_TAG, None)
+        edited["bad anatomy"] = 2
+        assert (
+            client.patch(
+                "/users/me/config", json={"smart_score_penalised_tags": edited}
+            ).status_code
+            == 200
+        )
+
+        # No explicit table: the fetch must go and find the owner's, as the background
+        # rescore that a config PATCH queues does.
+        *_, scorer_config = fetch_smart_score_data(server, None)
+        weights = scorer_config["penalised_tag_weights"]
+        assert PENALISED_TAG not in weights, (
+            f"{PENALISED_TAG!r} was removed from the owner's table but still reached "
+            "the scorer; the weights are coming from the shipped defaults"
+        )
+        assert weights["bad anatomy"] == 2
+
+        # And the same resolution stands alone, so the background task gets it too.
+        assert resolve_penalised_tag_weights(server.auth) == weights
     finally:
         server.close()
         temp_dir.cleanup()

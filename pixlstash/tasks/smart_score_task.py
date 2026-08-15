@@ -15,14 +15,13 @@ from pixlstash.scoring.smart_score import (
     _BUILTIN_MIN_BAD,
     attach_anomaly_inputs,
     prepare_smart_score_inputs,
+    resolve_penalised_tag_weights,
 )
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.service.anomaly_thresholds import resolve_anomaly_apply_thresholds
 from pixlstash.utils.service.smart_score_invalidation import anomaly_state_signature
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask
-from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
-from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 
 
 logger = get_logger(__name__)
@@ -69,10 +68,11 @@ class SmartScoreTask(BaseTask):
             return {"changed_count": 0}
 
         apply_thresholds = resolve_anomaly_apply_thresholds(self._vault)
-        owner = getattr(getattr(self._vault, "auth_service", None), "user", None)
-        owner_penalised_tags = smart_score_penalised_tags(
-            getattr(owner, "smart_score_penalised_tags", None),
-            DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+        # Read live from the hub rather than from ``auth_service.user``: that is a
+        # start-up snapshot, so a penalised-tag edit made since would not reach the
+        # rescore the edit itself queued.
+        owner_penalised_tags = resolve_penalised_tag_weights(
+            getattr(self._vault, "auth_service", None)
         )
         good_anchors, bad_anchors, candidates, scorer_config, before_signature = (
             self._db.run_immediate_read_task(
@@ -145,6 +145,8 @@ class SmartScoreTask(BaseTask):
             candidate_ids: Pictures to score.
             apply_thresholds: Per-tag confidence gate; see
                 :func:`pixlstash.scoring.smart_score.fetch_anomaly_confidences`.
+            owner_penalised_tags: The owner's ``{tag: weight}`` table, resolved from the
+                hub by the caller — ``session`` is a vault one and holds no identity.
         """
         good = session.exec(
             select(Picture.image_embedding, Picture.score)
@@ -206,10 +208,11 @@ class SmartScoreTask(BaseTask):
             )
 
         scorer_config = attach_anomaly_inputs(
-            session, candidates, apply_thresholds=apply_thresholds
+            session,
+            candidates,
+            apply_thresholds=apply_thresholds,
+            penalised_tag_weights=owner_penalised_tags,
         )
-        if owner_penalised_tags is not None:
-            scorer_config["penalised_tag_weights"] = owner_penalised_tags
 
         builtin_good, builtin_bad = _load_builtin_anchors()
         if len(good) < _BUILTIN_MIN_GOOD:
