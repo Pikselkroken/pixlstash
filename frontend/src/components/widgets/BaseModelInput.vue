@@ -7,7 +7,7 @@
     role="combobox"
     aria-autocomplete="list"
     :aria-expanded="String(menuShown)"
-    :aria-controls="menuId"
+    :aria-controls="menuShown ? menuId : undefined"
     :aria-activedescendant="
       menuShown && index >= 0 ? `${menuId}-${index}` : undefined
     "
@@ -30,12 +30,14 @@
         minWidth: `${Math.max(rect.width, 160)}px`,
       }"
       role="listbox"
+      aria-label="Base model suggestions"
     >
       <button
         v-for="(item, idx) in matches"
         :id="`${menuId}-${idx}`"
         :key="item"
         type="button"
+        tabindex="-1"
         class="bmi-item"
         :class="{ 'bmi-item--active': idx === index }"
         role="option"
@@ -68,17 +70,29 @@
  * places this appears (the bulk dialog and the inline editor on a row) are
  * opened and closed constantly and the list changes only when somebody saves.
  *
- * Keys follow the tag field, which is the app's existing completion contract:
- * Arrow opens the list and moves the highlight, Tab fills the field without
- * committing, Enter commits (taking the highlight if there is one), Escape
- * closes the list and then, on a second press, gets out. Anything this consumes
- * is stopped here, so a parent that also listens for Enter or Escape does not
- * act twice.
+ * Keys follow the tag field as far as the tag field goes — Arrow highlights,
+ * Tab fills, and the highlighted row wears the same TAB hint — and then add the
+ * two it has no answer for. `OverlayTagsPanel`'s list has no open state at all:
+ * it is simply visible whenever the input holds a prefix that matches, inside a
+ * panel that is itself a mode. This field lives on a row and inside a dialog
+ * that both own Escape, so it needs one: ArrowDown opens the menu, Escape
+ * closes it, and only a second Escape reaches the host. Enter commits, taking
+ * the highlight if there is one. Anything this consumes is stopped here, so a
+ * parent that also listens for Enter or Escape does not act twice.
  *
  * **The menu opens on a keystroke, never on focus.** Both hosts focus this
  * field the moment they draw it, and a menu that opened with them would cover
  * the dialog before a key was pressed and would eat the Escape that dismisses
- * it. ArrowDown is the deliberate "show me everything" gesture.
+ * it. ArrowDown is the deliberate "show me everything" gesture. Shift+Tab is
+ * left alone even with a menu up, or there would be no way back out of the
+ * field for a keyboard reader.
+ *
+ * **Not a `<datalist>`**, which would have been free. Three things it cannot
+ * do: match on the folded spelling (`sdxl` has to find `SDXL 1.0`, and a
+ * datalist matches literally), render in the app's own theme rather than the
+ * browser's chrome, and honour the key contract the tag field already taught —
+ * Tab fills, Enter commits, Escape steps back one level. The first is the whole
+ * point of the feature.
  *
  * The menu is drawn like the tag panel's and is deliberately NOT shared with
  * it: that one is wired into predictions, rejected-tag confidences and the
@@ -86,7 +100,15 @@
  * does not otherwise touch. The duplication is the treatment, not the logic,
  * and it is the thing to collapse if a third completion field ever appears.
  */
-import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  useId,
+  watch,
+} from "vue";
 
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
@@ -163,8 +185,10 @@ watch(
 function onOutsideScroll() {
   if (isOpen.value) close();
 }
-window.addEventListener("scroll", onOutsideScroll, true);
-window.addEventListener("resize", onOutsideScroll);
+onMounted(() => {
+  window.addEventListener("scroll", onOutsideScroll, true);
+  window.addEventListener("resize", onOutsideScroll);
+});
 onBeforeUnmount(() => {
   window.removeEventListener("scroll", onOutsideScroll, true);
   window.removeEventListener("resize", onOutsideScroll);
@@ -214,7 +238,7 @@ function onKeydown(event) {
     event.preventDefault();
     event.stopPropagation();
     index.value = Math.max(index.value - 1, -1);
-  } else if (event.key === "Tab" && menuShown.value) {
+  } else if (event.key === "Tab" && !event.shiftKey && menuShown.value) {
     event.preventDefault();
     event.stopPropagation();
     choose(list[index.value >= 0 ? index.value : 0]);

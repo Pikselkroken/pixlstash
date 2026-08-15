@@ -142,6 +142,38 @@ describe("the base-model completion list", () => {
     expect(wrapper.find("input").attributes("aria-expanded")).toBe("false");
   });
 
+  it("names the menu and its highlight for a screen reader", async () => {
+    // Without these the field announces "expanded" and gives no way to reach
+    // what expanded, and the Arrow highlight is never read out at all.
+    const wrapper = await field();
+    const input = wrapper.find("input");
+    const menuId = document.querySelector(".bmi-menu").id;
+    expect(menuId).toBeTruthy();
+    expect(input.attributes("aria-controls")).toBe(menuId);
+    expect(input.attributes("aria-activedescendant")).toBeUndefined();
+
+    await input.trigger("keydown", { key: "ArrowDown" });
+    const active = input.attributes("aria-activedescendant");
+    expect(active).toBeTruthy();
+    expect(document.getElementById(active)?.textContent).toContain("FLUX.2");
+
+    // And the pointer is not left aimed at an element that is gone.
+    await input.trigger("keydown", { key: "Escape" });
+    await wrapper.vm.$nextTick();
+    expect(input.attributes("aria-controls")).toBeUndefined();
+  });
+
+  it("leaves Shift+Tab alone, so there is a way back out", async () => {
+    const wrapper = await field();
+    const input = wrapper.find("input");
+    await input.setValue("fl");
+    await wrapper.vm.$nextTick();
+
+    await input.trigger("keydown", { key: "Tab", shiftKey: true });
+
+    expect(wrapper.props("modelValue")).toBe("fl");
+  });
+
   it("closes when the list underneath scrolls", async () => {
     // The menu is positioned once, `fixed`. Left open it would sit over
     // whichever rows scrolled into its place and still be clickable.

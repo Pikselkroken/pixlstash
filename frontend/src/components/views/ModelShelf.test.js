@@ -146,12 +146,17 @@ function adapter(overrides = {}) {
   };
 }
 
-async function mountShelf(rows, checkpoints = [], unclassified = []) {
+async function mountShelf(
+  rows,
+  checkpoints = [],
+  unclassified = [],
+  extra = {},
+) {
   listAdapters.mockResolvedValue(rows);
   listCheckpoints.mockResolvedValue(checkpoints);
   listEngines.mockResolvedValue([]);
   listUnclassified.mockResolvedValue(unclassified);
-  const wrapper = mount(ModelShelf, globalOpts);
+  const wrapper = mount(ModelShelf, { ...globalOpts, ...extra });
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
   return wrapper;
@@ -442,6 +447,33 @@ describe("editing a base model in place", () => {
     await field.trigger("blur");
 
     expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands focus back to the row on a key, and leaves it alone on a click", async () => {
+    // The grid's tab stop roves, so a field that closes without giving focus
+    // back drops a keyboard reader at the top of the document — the defect the
+    // rename path fixed and this one had to inherit. A blur is the opposite
+    // case: the reader has already chosen where to go.
+    const wrapper = await mountShelf([adapter({ id: 7 })], [], [], {
+      attachTo: document.body,
+    });
+    const store = useModelShelfStore();
+    vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    const rowEl = wrapper.find(".shelf-row");
+    await rowEl.find(".shelf-col--base span").trigger("dblclick");
+    await wrapper.find(".shelf-row-base-edit").trigger("keydown", {
+      key: "Enter",
+    });
+    await wrapper.vm.$nextTick();
+    expect(document.activeElement).toBe(rowEl.element);
+
+    await rowEl.find(".shelf-col--base span").trigger("dblclick");
+    document.body.focus();
+    await wrapper.find(".shelf-row-base-edit").trigger("blur");
+    await wrapper.vm.$nextTick();
+    expect(document.activeElement).not.toBe(rowEl.element);
+    wrapper.unmount();
   });
 
   it("is reachable from the keyboard, like the name beside it", async () => {

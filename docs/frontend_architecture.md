@@ -2386,10 +2386,14 @@ the field is useful on a fresh install where nothing records a base model at
 all, plus every distinct string this machine already stores. The column is free
 text by rule and stays that way, so a name released after this build is typed
 and stored verbatim. Matching folds case, spacing and punctuation away (`sdxl`
-finds `SDXL 1.0`), and the keys are the tag field's, which is the app's existing
-completion contract: ArrowDown opens the menu and then highlights, **Tab fills
-without committing**, Enter commits and takes the highlight if there is one, and
-the first Escape closes the menu rather than throwing the edit away. **The menu
+finds `SDXL 1.0`), and the keys follow the tag field as far as that field goes —
+Arrow highlights, **Tab fills without committing**, and the highlighted row
+wears the same TAB hint. The two it adds are the two `OverlayTagsPanel` has no
+answer for: that list has no open state (it is visible whenever the prefix
+matches, inside a panel that is itself a mode), while this field sits on a row
+and in a dialog that both own Escape. So **ArrowDown opens the menu**, Escape
+closes it, and only a second Escape reaches the host; Enter commits and takes
+the highlight if there is one. **The menu
 opens on a keystroke and never on focus**, because both hosts focus the field as
 they draw it: a menu that opened with them would cover the dialog unasked and
 would eat the Escape that dismisses it. A scroll or resize closes it — it is

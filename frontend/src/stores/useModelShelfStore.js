@@ -62,6 +62,9 @@ const VIEW_SCHEMA_VERSION = 1;
  */
 const MAX_COLLAPSED_KEYS = 200;
 
+/** How long a failed completion fetch waits before the field may ask again. */
+const COMPLETION_RETRY_MS = 30_000;
+
 /**
  * The axes the shelf can group by. `none` is the flat F1 list.
  *
@@ -695,34 +698,47 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * the other would break whichever one lost.
    */
   const fetchedCompletions = ref([]);
-  let completionsFetchedAt = 0;
+  let completionsLoaded = false;
+  let completionsAttemptedAt = 0;
 
   /**
-   * The fetched list, plus whatever the rows on screen already say.
+   * The fetched list, plus the base models on screen the server did not know.
    *
    * The fetch is not the only writer of `base_model`: the scanner and the
    * importer write it too, and neither goes anywhere near this store — so a
    * value that arrived with a scan would not be offered until a reload. The
-   * rows carry their own raw spellings, so unioning them in costs no request
-   * and closes that window. Deduplicated on the FOLDED key, with the fetched
-   * label winning, or a row spelling `sdxl base` would be offered beside the
-   * `SDXL 1.0` it means.
+   * rows carry their own spellings, so unioning them in costs no request and
+   * closes that window.
+   *
+   * **A row whose `base_model_folded` is set is skipped**, which is the
+   * server's own rule (`completions()` drops an extra that folds to something
+   * it ships) applied to the field the server already computed for the row.
+   * Without it the client hands back every alias the server deliberately
+   * dropped: a shelf spelling `sdxl base`, `SDXL` and `sdxl_base_v1-0` would
+   * offer three more entries for the `SDXL 1.0` already in the list, and with
+   * eight slots in the menu the canonical label can be pushed off it. The
+   * client cannot fold on its own — the alias table is the server's — so this
+   * is the only place the rule can be honoured.
+   *
+   * Deduplication is on case, spacing and punctuation (the server's `_norm`),
+   * with the fetched label winning: that catches two rows spelling one unknown
+   * base differently, which is all it claims to catch.
    */
   const baseModelCompletions = computed(() => {
     const seen = new Set();
     const out = [];
-    for (const value of fetchedCompletions.value) {
-      const key = value.toLowerCase().replace(/[^a-z0-9]/g, "");
-      if (!key || seen.has(key)) continue;
+    const add = (value) => {
+      const key = String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+      if (!key || seen.has(key)) return;
       seen.add(key);
-      out.push(value);
-    }
+      out.push(String(value).trim());
+    };
+    for (const value of fetchedCompletions.value) add(value);
     for (const row of rows.value) {
-      const value = String(row.base_model || "").trim();
-      const key = value.toLowerCase().replace(/[^a-z0-9]/g, "");
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      out.push(value);
+      if (row.base_model_folded) continue;
+      add(row.base_model);
     }
     return out;
   });
@@ -735,16 +751,29 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * first use and invalidated by the write that could change it rather than
    * polled. A failure is not worth a notice: the field still takes free text,
    * which is what it took before there was a list at all.
+   *
+   * A failure is **throttled, not latched**. The field asks on every keystroke,
+   * so clearing the stamp on the error path turned one dead endpoint into one
+   * request per character typed; latching it instead would mean a single blip
+   * cost completion for the rest of the session.
    */
   async function loadBaseModelCompletions() {
-    if (completionsFetchedAt) return;
-    completionsFetchedAt = Date.now();
+    const now = Date.now();
+    if (completionsLoaded) return;
+    if (now - completionsAttemptedAt < COMPLETION_RETRY_MS) return;
+    completionsAttemptedAt = now;
     try {
       fetchedCompletions.value = await listBaseModelCompletions();
+      completionsLoaded = true;
     } catch (err) {
-      completionsFetchedAt = 0;
       console.debug("[shelf] could not load base-model completions", err);
     }
+  }
+
+  /** Make the next open re-fetch: the list this holds can no longer be right. */
+  function invalidateBaseModelCompletions() {
+    completionsLoaded = false;
+    completionsAttemptedAt = 0;
   }
 
   /** The rows the current selection actually shows, with display fields. */
@@ -1193,7 +1222,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       const body = await editModels(ids, changes);
       // A base model the server had never seen is a completion target the
       // moment it is stored, so the list it came from is now one entry short.
-      if ("base_model" in changes) completionsFetchedAt = 0;
+      if ("base_model" in changes) invalidateBaseModelCompletions();
       await fetchRows();
       notices.push({
         level: "success",
@@ -1412,6 +1441,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     loaded.value = false;
     error.value = "";
     loading.value = false;
+    // The completion list goes with the rows. It is derived from this machine's
+    // `model` rows, the credential that could read them has just changed, and
+    // the stamp beside it would otherwise say "already fetched" forever.
+    fetchedCompletions.value = [];
+    invalidateBaseModelCompletions();
   }
 
   const unsubscribeSessionReset = onSessionReset(resetForSession);
