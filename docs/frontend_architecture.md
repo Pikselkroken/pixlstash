@@ -2224,6 +2224,34 @@ double click on the name, or F2 on the row for the keyboard.
 Arrows move the stop **without** selecting, so a reader can walk the list
 without arming a verb against every row they pass; Space and Enter pick;
 Shift+arrow extends from the anchor, the keyboard's Shift+click; Escape clears.
+**Escape is bound on the `window`, not on the shelf's root**, because a keydown
+only reaches an element that contains the focus: bound to the root it worked
+from a row and from the toolbar and did nothing once the sidebar or the app bar
+had been clicked, while the selection was still on screen. A window listener
+then has to know what else owns the key, and hand it back rather than clear
+underneath. Five checks, in this order, each for its own reason:
+
+- **The shelf's own dialogs, by REF** (`moveOpen`, `importOpen`, `stacksOpen`,
+  `foldersOpen`, `addFileOpen`, `editVerb`) — they are `AppDialog`s inside this
+  subtree, and a press with nothing focused targets `<body>`, which no ancestor
+  test can see. Same body-target hole the create-person dialog documents above.
+- **Any active Vuetify overlay that is not a tooltip**, plus `.image-overlay` —
+  read off the OVERLAY, not the event target, because `VMenu` only pulls focus
+  into its content on a later `focusin`: a menu opened with the mouse leaves
+  focus on its activator, so a target test would let the shelf's own Sort, Show
+  and verb menus close *and* drop the selection in one press. Tooltips are
+  exempt, or a hovered button anywhere in the app would swallow the key.
+- **`reviewSessionsStore.overlayOpen`** — that overlay renders outside `App.vue`'s
+  view switch, so the shelf is still mounted under it.
+- **The revealed auto-hide sidebar** — `useGlobalKeydown` dismisses it on Escape
+  and deliberately does not stop the event, so without this one press would hide
+  the sidebar and wipe the selection behind it.
+- **A `[role="dialog"]`/`.ate` target, and any typing target** (`isTypingTarget`,
+  so the search field's own Escape stays its own).
+
+Bubble phase, not capture: every owner above is meant to resolve the key first.
+The view is `v-else-if`'d away with the route, so the listener is only live while
+there is a shelf to clear.
 **The panel's text is not selectable** (`user-select: none` on `.shelf`, #932).
 Picking rows is the gesture here and the browser's own text selection rode along
 with it: Shift+click extends a text range from the last click and a fast double
