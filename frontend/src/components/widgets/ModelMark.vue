@@ -28,6 +28,12 @@
         loading="lazy"
         @error="dropFace"
       />
+      <v-icon
+        v-else-if="ring?.icon"
+        class="mmark-icon"
+        :color="ring.iconHue || undefined"
+        >{{ ring.icon }}</v-icon
+      >
       <span
         v-else
         class="mmark-initials"
@@ -121,7 +127,8 @@ function dropFace(event) {
 // itself compares unequal each time, and the reset would fire on every keystroke
 // in the filter box — putting the mark back on the URL that just 404ed.
 watch(
-  () => `${iconUrl.value}|${props.ring?.type}|${props.ring?.id}`,
+  () =>
+    `${iconUrl.value}|${props.ring?.type}|${props.ring?.id}|${props.ring?.icon}`,
   () => {
     failed.value = [];
   },
@@ -131,15 +138,21 @@ watch(
  * The face inside the ring, in priority order.
  *
  * 1. The model's OWN icon, always: somebody chose that picture for this file.
- * 2. The face of whoever it is assigned to. A LoRA of Sarah with no icon of
+ * 2. The icon of whoever it is assigned to, if it carries one — a picture set's
+ *    `set_icon` is what its thumbnail was replaced BY, and the sidebar already
+ *    draws the set that way, in the same colour or the same theme ink.
+ *    Deliberately not fallible: an icon is a name in a font rather than a
+ *    fetch, so there is no `error` to catch and the step below is unreachable
+ *    once a set carries one.
+ * 3. The face of whoever it is assigned to. A LoRA of Sarah with no icon of
  *    its own is far better identified by Sarah's reference face than by the
  *    letters `SA` — and the ring around it is already that person's colour, so
  *    the two halves say one thing.
- * 3. The generated mark. A character with no reference face and a set with no
+ * 4. The generated mark. A character with no reference face and a set with no
  *    pictures both 404 their thumbnail, and an empty square would read as a
  *    broken mark rather than as an entity without a picture.
  *
- * Each step is skipped once its own URL has failed, so the chain runs all the
+ * Each step that IS a URL is skipped once that URL has failed, so the chain runs all the
  * way down: a model pointing at an icon whose file is gone falls to the
  * assigned face, and then to the mark, rather than sitting on a broken image.
  *
@@ -149,7 +162,13 @@ watch(
  */
 const faceUrl = computed(() => {
   const build = ENTITY_THUMBNAIL[props.ring?.type];
-  const entityUrl = build && props.ring?.id != null ? build(props.ring.id) : "";
+  // An entity that has chosen an icon has no thumbnail to lend: choosing one is
+  // how the owner turns the picture off, so borrowing it here would put back the
+  // face the sidebar no longer shows. `ring.icon` takes step 2 instead.
+  const entityUrl =
+    build && props.ring?.id != null && !props.ring.icon
+      ? build(props.ring.id)
+      : "";
   return (
     [iconUrl.value, entityUrl].find(
       (url) => url && !failed.value.includes(url),
@@ -188,6 +207,14 @@ const ringClass = computed(() =>
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+/* The entity's chosen icon, at the slot's own size so it fills the square the
+   thumbnail would have filled. `margin: auto` because the face is a flex box
+   sized by its child here rather than by an image stretched to 100%. */
+.mmark-icon {
+  margin: auto;
+  font-size: var(--entity-thumb);
 }
 
 /* The initials carry their own colour derived from the frozen 48, so the
