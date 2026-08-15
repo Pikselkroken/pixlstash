@@ -1830,7 +1830,7 @@ for.
     of a list of empty folders, because "add the folder where you keep them" is
     the better answer on a fresh install than an inventory of nothing.
 - **The band is named by the volume, not by the mount point.** A Linux mount
-  point runs to `/media/glindkvist/102AB4B6757AF9A3` and crowds the header out,
+  point runs to `/media/<user>/A1B2C3D4E5F60789` and crowds the header out,
   so the band shows `label` behind a disk glyph and keeps `mount_point` as its
   `title`. The server reads the label from `/dev/disk/by-label` on Linux,
   `GetVolumeInformationW` on Windows and the `/Volumes` mount name on macOS, and
