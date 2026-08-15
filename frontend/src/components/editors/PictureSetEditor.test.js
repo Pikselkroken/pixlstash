@@ -233,9 +233,12 @@ describe("PictureSetEditor — adapter tray", () => {
     ).toBe(true);
   });
 
-  it("does not mount it while the dialog is closed", () => {
+  it("does not mount it before the dialog has ever been opened", () => {
     // The mount is what triggers the read, and the hosts keep this component
-    // alive for the life of the view.
+    // alive for the life of the view. Once opened it stays mounted — including
+    // through the close, so the widest row does not vanish from under the leave
+    // transition — and re-reads via its key on the next open. What must never
+    // happen is a read for a dialog the user has not opened at all.
     expect(
       mountWithTray({ open: false, set: lockedSet })
         .find(".adapter-tray-stub")
