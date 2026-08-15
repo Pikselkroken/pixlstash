@@ -45,7 +45,6 @@
                 v-for="plugin in tagPlugins"
                 :key="plugin.name"
                 :title="plugin.display_name || plugin.name"
-                :disabled="!!plugin.load_error"
                 @click="refreshPictureTags(plugin.name)"
               />
               <v-list-item

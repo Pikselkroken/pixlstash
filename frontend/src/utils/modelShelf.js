@@ -10,7 +10,7 @@
 //   * A missing value is still rendered. "Base model not set" occupies the same
 //     slot in the same type as a real value; a blank cell is the failure mode.
 
-import { SET_COLORS } from "./setAppearance";
+import { ICON_CARDS, SET_COLORS } from "./setAppearance";
 
 /** Trailing tokens that record where in a training run a file was saved.
  *
@@ -169,8 +169,122 @@ export const CAPABILITY_LABELS = {
  * @returns {string} e.g. `Captioning`.
  */
 export function capabilityLabel(capability) {
-  const key = String(capability || "");
-  return CAPABILITY_LABELS[key] || key;
+  return labelFrom(CAPABILITY_LABELS, String(capability || ""));
+}
+
+/**
+ * Look a free-text value up in a label table, falling through to itself.
+ *
+ * `Object.hasOwn` rather than a plain index, because both tables are keyed by
+ * strings that come off the wire or out of a file header. `kind` reaches this
+ * as `constructor` and the index returns `Object`'s constructor FUNCTION —
+ * truthy, so `|| key` never fires, and it lands in a group label where
+ * `localeCompare` throws and takes the whole `groups` computed with it.
+ */
+function labelFrom(table, key) {
+  return Object.hasOwn(table, key) ? table[key] : key;
+}
+
+/**
+ * How the shelf spells each adapter algorithm. Trainers spell them however
+ * they like; `model.kind` stores whatever was read out of the header.
+ *
+ * Not exported: `adapterKindLabel` is the only way in, so no caller can index
+ * it raw and reintroduce the `Object.prototype` hole `labelFrom` closes.
+ */
+const ADAPTER_KIND_LABELS = {
+  lora: "LoRA",
+  lokr: "LoKr",
+  loha: "LoHa",
+  dora: "DoRA",
+  oft: "OFT",
+  // `KIND_UNKNOWN` — `detect_adapter_kind` found adapter markers but no
+  // algorithm it knows. A real thing to filter on ("which of these could we
+  // not identify") and a real thing to print in the Kind cell, so it is
+  // spelled here like the rest. It is only the GROUP axis that declines it,
+  // because a heading called `UNKNOWN` beside `NO FEATURE RECORDED` is two
+  // shrugs presented as one feature and one not.
+  unknown: "Unknown",
+};
+
+/**
+ * Fold one stored `model.kind` to the value everything keys on.
+ *
+ * `model.kind` is free text — the scanner writes a constant, but `PATCH
+ * /models` stores whatever reaches it verbatim — so `LoRA`, `lora` and ` lora `
+ * are one algorithm spelled three ways. The shelf folds them here, once: the
+ * group key, the `Show` panel's checkbox list and the kind filter all read this
+ * rather than the raw column, or the panel offers two boxes labelled `LoRA`
+ * where the axis draws one group and ticking either hides half of it.
+ *
+ * Both halves earn their place. The CASE is reachable from the app's own edit
+ * dialog, which trims but does not fold. The WHITESPACE only arrives over the
+ * raw API, and an untrimmed value sorts to the very TOP of a grouped shelf,
+ * ahead of every letter.
+ *
+ * @param {string} kind - a stored `model.kind`.
+ * @returns {string} e.g. `lora`, or `""` when the row records no algorithm.
+ */
+export function adapterKindKey(kind) {
+  return String(kind || "")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Name one adapter algorithm for display.
+ *
+ * Falls through to the folded word, like `capabilityLabel`: an algorithm this
+ * table has not heard of should show its own name rather than be hidden.
+ *
+ * @param {string} kind - a stored `model.kind`, or an `adapterKindKey`.
+ * @returns {string} e.g. `LoRA`, or `""` when the row records no algorithm.
+ */
+export function adapterKindLabel(kind) {
+  return labelFrom(ADAPTER_KIND_LABELS, adapterKindKey(kind));
+}
+
+/**
+ * The glyph that stands for each capability, in the app's OWN vocabulary.
+ *
+ * Not a new icon family. Where the product already marks a feature, that mark
+ * is the one used here and it is not re-drawn somewhere else: the face from
+ * `ImageOverlay` and the toolbar, the SHAPE from the same two — it is what
+ * "Object boxes" and "Detect objects" wear, so `detector` takes it and the
+ * catch-all does not — the tag, the star and the caption box from the operation
+ * log's icon rules. The two features nothing else in the app marks take glyphs
+ * nothing else in the app uses: a whole packaged model for `checkpoint` (NOT
+ * the cube, which is the base-model axis's), and the overflow dots for `other`.
+ *
+ * Grouped by feature, the shelf otherwise drew the AXIS's glyph on every
+ * header, so eight different headers all read as one star and the mark carried
+ * no information at all.
+ */
+export const CAPABILITY_ICONS = {
+  captioner: "mdi-text-box-outline",
+  tagger: "mdi-tag-outline",
+  detector: "mdi-shape-outline",
+  face: "mdi-face-recognition",
+  search: "mdi-magnify",
+  scorer: "mdi-star-outline",
+  checkpoint: "mdi-package-variant-closed",
+  other: "mdi-dots-horizontal-circle-outline",
+};
+
+/**
+ * The glyph for one capability.
+ *
+ * Returns "" for a capability this build has never seen, so the caller falls
+ * back to the grouping axis's own glyph rather than drawing a wrong one. Unlike
+ * {@link capabilityLabel}, which falls through to the STORED WORD, there is no
+ * such fallback for a glyph: an unknown capability has a name to show and no
+ * picture to show, and inventing one would be the confident wrong answer.
+ *
+ * @param {string} capability - a stored `model_capability.capability`.
+ * @returns {string} an mdi class name, or `""`.
+ */
+export function capabilityIcon(capability) {
+  return CAPABILITY_ICONS[String(capability || "")] || "";
 }
 
 const SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"];
@@ -1134,7 +1248,15 @@ const ATTACHMENT_KIND = {
     noun: "person",
     colorKey: "character_color",
   },
-  set: { list: "sets", noun: "set", colorKey: "set_color" },
+  // `iconKey` is what a set may carry INSTEAD of a thumbnail; a character has
+  // no such column, and the absence here is what keeps the lookup per-type
+  // rather than a hardcoded field read in the loop below.
+  set: {
+    list: "sets",
+    noun: "set",
+    colorKey: "set_color",
+    iconKey: "set_icon",
+  },
 };
 
 /**
@@ -1167,7 +1289,10 @@ const ATTACHMENT_KIND = {
  * @param {Array<Object>} [lists.characters] - `useEntityListsStore().characters`.
  * @param {Array<Object>} [lists.sets] - `useEntityListsStore().pictureSets`.
  * @returns {{style: string, hue: string, type: string, id: ?number,
- *   label: string, count: number}} `style`
+ *   icon: string, iconHue: string, label: string, count: number}} `icon` is
+ *   the mdi name a picture set carries instead of its thumbnail, empty
+ *   otherwise, and `iconHue` is that set's own colour — empty when it has none,
+ *   which is theme ink and NOT the ring's hashed fallback. `style`
  *   is `"none"` and `hue` empty when nothing is attached, which is the dashed
  *   grey ring — never an absent ring, because a mark with no edge at all would
  *   read as a rendering gap rather than as a state.
@@ -1190,6 +1315,23 @@ export function assignmentRing(
       type,
       id: att.entity_id,
       label: `${name} (${kind.noun})`,
+      // A set carrying an icon has said what its face is; the thumbnail is what
+      // an icon REPLACES, in the sidebar and here alike, so borrowing the
+      // picture would draw a face no other surface shows. `cards` is the
+      // sentinel for "keep the thumbnail", not an icon name.
+      icon:
+        kind.iconKey &&
+        entity?.[kind.iconKey] &&
+        entity[kind.iconKey] !== ICON_CARDS
+          ? entity[kind.iconKey]
+          : "",
+      // The icon's own colour, and deliberately NOT `hue` below: `hue` always
+      // resolves to something so the ring is never invisible, while an icon
+      // with no `set_color` is drawn in theme ink by the sidebar. Inventing a
+      // hashed hue here would paint one set two different colours on one
+      // screen, which is exactly what the ring's "the hue is the entity's own"
+      // rule exists to prevent.
+      iconHue: entity?.[kind.colorKey] || "",
       hue:
         entity?.[kind.colorKey] ||
         SET_COLORS[hash32(`${type}:${att.entity_id}`) % SET_COLORS.length]
@@ -1202,6 +1344,8 @@ export function assignmentRing(
       hue: "",
       type: "",
       id: null,
+      icon: "",
+      iconHue: "",
       label: "Unassigned",
       count: 0,
     };
@@ -1215,6 +1359,8 @@ export function assignmentRing(
     // which attachment owns the ring and which owns the face cannot drift.
     type: first.type,
     id: first.id,
+    icon: first.icon,
+    iconHue: first.iconHue,
     label: named.map((one) => one.label).join(", "),
     count: named.length,
   };

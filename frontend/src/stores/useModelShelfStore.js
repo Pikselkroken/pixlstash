@@ -13,8 +13,11 @@ import { onSessionReset } from "../utils/apiClient";
 import { useNoticeStore } from "./useNoticeStore";
 import { errorDetail } from "../utils/apiError";
 import {
+  adapterKindKey,
+  adapterKindLabel,
   baseModelKey,
   collapseStacks,
+  capabilityIcon,
   capabilityLabel,
   compareGroups,
   locationState,
@@ -320,6 +323,19 @@ function storedFilters() {
       filters[key] = parsed[key].filter((v) => typeof v === "string");
     }
   }
+  // Folded on the way in, because the facet and the match now key on the
+  // FOLDED algorithm and a shipped build persisted the raw column. A remembered
+  // `LoRA` would otherwise match no row and appear in no checkbox: the shelf
+  // shows nothing, the Adapters box reads fully on, the one algorithm box reads
+  // off, and the only way out is `Reset filters` — which also throws away the
+  // base models and capabilities the user did not ask to lose.
+  //
+  // Folded rather than gated behind a `FILTERS_SCHEMA_VERSION` bump for that
+  // same reason: the version discards the blob WHOLE, and this selection is
+  // still exactly what the user chose. It only needs spelling the new way.
+  filters.adapterKinds = [
+    ...new Set(filters.adapterKinds.map(adapterKindKey).filter(Boolean)),
+  ];
   return filters;
 }
 
@@ -383,7 +399,8 @@ function storedCollapsed() {
  * Florence-2 captions AND detects, and the embedder's CLIP is both the search
  * encoder and the aesthetic scorer's backbone. Filing either under one heading
  * answers "what breaks if I delete this" wrongly, which is the question this
- * axis exists to answer, so the row appears under each.
+ * axis exists to answer, so the row appears under each. An adapter declares no
+ * capability and is filed under its algorithm instead — see below.
  */
 function groupsOf(row, axis) {
   if (axis === "feature") {
@@ -391,10 +408,37 @@ function groupsOf(row, axis) {
       ? row.capabilities
       : [];
     if (!capabilities.length) {
-      // Every scanned adapter and checkpoint lands here, which is most of the
-      // shelf: `kind` on those rows is an adapter algorithm, not a capability,
-      // and calling a LoRA's `lokr` a feature would be the confident wrong
-      // answer the classifier already refuses to give.
+      // An adapter's algorithm IS its heading here. The row's own Kind column
+      // has always read `LoRA`, so filing it under "No feature recorded" left
+      // the axis saying one thing and the cell beside it another — and it
+      // swallowed most of the shelf into one bucket, which is the one shape a
+      // grouping axis must not take. A checkpoint or an unclassified file has
+      // no algorithm either, and still says nothing.
+      //
+      // `unknown` is excluded because it is not an algorithm: it is
+      // `detect_adapter_kind`'s explicit refusal (`KIND_UNKNOWN`) for an
+      // adapter whose tensor markers matched nothing it knows. Promoting that
+      // to a heading would stand a second shrug next to the real one and call
+      // it a feature — the confident wrong answer the classifier declined to
+      // give. The comparison catches every spelling of it because the label is
+      // trimmed and folded first.
+      //
+      // Keyed on the FOLDED value and labelled from it, the same split
+      // `base_model` makes one branch down: the key is what a collapsed group
+      // is remembered by, so keying on the label would orphan everyone's
+      // stored `kind:GLoRA` the day this table learns to spell `glora`. The
+      // `kind:` prefix keeps an algorithm out of the capability keyspace,
+      // where a collision would silently merge two unrelated headings.
+      const key = adapterKindKey(row.kind);
+      if (row.file_kind === "adapter" && key && key !== "unknown") {
+        return [
+          {
+            key: `kind:${key}`,
+            label: adapterKindLabel(key),
+            labelKind: "name",
+          },
+        ];
+      }
       return [
         {
           key: UNSET_GROUP_KEY,
@@ -407,6 +451,10 @@ function groupsOf(row, axis) {
       key: String(capability),
       label: capabilityLabel(capability),
       labelKind: "name",
+      // The feature's own glyph, so eight headers read as eight things. Empty
+      // for a capability this build does not know, which leaves the header on
+      // the axis's glyph rather than on a wrong one.
+      icon: capabilityIcon(capability),
     }));
   }
   if (axis === "base_model") {
@@ -568,13 +616,31 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     }
   }
 
-  /** Every adapter algorithm present, for the nested kind checkboxes. */
+  /**
+   * Every adapter algorithm present, for the nested kind checkboxes.
+   *
+   * FOLDED, like `baseModelOptions` is folded: `model.kind` is free text, so
+   * `LoRA` and `lora` are one algorithm and two raw strings. Faceting on the
+   * raw column offered two checkboxes that the panel now draws with the same
+   * label, each ticking half the rows — and the `feature` axis folds them into
+   * one group, so ticking either would have emptied half of a group the user
+   * can see.
+   *
+   * Sorted on the KEY, like `baseModelOptions` below and unlike
+   * `capabilityOptions`, which sorts on the label: these ARE the folded keys
+   * and every label differs from its key only in case, so ordering by label
+   * could not put a single box anywhere else.
+   */
   const adapterKindOptions = computed(() =>
     [
       ...new Set(
         rows.value
-          .filter((r) => r.file_kind === "adapter" && r.kind)
-          .map((r) => String(r.kind)),
+          .filter((r) => r.file_kind === "adapter")
+          // `.filter(Boolean)` and not `r.kind`: the hub CHECK makes an
+          // adapter's kind NOT NULL but not non-empty, so a whitespace-only
+          // one folds to "" and would otherwise be a checkbox with no label.
+          .map((r) => adapterKindKey(r.kind))
+          .filter(Boolean),
       ),
     ].sort(),
   );
@@ -626,7 +692,17 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         // a block already fetched stays in `rows` so its options survive.
         if (!filters[blockOf(row)]) return false;
         if (row.file_kind === "adapter" && kinds.length) {
-          if (!kinds.includes(String(row.kind))) return false;
+          // Matched against the same folded key the facet list was built from,
+          // exactly as the base-model filter is two branches down.
+          //
+          // A row whose kind folds to nothing is NOT excluded. The facet offers
+          // no box for it — an unlabelled checkbox is not a control — so a kind
+          // selection cannot hold an opinion about it, and hiding it would
+          // leave a row no box can bring back. That is the failure this store
+          // already memorialises one computed up: base models that stayed
+          // selected with no box left to untick them.
+          const key = adapterKindKey(row.kind);
+          if (key && !kinds.includes(key)) return false;
         }
         // "HAS this capability", not "IS this kind" — the whole point of the
         // set. A model serving two features survives a tick of either.
@@ -717,6 +793,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
             // only place that survives the flattening: `location` belongs to a
             // copy, and a bucket outlives the copy that opened it.
             folderId: group.location ? Number(group.location.folder_id) : null,
+            // The header's glyph, where the axis has one per group rather than
+            // one for the whole axis. Empty elsewhere, and `withFolderSignals`
+            // fills it in for `folder` after the fact.
+            icon: group.icon || "",
             rows: [],
           };
           byKey.set(group.key, bucket);
@@ -813,21 +893,36 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * narrowing and the number would stop meaning anything.
    */
   const activeCount = computed(() => {
-    let n = 0;
-    if (!filters.adapters || filters.adapterKinds.length) n += 1;
-    if (!filters.checkpoints) n += 1;
-    // Counted the way `checkpoints` is, because it now defaults the same way:
-    // the badge says how far the selection has moved from the default, so the
-    // departure is turning it OFF.
-    if (!filters.unclassified) n += 1;
+    // Every block defaults to ON, so the departure is turning one OFF — and
+    // read off {@link BLOCKS} rather than named one by one, which is how
+    // `engines` came to be uncounted: a shelf showing engines alone reported
+    // "3 filters active" while the fourth block was the only one showing
+    // anything.
+    let n = BLOCKS.filter((block) => !filters[block]).length;
+    // The nested kinds are part of the Adapters section, so they add nothing
+    // when that block is already counted.
+    if (filters.adapters && filters.adapterKinds.length) n += 1;
     if (filters.baseModels.length) n += 1;
     if (filters.capabilities.length) n += 1;
     return n;
   });
 
-  /** True when the selection asks for no rows at all — a distinct empty state. */
+  /**
+   * True when the selection asks for no rows at all — a distinct empty state.
+   *
+   * Read off {@link BLOCKS} rather than named block by block, which is how
+   * `engines` came to be left out of it: a shelf showing engines alone asks
+   * for plenty of rows, fetched them, and then drew "Nothing is selected in
+   * Show" over the top of them.
+   *
+   * This and `activeCount` now derive; `defaultFilters`, `storedFilters`,
+   * `blockOf` and `fetchRows` still spell the blocks out, because each says
+   * something different about each one. A fifth block is four deliberate
+   * edits, not five — the two that could silently disagree with the fetch are
+   * the two that no longer can.
+   */
   const nothingSelected = computed(
-    () => !filters.adapters && !filters.checkpoints && !filters.unclassified,
+    () => !BLOCKS.some((block) => filters[block]),
   );
 
   /**

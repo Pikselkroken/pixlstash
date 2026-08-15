@@ -92,6 +92,7 @@ import ModelShelf from "./ModelShelf.vue";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const globalOpts = {
   global: {
@@ -201,14 +202,19 @@ describe("a row with nothing in its header", () => {
     const wrapper = await mountShelf([
       adapter({ id: 1, display_name: null }),
       adapter({ id: 2, display_name: "Clementine" }),
+      // Nothing survives the strip, so this one IS the filename — the positive
+      // control, or the two negatives below would also pass with the tag ripped
+      // out of the component altogether.
+      adapter({ id: 3, display_name: null, filename: "000002750.st" }),
     ]);
     const names = wrapper.findAll(".shelf-row-name");
     expect(names[0].classes()).toContain("shelf-row-name--derived");
     expect(names[1].classes()).toContain("shelf-row-name--named");
-    // ...and the mark is a WORD, because a font swap is silent to a screen
-    // reader and invisible in greyscale.
+    // ...and it carries no tag: "DERIVED" on most of the column said nothing a
+    // reader acts on.
     const rows = wrapper.findAll(".shelf-row");
-    expect(rows[0].find(".shelf-name-tag").text()).toBe("derived");
+    expect(rows[2].find(".shelf-name-tag").text()).toBe("from filename");
+    expect(rows[0].find(".shelf-name-tag").exists()).toBe(false);
     expect(rows[1].find(".shelf-name-tag").exists()).toBe(false);
   });
 });
@@ -242,13 +248,11 @@ describe("the four naming states", () => {
 
   it("tells derived from the file's own name without opening anything", async () => {
     const rows = (await mountStates()).findAll(".shelf-row");
-    // The two "nobody named this" states are different news, and the words are
-    // what carry it: the accent on the from-file tag is a hint on top.
-    expect(rows[2].find(".shelf-name-tag").text()).toBe("derived");
+    // Only the file's own string gets a word: a derived name already reads as
+    // ours from its type and rule, so tagging it was a chip on most of the
+    // column that a reader could not act on.
+    expect(rows[2].find(".shelf-name-tag").exists()).toBe(false);
     expect(rows[3].find(".shelf-name-tag").text()).toBe("from filename");
-    expect(rows[3].find(".shelf-name-tag").classes()).toContain(
-      "shelf-name-tag--from-file",
-    );
   });
 
   it("shows an unnamed model an empty field, not inert text", async () => {
@@ -359,6 +363,15 @@ describe("file kinds", () => {
       "Checkpoint",
     );
   });
+
+  it("still names an adapter whose algorithm folds to nothing", async () => {
+    // The hub CHECK is `kind IS NOT NULL`, not non-empty, so a whitespace-only
+    // kind is reachable over the raw API. The cell falls back to `Adapter`
+    // rather than going blank: an empty Kind column reads as a broken row, and
+    // "it is an adapter, we cannot name the algorithm" is the actual fact.
+    const wrapper = await mountShelf([adapter({ kind: "  " })]);
+    expect(textOf(wrapper.find(".shelf-row .shelf-col"))).toContain("Adapter");
+  });
 });
 
 describe("location state", () => {
@@ -405,11 +418,50 @@ describe("empty states", () => {
       adapters: false,
       checkpoints: false,
       unclassified: false,
+      engines: false,
     });
     await wrapper.vm.$nextTick();
     expect(textOf(wrapper.find(".shelf-state"))).toContain(
       "Nothing is selected in Show",
     );
+  });
+
+  it("draws the engines when Engines is the only block ticked", async () => {
+    // The reported bug, at the layer it was seen: the toolbar counted the
+    // engine rows and the body drew "Nothing is selected in Show" over the
+    // top of them, because the check knew about three blocks out of four.
+    const wrapper = await mountShelf([adapter()]);
+    listEngines.mockResolvedValue([
+      adapter({
+        id: 900,
+        file_kind: "engine",
+        kind: "captioner",
+        display_name: "JoyCaption",
+      }),
+    ]);
+    await useModelShelfStore().setFilters(
+      { adapters: false, checkpoints: false, unclassified: false },
+      { refetch: true },
+    );
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-state").exists()).toBe(false);
+    expect(textOf(wrapper.find(".shelf-row"))).toContain("JoyCaption");
+  });
+
+  it("offers Reset rather than 'add a folder' when a narrowed shelf is empty", async () => {
+    // A narrowed selection only FETCHES the blocks it asks for, so a shelf
+    // reopened with one empty block ticked arrives with no rows at all on a
+    // machine full of models. Reading that as the terminal "there is nothing
+    // here" leaves the reader no way back.
+    const wrapper = await mountShelf([]);
+    await useModelShelfStore().setFilters(
+      { adapters: false, checkpoints: false, unclassified: false },
+      { refetch: true },
+    );
+    await wrapper.vm.$nextTick();
+    const state = textOf(wrapper.find(".shelf-state"));
+    expect(state).toContain("No models match these filters");
+    expect(state).toContain("Reset filters");
   });
 });
 
@@ -1141,6 +1193,38 @@ describe("the group header's reserved column", () => {
     const mark = wrapper.find(".shelf-group-mark");
     expect(mark.exists()).toBe(true);
     expect(mark.element.tagName.toLowerCase()).toBe("v-icon-stub");
+  });
+
+  it("draws each FEATURE's own glyph there, not one axis glyph on every header", async () => {
+    // The bug: the header fell back to the axis's glyph for want of its own, so
+    // every feature wore one star. Asserted on the rendered mark rather than on
+    // the store's field, because the fallback lives in the template and the
+    // store test passes either way.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, capabilities: ["tagger"] }),
+      adapter({ id: 2, capabilities: ["face"] }),
+    ]);
+    listCheckpoints.mockResolvedValue([]);
+    // The auto-stub swallows its slot, which is why the test above can only
+    // reach the tag name. This one has to read the glyph, so `v-icon` renders.
+    const wrapper = mount(ModelShelf, {
+      global: {
+        ...globalOpts.global,
+        stubs: {
+          ...globalOpts.global.stubs,
+          "v-icon": { template: "<i><slot /></i>" },
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+    useModelShelfStore().setView({ groupBy: "feature" });
+    await wrapper.vm.$nextTick();
+
+    const marks = wrapper
+      .findAll(".shelf-group-mark")
+      .map((mark) => mark.text());
+    expect(marks.sort()).toEqual(["mdi-face-recognition", "mdi-tag-outline"]);
   });
 });
 
@@ -2345,5 +2429,58 @@ describe("a long move, in the panel that is running it", () => {
     expect(card().attributes("percent")).toBe("100");
     expect(card().attributes("message")).toContain("could not be moved");
     expect(card().attributes("abortlabel")).toBe("Dismiss");
+  });
+});
+
+// #938-follow-up: the shelf is a destination like Duplicates, so it carries the
+// app-wide tail — undo, Settings and the stats toggle — rather than dropping all
+// three the moment the grid unmounts.
+describe("the app-wide toolbar tail", () => {
+  it("asks App.vue for Settings and toggles the stats sidebar itself", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const sidebar = useSidebarStore();
+    const settings = wrapper.find(".shelf-toolbar button[title='Settings']");
+
+    await settings.trigger("click");
+    expect(wrapper.emitted("open-settings")).toHaveLength(1);
+
+    // Directional, not a flip: the rail opens on the first press and closes on
+    // the second, from the shut state a fresh session starts in.
+    sidebar.statsOpen = false;
+    await wrapper.find(".shelf-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(true);
+    await wrapper.find(".shelf-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.statsOpen).toBe(false);
+  });
+
+  it("orders the tail separator → UndoControl → TbGlobalActions, last in the bar", async () => {
+    // The documented canonical tail
+    // (docs/design/toolbar-responsive-decisions.md). Asserted as PLACEMENT and
+    // not merely as presence: the whole point of the rule is that the pair sits
+    // after the view controls, ruled off from them, at the end of the bar.
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const cluster = wrapper.find(".shelf-bar-cluster").element;
+    const undo = wrapper.findComponent({ name: "UndoControl" }).element;
+    // TbGlobalActions is multi-root; its Settings button is a stable anchor.
+    const settings = wrapper.find("button[title='Settings']").element;
+    // The Show menu — the LAST of this view's own controls, and the one the
+    // tail has to come after. (`.bar-btn--boxed` alone would find the stack
+    // sweep, which sits outside the cluster and proves nothing.)
+    const showBtn = wrapper
+      .findAll(".shelf-bar-cluster .bar-btn--boxed")
+      .at(-1).element;
+    const follows = (a, b) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    expect(
+      undo.previousElementSibling.classList.contains("bar-separator"),
+    ).toBe(true);
+    expect(follows(showBtn, undo)).toBe(true);
+    expect(follows(undo, settings)).toBe(true);
+    // Nothing of this view's own follows the app-wide pair. TbGlobalActions is
+    // multi-root, so its stats button IS the bar's last element.
+    expect(cluster.lastElementChild.classList.contains("tb-stats-btn")).toBe(
+      true,
+    );
   });
 });

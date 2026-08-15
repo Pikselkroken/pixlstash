@@ -14,11 +14,12 @@
     <p id="shelf-help" class="visually-hidden">
       Every adapter and checkpoint PixlStash has found on this machine. Group
       and Sort choose the order and whether the list is cut into groups; Show
-      chooses which kinds are listed and which base models. A ring around a
-      model's mark says who it is assigned to. A name in italics has not been
-      given one. A row that stands for a training run says how many files it
-      holds; Right and Left open and close it. Right-click a row for everything
-      that can be done to it. Escape clears the selection.
+      chooses which kinds are listed and which base models. The bar ends in the
+      app-wide controls: Undo and Redo, Settings, and the stats sidebar toggle.
+      A ring around a model's mark says who it is assigned to. A name in italics
+      has not been given one. A row that stands for a training run says how many
+      files it holds; Right and Left open and close it. Right-click a row for
+      everything that can be done to it. Escape clears the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -247,6 +248,20 @@
           </template>
           <ShelfShowPanel />
         </v-menu>
+
+        <!-- The canonical tail, whole and in the documented order:
+             [separator] [UndoControl] [TbGlobalActions]
+             (docs/design/toolbar-responsive-decisions.md). The shelf replaces
+             the grid, and with it the grid's toolbar, so it owes the same
+             app-wide chrome the duplicates queue does — including undo, which
+             is about RECOVERY: the shelf writes nothing to the operation log
+             itself, but a library action undone from here is one the reader
+             does not have to navigate back to reach. The separator is required
+             at every width: proximity alone cannot separate identical icon
+             buttons into "this view's controls" and "the app's". -->
+        <span class="bar-separator" aria-hidden="true"></span>
+        <UndoControl />
+        <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
     </div>
 
@@ -318,7 +333,27 @@
           Reset filters
         </button>
       </div>
-      <div v-else-if="!store.rows.length" class="shelf-state">
+      <!-- Ahead of the terminal state, and gated on the selection rather than
+           on `rows`: a narrowed selection only FETCHES the blocks it asks for,
+           so a shelf reopened with one block ticked and nothing in it arrives
+           with `rows` empty for a machine holding 1,800 adapters. Reading that
+           as "there is nothing here" dead-ends the reader with no Reset — the
+           exact conflation the note above forbids. Reset refetches every block
+           and the terminal state below then says so truthfully. -->
+      <div
+        v-else-if="!store.visibleRows.length && store.activeCount"
+        class="shelf-state"
+      >
+        <p>No models match these filters.</p>
+        <button
+          class="tbm-action tbm-action--secondary"
+          type="button"
+          @click="store.resetFilters()"
+        >
+          Reset filters
+        </button>
+      </div>
+      <div v-else-if="!store.visibleRows.length" class="shelf-state">
         <p>No models found.</p>
         <p>
           PixlStash lists what it finds in the model folders registered on this
@@ -330,16 +365,6 @@
           @click="openFolders()"
         >
           Add a model folder
-        </button>
-      </div>
-      <div v-else-if="!store.visibleRows.length" class="shelf-state">
-        <p>No models match these filters.</p>
-        <button
-          class="tbm-action tbm-action--secondary"
-          type="button"
-          @click="store.resetFilters()"
-        >
-          Reset filters
         </button>
       </div>
 
@@ -512,10 +537,15 @@
                 }"
                 >mdi-chevron-right</v-icon
               >
-              <!-- Under `Folder` the glyph is the TIER's — one mdi folder
-                   family, never a hand-drawn box — and an unreachable folder
-                   wears the disconnected mark instead, which is the shape half
-                   of the offline treatment. -->
+              <!-- The GROUP's own glyph where it has one, and the axis's only
+                   where it does not. Under `Folder` that is the TIER's — one
+                   mdi folder family, never a hand-drawn box — and an
+                   unreachable folder wears the disconnected mark instead, which
+                   is the shape half of the offline treatment. Under `Feature`
+                   it is the feature's own mark, or eight headers read as eight
+                   copies of one star. The fallback is what the unset group and
+                   an unrecognised value get, both of which mean "no feature
+                   here to name" and so are exactly the axis. -->
               <v-icon size="16" class="shelf-group-mark">{{
                 group.icon || GROUP_BY_LABELS[store.view.groupBy].icon
               }}</v-icon>
@@ -662,9 +692,9 @@
                        guessed" from "there is nothing here" without opening
                        anything. Rendering all four as one string is what made
                        an unnamed row look inert, and an inert row never gets
-                       named (#897). The tag beside the name is the carrier;
-                       the type and the accent are hints on top of it, so the
-                       distinction survives greyscale. -->
+                       named (#897). Type and the accent rule carry the
+                       distinction; only the file's own string gets a tag on
+                       top, so the shelf is not a column of chips. -->
                   <input
                     v-if="editingRowKey === row.rowKey"
                     v-model="editingName"
@@ -684,11 +714,10 @@
                       >{{ row.name.text || "Name this model" }}</span
                     >
                     <span
-                      v-if="NAME_TAG[row.name.state]"
+                      v-if="row.name.state === 'from-file'"
                       class="shelf-name-tag"
-                      :class="`shelf-name-tag--${row.name.state}`"
-                      :title="NAME_TAG[row.name.state].title"
-                      >{{ NAME_TAG[row.name.state].label }}</span
+                      :title="FROM_FILE_TAG_TITLE"
+                      >from filename</span
                     >
                   </template>
                   <!-- Beside the name rather than in a column of its own: the
@@ -885,6 +914,8 @@ import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
+import TbGlobalActions from "../panels/TbGlobalActions.vue";
+import UndoControl from "../panels/UndoControl.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
@@ -900,6 +931,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorDetail } from "../../utils/apiError";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
+  adapterKindLabel,
   assignmentRing,
   bandGroups,
   bandKeyFor,
@@ -916,6 +948,11 @@ import {
   trainingStep,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
+
+// Settings lives in App.vue's sidebar dialog, so the toolbar's Settings button
+// asks for it the way the duplicates queue does. The stats toggle needs no
+// event: TbGlobalActions flips the sidebar store itself.
+const emit = defineEmits(["open-settings"]);
 
 const store = useModelShelfStore();
 const entityLists = useEntityListsStore();
@@ -1620,15 +1657,6 @@ const LOC_TITLE = {
 // copy left at all. They share the row treatment because they share the fact.
 const BROKEN_STATES = new Set(["missing", "forgotten"]);
 
-// Trainers spell these however they like; the shelf spells them one way.
-const ALGO_LABEL = {
-  lora: "LoRA",
-  lokr: "LoKr",
-  loha: "LoHa",
-  dora: "DoRA",
-  oft: "OFT",
-};
-
 /**
  * Every drawn row, in order, as `{key, id}`.
  *
@@ -1780,24 +1808,16 @@ function onRowKeydown(row, event) {
 }
 
 /**
- * What the two "nobody has named this" states say out loud.
+ * One state gets a word beside the name, and it is `from-file`.
  *
- * Words, not colour: the accent on the from-file chip is a hint and the label
- * is what carries the meaning, so the pair still reads in greyscale. They are
- * different news — one string is the file's own and one is ours — and the whole
- * point of #897 is that a reader can tell which without opening the row.
+ * `derived` used to carry one too, and it was a chip on most of the column
+ * saying nothing a reader acts on: it is the commonest state on the shelf, and
+ * a name we made already reads as ours from its face and its accent rule. The
+ * file's own string is different news — that one is worth a word, and the word
+ * is what carries it, so it survives greyscale (§4).
  */
-const NAME_TAG = {
-  derived: {
-    label: "derived",
-    title:
-      "PixlStash made this name from the file. Nobody has named this model.",
-  },
-  "from-file": {
-    label: "from filename",
-    title: "This is the file's own name. Nobody has named this model.",
-  },
-};
+const FROM_FILE_TAG_TITLE =
+  "This is the file's own name. Nobody has named this model.";
 
 // Inline rename. One row at a time, held by row key: the field is what makes
 // the dashed rule and the pencil honest — an affordance that opened a dialog
@@ -2226,8 +2246,10 @@ function kindLabel(row) {
   if (row.file_kind === "unknown") return "Unclassified";
   const capabilities = Array.isArray(row.capabilities) ? row.capabilities : [];
   if (capabilities.length) return capabilities.map(capabilityLabel).join(", ");
-  const kind = String(row.kind || "").toLowerCase();
-  return ALGO_LABEL[kind] || kind || "Adapter";
+  // One vocabulary with the `feature` group axis, though not always the same
+  // heading: that axis files `unknown`, and anything that is not an adapter,
+  // under "No feature recorded". The CELL still names what the row is.
+  return adapterKindLabel(row.kind) || "Adapter";
 }
 
 onMounted(() => {
@@ -2327,6 +2349,12 @@ watch(
   display: flex;
   align-items: center;
   gap: var(--space-4);
+  /* `shelfbar` for this bar's own ladder, and the shared `toolbar` name the
+     app-wide chrome (UndoControl, TbGlobalActions) writes its scoped
+     @container rules against — so it degrades here exactly as it does in the
+     grid bar (`selbar toolbar`) and the queue's (`dqbar toolbar`). */
+  container-type: inline-size;
+  container-name: shelfbar toolbar;
   height: var(--bar-height);
   padding: 0 var(--space-5);
   border-bottom: 1px solid rgb(var(--v-theme-divider));
@@ -2934,8 +2962,8 @@ watch(
 
 /* A readable name we generated. The UI face, because this string is OURS and
    is not in the file — mono would claim it were. Regular weight, so it does
-   not carry the authority of a title somebody chose; the tag beside it and the
-   accent rule under it say the rest. */
+   not carry the authority of a title somebody chose, and the accent rule under
+   it says the rest. */
 .shelf-row-name--derived {
   font-weight: var(--weight-regular);
   border-bottom-color: rgba(var(--v-theme-accent), 0.7);
@@ -2951,26 +2979,20 @@ watch(
   font-weight: var(--weight-regular);
 }
 
-/* The two "nobody has named this" tags. Both are shapes with words in them, so
-   which is which survives greyscale (§4): the accent is a hint on the
-   from-file one, never the thing carrying the meaning. */
+/* The "this is the file's own string" tag. A shape with a word in it, so it
+   survives greyscale (§4): the accent is a hint, never the thing carrying the
+   meaning. */
 .shelf-name-tag {
   flex: none;
   padding: 0 var(--space-2);
-  border: 1px solid rgba(var(--v-theme-on-background), 0.35);
+  border: 1px solid rgba(var(--v-theme-accent), 0.6);
   border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-accent), 0.14);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   white-space: nowrap;
-  /* 0.7 and not 0.6: at 11px the lower alpha misses the contrast floor (#836). */
-  color: rgba(var(--v-theme-on-background), 0.7);
-}
-
-.shelf-name-tag--from-file {
-  border-color: rgba(var(--v-theme-accent), 0.6);
-  background: rgba(var(--v-theme-accent), 0.14);
   /* The surface's own ink on a 14% wash, NOT `on-accent`: that pairing is for a
      solid fill and measures near-invisible over a tint (§4, §11). */
   color: rgb(var(--v-theme-on-background));

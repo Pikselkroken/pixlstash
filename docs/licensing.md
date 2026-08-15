@@ -19,9 +19,12 @@ Basics:
 - Licensed under the GNU General Public License v3.0 (GPL-3.0).
 - See pixlstash/LICENSE for the full license text.
 - Contributions to the backend require agreement to the CLA in pixlstash/CLA.md.
-- As an exception, the image plugin base class and template are MIT-licensed
+- As an exception, the plugin base classes and templates are MIT-licensed, so
+  third-party plugin authors can depend on those APIs without pulling in the GPL
   - `pixlstash/image_plugins/base.py`
   - `pixlstash/image_plugins/built-in/plugin_template.py`
+  - `pixlstash/tagger_plugins/base.py`
+  - `pixlstash/tagger_plugins/plugin_template.py`
 
 ### PixlStash Frontend
 - Located in the "frontend" directory

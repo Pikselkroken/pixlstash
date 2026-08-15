@@ -4,14 +4,17 @@
 
 import { describe, it, expect } from "vitest";
 import { contrastRatio } from "./contrastAudit.js";
-import { SET_COLORS } from "./setAppearance";
+import { ICON_CARDS, SET_COLORS } from "./setAppearance";
 import {
+  adapterKindKey,
+  adapterKindLabel,
   assignmentRing,
   RING_STYLES,
   bandGroups,
   bandProjection,
   bandUsage,
   baseModelKey,
+  capabilityLabel,
   collapseStacks,
   withEmptyFolders,
   cleanAssetName,
@@ -29,7 +32,27 @@ import {
   trainingStep,
   withFolderSignals,
   FOLDER_TIERS,
+  CAPABILITY_LABELS,
+  capabilityIcon,
 } from "./modelShelf";
+
+describe("capabilityIcon", () => {
+  it("gives every named capability its own glyph", () => {
+    // The bug: the feature axis drew its own glyph on every header, so eight
+    // headers read as one star. A duplicate here would put two features back
+    // under one mark, and a missing one drops that header to the star again.
+    const icons = Object.keys(CAPABILITY_LABELS).map(capabilityIcon);
+    expect(icons.filter(Boolean)).toHaveLength(icons.length);
+    expect(new Set(icons).size).toBe(icons.length);
+  });
+
+  it("returns nothing for a capability this build has never seen", () => {
+    // The caller falls back to the axis's glyph. Inventing one would be the
+    // confident wrong answer.
+    expect(capabilityIcon("segmenter")).toBe("");
+    expect(capabilityIcon(null)).toBe("");
+  });
+});
 
 describe("cleanAssetName", () => {
   it("matches the Python it mirrors", () => {
@@ -98,6 +121,59 @@ describe("modelName", () => {
     // like a name, sorted like one and read as inert. The row draws this state
     // as a field asking to be filled (#897).
     expect(modelName({})).toEqual({ text: "", state: "needs-a-name" });
+  });
+});
+
+describe("adapterKindLabel", () => {
+  it("spells the algorithm one way, whatever the trainer wrote", () => {
+    expect(adapterKindLabel("lora")).toBe("LoRA");
+    expect(adapterKindLabel("LORA")).toBe("LoRA");
+    // `model.kind` is free text and the edit dialog takes it verbatim. An
+    // untrimmed value would sort to the TOP of a grouped shelf, because
+    // `localeCompare` puts a leading space before every letter.
+    expect(adapterKindLabel("  lokr  ")).toBe("LoKr");
+  });
+
+  it("shows an algorithm it has not heard of rather than hiding it", () => {
+    // Same rule as `capabilityLabel`: a LyCORIS variant that ships after this
+    // table should appear under its own name, not under "Unknown".
+    expect(adapterKindLabel("glora")).toBe("glora");
+    expect(adapterKindLabel(null)).toBe("");
+    expect(adapterKindLabel(undefined)).toBe("");
+  });
+
+  it("returns a STRING for a key that names something on Object.prototype", () => {
+    // `kind` is free text, and a plain index on an object literal answers
+    // `constructor` with a FUNCTION — truthy, so a `|| key` fallback never
+    // fires. That value became a group label, where `localeCompare` throws and
+    // takes the whole `groups` computed with it.
+    expect(adapterKindLabel("constructor")).toBe("constructor");
+    expect(adapterKindLabel("__proto__")).toBe("__proto__");
+  });
+});
+
+describe("adapterKindKey", () => {
+  it("folds what everything else keys on, and keeps it a key", () => {
+    // Exported because the group key, the facet, the filter, the remembered
+    // selection and the edit dialog all have to agree on ONE value. The label
+    // is a separate question: this stays the stored vocabulary.
+    expect(adapterKindKey(" LoRA ")).toBe("lora");
+    expect(adapterKindKey("lora")).toBe("lora");
+    expect(adapterKindKey("  ")).toBe("");
+    expect(adapterKindKey(null)).toBe("");
+  });
+});
+
+describe("capabilityLabel", () => {
+  it("names a capability in the screen's words and passes an unknown through", () => {
+    expect(capabilityLabel("scorer")).toBe("Quality score");
+    expect(capabilityLabel("newthing")).toBe("newthing");
+  });
+
+  it("returns a STRING for a key that names something on Object.prototype", () => {
+    // Same hole as `adapterKindLabel`'s, and this input comes off the wire.
+    expect(capabilityLabel("constructor")).toBe("constructor");
+    expect(capabilityLabel("toString")).toBe("toString");
   });
 });
 
@@ -1176,6 +1252,37 @@ describe("assignmentRing", () => {
     expect(ring.label).toBe("#1 (person), #2 (set), #3 (person)");
   });
 
+  it("carries the icon a set chose instead of its thumbnail", () => {
+    const ring = assignmentRing([attach("set", 5)], {
+      sets: [
+        { id: 5, name: "Studio", set_icon: "mdi-star", set_color: "#fdd835" },
+      ],
+    });
+    expect(ring.icon).toBe("mdi-star");
+    expect(ring.hue).toBe("#fdd835");
+  });
+
+  it("carries no icon for a set still on the thumbnail", () => {
+    // `cards` is the sentinel for "keep the thumbnail", so treating it as an
+    // icon name would draw an mdi glyph that does not exist.
+    //
+    // The literal is pinned HERE, once, and the fixtures use the constant.
+    // What they stand for is a value the BACKEND stored — `picture_sets.py`
+    // hardcodes `!= "cards"` too, and rows written before any rename would
+    // still hold the old string — so a suite built only from `ICON_CARDS`
+    // would rename itself alongside the source and stay green while the two
+    // sides had stopped agreeing. One pin closes that without making every
+    // fixture repeat the string.
+    expect(ICON_CARDS).toBe("cards");
+    for (const set of [
+      { id: 5, name: "Studio", set_icon: ICON_CARDS },
+      { id: 5, name: "Studio" },
+    ]) {
+      expect(assignmentRing([attach("set", 5)], { sets: [set] }).icon).toBe("");
+    }
+    expect(assignmentRing([attach("character", 5)], {}).icon).toBe("");
+  });
+
   it("draws the dashed grey ring for a model assigned to nothing", () => {
     // Never an ABSENT ring: an unringed mark under a design where every other
     // mark has one reads as a rendering gap rather than as a state.
@@ -1199,5 +1306,35 @@ describe("assignmentRing", () => {
     expect(label(before)).toBe("Ada (person)");
     expect(label(before)).toBe("Ada (person)");
     expect(label(after)).toBe("Ada Lovelace (person)");
+  });
+
+  it("picks up a set's new icon when the entity list is replaced", () => {
+    // The other half of "it has to update when the icon changes": the shelf
+    // reads the sets off `useEntityListsStore`, which REPLACES the array on
+    // every refresh, and the id map above is cached per array reference. A
+    // cache keyed on anything longer-lived would leave the mark on the face the
+    // set no longer shows.
+    const icon = (sets) => assignmentRing([attach("set", 5)], { sets }).icon;
+    const before = [{ id: 5, name: "Studio", set_icon: ICON_CARDS }];
+    const after = [{ id: 5, name: "Studio", set_icon: "mdi-star" }];
+    expect(icon(before)).toBe("");
+    expect(icon(after)).toBe("mdi-star");
+    expect(icon(before)).toBe("");
+  });
+
+  it("takes the icon's colour from the set, never from the ring's fallback", () => {
+    // `hue` invents a hashed palette entry so the ring is never invisible;
+    // `iconHue` must not, or a set with no colour is drawn in theme ink by the
+    // sidebar and in an arbitrary hue by the shelf, on one screen.
+    const ring = assignmentRing([attach("set", 5)], {
+      sets: [{ id: 5, name: "Studio", set_icon: "mdi-star" }],
+    });
+    expect(ring.iconHue).toBe("");
+    expect(ring.hue).not.toBe("");
+    expect(
+      assignmentRing([attach("set", 5)], {
+        sets: [{ id: 5, set_icon: "mdi-star", set_color: "#00897b" }],
+      }).iconHue,
+    ).toBe("#00897b");
   });
 });

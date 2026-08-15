@@ -7,11 +7,14 @@
   same 90 lines of SVG four times over, differing only in which array they read,
   which fill they wore, and which filter a click toggled. They differ in one more
   way that matters: not every row is clickable. A confidence row does nothing
-  until a tag is selected, and the manual-score chart's "Unscored" row is not a
-  score you can filter to. So interactivity is a predicate, not a boolean, and it
+  until a tag is selected. So interactivity is a predicate, not a boolean, and it
   gates the row's class, its `role`, its `tabindex` and its title together — a
   row that announces itself as a button and then ignores the press is worse than
   one that never claimed to be one.
+
+  The manual-score chart's "Unscored" row used to be the second example here.
+  It is a filter of its own now (`unscored=1`), so that chart passes no
+  predicate at all and every one of its rows is clickable.
 -->
 <template>
   <svg

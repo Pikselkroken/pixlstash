@@ -2,7 +2,7 @@
 import { onUnmounted, ref, watch } from "vue";
 import { getUserConfig, patchUserConfig } from "../../api/config";
 import { getWorkerProgress } from "../../api/workers";
-import { listTaggers } from "../../api/taggers";
+import { listTaggers, listTaggerPluginDiagnostics } from "../../api/taggers";
 import { VSlider, VSwitch } from "vuetify/components";
 import PluginsTable from "../widgets/PluginsTable.vue";
 import SettingsSection from "./SettingsSection.vue";
@@ -20,6 +20,12 @@ const keepModelsInMemoryError = ref("");
 const taggerPlugins = ref([]);
 const taggerSettings = ref({});
 const taggerLoading = ref(false);
+// null until the diagnostics request answers; "" once it has answered 403.
+const taggerPluginDir = ref(null);
+// Both come from the diagnostics route rather than the plugin list: a load
+// error is exception text from a third-party plugin and can name any path on
+// the host, so it is owner-and-local like the folder itself.
+const taggerPluginErrors = ref([]);
 
 // ── VRAM budget ───────────────────────────────────────────────────────────────
 const VRAM_BUDGET_MIN_GB = 2;
@@ -172,9 +178,24 @@ async function fetchTaggerPlugins() {
     taggerPlugins.value = body?.plugins ?? [];
     taggerSettings.value = body?.settings ?? {};
   } catch {
+    // Both, not just the list: a failed refresh that cleared the plugins but
+    // kept the settings showed the previous library's values against an empty
+    // table (review of #937).
     taggerPlugins.value = [];
+    taggerSettings.value = {};
   } finally {
     taggerLoading.value = false;
+  }
+  // Separate request: these name host paths, so the route is local-owner-only
+  // and 403s for a remote or share-scoped caller. That is not an error — there
+  // is simply nothing to show them.
+  try {
+    const diagnostics = await listTaggerPluginDiagnostics();
+    taggerPluginDir.value = diagnostics?.plugin_dirs?.user ?? "";
+    taggerPluginErrors.value = diagnostics?.load_errors ?? [];
+  } catch {
+    taggerPluginDir.value = "";
+    taggerPluginErrors.value = [];
   }
 }
 
@@ -309,6 +330,36 @@ watch(
           />
         </SettingsFieldBlock>
       </SettingsTwoCol>
+      <ul
+        v-if="taggerPluginErrors.length"
+        class="settings-tagger-plugin-errors"
+      >
+        <li v-for="(p, i) in taggerPluginErrors" :key="`${p.name}-${i}`">
+          <strong>{{ p.name }}</strong> failed to load: {{ p.message }}
+        </li>
+      </ul>
+      <div v-if="taggerPluginDir" class="settings-tagger-plugin-dir">
+        Add your own plugin by dropping a <code>.py</code> file (or a folder
+        with an <code>__init__.py</code>) into
+        <code class="settings-tagger-plugin-path">{{ taggerPluginDir }}</code
+        >, creating the folder if it does not exist. Plugins run as ordinary
+        Python with the same access as PixlStash itself, so only add ones you
+        trust. Restart the server afterwards — plugins are only discovered at
+        start-up.
+      </div>
+      <!-- Rendered only once the diagnostics request has answered. Without it
+           the block just vanishes for a remote caller, which reads as a missing
+           feature rather than a deliberate restriction; rendered too early it
+           tells a local owner the path cannot be shown on the screen showing
+           it. -->
+      <div
+        v-else-if="taggerPluginDir !== null"
+        class="settings-tagger-plugin-dir"
+      >
+        Custom plugins are installed by putting a file into a folder on the
+        machine running PixlStash. The path is only shown to a browser on that
+        machine or its local network, so open this screen from there to see it.
+      </div>
     </SettingsSection>
   </div>
 </template>
@@ -318,6 +369,25 @@ watch(
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.55);
   padding: var(--space-3) 0;
+}
+
+.settings-tagger-plugin-dir {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.55);
+  padding-top: var(--space-3);
+}
+
+.settings-tagger-plugin-path {
+  overflow-wrap: anywhere;
+}
+
+.settings-tagger-plugin-errors {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-error));
+  overflow-wrap: anywhere;
 }
 
 .settings-error {

@@ -193,6 +193,91 @@ describe("ModelMark", () => {
     expect(parent.find("img").attributes("src")).toBe(ADA_FACE);
   });
 
+  // A picture set carrying an icon has said that IS its face; the thumbnail is
+  // the thing the icon replaces. Borrowing the picture here would put back on
+  // the shelf exactly what the sidebar stopped showing.
+  const SET_THUMB = `${API_BASE_URL}/picture_sets/5/thumbnail`;
+  const SET_RING = {
+    type: "set",
+    id: 5,
+    style: "solid",
+    label: "Studio (set)",
+    hue: "#fdd835",
+    icon: "mdi-star",
+    iconHue: "#fdd835",
+  };
+  // `v-icon` only resolves under the Vuetify plugin, which these mounts do not
+  // install. The stub is NAMED and carries its own class, so an assertion on it
+  // states "a Vuetify icon was rendered" — a plain span holding the string
+  // `mdi-star` would satisfy a text-only assertion just as happily, and that is
+  // the shape of the bug. It declares `color` so the binding is observable.
+  const ICON_STUB = {
+    global: {
+      stubs: {
+        VIcon: {
+          props: ["color"],
+          template: `<i class="stub-vicon" :data-color="color"><slot/></i>`,
+        },
+      },
+    },
+  };
+
+  it("draws the assigned set's icon instead of its thumbnail", () => {
+    const wrapper = mount(ModelMark, {
+      props: { row: row(), ring: SET_RING },
+      ...ICON_STUB,
+    });
+    expect(wrapper.find("img").exists()).toBe(false);
+    const glyph = wrapper.find("i.stub-vicon.mmark-icon");
+    expect(glyph.text()).toBe("mdi-star");
+    // In the SET'S OWN colour, which is what the sidebar paints it. The ring's
+    // `hue` falls back to a hashed palette entry when a set has no colour, and
+    // borrowing that here would put one set on screen in two colours at once.
+    expect(glyph.attributes("data-color")).toBe("#fdd835");
+  });
+
+  it("leaves a colourless set's icon in theme ink, as the sidebar does", () => {
+    const wrapper = mount(ModelMark, {
+      props: {
+        row: row(),
+        ring: { ...SET_RING, iconHue: "", hue: "#8e24aa" },
+      },
+      ...ICON_STUB,
+    });
+    expect(
+      wrapper.find("i.stub-vicon").attributes("data-color"),
+    ).toBeUndefined();
+  });
+
+  it("still lets the model's own icon win over the set's", () => {
+    // Step 1 of the chain is unchanged: somebody chose that picture for THIS
+    // file, which is a more specific statement than the set's icon.
+    const wrapper = mount(ModelMark, {
+      props: { row: row({ icon_sha256: "c".repeat(64) }), ring: SET_RING },
+      ...ICON_STUB,
+    });
+    expect(wrapper.find("img").attributes("src")).toBe(icon("c".repeat(64)));
+    expect(wrapper.find(".mmark-icon").exists()).toBe(false);
+  });
+
+  it("follows the set from thumbnail to icon and back", async () => {
+    // The set's appearance is edited elsewhere; the shelf reads it off the
+    // shared entity list, so the mark has to repaint when the list refreshes
+    // rather than only on mount.
+    const wrapper = mount(ModelMark, {
+      props: { row: row(), ring: { ...SET_RING, icon: "" } },
+      ...ICON_STUB,
+    });
+    expect(wrapper.find("img").attributes("src")).toBe(SET_THUMB);
+
+    await wrapper.setProps({ ring: SET_RING });
+    expect(wrapper.find("img").exists()).toBe(false);
+    expect(wrapper.find("i.stub-vicon.mmark-icon").text()).toBe("mdi-star");
+
+    await wrapper.setProps({ ring: { ...SET_RING, icon: "" } });
+    expect(wrapper.find("img").exists()).toBe(true);
+  });
+
   it("draws no ring at all where nothing hands it one", () => {
     // Distinct from the `none` style, which is the dashed grey "assigned to
     // nothing" and belongs on a shelf row. A mark in a picker or a dialog is

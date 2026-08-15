@@ -52,6 +52,7 @@ class PictureStatsParams:
     format_filter: list[str]
     min_score: int | None
     max_score: int | None
+    unscored: bool
     smart_score_bucket: str | None
     resolution_bucket: str | None
     file_path_prefix: str | None
@@ -210,6 +211,7 @@ def _build_filtered_picture_subquery(session: Session, params: PictureStatsParam
         format=[f.upper() for f in params.format_filter] or None,
         min_score=params.min_score,
         max_score=params.max_score,
+        unscored=params.unscored,
         smart_score_bucket=params.smart_score_bucket,
         resolution_bucket=params.resolution_bucket,
         file_path_prefix=params.file_path_prefix or None,
@@ -452,7 +454,13 @@ def _compute_picture_distributions(
         (row[0] if row[0] is not None else -1): int(row[1]) for row in score_rows
     }
     score_distribution = [
-        {"label": "Unscored", "count": score_map.get(-1, 0)},
+        # Score 0 belongs in "Unscored", not in a bucket of its own and not
+        # nowhere: clicking the current star again writes a literal 0, which to
+        # the user is the same act as never having rated the picture. Reading
+        # only -1 here left every score-0 row out of the chart entirely, so the
+        # buckets did not sum to the library and the sidebar count disagreed
+        # with what `unscored=1` returns on the very first click.
+        {"label": "Unscored", "count": score_map.get(-1, 0) + score_map.get(0, 0)},
         {"label": "1", "count": score_map.get(1, 0)},
         {"label": "2", "count": score_map.get(2, 0)},
         {"label": "3", "count": score_map.get(3, 0)},
@@ -518,8 +526,12 @@ def _agreement_scope(session, pic_subq, params: PictureStatsParams):
     A filter widget must not filter itself. Clicking a cell sets the score and
     smart-score-bucket filters, and if the matrix honoured them it would collapse
     to the single cell that was clicked, leaving no way to reach a neighbouring
-    one. So those three predicates are dropped here while every other scope and
+    one. So those predicates are dropped here while every other scope and
     filter still applies, and the clicked cell is rendered as selected instead.
+
+    ``unscored`` is dropped for a stronger reason than self-collapse: the matrix's
+    rows are the ratings 1-5 by construction, so honouring "never rated" would
+    render it permanently empty rather than merely narrow.
 
     Args:
         session: Active database session.
@@ -527,7 +539,7 @@ def _agreement_scope(session, pic_subq, params: PictureStatsParams):
         params: All parsed filter parameters from the request.
 
     Returns:
-        ``pic_subq`` unchanged when none of the three predicates is active (the
+        ``pic_subq`` unchanged when none of those predicates is active (the
         common case, so the second subquery build is skipped), otherwise a scope
         rebuilt without them. Falls back to ``pic_subq`` if the rebuild resolves
         to an empty candidate set.
@@ -535,11 +547,16 @@ def _agreement_scope(session, pic_subq, params: PictureStatsParams):
     if (
         params.min_score is None
         and params.max_score is None
+        and not params.unscored
         and params.smart_score_bucket is None
     ):
         return pic_subq
     unfiltered = dataclasses.replace(
-        params, min_score=None, max_score=None, smart_score_bucket=None
+        params,
+        min_score=None,
+        max_score=None,
+        unscored=False,
+        smart_score_bucket=None,
     )
     # A subquery has no defined truthiness, so test for None explicitly.
     rebuilt = _build_filtered_picture_subquery(session, unfiltered)
@@ -687,8 +704,9 @@ def _compute_agreement(session, pic_subq, params: PictureStatsParams) -> dict:
     """Cross-tabulate the user's star rating against the smart score.
 
     Both ``NULL`` and ``0`` mean "unrated" here, matching how
-    ``score_distribution`` labels NULL "Unscored" and omits 0, and how the
-    smart-score anchor query treats ``score > 0``.
+    ``score_distribution`` counts them together under "Unscored", how the
+    ``unscored`` filter selects them, and how the smart-score anchor query
+    treats ``score > 0``.
 
     Args:
         session: Active database session.

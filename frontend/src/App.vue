@@ -606,7 +606,10 @@ defineExpose({
                    pictures in the library, so like Duplicates it replaces the
                    grid instead of floating over it, and the grid stays
                    unmounted while it is open. -->
-              <ModelShelf v-else-if="isModelsView" />
+              <ModelShelf
+                v-else-if="isModelsView"
+                @open-settings="openSettingsDialog"
+              />
               <ImageGrid
                 v-else
                 ref="gridContainer"

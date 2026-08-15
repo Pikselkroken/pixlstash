@@ -93,7 +93,7 @@ frontend/src/
 │   ├── tagSuggestions.js        # /tag_suggestions — per-card review decisions
 │   ├── tagHealth.js             # /tag_health — board rows + cache rebuild
 │   ├── comfyui.js               # /comfyui/* — workflows, run, recipe read/replay, abort
-│   ├── taggers.js               # /taggers, /tagger/label-thresholds
+│   ├── taggers.js               # /taggers, /taggers/plugin-diagnostics, /tagger/label-thresholds
 │   ├── folders.js               # /reference-folders, /import-folders, /filesystem/*
 │   ├── characters.js            # /characters + faces + reference pictures
 │   ├── projects.js              # /projects + membership
@@ -217,7 +217,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 |-------|------|-----------|
 | `useViewStore` | `useViewStore.js` | The route's parsed reflection: `view` (the resolved view descriptor) and `activeFolderKey`. Owns the app's **single route watcher** and is the only writer of route-derived selection/project state. Never pushes a route. See §4.5. |
 | `useSelectionStore` | `useSelectionStore.js` | `selectedCharacter`, `selectedCharacterIds`, `selectedSet`, `selectedSetIds`, `selectedFolderFilter` |
-| `useFilterStore` | `useFilterStore.js` | `mediaTypeFilter`, `minScoreFilter`, `maxScoreFilter`, `tagFilter`, `tagRejectedFilter`, `faceBboxFilter`, `sharedOnlyFilter`, `unassignedOnlyFilter`, etc. |
+| `useFilterStore` | `useFilterStore.js` | `mediaTypeFilter`, `minScoreFilter`, `maxScoreFilter`, `unscoredOnlyFilter`, `tagFilter`, `tagRejectedFilter`, `faceBboxFilter`, `sharedOnlyFilter`, `unassignedOnlyFilter`, etc. `minScoreFilter`/`maxScoreFilter`/`unscoredOnlyFilter` are writable computeds, not bare refs: "unscored" (`unscored=1`, i.e. `score IS NULL OR score = 0`) is the complement of a score range rather than a point on it, so the setters keep the two mutually exclusive and every surface that writes them inherits the rule. |
 | `useSortStore` | `useSortStore.js` | `selectedSort`, `selectedDescending`, `sortOptions`, `similarityCharacterOptions`, `selectedSimilarityCharacter` |
 | `useGridStore` | `useGridStore.js` | `columns`, `thumbnailSize`, `sidebarThumbnailSize`, `gridVersion`, `wsUpdateKey`, `showStars`, `showFaceBboxes`, `showProblemIcon`, `showStacks`, `stackThreshold`, `expandedStackCount`, `totalStackCount`, `compactMode`, `visibleRangeLabel` |
 | `useExportStore` | `useExportStore.js` | `exportType`, `exportCaptionMode`, `exportResolution`, `exportTagFormat`, `exportIncludeCharacterName`, `exportUseOriginalFileNames`, etc. |
@@ -229,7 +229,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useSnapshotsStore` | `useSnapshotsStore.js` | `snapshots`, `loading`, `activeJob`, `error`, `dailySnapshotsEnabled`; drives the shared `RestoreConfirmDialog` hoisted in `App.vue` (`restoreDialogOpen`, `restoreDialogSnapshotId`, `restoreDialogResources`). Owns snapshot list load / create / restore and the snapshot WebSocket event handlers (called from `App.vue`). |
 | `useReviewSessionsStore` | `useReviewSessionsStore.js` | Tag-review state: the tag-health board, the rail of open review sessions (each = one tag + frozen scope + one scan's results), and the per-session binary/pair card queues. Per-item decisions write through `/tag_suggestions`; session bookkeeping talks to `/reviews`, the board to `/tag_health`. Also owns the opt-in gamification — variable-ratio sticker awards with monotonic XP / level / streak counters; the sticker vocabulary is imported from `setAppearance.js` so sets and stickers never drift. |
 | `useLockedSetsStore` | `useLockedSetsStore.js` | Which pictures are frozen by a locked picture set. Fed by `GET /picture_sets/locked-members`; refreshed on app start and on the same sidebar-refresh / `pictures_changed` ws triggers the sidebar uses. Single source of the lock-tooltip copy reused by the grid badge, overlay chip, and context-menu gating. |
-| `useModelShelfStore` | `useModelShelfStore.js` | The model shelf's rows and its `Show` selection. `rows` are the raw `/adapters` + `/checkpoints` payload, **every block fetched so far rather than the shown set**: a fetch replaces the blocks it asked for and leaves the rest standing, because the option vocabularies (`adapterKindOptions`, `capabilityOptions`, `baseModelOptions`) are derived from `rows`, so an overwriting narrowed fetch deleted the kind checkboxes that unticking Adapters is documented to *grey*, and dropped base models that stayed selected and persisted with no box left to untick them. `visibleRows` layers the resolved name and the reduced location state on top and applies the kind, capability and base-model narrowing **client-side**, so a multi-select base-model filter is not one request per option. The capability filter matches **has this capability**, not *is this kind*: a model serving two features survives a tick of either, and like the kind boxes it narrows only the block it hangs under (engines), never the whole shelf. `groups` sorts `visibleRows` client-side on the five ruled `SortKey` values and cuts them into one level of groups (`none` / `base_model` / `folder` / `feature`), always returning at least one group so the flat and grouped lists are one piece of markup; sorting never refetches, because every field the keys read is already on the payload and three server-sorted blocks would be destroyed by the merge above. **Two axes fan a row out across several groups** — `folder` (a file copied into two folders occupies both) and `feature` (a multi-capability model is listed under each feature it serves, which is the design rule) — so `rowKey` carries the group on every grouped axis, not just the ones that need it: one key across several draws put `tabindex="0"` on all of them at once. A row that cannot answer the key sorts last in BOTH directions, and the unset group sorts last whatever the direction; a row with no capabilities groups under "No feature recorded" rather than having its `kind` guessed at as a feature. `view` (`groupBy`, `sortKey`, `sortDirection`) and the per-axis collapsed sets persist under `pixlstash:modelShelfView`, a SECOND key so `resetFilters` cannot take the sort order with it. `filters` (`adapters`, `adapterKinds`, `checkpoints`, `unclassified`, `engines`, `capabilities`, `baseModels`) persists to `localStorage` under `pixlstash:modelShelfFilters` — not to `/users/me/config`, which is a fixed `User` model and would need a backend column. An empty `adapterKinds` / `capabilities` / `baseModels` array means **unconstrained**, the standard multi-select convention and the only reading under which a fresh install shows anything. `activeCount` counts filter SECTIONS that deviate from their default, not ticked boxes, or a mild narrowing would read as `9`. Only the four top-level type toggles refetch, and they narrow client-side too; the rest only narrow what is already loaded. Each fetch takes the next `epoch` and only the newest may write `rows` or clear `loading`, so a slower earlier flight cannot land last and show adapters only while Checkpoints is ticked; `resetForSession` bumps the same counter, so a read on the wire when the credential changed is discarded. `ModelShelf.vue` watches `loaded` and refetches when a session reset clears it, which the store cannot do itself because session-reset handlers run *before* the new credential is installed. **Session reset drops `rows` but keeps `filters`:** the models are hub-side facts about this machine, but every row carries the characters and sets in the ACTIVE LIBRARY that use it, while the selection and the view axes are the user's own preferences and hold no ids. `offlineMounts` and the `New` badge's `newIds` are both derived here and both documented under §9.1a, "The two kinds of absence": `offlineMounts` reads `rows` rather than `visibleRows` on purpose, and `newIds` is a per-fetch id diff that only `fetchRows({ markNew: true })` fills and every other fetch clears. |
+| `useModelShelfStore` | `useModelShelfStore.js` | The model shelf's rows and its `Show` selection. `rows` are the raw `/adapters` + `/checkpoints` payload, **every block fetched so far rather than the shown set**: a fetch replaces the blocks it asked for and leaves the rest standing, because the option vocabularies (`adapterKindOptions`, `capabilityOptions`, `baseModelOptions`) are derived from `rows`, so an overwriting narrowed fetch deleted the kind checkboxes that unticking Adapters is documented to *grey*, and dropped base models that stayed selected and persisted with no box left to untick them. `visibleRows` layers the resolved name and the reduced location state on top and applies the kind, capability and base-model narrowing **client-side**, so a multi-select base-model filter is not one request per option. The capability filter matches **has this capability**, not *is this kind*: a model serving two features survives a tick of either, and like the kind boxes it narrows only the block it hangs under (engines), never the whole shelf. `groups` sorts `visibleRows` client-side on the five ruled `SortKey` values and cuts them into one level of groups (`none` / `base_model` / `folder` / `feature`), always returning at least one group so the flat and grouped lists are one piece of markup; sorting never refetches, because every field the keys read is already on the payload and three server-sorted blocks would be destroyed by the merge above. **Two axes fan a row out across several groups** — `folder` (a file copied into two folders occupies both) and `feature` (a multi-capability model is listed under each feature it serves, which is the design rule) — so `rowKey` carries the group on every grouped axis, not just the ones that need it: one key across several draws put `tabindex="0"` on all of them at once. A row that cannot answer the key sorts last in BOTH directions, and the unset group sorts last whatever the direction; an adapter declares no capability and groups under **its algorithm** (`LoRA`, `LoKr`, …) rather than under one "No feature recorded" bucket that held most of the shelf. One vocabulary spells it and one fold keys it, both in `utils/modelShelf.js`: `adapterKindKey` trims and lower-cases the free-text column, `adapterKindLabel` names the folded value, and the group key, the group header, the row's Kind cell, the nested `Show` checkboxes AND the `adapterKinds` filter behind them all read those two rather than `row.kind`. **The fold has to reach the filter, not just the label.** `LoRA` is reachable from the edit dialog, which trims but does not case-fold, so faceting on the raw column offered two checkboxes drawn with the same label that each ticked half the rows — while the axis folded them into one visible group. **And the fold has to reach the remembered selection too**, which `storedFilters` does on read: a shipped build persisted the raw column, so a blob holding `LoRA` would match nothing and appear in no checkbox — an empty shelf with the Adapters box reading fully on and nothing on screen naming the filter doing it. Folded rather than discarded by a `FILTERS_SCHEMA_VERSION` bump, which throws the whole blob away when the selection is still exactly what the user chose. The key is the folded value and never the label, because the key is what `modelShelfView.collapsed.feature` remembers a collapse by; it is prefixed `kind:` to keep an algorithm out of the capability keyspace. Group headers are uppercased by `.shelf-group-label` like every other header on the axis, so the header reads `LORA` where the cell reads `LoRA`: one vocabulary stops a *second spelling* existing, it does not exempt the axis from the shelf-wide case rule. Everything that is not an adapter with an algorithm still falls through to "No feature recorded", which is the whole of the rest: a checkpoint, an unclassified file, an engine declaring no capability and any `file_kind` this build does not know have no algorithm at all; an adapter whose `kind` folds to the empty string has none either (the hub CHECK makes it NOT NULL, not non-empty, so a whitespace-only one is reachable over the raw API); and an adapter whose `kind` is the literal `unknown` has the classifier's refusal rather than an algorithm (`KIND_UNKNOWN`, `utils/adapter_header.py`) — heading that `UNKNOWN` would stand a second shrug beside the real one and call it a feature. The `Show` facet still offers `Unknown` as a box, because "which of these could we not identify" is a real selection even where it is not a real feature. `view` (`groupBy`, `sortKey`, `sortDirection`) and the per-axis collapsed sets persist under `pixlstash:modelShelfView`, a SECOND key so `resetFilters` cannot take the sort order with it. `filters` (`adapters`, `adapterKinds`, `checkpoints`, `unclassified`, `engines`, `capabilities`, `baseModels`) persists to `localStorage` under `pixlstash:modelShelfFilters` — not to `/users/me/config`, which is a fixed `User` model and would need a backend column. An empty `adapterKinds` / `capabilities` / `baseModels` array means **unconstrained**, the standard multi-select convention and the only reading under which a fresh install shows anything. `activeCount` counts filter SECTIONS that deviate from their default, not ticked boxes, or a mild narrowing would read as `9`. Only the four top-level type toggles refetch, and they narrow client-side too; the rest only narrow what is already loaded. Each fetch takes the next `epoch` and only the newest may write `rows` or clear `loading`, so a slower earlier flight cannot land last and show adapters only while Checkpoints is ticked; `resetForSession` bumps the same counter, so a read on the wire when the credential changed is discarded. `ModelShelf.vue` watches `loaded` and refetches when a session reset clears it, which the store cannot do itself because session-reset handlers run *before* the new credential is installed. **Session reset drops `rows` but keeps `filters`:** the models are hub-side facts about this machine, but every row carries the characters and sets in the ACTIVE LIBRARY that use it, while the selection and the view axes are the user's own preferences and hold no ids. `offlineMounts` and the `New` badge's `newIds` are both derived here and both documented under §9.1a, "The two kinds of absence": `offlineMounts` reads `rows` rather than `visibleRows` on purpose, and `newIds` is a per-fetch id diff that only `fetchRows({ markNew: true })` fills and every other fetch clears. |
 | `useModelFoldersStore` | `useModelFoldersStore.js` | The registered model folders and the scans running against them. Fetched when `ModelFoldersDialog` opens, not at startup: the dialog is its only reader. It is a **store rather than dialog state** because a scan outlives the panel that started it, and because `POST .../rescan` answers 202 as soon as the thread starts, so completion has to be waited for: the store polls `GET /model-folders` every 3s and treats `last_checked` advancing as done, then refreshes `useModelShelfStore` and says what landed. It **gives up after 10 minutes**, because the scanner logs an exception without stamping `last_checked` and a crashed scan is otherwise indistinguishable from a slow one. `forget` captures the row's fields BEFORE the request, which is what makes the notice's `Add it back` possible and therefore what lets removal skip a confirmation prompt. **Session reset drops it whole:** absolute host paths are owner-only, and a session that lost its credential has no standing to keep polling. |
 | `useGenStackPrefsStore` | `useGenStackPrefsStore.js` | Remembered client prefs for whether newly generated / filtered images stack with their source: `stackI2IOutputs` (ComfyUI image-to-image) and `stackFilterOutputs` (plugin "Filters" runs), both default ON and persisted to `localStorage`. |
 | `useEntityListsStore` | `useEntityListsStore.js` | The character / picture-set / project **lists** themselves (`characters`, `pictureSets`, `projects`) plus `fetchedAt` and `pending` per kind. One cache for the three surfaces that need them — the `SideBar` tree, the image context menu's Person/Set/Project flyouts, and the tag-review scope pickers. **Stale-while-revalidate:** a caller renders the cached list immediately and calls `refresh(kind)` *without awaiting it*, so opening a flyout never waits on the network; concurrent callers share one in-flight request (`inFlight`, modelled on `useDedupStore.scopeCounts`). `invalidate(kinds)` is **refetch-only** — a `characters_changed` ws event or a local assignment says "ask again", it never writes the store from a payload (`origin_client_id` is echo-matching, not authority; see §9 and integration_architecture.md §8.1). **These are `SCOPED_LIST` routes, so their content is an authorization decision:** the cache is in-memory only (never `localStorage`/`sessionStorage`), `reset()` drops it on every auth-context transition via the single `onSessionReset` chokepoint in `apiClient` (logout / login / share-token entry / vault switch), and an epoch guard discards any response that was in flight across that transition. Revalidate-on-open is mandatory rather than an optimisation: a share/scoped session receives no ws events (the stream is owner-only), so it is that session's only invalidation path. **The sidebar's row counts ride along on these lists (`include_counts=true`, issue #651):** every character row carries `image_count` and `project_image_count` (scoped to the character's OWN `project_id`, or to "in no project" when it has none) and every project row carries `image_count`, which is what replaced `SideBar.fetchSidebarData`'s one-`/{id}/summary`-per-row fan-out. They live on the shared list rather than in a second counts-bearing cache on purpose (two shapes for one entity would mean two caches, two invalidation paths and two epochs), and the flyout / scope-picker consumers simply ignore the extra fields. Because both scopes are on every row and neither depends on the sidebar's current project selection, one cached response serves both sidebar view modes. Distinct from `useEntityNamesStore`, which holds id→name maps only. |
@@ -507,7 +507,7 @@ Right-side statistics panel. Responsibilities:
 - Tag frequency charts (top tags, tag co-occurrence).
 - Confidence-score histogram.
 - Tag-count histogram.
-- Score distribution.
+- Score distribution. Every row is clickable, including **Unscored**: it toggles `unscoredOnlyFilter` (`unscored=1`) the same way a star row toggles a one-star range, so the count it has always shown is now a way in. The same toggle sits between the two star rows in the Filters menu (`GbFilterPanel`, `mdi-star-off`), and both write the one store field.
 - **Agreement matrix** (`score_agreement`): a 5x4 heatmap cross-tabulating the user's star rating (rows 1-5, same order as the Score chart) against the smart-score buckets (columns, same bucketing as the Smart Score chart), **Composite encoding**: hue is a traffic light for how far apart the two scores are, opacity is the count on a sqrt ramp. The gap is measured in **smart-score points, not grid steps** — a star rating is a rounded smart score, so rating 4 covers 3.5-4.5 and matches both the 3-4 and the 4-5 bucket. Distance is from the rating to the nearest edge of the bucket's interval: 0 (green, within half a point), 1 (amber), 2 or more (red). Middle ratings therefore get a two-bucket green band and the end ratings one, which is correct rather than an artefact. Hue is redundant with cell position and every populated cell prints its count, so nothing is carried by colour alone. Status hues come from the theme's own `success`/`warning`/`error` tokens, with the matching `on-*` ink for counts on strong fills. Axis titles ("Your rating" rotated on the left, "Smart score" below) plus Pearson r and Spearman ρ, each named and tooltipped, over a rated-coverage line. A cell click is a **compound** filter (`minScoreFilter` + `maxScoreFilter` + `smartScoreBucketFilter` at once); clicking the active cell clears all three. Keyboard: the grid is one tab stop with roving `tabindex`, arrow keys/Home/End move, Enter/Space activate. **The backend deliberately computes this section with those three filters excluded** so a cell click cannot collapse the matrix to the cell you just clicked (see backend_architecture, `_agreement_scope`); the selected cell is ringed instead. Empty cells are inert, since filtering to one would empty the grid.
 - Filter controls that emit back to `App.vue`: tag filter, score range, resolution bucket, media type.
 - Mirrors the same filter props as `ImageGrid` so its stats always match the active view.
@@ -771,7 +771,7 @@ Reusable control for assigning images to/from characters, sets and projects. Pro
 
 **The `face` type is a separate single-select mode** (#645), used by `ImageOverlay`'s per-face rows in place of the native `<select>` they replaced (a native `<option>` cannot carry the create row's highlight: macOS Chrome and Safari draw select popups as OS menus that ignore option colour). A face has exactly one person or none, so it renders radio glyphs (`mdi-radiobox-marked` / `mdi-radiobox-blank`, left at `on-dark-surface` in both states so the olive is spent on the create row alone) plus a leading **Unassigned** row, and it is deliberately NOT bolted onto the character path, whose tri-state checkboxes, toggle semantics and picture-id writes are all wrong for a face. It performs **no writes**: it emits `assign` / `unassign` and the host keeps its face-level `addCharacterFacesByFaceId` / `removeCharacterFacesByFaceId` calls. Props `faceId`, `assignedCharacterId`, `assignedCharacterName`; `focusTrigger()` is exposed so a host dialog can hand the keyboard back.
 
-**`floatMenu`** (opt-in, default false) teleports the menu to `<body>` and has `sizeMenu()` position it against the viewport (`position: fixed`, `--z-overlay`, viewport-clamped, flipping upward for a low trigger) instead of rendering it in place. The in-place default is only safe where no ancestor clips or scrolls, which holds for the grid context menu (itself fixed and teleported), `SelectionMenu`, and the overlay's top chrome, but NOT inside the overlay's Faces panel, where `.overlay-sidebar` is `overflow: hidden` and `.face-assign-grid` is `overflow-y: auto`: an absolutely positioned menu there was clipped and inflated the scroller's extent, producing a spurious scrollbar. It is a prop rather than a `type === "face"` branch because host layout, not entity type, decides it. **Incompatible with `placement="right"`**, whose `.ate--flyout` rules position at `left: 100%` of a root the node has left. Position (not just height) is recomputed on the `resize` and capture-phase `scroll` listeners `openMenu()` already registers; capture phase is what catches the sidebar scrolling, since the scrolling ancestor is not the window. It lives in this component rather than in a local overlay menu because the `.ate-*` skin is scoped to this file and one create rule has to serve both call sites.
+**`floatMenu`** (opt-in, default false) teleports the menu to `<body>` and has `sizeMenu()` position it against the viewport (`position: fixed`, `--z-overlay`, viewport-clamped, flipping upward for a low trigger) instead of rendering it in place. The in-place default is only safe where no ancestor clips or scrolls, which holds for the grid context menu (itself fixed and teleported), `SelectionMenu`, and the overlay's top chrome, but NOT inside the overlay's Faces panel, where `.overlay-sidebar` is `overflow: hidden` and `.face-assign-grid` is `overflow-y: auto`: an absolutely positioned menu there was clipped and inflated the scroller's extent, producing a spurious scrollbar. It is a prop rather than a `type === "face"` branch because host layout, not entity type, decides it. **Incompatible with `placement="right"`**, whose `.ate--flyout` rules position at `left: 100%` of a root the node has left — and that is now ENFORCED rather than stated: the `floating` computed drops `floatMenu` under that placement, because saying it was not enough. The model shelf's row context menu (`ShelfSelectionBar.vue`'s `VerbMenu`) passed both, and its two Assign flyouts came out BELOW the row instead of beside it and teleported out of the `.ate` root they hover off, so reaching for one fired `mouseleave` and shut it before the pointer arrived. The side a flyout opens on (`measureFlyoutSide`) is measured in `openMenu` AND in `sizeMenu`, not only on `mouseenter`, for the same class of reason: measured on hover alone, a flyout opened from the keyboard near the right edge kept the previous measurement and painted off-screen with nothing to clamp it, and a resize under an open one never moved it back. `openMenu` covers the first paint synchronously, `sizeMenu` is what the `resize` / `scroll` listeners call, and `onFlyoutMouseenter` is the only one that sees a hover of an already-open menu. Position (not just height) is recomputed on the `resize` and capture-phase `scroll` listeners `openMenu()` already registers; capture phase is what catches the sidebar scrolling, since the scrolling ancestor is not the window. It lives in this component rather than in a local overlay menu because the `.ate-*` skin is scoped to this file and one create rule has to serve both call sites.
 
 Both people modes take the opt-in `allowCreate` prop (default false; set by `ImageGridContextMenu` and by the overlay's face rows, because a host that does not handle `create` must never show a dead row, which is why `SelectionMenu` stays opted out): the flyout carries a pinned "New person…" row below the scrolling list, and a no-match search turns the empty state into a Create "query"… row (Enter in the search box activates it). Both rows are disabled exactly like sibling items (readonly / empty selection) and only emit `create` with the typed query; creation itself belongs to the host (`ImageGrid` opens its `CharacterEditor` and assigns the captured selection on save; see #645). Co-located tests: `AddToEntityControl.test.js`.
 
@@ -1379,7 +1379,7 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/tagSuggestions.js` | `/tag_suggestions`, the per-card decisions |
 | `api/tagHealth.js` | `/tag_health`, the board and its cache rebuild |
 | `api/comfyui.js` | `/comfyui/*`, PixlStash's own ComfyUI proxy routes |
-| `api/taggers.js` | `/taggers` and `/tagger/label-thresholds` |
+| `api/taggers.js` | `/taggers`, `/taggers/plugin-diagnostics` and `/tagger/label-thresholds` |
 | `api/folders.js` | `/reference-folders`, `/import-folders`, and the `/filesystem/*` picker |
 | `api/characters.js` | `/characters`, including face membership and reference pictures |
 | `api/projects.js` | `/projects` and project membership |
@@ -1519,6 +1519,17 @@ express that. Like Duplicates it is excluded from `selectionOwnsHighlight` in
 `SideBar.vue`, or the underlying picture selection would light a second active
 destination in the rail.
 
+**And like Duplicates its bar carries the shell chrome.** Replacing the grid
+also replaces the grid's toolbar, so `.shelf-toolbar` ends in the canonical tail
+whole — `[separator] [UndoControl] [TbGlobalActions]`, the same components the
+grid and the queue mount, with `TbGlobalActions` emitting `open-settings` up to
+`App.vue`. The shelf writes nothing to the operation log itself, but
+`useOperationStore` is a read model over the backend's app-wide log, so undo
+here is live for whatever library work preceded the visit — which is the point
+of a recovery control that survives a change of destination. `.shelf-toolbar`
+declares `container-name: shelfbar toolbar` for the same reason both other
+hosts do: the shared chrome's scoped `@container toolbar` rules must reach it.
+
 These rules come from measurement against real adapter folders and are easy to
 undo by accident:
 
@@ -1538,8 +1549,10 @@ undo by accident:
   so telling them apart is the column's main job (#897):
   - `named` — somebody chose it. Plain, at `--weight-semibold`.
   - `derived` — we made a readable string the file does not contain. The **UI**
-    face at `--weight-regular` (mono would claim the string were the file's),
-    plus an outline tag reading `derived`.
+    face at `--weight-regular` (mono would claim the string were the file's)
+    over a soft accent rule. **No tag**: it is the commonest state on the shelf,
+    so a `derived` chip stamped most of the column with a word the reader could
+    not act on (owner call, 2026-08-15).
   - `from-file` — nothing survived the strip, so what is shown *is* the
     filename. `--font-mono` (§3 gives mono to file paths) plus a small **accent**
     tag reading `from filename`.
@@ -1549,10 +1562,10 @@ undo by accident:
     looks like a name and reads as inert, so the row that most needed naming was
     the one that least invited it.
   Rank is type, shape and words — **never opacity** (`visual-language.md` §5.1):
-  a third of the rows faded would be a column of ghosts, and the two "nobody has
-  named this" tags carry their meaning in the label so the pair survives
-  greyscale. The empty `text` is already handled by `compareOn`, which sorts a
-  row that cannot answer the key last in both directions.
+  a third of the rows faded would be a column of ghosts, and the one remaining
+  tag carries its meaning in the label so it survives greyscale. The empty
+  `text` is already handled by `compareOn`, which sorts a row that cannot answer
+  the key last in both directions.
 - **The name is a field, and the affordance is not hover-only.** The dashed rule
   and the pencil appear on `.shelf-row:hover` **and** `:focus-within`, or a
   keyboard reader would have no sign the name is editable. Editing happens
@@ -1576,6 +1589,23 @@ undo by accident:
   would have defeated the change on exactly the machines that had used the shelf
   longest, so `pixlstash:modelShelfFilters` gained `FILTERS_SCHEMA_VERSION` and
   a blob from another `v` is discarded whole — the same trade `storedView` makes.
+- **The four blocks are one list, and the empty states read it.** `nothingSelected`
+  and `activeCount` both derive from `BLOCKS`, never from a hand-written run of
+  `filters.adapters && filters.checkpoints && …`: naming three of the four is how
+  a shelf with **only Engines ticked** fetched its engines, counted them in the
+  toolbar, and then drew "Nothing is selected in Show" over the top of them.
+  `activeCount` therefore counts turning `engines` off exactly as it counts
+  `unclassified`, which also un-greys the panel's Reset button. The remaining
+  block-by-block lists (`defaultFilters`, `storedFilters`, `blockOf`,
+  `fetchRows`) each say something different per block and stay explicit.
+- **A narrowed selection that comes back empty is not "there is nothing here".**
+  Only the ticked blocks are fetched, so a shelf reopened with one empty block
+  selected has `rows` empty on a machine holding 1,800 adapters. The three empty
+  states are therefore ordered `nothingSelected` → *no models match these
+  filters* (whenever `activeCount` is non-zero) → the terminal *no models found*,
+  so the reader is only sent to "add a model folder" when nothing is narrowing
+  the shelf. Reset refetches every block and the terminal state then tells the
+  truth.
 
 **The assignment ring** (`assignmentRing` in `utils/modelShelf.js`, drawn by
 `ModelMark.vue`) is what the shelf says about who a model belongs to. It
@@ -1604,17 +1634,30 @@ shared and cached, never a lookup per attachment.
   contrast problem per image, and detached, its inner edge sits on the row
   background — a known colour in both themes. That is also why `ModelMark` is
   two boxes: one element cannot both clip an image and draw outside its own edge.
-- **The face inside the ring falls back twice.** The model's own icon wins,
-  because somebody chose that picture for this file; failing that the mark
-  borrows the thumbnail of whoever it is assigned to, since a LoRA of Sarah with
-  no icon is better identified by Sarah's reference face than by two letters —
-  and the ring around it is already her colour, so the halves say one thing;
-  failing that the generated mark. Thumbnails are `<img src>` from
-  `characterThumbnailUrl` / `pictureSetThumbnailUrl` rather than blobs, so one
-  response is cached however many rows borrow that face. **Each step is skipped
-  once its own URL has failed**, so the chain runs all the way down: a model
-  pointing at an icon whose file is gone falls to the assigned face and then to
-  the initials, rather than sitting on a broken image. `ModelMark` therefore
+- **The face inside the ring falls back three times.** In order: the model's own
+  icon, because somebody chose that picture for this file; then the `set_icon`
+  of the set it is assigned to, if that set carries one; then the thumbnail of
+  whoever it is assigned to, since a LoRA of Sarah with no icon is better
+  identified by Sarah's reference face than by two letters — and the ring around
+  it is already her colour, so the halves say one thing; then the generated mark.
+  A set's icon comes SECOND rather than last because `set_icon` is what its
+  thumbnail was replaced by: the sidebar rows and the set editor already draw
+  the set as that glyph, so lending the picture here would be the one surface
+  still showing a face the rest of the app has stopped showing. `assignmentRing`
+  carries the mdi name as `ring.icon` — empty for the `cards` sentinel, which
+  means "keep the thumbnail" — and the set's own colour as `ring.iconHue`,
+  deliberately not the ring's `hue`: `hue` invents a hashed palette entry so the
+  ring is never invisible, while a set with no `set_color` is drawn in theme ink
+  by the sidebar, and one set wearing two colours on one screen is the thing the
+  ring's "the hue is the entity's own" rule exists to prevent. Thumbnails are
+  `<img src>` from `characterThumbnailUrl` / `pictureSetThumbnailUrl` rather
+  than blobs, so one response is cached however many rows borrow that face.
+  **Each step that is a URL is skipped once that URL has failed**, so the chain
+  runs all the way down: a model pointing at an icon whose file is gone falls to
+  the assigned face and then to the initials, rather than sitting on a broken
+  image. The icon step is the one that cannot fail and the one that is therefore
+  terminal — a glyph is a name in a font, there is no `error` to catch, and a
+  set carrying an icon never reaches the thumbnail below it. `ModelMark` therefore
   records the URLs that 404ed, not one "it failed" flag — and clears that record
   on a *string* of the row's icon and ring identity, because the shelf builds a
   fresh ring object on every render and an identity comparison would reset the
@@ -1725,24 +1768,38 @@ Two rules are inherited from the API and are easy to undo:
 
 **`groups` always returns at least one group**, so the flat list and the grouped
 list are one piece of markup with the header switched off rather than two copies
-of the row template. Grouping offers `None`, `Base model` and `Folder`. Type is
-deliberately absent: three buckets, already a `Show` checkbox, and already on
-every row as an icon and a word.
+of the row template. Grouping offers `None`, `Base model`, `Folder` and
+`Feature`. **Type** is deliberately absent: four buckets, already a `Show`
+checkbox, and already on every row as an icon and a word.
+
+`Feature` is not that axis, though the two are easy to confuse now that it files
+an adapter under its **algorithm**. Type is `file_kind` — `adapter |
+checkpoint | unknown | engine` — and answers "what sort of file is this";
+`Feature` answers "what breaks if I delete this", and for the engines that
+declare capabilities it fans one row out across several headings, which no type
+axis would ever do. Filing an adapter under `LoRA` rather than under one "No
+feature recorded" bucket holding most of the shelf is that same question
+answered with the only thing the row knows — and it is a genuine group
+boundary, where `adapter` is not: the algorithm axis has as many headings as the
+shelf has algorithms, and the `Show` checkbox it duplicates is nested under
+`Adapters` rather than being one of the four top-level ones.
 
 **Two levels, and only under `Folder`.** The folder is a grouping *value* on
-every axis, so `None` and `Base model` draw one level of headers and nothing
-else; a band per folder crossed with a group per base model would fragment "what
-do I have for SDXL" into one answer per disk, and three folders by twelve base
-models is thirty-six headers. Under `Folder` the second level is spent on the
-**drive band** (F2), which is what the plan's "2 levels max" was for.
+every axis, so `None`, `Base model` and `Feature` draw one level of headers and
+nothing else; a band per folder crossed with a group per base model would
+fragment "what do I have for SDXL" into one answer per disk, and three folders
+by twelve base models is thirty-six headers. Under `Folder` the second level is
+spent on the **drive band** (F2), which is what the plan's "2 levels max" was
+for.
 
-- **The layout is a sub-choice of `Folder`, not a fourth axis.** `folderLayout`
-  is `drive` (bands the folders by the disk they sit on) or `alpha` (one flat A
-  to Z run), it renders in `ShelfSortPanel.vue` only while `Folder` is selected,
-  and it is carried in `view` at all times so a trip through another axis and
-  back does not reset it. It was once shipped as `Sort: Drive | Folder`, which
-  reordered nothing and grouped everything; a grouping control living in the
-  sort menu is why the absence of real sorting went unnoticed.
+- **The layout is a sub-choice of `Folder`, not an axis of its own.**
+  `folderLayout` is `drive` (bands the folders by the disk they sit on) or
+  `alpha` (one flat A to Z run), it renders in `ShelfSortPanel.vue` only while
+  `Folder` is selected, and it is carried in `view` at all times so a trip
+  through another axis and back does not reset it. It was once shipped as
+  `Sort: Drive | Folder`, which reordered nothing and grouped everything; a
+  grouping control living in the sort menu is why the absence of real sorting
+  went unnoticed.
 - **Only the folder header is sticky.** Two sticky levels need stacking
   arithmetic — the inner offset is the outer's measured height, which no token
   knows — and the band is a label with a meter rather than something worth
@@ -2012,6 +2069,20 @@ promises, which is the failure a test now pins.
   storage answer wrong: the file really does occupy both disks. The consequence
   is that group counts sum higher than the shelf holds, so the toolbar states
   both numbers when they differ (`1,782 models · 1,806 copies`).
+- **Under `Feature` each header wears that feature's own glyph**, not the axis's.
+  `CAPABILITY_ICONS` in `utils/modelShelf.js` is not a second icon family, the
+  same rule `FOLDER_TIERS` follows: where the product already marks a feature,
+  that mark is the one used and it is **not** re-drawn on anything else here —
+  `face` takes `ImageOverlay`'s `mdi-face-recognition`, `detector` takes the
+  `mdi-shape-outline` that "Object boxes" and "Detect objects" already wear (so
+  the catch-all may not have it), and `tagger` / `scorer` / `captioner` take the
+  operation log's tag, star and caption box. The two features nothing else marks
+  take glyphs nothing else uses: `checkpoint` a packaged model, deliberately not
+  the `mdi-cube-outline` that means *base model* on the sort and group-by
+  controls, and `other` the overflow dots. The **unset** group and a capability
+  this build has never seen both fall back to the axis's own glyph, which is the
+  rule every axis follows for its unset group; the fallback is what the whole
+  axis used to draw, one star over eight different features.
 - **The sort never reorders groups, only rows inside them.** Groups are
   alphabetical by label with the unset group last. Switching to "Largest first"
   and having every header move out from under the reader would be a different

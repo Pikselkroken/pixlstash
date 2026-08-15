@@ -104,6 +104,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { adapterKindKey } from "../../utils/modelShelf";
 
 const props = defineProps({
   /** `rename` | `base-model` | `kind`, or `""` when the dialog is closed. */
@@ -173,8 +174,11 @@ const canSubmit = computed(() => {
   return true;
 });
 
+// Folded, not `Boolean(row.kind)`: the hub CHECK makes an adapter's kind NOT
+// NULL but not non-empty, so a whitespace-only one is truthy and would count as
+// already set — leaving Save enabled on a verb with nothing to write.
 const everySelectedRowAlreadyHasAKind = computed(() =>
-  store.selectedRows.every((row) => Boolean(row.kind)),
+  store.selectedRows.every((row) => Boolean(adapterKindKey(row.kind))),
 );
 
 // Seed from the selection on open, so the field shows what is there now rather
@@ -188,9 +192,15 @@ watch(
     const shared = rows.every((row) => row.base_model === rows[0]?.base_model);
     baseModel.value = shared ? rows[0]?.base_model || "" : "";
     fileKind.value = rows[0]?.file_kind || "adapter";
-    kind.value = rows.every((row) => row.kind === rows[0]?.kind)
-      ? rows[0]?.kind || ""
-      : "";
+    // Compared FOLDED. The shelf now draws `lora` and `LoRA` under one group
+    // header, in one checkbox, with both Kind cells reading `LoRA`, so a raw
+    // comparison here opened this field blank on a selection the rest of the
+    // screen presents as one algorithm — and blank means "they disagree".
+    // Seeded with the first row's own spelling, so saving converges the two.
+    const sharedKind = rows.every(
+      (row) => adapterKindKey(row.kind) === adapterKindKey(rows[0]?.kind),
+    );
+    kind.value = sharedKind ? rows[0]?.kind || "" : "";
     working.value = false;
     await nextTick();
     firstFieldEl.value?.focus();
