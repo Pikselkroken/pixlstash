@@ -54,7 +54,6 @@
                 v-for="plugin in descPlugins"
                 :key="plugin.name"
                 :title="plugin.display_name || plugin.name"
-                :disabled="!!plugin.load_error"
                 @click="refreshDescription(plugin.name)"
               />
               <v-list-item

@@ -116,6 +116,28 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # sidecar naming. A folder/filesystem endpoint, so READ tokens (handed
         # out to view a shared gallery) must not reach it.
         "/api/v1/reference-folders/detect-sidecars",
+        # Names the tagger-plugin folder on the server's disk, and returns
+        # plugin import errors whose text can carry any path the failing plugin
+        # reached for. The authz gate declares it LOCAL_OWNER_ONLY; it is here
+        # as well because that is the pattern filesystem/browse already sets,
+        # and because AUTHZ_GATE_ENFORCING is a documented one-line rollback —
+        # without this entry, taking it would hand the folder straight back to
+        # every share token.
+        "/api/v1/taggers/plugin-diagnostics",
+        # The plugin list carries the caller's own tagger_settings, which is
+        # user settings exactly like /users/me/config above — a plugin may
+        # declare a free-text parameter and the owner may have typed a path
+        # into it. Gate policy is OWNER_ONLY; same belt-and-braces reasoning.
+        "/api/v1/taggers",
+        # Found by the derivation in tests/test_authz_host_capability_16_3.py
+        # ::test_every_untemplated_locality_get_is_on_the_read_blocked_belt,
+        # not by anyone reading this list: it is LOCAL_OWNER_ONLY at the gate
+        # and serves the move queue's source and destination folders, so with
+        # the gate rolled back a READ token read host paths straight out of it.
+        # Its two templated siblings on the same tier cannot be expressed here
+        # at all — this frozenset matches literal paths — and stay the recorded
+        # follow-up.
+        "/api/v1/model-moves",
     }
 )
 

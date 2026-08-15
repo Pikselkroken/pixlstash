@@ -2,11 +2,14 @@
 
 Covers the three-lens (CSO/Principal/CEO) decided design landing before Step 5:
 
-* ``LOCAL_OWNER_ONLY`` (13 filesystem/folder routes + the library switch) — loopback / RFC1918 LAN /
+* ``LOCAL_OWNER_ONLY`` (the filesystem/folder routes, the library switch, and the
+  host-path disclosures; the tier-split test's own name carries the count, and
+  it is the only place that does — prose here goes stale, an assertion cannot)
+  — loopback / RFC1918 LAN /
   **Tailscale CGNAT ``100.64.0.0/10``** all count as local; a genuinely remote
   owner is 403'd with a message NAMING ``allow_remote_host_ops`` unless that
   dedicated flag is set, which then admits the remote owner.
-* ``LOOPBACK_OWNER_ONLY`` (3 host-shell red-line routes) — strictly loopback; the
+* ``LOOPBACK_OWNER_ONLY`` (the host-shell red-line routes) — strictly loopback; the
   ``allow_remote_host_ops`` flag can NEVER loosen them (RFC1918 + flag-on is still
   403).
 * Reverse-proxy: with ``trusted_proxies`` set the owner's real (spoofed) client IP
@@ -14,9 +17,12 @@ Covers the three-lens (CSO/Principal/CEO) decided design landing before Step 5:
   is allowed.
 
 Both-directional per CLAUDE.md / §16.1: every deny is paired with an in-scope
-allow so over-blocking is caught as its own regression. The shipped constant
-``AUTHZ_GATE_ENFORCING`` stays ``False``; enforcement is proven behind
-``enforcing=True`` exactly as the Step-3 suite does.
+allow so over-blocking is caught as its own regression. These tests set
+``enforcing`` explicitly rather than relying on the shipped default, which was
+``False`` when this file was written and is ``True`` today — one test
+deliberately turns it **off**, to prove the middleware's
+``READ_BLOCKED_GET_PATHS`` still refuses a share token if the documented
+one-line rollback is ever taken.
 """
 
 import contextlib
@@ -27,6 +33,7 @@ import tempfile
 import pytest
 
 from pixlstash.auth import (
+    READ_BLOCKED_GET_PATHS,
     is_local_ip,
     is_local_or_tailscale_ip,
     is_loopback_ip,
@@ -39,6 +46,7 @@ from pixlstash.authz.policy import (
     validate_policy_declarations,
 )
 from pixlstash.authz.registry import ROUTE_POLICIES
+from pixlstash.route_inventory import api_endpoint_set
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -148,10 +156,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_26_local_5_loopback():
+def test_host_capability_tier_split_is_27_local_5_loopback():
     """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 31 routes carry a
-    locality tier = 26 local + 5 loopback.
+    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 32 routes carry a
+    locality tier = 27 local + 5 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -209,6 +217,19 @@ def test_host_capability_tier_split_is_26_local_5_loopback():
     inside a registered folder). It never unlinks: the source is the owner's own
     file.
 
+    32 = 27 + 5 with ``GET /taggers/plugin-diagnostics`` (#326). It is the
+    first route on this tier for **disclosure alone**: it takes no path, walks
+    nothing and writes nothing. It returns two things and both name paths on
+    the host — the folder the tagger registry scans, which is under the owner's
+    home directory, and the import failures of the plugins in it, whose message
+    is ``str(exc)`` from third-party code and so carries whatever path that code
+    was reaching for. Both were fields on ``GET /taggers``, which was ANY_TOKEN,
+    so every share-link holder was reading them. Splitting them out costs a
+    remote owner nothing real: acting on either means editing a file in that
+    folder and restarting. (``GET /taggers`` itself went ``any_token`` ->
+    ``owner_only`` in the same change, which is not a locality tier and so does
+    not move this arithmetic.)
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -222,7 +243,7 @@ def test_host_capability_tier_split_is_26_local_5_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 26, sorted(local)
+    assert len(local) == 27, sorted(local)
 
 
 # ===========================================================================
@@ -295,9 +316,11 @@ def _is_loopback_403(resp):
 
 _BROWSE = f"{API}/filesystem/browse"  # a LOCAL_OWNER_ONLY route
 _OPEN_LOCATION = f"{API}/pictures/999999/open-location"  # a LOOPBACK_OWNER_ONLY route
+# LOCAL_OWNER_ONLY for disclosure alone.
+_TAGGER_DIAGNOSTICS = f"{API}/taggers/plugin-diagnostics"
 
 
-# ---- LOCAL_OWNER_ONLY (13) ------------------------------------------------
+# ---- LOCAL_OWNER_ONLY (27) ------------------------------------------------
 
 
 def test_local_owner_only_allows_loopback_lan_and_tailscale():
@@ -330,8 +353,8 @@ def test_local_owner_only_remote_public_403s_naming_the_flag():
 
 
 def test_local_owner_only_remote_public_allowed_with_flag_on():
-    """The dedicated flag admits a remote authenticated owner on the 13
-    LOCAL_OWNER_ONLY routes."""
+    """The dedicated flag admits a remote authenticated owner on the
+    LOCAL_OWNER_ONLY tier."""
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
         with _enforcing(server), _remote_host_ops(server, True):
@@ -342,7 +365,220 @@ def test_local_owner_only_remote_public_allowed_with_flag_on():
             )
 
 
-# ---- LOOPBACK_OWNER_ONLY (3) — the flag-immune red line --------------------
+def test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path():
+    """Both directions on the #326 split, plus the reason it exists.
+
+    The plugin folder and the load-failure messages are host-path disclosures,
+    so a remote owner is refused them (flag off) and a share-scoped token is
+    refused them from anywhere; a loopback owner still gets them, because
+    over-blocking is its own regression.
+
+    The negatives assert on the **path string**, not on a field name: an
+    earlier version of this test checked that ``plugin_dirs`` was absent from
+    ``GET /taggers``, which the ``load_error`` row beside it satisfied while
+    still carrying the folder. Grepping the serialised body for the owner's
+    home directory is the assertion that cannot be satisfied by moving the leak
+    to another key — or to another directory.
+
+    ``GET /taggers`` is now owner-only and gets the stronger check of the two:
+    a share token may not read it at all.
+    """
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            allowed = owner.get(_TAGGER_DIAGNOSTICS)
+            assert allowed.status_code == 200, allowed.text
+            plugin_dir = allowed.json()["plugin_dirs"]["user"]
+            assert plugin_dir, "the folder must be named"
+
+            refused = owner.get(_TAGGER_DIAGNOSTICS, headers=_xff("8.8.8.8"))
+            assert _is_locality_403(refused), (
+                f"a remote owner must not read the host path; "
+                f"got {refused.status_code}: {refused.text}"
+            )
+
+            # The actual threat model: a share link, from anywhere at all.
+            minted = owner.post(
+                f"{API}/users/me/token",
+                json={
+                    "description": "set share",
+                    "scope": "READ",
+                    "resource_type": "picture_set",
+                    "resource_id": 1,
+                },
+            )
+            assert minted.status_code == 200, minted.text
+            # A cookie-less client: the middleware prefers the owner's session
+            # cookie over a Bearer token, which would never exercise the scope.
+            from starlette.testclient import TestClient
+
+            anon = TestClient(server.api, raise_server_exceptions=True)
+            share = {"Authorization": f"Bearer {minted.json()['token']}"}
+            scoped = anon.get(_TAGGER_DIAGNOSTICS, headers=share)
+            assert scoped.status_code == 403, (
+                f"a resource-scoped token must never reach it; got {scoped.status_code}"
+            )
+
+            # GET /taggers itself is no longer reachable by that token at all:
+            # it carries the caller's own tagger_settings, so a plugin with a
+            # "string" parameter puts whatever the owner typed into it — a
+            # model path as easily as a prompt — in front of a share link.
+            listing = anon.get(f"{API}/taggers", headers=share)
+            assert listing.status_code == 403, (
+                f"the plugin list is owner-only; got {listing.status_code}"
+            )
+
+            # ...and no **parameterless GET declared any_token or public**
+            # discloses a path under the owner's home directory, under any key.
+            #
+            # Read that scope literally. It is NOT "no route a share token can
+            # reach": the picture rows themselves carry host paths in
+            # `import_source_folder` and `tags_file`, which a picture-scoped
+            # token reads through `GET /pictures/{id}/{field}` today. That is a
+            # pre-existing disclosure of a different class — per-object columns
+            # behind a membership check, not a global one behind none — and it
+            # is recorded as a follow-up rather than fixed here. Claiming the
+            # wider invariant in this comment would have been the third version
+            # of exactly the mistake below.
+            #
+            # Two deliberate choices, both learned from this change's own
+            # review rounds. The home directory rather than the plugin folder:
+            # a check anchored on the folder passes any leak one directory
+            # over, which is how the first version of this test passed while
+            # `load_error` still carried the path. And the route list is
+            # *derived from the registry*, not written down: the first two
+            # rounds each missed a sibling because they fixed the field they
+            # knew about instead of enumerating the disclosure, and a hand-kept
+            # list here would reproduce exactly that.
+            home = os.path.expanduser("~")
+            # JSON escapes backslashes, so the raw form never substring-matches
+            # a Windows path in a serialised body.
+            home_forms = (home, home.replace("\\", "\\\\"))
+            #
+            # Two filters on the derivation, both about what the probe can
+            # honestly reach rather than about which routes matter:
+            #
+            # * ``/api/v1`` only. ``tests/conftest.py`` wraps ``TestClient.get``
+            #   and prefixes ``/api/v1`` to any path that lacks it, bar three
+            #   root paths. So a probe of the registry's ``/docs``, ``/scalar``
+            #   or ``/openapi.json`` is sent as ``/api/v1/docs``, where nothing
+            #   is mounted and the SPA catch-all answers 200 — a vacuous
+            #   assertion, and `no_spa_fallback` says so. It fails on CI (which
+            #   builds the frontend) and passed locally (which does not), which
+            #   is exactly the shape of bug that guard exists for.
+            # * Mounted on this app. The registry also declares
+            #   conditionally-mounted routes, and an unmounted one lands on the
+            #   same catch-all.
+            mounted = {
+                path for method, path in api_endpoint_set(server.api) if method == "GET"
+            }
+            reachable = sorted(
+                path
+                for (method, path), rp in ROUTE_POLICIES.items()
+                if method == "GET"
+                and rp.policy in (AccessPolicy.ANY_TOKEN, AccessPolicy.PUBLIC)
+                and "{" not in path
+                and path.startswith(f"{API}/")
+                and path in mounted
+            )
+            inspected = 0
+            for route in reachable:
+                body = anon.get(route, headers=share)
+                if body.status_code != 200:
+                    continue  # refused outright is a stronger answer than clean
+                inspected += 1
+                for form in home_forms:
+                    assert form not in body.text, (
+                        f"{route} is reachable by a share token and disclosed "
+                        f"a host path"
+                    )
+            # Not a count of *declarations* — a count of bodies actually read.
+            # Every route 403ing would otherwise make the loop silently green.
+            assert inspected >= 8, f"only {inspected} of {len(reachable)} answered 200"
+
+
+def test_the_plugin_routes_survive_the_documented_gate_rollback():
+    """The second belt: ``READ_BLOCKED_GET_PATHS``, with the gate switched off.
+
+    ``AUTHZ_GATE_ENFORCING = False`` is a documented one-line rollback, and
+    ``GET /filesystem/browse`` is on both belts precisely so taking it does not
+    re-open a filesystem disclosure. The two tagger routes are GETs on the same
+    tier, so they need the same pair — a fact the #326 review reproduced by
+    reading the owner's home directory out of the diagnostics route with the
+    gate off. The owner (no token, session cookie) is unaffected either way.
+    """
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        minted = owner.post(
+            f"{API}/users/me/token",
+            json={
+                "description": "set share",
+                "scope": "READ",
+                "resource_type": "picture_set",
+                "resource_id": 1,
+            },
+        )
+        assert minted.status_code == 200, minted.text
+        from starlette.testclient import TestClient
+
+        anon = TestClient(server.api, raise_server_exceptions=True)
+        share = {"Authorization": f"Bearer {minted.json()['token']}"}
+        # The rollback state, set explicitly: the gate ships enforcing.
+        previously_enforcing = server.authz._enforcing
+        server.authz._enforcing = False
+        try:
+            assert anon.get(f"{API}/pictures", headers=share).status_code == 200, (
+                "the share token is dead; the refusals below would prove nothing"
+            )
+            for route in (_TAGGER_DIAGNOSTICS, f"{API}/taggers"):
+                refused = anon.get(route, headers=share)
+                assert refused.status_code == 403, (
+                    f"{route} must stay closed to a READ token with the gate "
+                    f"off; got {refused.status_code}"
+                )
+            # The owner still reaches both, from the same middleware.
+            assert owner.get(_TAGGER_DIAGNOSTICS).status_code == 200
+            assert owner.get(f"{API}/taggers").status_code == 200
+        finally:
+            server.authz._enforcing = previously_enforcing
+
+
+def test_every_untemplated_locality_get_is_on_the_read_blocked_belt():
+    """Derive the belt's membership instead of writing it down.
+
+    ``READ_BLOCKED_GET_PATHS`` matches literal paths, so a GET on the locality
+    tier is only protected under the documented ``AUTHZ_GATE_ENFORCING = False``
+    rollback if its own path is in that frozenset. The rollback test beside this
+    one names two paths; this one asserts the *rule*, so the next such GET fails
+    the build rather than waiting for a review to notice it.
+
+    The templated ones cannot be expressed in an exact-match frozenset at all.
+    They are pinned as a known set rather than ignored: adding a fourth fails
+    here, and closing the gap needs prefix matching (the follow-up recorded in
+    ``tests/test_model_shelf_api.py`` and ``docs/backend_architecture.md`` §16.3).
+    """
+    tier = (AccessPolicy.LOCAL_OWNER_ONLY, AccessPolicy.LOOPBACK_OWNER_ONLY)
+    tier_gets = {
+        path
+        for (method, path), rp in ROUTE_POLICIES.items()
+        if method == "GET" and rp.policy in tier
+    }
+    untemplated = {path for path in tier_gets if "{" not in path}
+    assert untemplated, "the derivation found nothing — it has stopped working"
+    missing = sorted(untemplated - READ_BLOCKED_GET_PATHS)
+    assert missing == [], (
+        f"locality-tier GETs off the second belt: {missing}. Add each to "
+        f"READ_BLOCKED_GET_PATHS in pixlstash/auth.py."
+    )
+
+    templated_gap = sorted(path for path in tier_gets if "{" in path)
+    assert templated_gap == [
+        "/api/v1/model-folders/{folder_id}/runs",
+        "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
+    ], templated_gap
+
+
+# ---- LOOPBACK_OWNER_ONLY (5) — the flag-immune red line --------------------
 
 
 def test_loopback_owner_only_allows_loopback():

@@ -93,7 +93,7 @@ frontend/src/
 │   ├── tagSuggestions.js        # /tag_suggestions — per-card review decisions
 │   ├── tagHealth.js             # /tag_health — board rows + cache rebuild
 │   ├── comfyui.js               # /comfyui/* — workflows, run, recipe read/replay, abort
-│   ├── taggers.js               # /taggers, /tagger/label-thresholds
+│   ├── taggers.js               # /taggers, /taggers/plugin-diagnostics, /tagger/label-thresholds
 │   ├── folders.js               # /reference-folders, /import-folders, /filesystem/*
 │   ├── characters.js            # /characters + faces + reference pictures
 │   ├── projects.js              # /projects + membership
@@ -1379,7 +1379,7 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/tagSuggestions.js` | `/tag_suggestions`, the per-card decisions |
 | `api/tagHealth.js` | `/tag_health`, the board and its cache rebuild |
 | `api/comfyui.js` | `/comfyui/*`, PixlStash's own ComfyUI proxy routes |
-| `api/taggers.js` | `/taggers` and `/tagger/label-thresholds` |
+| `api/taggers.js` | `/taggers`, `/taggers/plugin-diagnostics` and `/tagger/label-thresholds` |
 | `api/folders.js` | `/reference-folders`, `/import-folders`, and the `/filesystem/*` picker |
 | `api/characters.js` | `/characters`, including face membership and reference pictures |
 | `api/projects.js` | `/projects` and project membership |

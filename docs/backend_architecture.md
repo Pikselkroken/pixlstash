@@ -892,6 +892,8 @@ Located in [pixlstash/image_plugins/](../pixlstash/image_plugins/).
 
 Built-in plugins: `brightness_contrast`, `blur_sharpen`, `colour_filter`, `pixelate`, `rotate`, `scaling`, plus `plugin_template.py` as a starter for custom plugins.
 
+User-supplied image plugins are loaded from `user_data_dir("pixlstash")/image-plugins/user`. **The tagger plugins use the same discovery mechanism** (§9, "User-supplied plugins") — keep the two in step rather than letting them drift, and note where they already differ: taggers also accept a package folder, built-ins win a name collision instead of losing it, and `TaggerPluginManager.plugin_dirs()` returns a `{source: path}` dict (the JSON `GET /taggers/plugin-diagnostics` emits) where `ImagePluginManager.plugin_dirs()` returns a list of tuples it iterates internally. Neither folder is served on an `ANY_TOKEN` route: the tagger path is behind the `LOCAL_OWNER_ONLY` route named above, and for image plugins both the folders and the load errors — whose `file` field was the *full* path of the failing plugin — are no longer served at all (§16.3, 2026-08-15).
+
 ---
 
 ## 9. Tagger Plugins
@@ -904,6 +906,78 @@ All taggers and captioners are implemented as `TaggerPlugin` subclasses ([pixlst
 | `pixlstash_tagger` | `PixlStashTaggerPlugin` | `tagger_plugins/pixlstash_tagger.py` | Tags | `PersonalJeebus/pixlvault-anomaly-tagger` (HF, pinned) |
 | `florence2` | `Florence2Plugin` | `tagger_plugins/florence2.py` | Descriptions | Florence-2 captions **and** the Segment action's detector — see the variant note below |
 | `joycaption` | `JoyCaptionPlugin` | `tagger_plugins/joycaption.py` | Tags + Descriptions | LLaVA-style LLM; `bitsandbytes` optional dep |
+
+#### User-supplied plugins (issue #326)
+
+Beyond the four built-ins above, `TaggerPluginManager` scans
+`user_data_dir("pixlstash")/tagger-plugins/user` and registers whatever `TaggerPlugin`
+subclasses it finds there. `pixlstash/tagger_plugins/plugin_template.py` is the starter and
+[docs/writing-tagger-plugins.md](writing-tagger-plugins.md) is the contract. Four properties
+are load-bearing:
+
+- **Two accepted shapes**: a single `.py` file, or a folder containing `__init__.py` (loaded
+  as a package, so it may `from . import helper`). Entries starting with `.` or `_` are
+  skipped. Modules are namespaced `pixlstash_user_tagger_<entry>` with the extension kept
+  (`foo.py` → `…_foo_py`, so a `foo/` package beside it is a different module), distinct
+  from the image plugins' `pixlstash_dynamic_plugin_*`. A failed import restores whatever
+  `sys.modules` entry it displaced, so a contrived clash cannot strip a working plugin's
+  module out from under it.
+- **Built-ins are loaded first and win a name collision**, which is the deliberate divergence
+  from `ImagePluginManager` (where the user directory is scanned first). A user plugin named
+  `florence2` would be inert anyway — `DescriptionWorkflow.generate_batch` routes that name
+  down a native fast path that never touches the plugin object — so the collision is recorded
+  as a `PluginLoadError` and surfaced in the UI rather than silently ignored.
+- **Every concrete class the module *defines* is registered**, not just the first one found,
+  so a package may bundle two engines. A subclass merely imported into the module is
+  excluded by comparing `__module__`.
+- **Start-up scan only.** There is no reload endpoint: re-instantiating a plugin whose model
+  is resident would orphan the model and make `is_loaded()` lie. Adding a plugin requires a
+  restart, which the guide and the Auto-tagging settings section both say. The directory is
+  not created at boot; **`GET /taggers/plugin-diagnostics`** returns its path so the UI can
+  tell the user where to make it. That is a route of its own, on the §16.3 locality tier,
+  and not a field on `GET /taggers`: the list route was `ANY_TOKEN` at the time, so a field there handed
+  the owner's home directory to every share-link holder. The same sweep took `plugin_dirs`
+  **and** `plugin_errors` off `GET /pictures/plugins` and `workflow_dirs` off
+  `GET /comfyui/workflows`, both `ANY_TOKEN` and both carrying the same directory; nothing
+  read any of them, so they are deleted rather than moved.
+
+A broken plugin never aborts the load: each entry is wrapped, logged with its path, and
+recorded as a `PluginLoadError` that **`GET /taggers/plugin-diagnostics`** returns in
+`load_errors`. It is on the locality tier with the folder, and for the same reason rather
+than by association: the message is `str(exc)` from an exception raised by third-party code
+during import, so an `OSError` out of a plugin's module body carries whatever absolute path
+it was reaching for. Sanitising that text would be guesswork. The **Auto-tagging** settings
+section renders the list; `PluginsTable.vue` never could, since a failed plugin carries
+neither capability flag.
+Registration also calls `plugin_schema()` once, because `GET /taggers`,
+`user_settings_utils` and `fill_defaults()` (on the library-open path, `server.py`) all
+call it unguarded: a plugin whose `parameter_schema()` raises has to be rejected at load
+or it takes the settings screen and the boot down with it. That check is boot-state only
+— it cannot catch a plugin that starts raising once its model is loaded — and the
+inference methods (`tag_images`, `generate_descriptions`, `download`, …) remain unguarded
+by design, exactly as they are for first-party plugins. `SystemExit` is caught alongside
+`Exception` so a stray `sys.exit()` in a plugin module cannot end the process;
+`KeyboardInterrupt` deliberately still propagates. The registry lock is an `RLock` and `_loaded`
+is set before loading for the same class of reason — a plugin whose module body calls
+`get_tagger_plugin_manager()` would otherwise hang the server forever, which is not an
+exception and so cannot be caught. It sees the partial registry.
+
+Plugin code runs unsandboxed, exactly as image plugins already do — but earlier: the
+tagger registry is built during vault construction, so a user plugin executes at boot
+rather than on first request. Three consequences worth naming: a plugin that hangs or
+segfaults at import stops the server starting (no containment is possible in-process);
+the developer's own plugin folder is executed by any test that boots a `Server`; and the
+folder's absolute host path needs somewhere to be served from, which is why
+`GET /taggers/plugin-diagnostics` exists on the §16.3 locality tier rather than as fields on
+`GET /taggers`, which was `ANY_TOKEN` then and is `OWNER_ONLY` now (the same disclosure `GET /pictures/plugins` and
+`GET /comfyui/workflows` had made all along, now removed from both).
+
+**The plugin lifecycle is not fully wired for third parties, and the guide says so.**
+`ModelLifecycleManager` unloads the four built-in *services* by name and does not walk the
+registry, so nothing calls `TaggerPlugin.unload()` on a user plugin; `DescriptionWorkflow`
+charges the VRAM budget for Florence-2 only, so `estimated_vram_mb()` is never consulted;
+and `generate_descriptions` is called without a `stop_event` (the tag path does pass one).
+Closing any of these is a separate change to the workflow, not to discovery.
 
 #### Florence-2 checkpoint selection (issue #512)
 
@@ -2324,7 +2398,15 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
     **Scope of that guarantee (do not over-read it).** Loopback enforcement inherits the pre-existing proxy caveat in CSO Condition 2 below, shared with the other four loopback routes: a reverse proxy that sets no `X-Forwarded-For`, or passes an inbound one through, can make a remote caller resolve to loopback. So the correct claim is that safety depends on the flag being off **or** the proxy being configured correctly — *not* that it stops depending on the flag entirely. Container port-mapping is **not** a bypass (Docker bridge / slirp present `172.17.x` / `10.0.2.x`, which are not loopback).
 
-  - **Updated 2026-08-12 (shelf plan F6's remainder, `Add file`) — the locality total is now `31 = 26 local + 5 loopback`.** `POST /api/v1/model-files` copies one loose model file from anywhere on this machine into a registered folder — the managed store unless another is named — and registers it, so a single adapter that belongs to no training run reaches the shelf without a folder being registered for it. It is the **second** route on this tier for both reasons at once (the relocate above is the first): it takes a caller-supplied host path like `POST /model-folders` and writes a file into a registered folder like `POST /model-moves`. It is also the first shelf route that takes a host path in its **body**, which the import block deliberately does not — and that cannot be avoided here, because the file is by definition somewhere nobody registered. So the containment moves to the write (`resolve_path_within` against the destination folder, which also refuses a symlink standing at the destination name) and the read is bounded instead: one regular `MODEL_SUFFIX` file, refused outright when it already lies inside a registered folder, since a second copy of a catalogued file is not what the owner meant and a rescan is. It never unlinks anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_26_local_5_loopback`. Arithmetic, not judgement.
+  - **Updated 2026-08-12 (shelf plan F6's remainder, `Add file`) — the locality total is now `31 = 26 local + 5 loopback`.** `POST /api/v1/model-files` copies one loose model file from anywhere on this machine into a registered folder — the managed store unless another is named — and registers it, so a single adapter that belongs to no training run reaches the shelf without a folder being registered for it. It is the **second** route on this tier for both reasons at once (the relocate above is the first): it takes a caller-supplied host path like `POST /model-folders` and writes a file into a registered folder like `POST /model-moves`. It is also the first shelf route that takes a host path in its **body**, which the import block deliberately does not — and that cannot be avoided here, because the file is by definition somewhere nobody registered. So the containment moves to the write (`resolve_path_within` against the destination folder, which also refuses a symlink standing at the destination name) and the read is bounded instead: one regular `MODEL_SUFFIX` file, refused outright when it already lies inside a registered folder, since a second copy of a catalogued file is not what the owner meant and a rescan is. It never unlinks anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_26_local_5_loopback` *(renamed with the change below; the live assertion is always the one named in the last update)*. Arithmetic, not judgement.
+
+  - **Updated 2026-08-15 (#326, user tagger plugins) — the locality total is now `32 = 27 local + 5 loopback`.** `GET /api/v1/taggers/plugin-diagnostics` is the first route on this tier for **disclosure alone**. It takes no path, walks nothing, reads no file and writes nothing. It returns two things, and both name paths on the server's disk: the folder the tagger registry scans for user-supplied plugins, which lives under the owner's home directory, and the import failures of the plugins in it, whose message is `str(exc)` from third-party code and therefore carries whatever absolute path that code was reaching for. Every other member of the tier is here for an authority it *exercises* or a path it *accepts*; this one is here because the route that used to carry both — `ANY_TOKEN` `GET /api/v1/taggers` — was handing them to every resource-scoped share-link holder, to render a settings screen they cannot act on. The split costs a remote owner nothing real, since acting on either means editing a file in that folder and restarting.
+
+    Two siblings made the identical disclosure and are fixed the other way, by **deletion**: `GET /api/v1/pictures/plugins` returned `plugin_dirs` *and* `plugin_errors` (each error carrying the full path of the plugin that failed), and `GET /api/v1/comfyui/workflows` returned `workflow_dirs`. Nothing in the UI ever read any of them, and an endpoint nobody calls is worse than no endpoint. **The sweep is the point**: the first pass moved only the tagger folder and was returned by the adversarial review with two live siblings and a leak on the very route it had just cleaned, because it fixed the field it knew about instead of enumerating the disclosure. The second pass was returned for the same reason one level up — having evicted `load_error` because it is third-party text, it left `display_name`, `description`, `parameter_schema` and the caller's own `settings` on the same `ANY_TOKEN` route. So **`GET /api/v1/taggers` is now `owner_only`** (`any_token` 14 -> 13, `owner_only` 127 -> 128; not a locality tier, so the `32 = 27 + 5` arithmetic above is unmoved). `settings` is the sharp one: it is this user's saved `tagger_settings` through `fill_defaults`, and the plugin guide blesses a `"string"` parameter, so a captioner declaring `model_path` puts whatever the owner typed into it in front of every share link. Nothing is lost — tagging and captioning are POSTs, which a READ token cannot make, so the list only ever rendered controls a non-owner could not use. **`GET /api/v1/pictures/plugins` moved with it** (`any_token` 13 -> 12, `owner_only` 128 -> 129): it serves `plugin_schema()` for every user-supplied *image* plugin, which is the same verbatim third-party text, and `POST /pictures/plugins/{name}` beside it is already unreachable to a READ token. Retargeting one and not the other would have been the same argument reaching two answers in one commit.
+
+    **Two disclosures these review rounds surfaced are deliberately NOT fixed here, and neither is this change's doing.** First, a picture-scoped token reads absolute host paths out of the picture row itself — `import_source_folder` and `tags_file` are documented columns (`pixlstash/db_models/picture.py`), served by `GET /pictures/{id}/{field}`, `GET /pictures/search`, `GET /stacks/{id}/pictures` and `GET /picture_sets/{id}`. That is a per-object disclosure behind a membership check, not a global one behind none, and deciding what a share viewer may see of a picture's provenance is a product call rather than a bug fix. Second, `GET /api/v1/network/info` (`any_token`) returns the server's LAN IP. Both predate #326 and both want their own issue; the regression test's comment is scoped to what it actually checks so that neither is implied to be closed. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_27_local_5_loopback` and by `test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path`. That test does two things a hand-written check would not: it greps each serialised body for the owner's **home directory** rather than checking a field name is absent (the weaker assertion passed while `load_error` still carried the folder, and an assertion anchored on the plugin folder would pass any leak one directory over), and it **derives** the routes to probe from `ROUTE_POLICIES` — every parameterless `GET` declared `any_token` or `public` — rather than naming them, because a written-down list is exactly what let two review rounds each miss a sibling. It runs them as the stated threat: a resource-scoped share token.
+
+    **Both tagger routes are also on the second belt**, `READ_BLOCKED_GET_PATHS` in `pixlstash/auth.py` — the middleware list that refuses a READ token a GET outright, where `GET /filesystem/browse` already sits. The gate alone is enough while it is enforcing, and that is the point: `AUTHZ_GATE_ENFORCING = False` is a documented one-line rollback, and with the gate off the diagnostics route served the owner's home directory to a share token. The review reproduced exactly that. `tests/test_authz_host_capability_16_3.py::test_the_plugin_routes_survive_the_documented_gate_rollback` turns the gate off deliberately and asserts both routes stay 403 for a share token while the owner still reaches them. The membership is **derived** rather than written down — `test_every_untemplated_locality_get_is_on_the_read_blocked_belt` asserts that every untemplated locality-tier GET is on the belt, so the next one fails the build instead of waiting for a review. Running that derivation for the first time found `GET /api/v1/model-moves` off it, which is fixed here: it serves the move queue's source and destination folders, so the rollback handed those to a READ token. `GET /pictures/plugins` is deliberately **not** on the belt: it is `owner_only` at the gate for the third-party text it serves, but `ImagePluginManager.list_plugins()` returns `plugin_schema()` and nothing else — no host path, no user settings — so it is not what this list is for. **What stays open** is the templated half: the frozenset matches literal paths, so `GET /model-folders/{folder_id}/runs` and its `samples/{filename}` sibling cannot join it at all. They are pinned as a known pair by the same test (a third fails it), and closing the gap needs prefix matching rather than another frozenset line. The follow-up is recorded in `tests/test_model_shelf_api.py`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 

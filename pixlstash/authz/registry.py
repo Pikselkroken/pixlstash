@@ -602,7 +602,16 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/pictures/impossible-tags/restore"): _LIST_AWARE,
     ("GET", "/api/v1/tags"): _LIST_AWARE,
     # ── pictures: owner-only surfaces ───────────────────────────────────────
-    ("GET", "/api/v1/pictures/plugins"): RoutePolicy(_ANY),
+    # Retargeted ANY_TOKEN -> OWNER_ONLY on 2026-08-15 (#326), for the reason
+    # its tagger sibling was: every field is verbatim text out of a plugin's
+    # own class body, half of them from a .py file the owner dropped in, and
+    # the only thing the list drives (POST /pictures/plugins/{name}) a READ
+    # token cannot call. Leaving it any_token while retargeting GET /taggers
+    # would have been the same argument reaching two answers.
+    ("GET", "/api/v1/pictures/plugins"): RoutePolicy(
+        _OWNER,
+        justification="Image plugin list; third-party plugin text, and the run endpoint beside it is owner-only",
+    ),
     ("GET", "/api/v1/sort_mechanisms"): RoutePolicy(_ANY),
     # Import status is NOT ANY_TOKEN: the completed payload carries per-object
     # data (``results[].picture_id``, ``results[].file`` the vault-relative
@@ -1287,7 +1296,30 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/tagger-runs"): RoutePolicy(_ANY),
     # ── taggers.py ──────────────────────────────────────────────────────────
-    ("GET", "/api/v1/taggers"): RoutePolicy(_ANY),
+    # Retargeted ANY_TOKEN -> OWNER_ONLY on 2026-08-15 (#326). Two reasons, and
+    # the first is the owner's own data: `settings` is this user's saved
+    # tagger_settings run through fill_defaults, so a plugin declaring a
+    # "string" parameter — which the plugin guide blesses — puts whatever the
+    # owner typed into it (a model path, a prompt) in front of every share-link
+    # holder. The second is that every other field is verbatim third-party text
+    # from a plugin's own class body. Nothing is lost: tagging and captioning
+    # are POSTs, which a READ token cannot make, so the list only ever rendered
+    # controls a non-owner could not use.
+    ("GET", "/api/v1/taggers"): RoutePolicy(
+        _OWNER,
+        justification="Plugin list + the caller's own tagger_settings; owner only — a scoped or READ token cannot run a tagger anyway",
+    ),
+    # The plugin folders and the load failures both came off GET /taggers so
+    # this tier could hold them: the folders are host paths under the owner's
+    # home directory, a load-failure message is exception text from third-party
+    # code that can carry any path it was reaching for, and that route is
+    # ANY_TOKEN, so every share-link holder was reading both. Local, not merely
+    # owner, because a host path is the §16.3 disclosure class — and nothing is
+    # lost remotely, since acting on either means editing a file in that folder.
+    ("GET", "/api/v1/taggers/plugin-diagnostics"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 host-path disclosure: names the scanned tagger-plugin folders on the server's disk and returns plugin import errors carrying host paths; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("POST", "/api/v1/taggers/{name}/download"): RoutePolicy(
         _OWNER,
         justification="Download tagger plugin; POST blocked for READ tokens; owner only",

@@ -117,7 +117,6 @@ function onParamsSaved({ name, params }) {
           v-for="plugin in capablePlugins"
           :key="plugin.name"
           class="pt-row"
-          :class="{ 'pt-row--unavailable': !!plugin.load_error }"
         >
           <td class="pt-col-active">
             <input
@@ -125,7 +124,7 @@ function onParamsSaved({ name, params }) {
               :name="`active-${kind}-plugin`"
               :value="plugin.name"
               :checked="activePlugin === plugin.name"
-              :disabled="!!plugin.load_error || settingActive"
+              :disabled="settingActive"
               class="pt-radio"
               @change="setActive(plugin.name)"
             />
@@ -148,9 +147,6 @@ function onParamsSaved({ name, params }) {
               </template>
             </v-tooltip>
             <span v-else class="pt-plugin-name">{{ plugin.display_name }}</span>
-            <span v-if="plugin.load_error" class="pt-unavailable-label">
-              (unavailable)
-            </span>
           </td>
 
           <td class="pt-col-loaded">
@@ -169,7 +165,6 @@ function onParamsSaved({ name, params }) {
               size="x-small"
               icon="mdi-cog"
               title="Plugin settings"
-              :disabled="!!plugin.load_error"
               @click="openSettings(plugin)"
             />
           </td>
@@ -221,10 +216,6 @@ function onParamsSaved({ name, params }) {
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.06);
 }
 
-.pt-row--unavailable td {
-  opacity: 0.5;
-}
-
 .pt-col-active {
   width: 52px;
 }
@@ -255,12 +246,6 @@ function onParamsSaved({ name, params }) {
   accent-color: rgb(var(--v-theme-primary));
   width: 16px;
   height: 16px;
-}
-
-.pt-unavailable-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), 0.45);
-  margin-left: var(--space-2);
 }
 
 .pt-error {

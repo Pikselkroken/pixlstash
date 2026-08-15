@@ -6,7 +6,11 @@ vi.mock("../utils/apiClient", () => ({
 }));
 
 import { apiClient } from "../utils/apiClient";
-import { listTaggers, getLabelThresholds } from "./taggers";
+import {
+  listTaggers,
+  listTaggerPluginDiagnostics,
+  getLabelThresholds,
+} from "./taggers";
 
 beforeEach(() => {
   apiClient.get.mockReset();
@@ -26,6 +30,21 @@ describe("api/taggers", () => {
     apiClient.get.mockResolvedValue({ data: {} });
     await listTaggers();
     expect(apiClient.get).toHaveBeenCalledWith("/taggers");
+  });
+
+  // Its own route because both halves name host paths, and the folder is
+  // stricter than the plugin list: local owner, not merely owner.
+  it("listTaggerPluginDiagnostics GETs the separate diagnostics route", async () => {
+    apiClient.get.mockResolvedValue({
+      data: {
+        plugin_dirs: { user: "/somewhere/tagger-plugins/user" },
+        load_errors: [{ name: "broken", message: "boom" }],
+      },
+    });
+    const result = await listTaggerPluginDiagnostics();
+    expect(apiClient.get).toHaveBeenCalledWith("/taggers/plugin-diagnostics");
+    expect(result.plugin_dirs.user).toBe("/somewhere/tagger-plugins/user");
+    expect(result.load_errors[0].name).toBe("broken");
   });
 
   it("getLabelThresholds sends the previewed offset", async () => {

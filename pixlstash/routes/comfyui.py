@@ -386,12 +386,17 @@ class ComfyUIWorkflowItemResponse(BaseModel):
 
 
 class ComfyUIWorkflowListResponse(BaseModel):
-    """List of ComfyUI workflows plus the directories they were discovered in."""
+    """List of ComfyUI workflows, by name.
+
+    The directories they were discovered in are deliberately absent: they are
+    host paths under the owner's home directory and this route is ANY_TOKEN, so
+    a share-link holder was reading them. Nothing consumed them (§16.3,
+    2026-08-15 — the same sweep that moved the tagger folders).
+    """
 
     model_config = ConfigDict(extra="allow")
 
     workflows: list[ComfyUIWorkflowItemResponse] = []
-    workflow_dirs: dict[str, str] = {}
 
 
 class ComfyUIWorkflowDeleteResponse(BaseModel):
@@ -659,10 +664,6 @@ def create_router(server) -> APIRouter:
         response_model=ComfyUIWorkflowListResponse,
     )
     async def list_comfyui_workflows():
-        workflow_dirs = {
-            "built_in": _workflow_builtin_dir(),
-            "user": _workflow_user_dir(),
-        }
         workflows = []
         seen = set()
         for source, folder in _workflow_dirs():
@@ -695,10 +696,7 @@ def create_router(server) -> APIRouter:
                     }
                 )
         workflows.sort(key=lambda item: item.get("name", ""))
-        return {
-            "workflows": workflows,
-            "workflow_dirs": workflow_dirs,
-        }
+        return {"workflows": workflows}
 
     @router.delete(
         "/comfyui/workflows/{workflow_name}",
