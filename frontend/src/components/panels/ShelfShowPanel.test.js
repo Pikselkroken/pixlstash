@@ -74,6 +74,35 @@ describe("ShelfShowPanel", () => {
     expect(parent.element.indeterminate).toBe(true);
   });
 
+  it("spells an algorithm the way the rest of the shelf spells it, once", async () => {
+    // The row's Kind cell and the `feature` group header both read `LoRA`, so
+    // a raw `lora` here was a third spelling of one thing on one screen. And
+    // the facet folds: two spellings of one algorithm are ONE box, or the
+    // panel offers two boxes with the same label that each tick half the rows.
+    const { wrapper } = await mountPanel([
+      adapter({ id: 1, kind: "lora" }),
+      adapter({ id: 2, kind: "LoRA" }),
+      adapter({ id: 3, kind: "lokr" }),
+    ]);
+    // The KIND block specifically: `.shelf-show-nested` is also the
+    // capability block, and this fixture only happens to have no engines.
+    const boxes = wrapper.findAll(".shelf-show-nested--kinds label");
+    expect(boxes.map((b) => b.text())).toEqual(["LoKr", "LoRA"]);
+  });
+
+  it("offers the unidentified adapters as a box, spelled like everything else", async () => {
+    // `unknown` is `detect_adapter_kind`'s refusal, and the group axis declines
+    // to head a group with it — but "which of these could we not identify" is
+    // still a real selection, so it stays a facet. Spelled `Unknown`, because a
+    // lowercase box beside `LoRA` is the third-spelling problem again.
+    const { wrapper } = await mountPanel([
+      adapter({ id: 1, kind: "lora" }),
+      adapter({ id: 2, kind: "unknown" }),
+    ]);
+    const boxes = wrapper.findAll(".shelf-show-nested--kinds label");
+    expect(boxes.map((b) => b.text())).toEqual(["LoRA", "Unknown"]);
+  });
+
   it("disables the kinds when the parent is off, keeping the selection", async () => {
     const { wrapper, store } = await mountPanel([
       adapter({ id: 1, kind: "lora" }),

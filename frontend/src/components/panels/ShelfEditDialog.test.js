@@ -104,6 +104,35 @@ describe("what the dialog sends", () => {
     expect(store.editSelected).toHaveBeenCalledWith({ display_name: null });
   });
 
+  it("seeds the algorithm from two rows the shelf calls one algorithm", async () => {
+    // `model.kind` is free text, and the shelf now folds it: `lora` and `LoRA`
+    // draw one group header, one Show checkbox, and two Kind cells both
+    // reading `LoRA`. Comparing raw here opened this field BLANK — which means
+    // "they disagree" — on a selection the rest of the screen presents as one
+    // thing. Seeded with the first row's own spelling, so saving converges it.
+    select([row(1, { kind: "lora" }), row(2, { kind: "LoRA" })]);
+    const wrapper = mount(ShelfEditDialog, {
+      ...globalOpts,
+      props: { verb: "kind" },
+    });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find("input[type=text]").element.value).toBe("lora");
+  });
+
+  it("still blanks the algorithm when the rows really do disagree", async () => {
+    // The other direction: over-folding would silently offer one algorithm as
+    // the shared value of a mixed selection and overwrite the other on save.
+    select([row(1, { kind: "lora" }), row(2, { kind: "lokr" })]);
+    const wrapper = mount(ShelfEditDialog, {
+      ...globalOpts,
+      props: { verb: "kind" },
+    });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find("input[type=text]").element.value).toBe("");
+  });
+
   it("asks for an algorithm before it will call a file an adapter", async () => {
     // The hub carries `CHECK (file_kind <> 'adapter' OR kind IS NOT NULL)`, so
     // without one the request is refused. The button is the honest place to say
@@ -122,6 +151,42 @@ describe("what the dialog sends", () => {
     await wrapper.find("input[type=text]").setValue("lokr");
     await wrapper.vm.$nextTick();
     expect(submitButton(wrapper).attributes("disabled")).toBeUndefined();
+  });
+
+  it("will not call a MIXED selection already-kinded off the one row that is", async () => {
+    // `.every`, never `.some`. At one row the two are the same, which is what
+    // every other case here selects; the guard only does work at two. With a
+    // blank field, `.some` would enable Save and send `file_kind` alone —
+    // leaving the second row with the non-algorithm it started with, under a
+    // receipt reading "Set the algorithm on 2 models".
+    select([
+      row(1, { file_kind: "adapter", kind: "lora" }),
+      row(2, { file_kind: "adapter", kind: "  " }),
+    ]);
+    const wrapper = mount(ShelfEditDialog, {
+      ...globalOpts,
+      props: { verb: "kind" },
+    });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find("input[type=text]").element.value).toBe("");
+    expect(submitButton(wrapper).attributes("disabled")).toBeDefined();
+  });
+
+  it("does not count a whitespace-only kind as an algorithm already on file", async () => {
+    // The CHECK is `kind IS NOT NULL`, not `kind <> ''`, so `"  "` satisfies
+    // the database and satisfies nobody else. Read raw it is truthy — Save
+    // goes live on a verb that would write only `file_kind` and leave the row
+    // with the same non-algorithm it had.
+    select([row(1, { file_kind: "adapter", kind: "  " })]);
+    const wrapper = mount(ShelfEditDialog, {
+      ...globalOpts,
+      props: { verb: "kind" },
+    });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find("input[type=text]").element.value).toBe("  ");
+    expect(submitButton(wrapper).attributes("disabled")).toBeDefined();
   });
 });
 
