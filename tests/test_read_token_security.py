@@ -305,6 +305,43 @@ def _setup_two_picture_sets(tmp: str):
 # ---------------------------------------------------------------------------
 
 
+def _stop_planner_and_settle(server, timeout_s: float = 120.0) -> None:
+    """Stop *server*'s planner and wait out the work it already handed off.
+
+    ``WorkPlanner.stop()`` stops the loop that FINDS work. It does not touch
+    the ``TaskRunner``, which owns its own queues and worker threads, so a task
+    the planner submitted seconds earlier is still queued or already executing
+    when ``stop()`` returns — measured on this very fixture: one task on the
+    GPU queue and a ``FaceExtractionTask`` running.
+
+    That is what a shared module environment cannot survive. ``TagTask``
+    deletes a picture's tags before writing its own, so a tagger still in
+    flight lands inside a test body, wipes the ``tag-a-only`` row the test just
+    posted, and leaves the tagger's own vocabulary in its place — which is
+    exactly how ``test_list_all_tags_cannot_leak_out_of_scope_vocab`` failed on
+    a CI runner slow enough to keep the pipeline alive that long, while passing
+    on every machine fast enough to finish it during setup.
+
+    Same shape as ``tests/test_picture_mutation_scope.py``'s pipeline settle:
+    drain what is queued, then wait for what is running. Looped, because a
+    finishing task's completion callback can submit its own follow-up.
+    """
+    server.vault._work_planner.stop()
+    runner = server.vault._task_runner
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        runner.cancel_pending_tasks()
+        with runner._active_task_lock:
+            active = list(runner._active_tasks.values())
+        if not active and runner._queue.empty() and runner._gpu_queue.empty():
+            return
+        time.sleep(0.05)
+    raise AssertionError(
+        f"the import pipeline did not settle within {timeout_s}s; still "
+        f"running: {active}"
+    )
+
+
 def _clear_rate_limit_window(server) -> None:
     """Empty the global rate limiter's sliding window on *server*.
 
@@ -459,12 +496,14 @@ class _SharedPictureLibrary:
 def _two_set_env():
     """One Server holding two single-picture sets, shared by the isolation tests.
 
-    The planner is stopped once the two imports are done. Nothing after setup
-    imports a picture, so it has no legitimate work left here — but several of
-    these tests hand-write ``Tag``, ``Character`` and ``PictureStack`` rows, and
-    on a warm long-lived server a ``TagTask`` (which deletes a picture's tags
-    before rewriting them) or a stack-cohesion sweep would clobber them. Same
-    move as tests/test_smart_score_invalidation.py.
+    The planner is stopped once the two imports are done, and the work it has
+    ALREADY handed to the runner is waited out — see
+    {@link _stop_planner_and_settle}, which is the half this fixture used to
+    skip. Nothing after setup imports a picture, so there is no legitimate work
+    left here — but several of these tests hand-write ``Tag``, ``Character``
+    and ``PictureStack`` rows, and a ``TagTask`` still in flight (it deletes a
+    picture's tags before rewriting them) or a stack-cohesion sweep would
+    clobber them. Same move as tests/test_smart_score_invalidation.py.
 
     Private on purpose: reach it through ``TestResourceScopedReadTokenIsolation.env``,
     never directly, or the test gets no reset and no integrity check.
@@ -472,7 +511,7 @@ def _two_set_env():
     with tempfile.TemporaryDirectory() as tmp:
         env = _setup_two_picture_sets(tmp)
         try:
-            env.server.vault._work_planner.stop()
+            _stop_planner_and_settle(env.server)
             yield env
         finally:
             env.server.__exit__(None, None, None)
@@ -660,7 +699,7 @@ def _comfyui_stack_env():
 
             ids = _seed_stack_pictures(server)
             _form_stacks(server, ids)
-            server.vault._work_planner.stop()
+            _stop_planner_and_settle(server)
 
             yield SimpleNamespace(server=server, owner_client=owner_client, ids=ids)
         finally:
