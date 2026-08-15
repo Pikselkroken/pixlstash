@@ -21,24 +21,26 @@ logger = get_logger(__name__)
 
 
 def list_plugins(vault: "Vault") -> dict:
-    """Return available image plugins, errors, and plugin directories.
+    """Return available image plugins and their load errors.
+
+    The scanned folders are deliberately **not** returned: they are host paths
+    on the server's disk and ``GET /pictures/plugins`` is ANY_TOKEN, so a
+    share-link holder would be handed the owner's home directory. Nothing in
+    the UI read them. The tagger equivalent is behind its own
+    LOCAL_OWNER_ONLY route (``GET /taggers/plugin-dirs``).
 
     Args:
         vault: Application vault (unused currently; reserved for future
             vault-scoped plugin discovery).
 
     Returns:
-        Dict with keys: ``plugins``, ``plugin_errors``, ``plugin_dirs``.
+        Dict with keys: ``plugins``, ``plugin_errors``.
     """
     manager = get_image_plugin_manager()
     manager.reload()
     return {
         "plugins": manager.list_plugins(),
         "plugin_errors": manager.list_errors(),
-        "plugin_dirs": {
-            "built_in": manager.built_in_dir,
-            "user": manager.user_dir,
-        },
     }
 
 

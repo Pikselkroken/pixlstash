@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { getUserConfig, patchUserConfig } from "../../api/config";
 import { getWorkerProgress } from "../../api/workers";
-import { listTaggers } from "../../api/taggers";
+import { listTaggers, listTaggerPluginDirs } from "../../api/taggers";
 import { VSlider, VSwitch } from "vuetify/components";
 import PluginsTable from "../widgets/PluginsTable.vue";
 import SettingsSection from "./SettingsSection.vue";
@@ -177,12 +177,20 @@ async function fetchTaggerPlugins() {
     const body = await listTaggers();
     taggerPlugins.value = body?.plugins ?? [];
     taggerSettings.value = body?.settings ?? {};
-    taggerPluginDir.value = body?.plugin_dirs?.user ?? "";
   } catch {
     taggerPlugins.value = [];
-    taggerPluginDir.value = "";
+    taggerSettings.value = {};
   } finally {
     taggerLoading.value = false;
+  }
+  // Separate request: the folder is a host path, so it is local-owner-only and
+  // 403s for a remote or share-scoped caller. That is not an error — there is
+  // simply no folder to show them.
+  try {
+    const dirs = await listTaggerPluginDirs();
+    taggerPluginDir.value = dirs?.plugin_dirs?.user ?? "";
+  } catch {
+    taggerPluginDir.value = "";
   }
 }
 

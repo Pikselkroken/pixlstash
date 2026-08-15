@@ -2,6 +2,7 @@
 
 Provides:
     GET  /taggers                          — list all registered plugins + current settings
+    GET  /taggers/plugin-dirs              — the scanned host folders (local owner only)
     POST /taggers/{name}/download          — kick off an artifact download for a plugin
     DELETE /taggers/{name}/artifacts/{id}  — remove a downloaded artifact
 """
@@ -42,6 +43,18 @@ class TaggerListResponse(BaseModel):
 
     plugins: list[TaggerPluginResponse] = []
     settings: dict = {}
+
+
+class TaggerPluginDirsResponse(BaseModel):
+    """Host folders scanned for user plugins — a §16.3 host-path disclosure.
+
+    Deliberately its own route rather than a field on ``GET /taggers``: that
+    one is ANY_TOKEN, so a share-link holder would otherwise be handed the
+    owner's home directory. This one is LOCAL_OWNER_ONLY.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
     plugin_dirs: dict = {}
 
 
@@ -109,9 +122,11 @@ def create_router(server) -> APIRouter:
                 },
                 ...
               ],
-              "settings": { ... },
-              "plugin_dirs": {"user": "/path/to/tagger-plugins/user"}
+              "settings": { ... }
             }
+
+        The scanned plugin folders are **not** here — they are host paths, and
+        this route is reachable by any token. See ``GET /taggers/plugin-dirs``.
         """
         mgr = get_tagger_plugin_manager()
 
@@ -155,8 +170,23 @@ def create_router(server) -> APIRouter:
         return {
             "plugins": plugins_out,
             "settings": _current_settings(request),
-            "plugin_dirs": mgr.plugin_dirs(),
         }
+
+    @router.get(
+        "/taggers/plugin-dirs",
+        summary="Host folders scanned for user tagger plugins",
+        response_model=TaggerPluginDirsResponse,
+    )
+    def list_plugin_dirs(request: Request):
+        """Return ``{"plugin_dirs": {"user": "/host/path"}}``.
+
+        LOCAL_OWNER_ONLY: it names a folder on the server's disk, which is the
+        §16.3 host-path class. Nothing else about a plugin is gated by it —
+        installing one means writing to that folder, which a remote caller
+        cannot do anyway.
+        """
+        server.auth.ensure_secure_when_required(request)
+        return {"plugin_dirs": get_tagger_plugin_manager().plugin_dirs()}
 
     @router.post(
         "/taggers/{name}/download",

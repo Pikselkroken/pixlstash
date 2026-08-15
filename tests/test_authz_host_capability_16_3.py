@@ -148,10 +148,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_26_local_5_loopback():
+def test_host_capability_tier_split_is_27_local_5_loopback():
     """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 31 routes carry a
-    locality tier = 26 local + 5 loopback.
+    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 32 routes carry a
+    locality tier = 27 local + 5 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -209,6 +209,14 @@ def test_host_capability_tier_split_is_26_local_5_loopback():
     inside a registered folder). It never unlinks: the source is the owner's own
     file.
 
+    32 = 27 + 5 with ``GET /taggers/plugin-dirs`` (#326). It is the first route
+    on this tier for **disclosure alone**: it takes no path, walks nothing and
+    writes nothing — it names the folder the tagger registry scans, which is
+    under the owner's home directory. It exists because that path was a field
+    on ``GET /taggers``, which is ANY_TOKEN, so every share-link holder was
+    reading it. Splitting it out costs a remote owner nothing real: installing
+    a plugin means writing to that folder, which they cannot do from there.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -222,7 +230,7 @@ def test_host_capability_tier_split_is_26_local_5_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 26, sorted(local)
+    assert len(local) == 27, sorted(local)
 
 
 # ===========================================================================
@@ -295,6 +303,7 @@ def _is_loopback_403(resp):
 
 _BROWSE = f"{API}/filesystem/browse"  # a LOCAL_OWNER_ONLY route
 _OPEN_LOCATION = f"{API}/pictures/999999/open-location"  # a LOOPBACK_OWNER_ONLY route
+_TAGGER_DIRS = f"{API}/taggers/plugin-dirs"  # LOCAL_OWNER_ONLY for disclosure alone
 
 
 # ---- LOCAL_OWNER_ONLY (13) ------------------------------------------------
@@ -339,6 +348,34 @@ def test_local_owner_only_remote_public_allowed_with_flag_on():
             assert not _is_locality_403(r), (
                 f"allow_remote_host_ops=true must admit a remote owner; "
                 f"got {r.status_code}: {r.text}"
+            )
+
+
+def test_tagger_plugin_dirs_is_local_and_the_listing_carries_no_host_path():
+    """Both directions on the #326 split, plus the reason it exists.
+
+    The folder is a host path, so a remote owner is refused it (flag off); a
+    loopback owner still gets it, because over-blocking is its own regression.
+    And the ANY_TOKEN sibling it came off must not carry it any more — that
+    route is reachable by every share-link holder.
+    """
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, False):
+            allowed = owner.get(_TAGGER_DIRS)
+            assert allowed.status_code == 200, allowed.text
+            assert allowed.json()["plugin_dirs"]["user"], "the folder must be named"
+
+            refused = owner.get(_TAGGER_DIRS, headers=_xff("8.8.8.8"))
+            assert _is_locality_403(refused), (
+                f"a remote owner must not read the host path; "
+                f"got {refused.status_code}: {refused.text}"
+            )
+
+            listing = owner.get(f"{API}/taggers", headers=_xff("8.8.8.8"))
+            assert listing.status_code == 200, listing.text
+            assert "plugin_dirs" not in listing.json(), (
+                "GET /taggers is ANY_TOKEN and must disclose no host path"
             )
 
 

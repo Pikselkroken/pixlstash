@@ -6,7 +6,11 @@ vi.mock("../utils/apiClient", () => ({
 }));
 
 import { apiClient } from "../utils/apiClient";
-import { listTaggers, getLabelThresholds } from "./taggers";
+import {
+  listTaggers,
+  listTaggerPluginDirs,
+  getLabelThresholds,
+} from "./taggers";
 
 beforeEach(() => {
   apiClient.get.mockReset();
@@ -26,6 +30,17 @@ describe("api/taggers", () => {
     apiClient.get.mockResolvedValue({ data: {} });
     await listTaggers();
     expect(apiClient.get).toHaveBeenCalledWith("/taggers");
+  });
+
+  // Its own route because the folder is a host path: /taggers is any-token and
+  // must never carry it.
+  it("listTaggerPluginDirs GETs the separate plugin-dirs route", async () => {
+    apiClient.get.mockResolvedValue({
+      data: { plugin_dirs: { user: "/somewhere/tagger-plugins/user" } },
+    });
+    const result = await listTaggerPluginDirs();
+    expect(apiClient.get).toHaveBeenCalledWith("/taggers/plugin-dirs");
+    expect(result.plugin_dirs.user).toBe("/somewhere/tagger-plugins/user");
   });
 
   it("getLabelThresholds sends the previewed offset", async () => {

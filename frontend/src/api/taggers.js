@@ -4,7 +4,7 @@
 // settings in one body; the settings are written back through the user config
 // (see api/config.js), which is why there is no PATCH here.
 
-import { apiClient} from "../utils/apiClient";
+import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
@@ -13,6 +13,17 @@ import { unwrap } from "../utils/unwrap";
  */
 export async function listTaggers() {
   return unwrap(apiClient.get(`/taggers`));
+}
+
+/**
+ * Read the host folders scanned for user-supplied tagger plugins.
+ *
+ * Local owner only — a remote or share-scoped caller gets 403, which the
+ * caller is expected to treat as "no folder to show" rather than an error.
+ * @returns {Promise<Object>} the response body: `plugin_dirs`.
+ */
+export async function listTaggerPluginDirs() {
+  return unwrap(apiClient.get(`/taggers/plugin-dirs`));
 }
 
 /**

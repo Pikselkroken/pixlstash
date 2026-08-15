@@ -69,7 +69,6 @@ class ImagePluginListResponse(BaseModel):
 
     plugins: list = []
     plugin_errors: list = []
-    plugin_dirs: dict = {}
 
 
 class PicturePluginRunResponse(BaseModel):

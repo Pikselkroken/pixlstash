@@ -56,17 +56,24 @@ The **aggregate counts in the table below are still not machine-checked**; only
 the rows are. Re-derive them from `ROUTE_POLICIES` when you touch them rather
 than editing the previous figure.
 
+**Re-derived 2026-08-15 (#326), counted from `ROUTE_POLICIES`, not carried
+forward: 277 declared.** The previous figures below the header (`249` total,
+`local_owner_only` 13) had gone stale by a long way — the shelf's host-capability
+routes alone took the local tier 13 → 26 without this table being touched. #326
+itself adds exactly **+1 `local_owner_only`**, `GET /api/v1/taggers/plugin-dirs`;
+every other movement here is drift being written down, not a change made now.
+
 | Policy | Count |
 |---|---|
 | `public` | 13 |
 | `any_token` | 14 |
-| `owner_only` | 113 |
+| `owner_only` | 127 |
 | `picture_scoped` | 36 |
 | `scoped_list` | 39 |
 | `set_scoped` | 4 |
 | `character_scoped` | 6 |
 | `project_scoped` | 6 |
-| `local_owner_only` | 13 |
+| `local_owner_only` | 27 |
 | `loopback_owner_only` | 5 |
 
 > **Updated for Step 3 (2026-07-21).** The §16.3 host-capability retarget moved 16
@@ -526,6 +533,7 @@ and the declarations themselves are pinned by
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
 | GET | `/api/v1/taggers` | any_token |  |  |
+| GET | `/api/v1/taggers/plugin-dirs` | local_owner_only |  | §16.3 host-path disclosure: names the scanned tagger-plugin folders on the server's disk; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1) |
 | DELETE | `/api/v1/taggers/{name}/artifacts/{artifact_id}` | owner_only |  | Delete tagger artifact; DELETE blocked for READ tokens; owner only |
 | POST | `/api/v1/taggers/{name}/download` | owner_only |  | Download tagger plugin; POST blocked for READ tokens; owner only |
 
