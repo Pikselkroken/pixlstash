@@ -78,8 +78,8 @@ describe("deriveModelName", () => {
     // needs five digits so `000002750` goes and the `2` in `v2` stays;
     // dropping that distinction merges six checkpoints of one run into six
     // unrelated-looking rows, or renames every `v2` file.
-    expect(deriveModelName("JimmyCarr_000002750.safetensors")).toBe(
-      "JimmyCarr",
+    expect(deriveModelName("JimmyVehicle_000002750.safetensors")).toBe(
+      "JimmyVehicle",
     );
     expect(deriveModelName("ohwx_woman-step00004500.safetensors")).toBe(
       "ohwx woman",
@@ -1027,6 +1027,39 @@ describe("importReceipt", () => {
     ).toContain("2 checkpoints could not be copied and were left in the run.");
   });
 
+  it("names a checkpoint that landed without its previews", () => {
+    // The server keeps such a file `imported` on purpose — losing a preview must
+    // not cost the weights — so the status counts cannot see it, and a receipt
+    // built from them alone would call this a clean import. It is not folded
+    // into the failure count either: the checkpoint is genuinely on the shelf.
+    expect(
+      importReceipt({
+        run_name: "Clementine",
+        files: [
+          { status: "imported", sample_count: 2 },
+          {
+            status: "imported",
+            sample_count: 0,
+            detail: "no room for previews",
+          },
+        ],
+      }),
+    ).toBe(
+      "Imported 2 checkpoints from Clementine. 1 checkpoint landed without its training previews.",
+    );
+  });
+
+  it("says nothing about previews for a run that had none", () => {
+    // `sample_count: 0` with no detail is a run with no samples at all, which is
+    // ordinary and not worth a sentence.
+    expect(
+      importReceipt({
+        run_name: "Clementine",
+        files: [{ status: "imported", sample_count: 0 }],
+      }),
+    ).toBe("Imported 1 checkpoint from Clementine.");
+  });
+
   it("says the run is gone when it is", () => {
     expect(
       importReceipt({
@@ -1185,14 +1218,14 @@ describe("stackReceipt", () => {
 
 describe("trainingStep", () => {
   it("reads the same suffix the name derivation strips", () => {
-    expect(trainingStep("JimmyCarr_000000500.safetensors")).toBe(500);
+    expect(trainingStep("JimmyVehicle_000000500.safetensors")).toBe(500);
     expect(trainingStep("ohwx_woman-step00004500.safetensors")).toBe(4500);
   });
 
   it("reports no step for a bare final, and for a version suffix", () => {
     // `v2` is not training bookkeeping — `deriveModelName` keeps it, so this
     // must not read it as a step.
-    expect(trainingStep("JimmyCarr.safetensors")).toBe(null);
+    expect(trainingStep("JimmyVehicle.safetensors")).toBe(null);
     expect(trainingStep("portrait_mix_v2.safetensors")).toBe(null);
   });
 });

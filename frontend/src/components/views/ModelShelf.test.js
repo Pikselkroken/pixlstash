@@ -940,6 +940,288 @@ describe("the Sort split-button", () => {
   });
 });
 
+describe("the column headings", () => {
+  /** The heading button for a column, by the width class on its wrapper. */
+  const headOf = (wrapper, key) =>
+    wrapper.find(`.shelf-head-col--${key} .shelf-head-cell`);
+  const gripOf = (wrapper, key) =>
+    wrapper.find(`.shelf-head-col--${key} .shelf-head-grip`);
+
+  it("sorts on the column pressed, at that column's own end", async () => {
+    // Not the direction the previous key was left at: arriving at Base from
+    // "Date added, newest first" would otherwise hand back Z to A.
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    expect(store.view.sortKey).toBe("added_at");
+    expect(store.view.sortDirection).toBe("desc");
+
+    await headOf(wrapper, "base").trigger("click");
+    expect(store.view.sortKey).toBe("base_model");
+    expect(store.view.sortDirection).toBe("asc");
+
+    // A size column starts at the big files, because that is what anyone
+    // sorting a shelf by size is looking for.
+    await headOf(wrapper, "size").trigger("click");
+    expect(store.view.sortKey).toBe("size");
+    expect(store.view.sortDirection).toBe("desc");
+
+    // Name is drawn on its own rather than from the column list — it is the
+    // flexible track, with no width and no grip — so it is asserted separately
+    // or the one heading written by hand is the one nothing covers.
+    await wrapper
+      .find(".shelf-head-col--label .shelf-head-cell")
+      .trigger("click");
+    expect(store.view.sortKey).toBe("name");
+    expect(store.view.sortDirection).toBe("asc");
+  });
+
+  it("flips the direction when the sorted column is pressed again", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    await headOf(wrapper, "size").trigger("click");
+    expect(store.view.sortDirection).toBe("desc");
+    await headOf(wrapper, "size").trigger("click");
+    expect(store.view.sortDirection).toBe("asc");
+    expect(store.view.sortKey).toBe("size");
+  });
+
+  it("names its own state and what pressing it would do", async () => {
+    // The heading is the sort control for a mouse user, so a screen-reader
+    // user has to hear the same three things the arrow and the ink say.
+    const wrapper = await mountShelf([adapter()]);
+    expect(headOf(wrapper, "size").attributes("aria-label")).toBe(
+      "Size, not sorted. Activate to sort Largest first.",
+    );
+    await headOf(wrapper, "size").trigger("click");
+    expect(headOf(wrapper, "size").attributes("aria-label")).toBe(
+      "Size, sorted Largest first. Activate to sort Smallest first.",
+    );
+  });
+
+  it("is absent from every state that draws no rows", async () => {
+    // A header for a list that is not there names nothing, and the three empty
+    // states are the ones a reader is meant to act on rather than read past.
+    // The positive control first, or every assertion below passes on a typo.
+    const shown = await mountShelf([adapter()]);
+    expect(shown.find(".shelf-head").exists()).toBe(true);
+
+    setActivePinia(createPinia());
+    const wrapper = await mountShelf([]);
+    const store = useModelShelfStore();
+    expect(wrapper.find(".shelf-head").exists()).toBe(false);
+
+    store.setFilters({ adapters: false, checkpoints: false });
+    store.setFilters({ engines: false, unclassified: false, support: false });
+    await wrapper.vm.$nextTick();
+    expect(store.nothingSelected).toBe(true);
+    expect(wrapper.find(".shelf-head").exists()).toBe(false);
+
+    store.error = "The shelf could not be read.";
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-head").exists()).toBe(false);
+  });
+
+  it("leaves Kind a heading rather than a button, having no sort key", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    expect(headOf(wrapper, "kind").element.tagName).toBe("SPAN");
+    // And it is still resizable: the grip belongs to the column, not to the
+    // sort.
+    expect(gripOf(wrapper, "kind").exists()).toBe(true);
+  });
+
+  it("carries the order into the grid's own hidden headings", async () => {
+    // The visible strip is a control group outside the treegrid, so without
+    // this a reader inside the grid hears the columns and not the order.
+    const wrapper = await mountShelf([adapter()]);
+    await headOf(wrapper, "base").trigger("click");
+    const headers = wrapper.findAll('[role="columnheader"]');
+    expect(headers.map((h) => h.attributes("aria-sort"))).toEqual([
+      undefined,
+      "none",
+      undefined,
+      "ascending",
+      "none",
+      // The date heading, which names whichever date axis the shelf is on and
+      // is therefore `none` here for `added_at` rather than absent.
+      "none",
+    ]);
+  });
+});
+
+describe("resizing the columns", () => {
+  const gripOf = (wrapper, key) =>
+    wrapper.find(`.shelf-head-col--${key} .shelf-head-grip`);
+
+  // Dispatched rather than `trigger`ed: test-utils builds the event and then
+  // assigns the options onto it, and `clientX` is a getter on MouseEvent, so
+  // the coordinate the whole gesture is made of never arrives.
+  //
+  // `buttons` is part of the gesture and not decoration: a move that arrives
+  // with nothing held down is how the code recognises a release it never heard
+  // about, so a helper that left it at 0 would end every drag on its first
+  // frame. `pointerup` is the one event that genuinely carries 0.
+  const fire = async (wrapper, grip, type, clientX, buttons = 1) => {
+    grip.element.dispatchEvent(
+      new MouseEvent(type, { clientX, buttons, bubbles: true }),
+    );
+    await wrapper.vm.$nextTick();
+  };
+
+  const drag = async (wrapper, grip, from, to) => {
+    await fire(wrapper, grip, "pointerdown", from);
+    await fire(wrapper, grip, "pointermove", to);
+    await fire(wrapper, grip, "pointerup", to, 0);
+  };
+
+  it("widens the column the grip belongs to, and remembers it", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    expect(store.view.columnWidths.base).toBe(84);
+
+    await drag(wrapper, gripOf(wrapper, "base"), 200, 240);
+    expect(store.view.columnWidths.base).toBe(124);
+    // The variable the rows read, not a per-cell style: one declaration, so a
+    // heading and the cells under it cannot drift apart.
+    expect(
+      wrapper.find(".shelf").element.style.getPropertyValue("--shelf-col-base"),
+    ).toBe("124px");
+    expect(
+      JSON.parse(window.localStorage.getItem("pixlstash:modelShelfView"))
+        .columnWidths.base,
+    ).toBe(124);
+  });
+
+  it("holds a column at its floor rather than letting it vanish", async () => {
+    // A column dragged to nothing takes its own grip off the screen with it,
+    // and there is no way back.
+    const wrapper = await mountShelf([adapter()]);
+    await drag(wrapper, gripOf(wrapper, "size"), 400, 0);
+    expect(useModelShelfStore().view.columnWidths.size).toBe(48);
+  });
+
+  it("stops tracking once the pointer is released", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    const grip = gripOf(wrapper, "kind");
+    await drag(wrapper, grip, 100, 120);
+    expect(store.view.columnWidths.kind).toBe(84);
+    await fire(wrapper, grip, "pointermove", 300, 0);
+    expect(store.view.columnWidths.kind).toBe(84);
+  });
+
+  it("gives up a drag whose release it never heard, rather than sticking", async () => {
+    // Pointer capture normally guarantees the pointerup, but a refused or lost
+    // capture would otherwise leave the drag live for good: the next hover over
+    // any grip would resume it from the original press and jump the column.
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    const grip = gripOf(wrapper, "base");
+
+    await fire(wrapper, grip, "pointerdown", 200);
+    await fire(wrapper, grip, "pointermove", 220);
+    expect(store.view.columnWidths.base).toBe(104);
+
+    // The release happened somewhere else. The next move arrives with nothing
+    // held down, and that is the drag over.
+    await fire(wrapper, grip, "pointermove", 260, 0);
+    expect(store.view.columnWidths.base).toBe(104);
+    await fire(wrapper, grip, "pointermove", 400, 0);
+    expect(store.view.columnWidths.base).toBe(104);
+  });
+
+  it("refuses a secondary button on any device, a pen's barrel included", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    const grip = gripOf(wrapper, "kind");
+    grip.element.dispatchEvent(
+      new MouseEvent("pointerdown", { clientX: 100, button: 2, bubbles: true }),
+    );
+    await wrapper.vm.$nextTick();
+    await fire(wrapper, grip, "pointermove", 200);
+    expect(store.view.columnWidths.kind).toBe(64);
+  });
+
+  it("moves the edge from the keyboard, which is why the grip is focusable", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    const grip = gripOf(wrapper, "kind");
+    expect(grip.attributes("role")).toBe("separator");
+    expect(grip.attributes("tabindex")).toBe("0");
+    expect(grip.attributes("aria-valuenow")).toBe("64");
+
+    await grip.trigger("keydown", { key: "ArrowRight" });
+    expect(store.view.columnWidths.kind).toBe(72);
+    await grip.trigger("keydown", { key: "ArrowLeft" });
+    await grip.trigger("keydown", { key: "ArrowLeft" });
+    expect(store.view.columnWidths.kind).toBe(56);
+    expect(gripOf(wrapper, "kind").attributes("aria-valuenow")).toBe("56");
+    expect(gripOf(wrapper, "kind").attributes("aria-valuetext")).toBe(
+      "56 pixels",
+    );
+  });
+
+  it("takes Home and End to the two ends", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    const grip = gripOf(wrapper, "base");
+    await grip.trigger("keydown", { key: "End" });
+    // The ceiling, which came down from 200 to 150 when the date column made
+    // the shelf four resizable columns wide: the ~600px the panel has for
+    // columns is the figure that was measured, and it is divided by however
+    // many there are.
+    expect(store.view.columnWidths.base).toBe(150);
+    await grip.trigger("keydown", { key: "Home" });
+    expect(store.view.columnWidths.base).toBe(48);
+  });
+
+  it("puts a column back, which is the only way out of a mis-drag", async () => {
+    // A width is remembered for good once it is dragged, so without a reset
+    // the reader's only recovery is clearing the browser's storage.
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    const grip = gripOf(wrapper, "size");
+
+    // 60px rather than 100: the assertion worth having here is the width the
+    // pointer asked for, and 174 is now past the ceiling, so it would be
+    // asserting the clamp instead.
+    await drag(wrapper, grip, 400, 460);
+    expect(store.view.columnWidths.size).toBe(134);
+    await grip.trigger("keydown", { key: "Enter" });
+    expect(store.view.columnWidths.size).toBe(74);
+
+    await drag(wrapper, grip, 400, 460);
+    await grip.trigger("dblclick");
+    expect(store.view.columnWidths.size).toBe(74);
+    expect(
+      JSON.parse(window.localStorage.getItem("pixlstash:modelShelfView"))
+        .columnWidths.size,
+    ).toBe(74);
+  });
+
+  it("writes the blob once the drag ends, not on every frame of it", async () => {
+    // `rememberView` rebuilds the whole blob and does a synchronous setItem;
+    // at one per pointermove that is ~120 main-thread writes a second.
+    const wrapper = await mountShelf([adapter()]);
+    const grip = gripOf(wrapper, "base");
+    const write = vi.spyOn(Storage.prototype, "setItem");
+
+    await fire(wrapper, grip, "pointerdown", 200);
+    await fire(wrapper, grip, "pointermove", 210);
+    await fire(wrapper, grip, "pointermove", 220);
+    await fire(wrapper, grip, "pointermove", 230);
+    expect(useModelShelfStore().view.columnWidths.base).toBe(114);
+    expect(write).not.toHaveBeenCalled();
+
+    await fire(wrapper, grip, "pointerup", 230, 0);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.parse(window.localStorage.getItem("pixlstash:modelShelfView"))
+        .columnWidths.base,
+    ).toBe(114);
+    write.mockRestore();
+  });
+});
+
 describe("selecting rows", () => {
   const rowAt = (wrapper, i) => wrapper.findAll(".shelf-row")[i];
 
@@ -2206,11 +2488,12 @@ describe("a run's disclosure", () => {
     );
   });
 
-  it("heads the columns once, and on every grid a reader may land in", async () => {
+  it("heads the columns on every grid a reader may land in, and draws the strip once", async () => {
     // The point of #891: a `columnheader` heads the grid it is in and nothing
     // else, and grouping makes one grid per group — so every group carries the
-    // row, and all but the first carry it visually-hidden so the eye sees one
-    // header line rather than one per folder.
+    // row, and every one of them is visually-hidden. What the eye sees is the
+    // single `.shelf-head` strip above the whole list, which is a control group
+    // and not the grid's header row precisely so it does not have to repeat.
     const wrapper = await mountShelf([
       adapter({
         id: 1,
@@ -2229,17 +2512,23 @@ describe("a run's disclosure", () => {
     useModelShelfStore().setView({ groupBy: "folder", folderLayout: "alpha" });
     await wrapper.vm.$nextTick();
 
-    // One strip per grid, and NONE of them drawn: a `columnheader` heads the
-    // grid it is in and nothing else, so grouping needs one per group — and
-    // the resolved design has no visible header strip, because the kind is a
-    // chip, the base is a word and the size is right-aligned, which is what
-    // makes the columns readable without being named. The names stay for the
-    // reader who cannot see that.
+    // One hidden header row per grid, because that is what the grid semantics
+    // want, and exactly ONE visible strip however many groups there are: eight
+    // identical bands of chrome down a grouped list is the thing the strip's
+    // whole design avoids.
     const heads = wrapper.findAll('[role="row"].visually-hidden');
     expect(heads).toHaveLength(2);
     expect(
       heads[0].findAll('[role="columnheader"]').map((cell) => cell.text()),
     ).toEqual(["Model", "Name", "Kind", "Base", "Size", "Date added"]);
+    expect(wrapper.findAll(".shelf-head")).toHaveLength(1);
+    // And the widths reach a group's rows through the one root declaration, so
+    // the columns cannot step sideways from one folder to the next.
+    useModelShelfStore().setColumnWidth("kind", 120);
+    await wrapper.vm.$nextTick();
+    expect(
+      wrapper.find(".shelf").element.style.getPropertyValue("--shelf-col-kind"),
+    ).toBe("120px");
   });
 });
 
@@ -2252,6 +2541,45 @@ describe("the date column", () => {
   const naive = (year, month, day) =>
     new Date(year, month - 1, day, 12, 0).toISOString().slice(0, 19);
   const ADDED = naive(2026, 7, 30);
+  const headOf = (wrapper) =>
+    wrapper.find(".shelf-head-col--date .shelf-head-cell");
+
+  it("heads itself with the axis it is drawn in, and sorts on that", async () => {
+    // The one heading in the strip that renames itself: there are two date
+    // sort keys and one column, so the label and the key it presses move
+    // together — otherwise the heading would name an axis the cells under it
+    // are not showing.
+    const wrapper = await mountShelf([adapter({ added_at: ADDED })]);
+    const store = useModelShelfStore();
+    expect(headOf(wrapper).text()).toBe("Date added");
+
+    // Already the sorted key, so pressing it flips the direction rather than
+    // re-picking it.
+    expect(store.view.sortKey).toBe("added_at");
+    await headOf(wrapper).trigger("click");
+    expect(store.view.sortKey).toBe("added_at");
+    expect(store.view.sortDirection).toBe("asc");
+
+    // The Sort panel is the only way onto the other axis. Arriving there
+    // renames this column rather than adding one, and the heading then sorts
+    // on the key it has become.
+    store.setView({ sortKey: "file_mtime" });
+    await wrapper.vm.$nextTick();
+    expect(headOf(wrapper).text()).toBe("File date");
+    await headOf(wrapper).trigger("click");
+    expect(store.view.sortKey).toBe("file_mtime");
+    expect(store.view.sortDirection).toBe("asc");
+
+    // And it is a resizable column like the other three.
+    expect(
+      wrapper.find(".shelf-head-col--date .shelf-head-grip").exists(),
+    ).toBe(true);
+    store.setColumnWidth("date", 120);
+    await wrapper.vm.$nextTick();
+    expect(
+      wrapper.find(".shelf").element.style.getPropertyValue("--shelf-col-date"),
+    ).toBe("120px");
+  });
 
   it("stamps the day in the reader's own date format", async () => {
     // The DAY, not the stamp: a column is scanned, and the clock is a third of

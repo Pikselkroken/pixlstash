@@ -1734,39 +1734,121 @@ read-only: Assign stays the shelf's verb, so there is one writer of
 `PUT /adapters/{sha256}/attachments` and one place that holds the whole
 attachment set it replaces.
 
-**A row is flex, not a grid, and its columns are FIXED widths.** Grouping makes
+**A row is flex, not a grid, and its columns are STATED ONCE.** Grouping makes
 one `role="treegrid"` list per group, so `auto` tracks would be measured against
 that group's contents alone and the columns would step sideways from one folder
-to the next — which is the alignment #891 exists to hold. The widths
-(`--shelf-col-kind: 64px`, `--shelf-col-base: 84px`, `--shelf-col-size: 74px`)
-are the resolved design's own. `--shelf-col-date: 96px` is not: it is sized for
-`ymd-jp`, the widest of the eight day formats, and `locale` hands back whatever
-the reader's browser writes, so it is the figure that keeps the common formats
-clear of the ellipsis rather than a proof against every one. It is owed to the
-app-wide width pass along with the other three. The name takes the rest, and the
-FILENAME takes the whole of a second line under it in the mono face: it is what the file is
-actually called — which the name above it often is not — and it is the string
-that gets pasted into a ComfyUI node, so it is drawn rather than parked in a
-tooltip.
+to the next — which is the alignment #891 exists to hold. The four widths are
+custom properties (`--shelf-col-kind`, `--shelf-col-base`, `--shelf-col-size`,
+`--shelf-col-date`), **written onto the element from `view.columnWidths`** and
+declared nowhere else, so the headings, the rows and a stack's member rows all
+resolve one declaration and cannot drift apart. The first three defaults are the
+resolved design's own 64/84/74px; the date column postdates the kit, and its
+96px is what `ymd-jp` needs, the widest of the eight day formats — `locale`
+returns whatever the reader's browser writes, so it is the figure that keeps the
+common formats clear of the ellipsis rather than a proof against every one, and
+the grip is there for the reader it does not suit. The name takes the rest — it
+is the flexible track and therefore has no remembered width — and the FILENAME
+takes the whole of a second line under it in the mono face: it is
+what the file is actually called, which the name above it often is not, and it
+is the string that gets pasted into a ComfyUI node, so it is drawn rather than
+parked in a tooltip.
+
+**One visible column strip for the view, and hidden `columnheader`s per grid.**
+`.shelf-head` is sticky at the top of the body scroller and the group headings
+stick under it at `--shelf-head-h`. It is deliberately **not** the grid's header
+row: a `columnheader` heads the grid it is in and nothing else, so a visible one
+would have to be repeated per group, which is eight identical bands of chrome
+down a grouped list. So the strip is a `role="group"` of controls —
+
+- **A heading is a button that sorts.** Pressing the sorted column flips the
+  direction; pressing another starts at that column's OWN end. `Kind` is a
+  heading and not a button: the API's `SortKey` has no member for it, and a
+  control that does nothing is worse than none. The toolbar's `Sort` panel
+  keeps the whole five-key vocabulary, and it is the only way onto `File date`,
+  since the date column can name only one axis at a time (below).
+
+  **`defaultSortDirection` is applied in `setView`, not in either control.**
+  There are two writers of `view.sortKey` — the headings and `ShelfSortPanel`
+  — and the panel writes it *without* a direction. With the rule in one of
+  them, the panel carried `Newest first` onto `Name` and handed back Z-to-A
+  while the heading beside it gave A-to-Z. `setView` fills the direction in
+  only when the key actually changes and the caller named none, so the
+  direction toggle and a re-pick of the current key are both untouched.
+- **A grip is a `role="separator"` that resizes.** It sits on the column's right
+  edge — 24px of grab area for WCAG 2.5.8 around a 1px drawn hairline, which is
+  the only signal a column is resizable and is therefore a component-grade 0.4
+  alpha rather than the `divider` token (1.4.11 wants 3:1, and `divider` on this
+  canvas is ~1.2:1). It drags with pointer capture and answers the window-
+  splitter keys: Left/Right by 8px, Home/End to the bounds, **Enter to the
+  default** — with a double-click doing the same, because a width is remembered
+  for good once it is dragged and a reset is otherwise the reader's only way out
+  of a mis-drag. It sets no `preventDefault` on `pointerdown`: `.shelf` already
+  suppresses selection and the grip sets `touch-action: none`, and calling it
+  would suppress the compatibility mouse events that focus the grip and that
+  `dblclick` is built on. A `pointermove` arriving with `buttons === 0` ends the
+  drag, so a refused or lost capture cannot leave one live forever.
+
+  Widths are clamped to **48–150px**. The ceiling is whatever divides the ~600px
+  the panel has for columns (~690px of chrome fits a 1024px window with the
+  stats rail open, and the rail, identity slot, gaps and padding take ~90px of
+  it), so it was 3 x 200 and became 4 x 150 when the date column arrived: a
+  fourth column at 200 would put a maxed-out shelf ~200px past a figure that was
+  measured. A stored 200 from the previous build clamps down on the way in. Past that the row scrolls
+  horizontally and the strip's background stops at the scrollport, so rows slide
+  through a transparent header. They are written into the same versioned view
+  blob **once per gesture, not per frame** — `rememberView` rebuilds the whole
+  blob synchronously, so `setColumnWidth(key, px, persist)` takes `false` during
+  a drag and is called once on pointerup — and read back per column through
+  `clampColumnWidth`, which takes a **finite number only**: `Number()` coercion
+  would turn a stored `null` into the 48px floor instead of falling through to
+  the default.
+
+  `DEFAULT_COLUMN_WIDTHS` in the store is the *only* declaration of the four
+  figures; `.shelf` deliberately carries no CSS fallback copy, which would be a
+  second literal with nothing keeping it equal.
+
+  Every heading is left-aligned, Size's included, though its figures are not:
+  the heading is a label and the figures are a magnitude, and a right-aligned
+  `SIZE` would sit under its own grip.
+
+— and the per-grid hidden header row stays, now carrying `aria-sort`, so the
+order is readable from inside the treegrid rather than only from the strip
+above it.
+
+The strip draws only where rows do: it lives inside the `v-else` that the
+loading, error, `nothingSelected` and both empty states branch away from, since
+a header for a list that is not there names nothing. It is opaque and pinned, so
+it takes its own rung inside the sticky stratum (`--shelf-head-z`) to stay above
+the group headings, and **`.shelf-dim` — the visible half of the move's `inert`
+— was raised above both**: an opaque band at full brightness over a dimmed list
+reads as usable when it is not, which is the failure the veil exists to prevent.
 
 **The date column FOLLOWS the sort.** Two of the five sort keys are dates
-(`added_at`, `file_mtime`), and one column shows whichever of the two the shelf
-is currently ordered on — every other key falls back to `added_at`, the default
-axis. A column pinned to one of them would read as unordered the moment the
-shelf was sorted on the other, which is the state that made a date column worth
-having rather than a second one worth adding. `modelDate` (`utils/modelShelf.js`)
-mirrors `SORT_VALUE` in the store so the column cannot disagree with the order
-the rows are drawn in, and the two aggregates it reads are not shaped alike.
-`newest_member_at` is grouped per STACK, so on `added_at` a run's date is its
-newest member's and never its cover's — and every member row carries the run's
-value too, which is why an expanded member is read for its own instead.
-`newest_file_mtime` is grouped per MODEL (`_LOCATION_JOIN`,
-`model_shelf_service.py`), so on `file_mtime` a collapsed run shows its COVER's
-file date: that is what the sort ordered that row on, and taking a maximum in
-the view would print a date the sort does not use. Opening the run is what shows
-a step written later. `file_mtime` arrives as `st_mtime_ns` and is divided down
-to milliseconds; a value out of `Date`'s range answers empty rather than
-throwing, because this runs inside render.
+(`added_at`, `file_mtime`) and there is one date column, so the column shows —
+and its heading names — whichever of the two the shelf is currently ordered on;
+every non-date key falls back to `added_at`, the default axis. A column pinned to
+one of them would read as unordered the moment the shelf was sorted on the other,
+which is the state that made a date column worth having rather than a second one
+worth adding. `DATE_COLUMN` is therefore the one entry in `SHELF_COLUMNS` that is
+computed rather than constant: its `label` and its `sort` move together, so
+pressing the heading does what every other heading does — sort on the key it
+names, flip the direction if that key is already the sorted one — and the hidden
+`columnheader` carries the same moving name, so a reader who cannot see the strip
+hears which axis the cells are drawn in. `File date` is reached from the `Sort`
+panel; arriving there renames the column rather than adding one.
+
+`modelDate` (`utils/modelShelf.js`) mirrors `SORT_VALUE` in the store so the
+column cannot disagree with the order the rows are drawn in, and the two
+aggregates it reads are not shaped alike. `newest_member_at` is grouped per
+STACK, so on `added_at` a run's date is its newest member's and never its
+cover's — and every member row carries the run's value too, which is why an
+expanded member is read for its own instead. `newest_file_mtime` is grouped per
+MODEL (`_LOCATION_JOIN`, `model_shelf_service.py`), so on `file_mtime` a
+collapsed run shows its COVER's file date: that is what the sort ordered that row
+on, and taking a maximum in the view would print a date the sort does not use.
+Opening the run is what shows a step written later. `file_mtime` arrives as
+`st_mtime_ns` and is divided down to milliseconds; a value out of `Date`'s range
+answers empty rather than throwing, because this runs inside render.
 
 The cell holds the **day** — `formatUserDay(iso, dateFormat)` — and its `title`
 the full stamp, both from `utils/utils.js` like every other timestamp in the
@@ -1775,20 +1857,13 @@ default. `formatUserDay` is BUILT from the date parts and never trimmed off a
 formatted stamp: `locale` delegates to the browser's own locale, which puts the
 clock before the date in vi-VN and behind an Arabic comma in ar-EG, so cutting
 at the first space printed a clock to some readers and a bare `2024.` to others.
-Both `locale` branches now go through one cached `Intl.DateTimeFormat` per
-option set — constructing one per call costs ~83 ms per 3,600 cells against
-~3 ms reusing it, and this list is documented at 1,800 rows. A row that cannot
-answer gets an empty cell, not a dash, exactly as the size column does — a
-placeholder in a figure column is noise the eye steps over on every scan.
+Both `locale` branches go through one cached `Intl.DateTimeFormat` per option
+set — constructing one per call costs ~83 ms per 3,600 cells against ~3 ms
+reusing it, and this list is documented at 1,800 rows. A row that cannot answer
+gets an empty cell, not a dash, exactly as the size column does — a placeholder
+in a figure column is noise the eye steps over on every scan.
 
-**The column names are announced and never drawn.** Each grid carries a
-`visually-hidden` `role="row"` of `columnheader`s, because a `columnheader` heads
-the grid it is in and nothing else. The resolved design has no visible header
-strip: the kind is a chip, the base is a word and the size is right-aligned,
-which is what makes the columns readable without being named. The date's header
-is the one that is not a constant — it reads `Date added` or `File date`, so the
-reader who cannot see the column hears which axis it is drawn in. Rows are **not**
-focus stops while they carry no verb:
+**Rows are not focus stops while they carry no verb.**
 1,800 empty tab stops would be a trap, so the shelf root takes `tabindex="-1"`
 and receives focus on entry, and roving focus arrives with the first thing a
 focused row can do. The sidebar's Models entry is a real `<button>` with
@@ -2775,7 +2850,7 @@ in the meantime (409, something stacked its rows first) is counted rather than
 thrown — one stale group must not discard the others.
 
 **Tier 2 is absent from the UI because it is absent from the backend.** Prefix
-grouping (`JimmyCarr` beside `JimmyCarr2`) needs per-group adjudication with
+grouping (`JimmyVehicle` beside `JimmyVehicle2`) needs per-group adjudication with
 counter-evidence first; half an adjudication surface would be worse than none.
 
 #### Importing from ai-toolkit (F6)
@@ -2816,6 +2891,16 @@ the deletion only when something actually landed: the server unlinks last and
 only after each row is committed, so "nothing imported" and "the run is gone"
 cannot both be true, and saying it anyway would tell the reader their run was
 destroyed for nothing.
+
+**A checkpoint that landed without its previews gets its own sentence.** The
+import copies each checkpoint's samples into `<stem>_samples/` beside it, and a
+failed copy is deliberately *not* a failed file — losing a preview must not cost
+the weights, so the server leaves the outcome `imported` with `sample_count: 0`
+and a `detail`. That means the status counts the receipt is otherwise built from
+cannot see it, and a receipt built from them alone would call a run whose
+previews were lost a clean import. It is named separately rather than folded
+into the failure count, because the checkpoint is genuinely on the shelf and
+telling someone otherwise is the worse error.
 
 **`Add file` is the same step's loose-file half, and it reuses `FolderBrowser`
 in a file mode rather than an `<input type=file>`.** The file is on the machine

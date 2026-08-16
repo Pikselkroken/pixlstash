@@ -189,6 +189,23 @@ export function sortDirectionLabel(key, direction) {
   return direction === "asc" ? words[0] : words[1];
 }
 
+/**
+ * Which end a key starts at when the reader first sorts on it.
+ *
+ * Carrying the previous key's direction over is what a plain toggle would do,
+ * and it is wrong at the moment it matters most: arriving at Name from "Date
+ * added, newest first" would hand back Z to A, which nobody asked for and
+ * reads as a broken sort. A name starts at A, a size starts at the big files —
+ * the reason anyone sorts a shelf by size is to find what is eating the disk —
+ * and a date starts at the newest, which is the shelf's own default.
+ *
+ * @param {string} key - a `SORT_LABELS` key.
+ * @returns {"asc"|"desc"}
+ */
+export function defaultSortDirection(key) {
+  return key === "name" || key === "base_model" ? "asc" : "desc";
+}
+
 /** What each grouping axis is called, and the glyph that stands for it. */
 export const GROUP_BY_LABELS = {
   none: { label: "None", icon: "mdi-format-list-bulleted" },
@@ -1058,6 +1075,20 @@ export function importReceipt(report) {
     // singular case is now asserted in both receipts' tests.
     notes.push(
       `${count(failed)} could not be copied and ${failed === 1 ? "was" : "were"} left in the run.`,
+    );
+  }
+  // A checkpoint whose previews did not copy is still `imported` — losing a
+  // preview must not cost the weights, so the server does not fail the file for
+  // it. Which means the status counts above cannot see it, and a receipt built
+  // from them alone would call a run whose samples were lost a clean import.
+  // Named separately rather than folded into `failed`, because the checkpoint
+  // is genuinely on the shelf and telling someone otherwise is worse.
+  const withoutSamples = files.filter(
+    (f) => f.status === "imported" && f.sample_count === 0 && f.detail,
+  ).length;
+  if (withoutSamples) {
+    notes.push(
+      `${count(withoutSamples)} landed without ${withoutSamples === 1 ? "its" : "their"} training previews.`,
     );
   }
   if (report?.deleted_source && landed) {

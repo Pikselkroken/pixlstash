@@ -13,7 +13,7 @@ this out for pictures and the shelf follows it exactly:
 * **Tier 1, step grouping.** Six files whose names differ only by a training
   step really are one run; there is nothing for a person to weigh, so this tier
   gets one dry run and one confirmation for the whole batch.
-* **Tier 2, prefix grouping** (``JimmyCarr`` beside ``JimmyCarr2``) needs a
+* **Tier 2, prefix grouping** (``JimmyVehicle`` beside ``JimmyVehicle2``) needs a
   person and gets per-group adjudication with counter-evidence. It is NOT in
   this module yet, deliberately: shipping tier 1 alone is a usable increment,
   and tier 2's evidence model is the part that needs design rather than code.
@@ -94,7 +94,7 @@ def propose_stacks(hub: HubDatabase) -> list[StackProposal]:
     Reads only. The caller shows the result and asks; nothing here writes.
 
     Grouped **per folder**, not shelf-wide. Two runs on different disks can
-    easily share a name — ``JimmyCarr`` is not a globally unique thing, which
+    easily share a name — ``JimmyVehicle`` is not a globally unique thing, which
     is the same reason ``run_key`` is documented as unique within a stack only —
     and collapsing across folders would invent a run that never existed and
     would put one stack's members on two drives.

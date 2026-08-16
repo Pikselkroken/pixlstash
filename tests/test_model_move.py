@@ -390,6 +390,191 @@ def test_an_unhashed_checkpoint_still_verifies(two_folders, cross_device, hub):
 
 
 # ===========================================================================
+# The samples follow the file
+# ===========================================================================
+#
+# A trained checkpoint's previews live beside it in ``<stem>_samples/``, put
+# there by the ai-toolkit import. A move that left them behind would strand them
+# in a folder the model no longer sits in, which is how they get deleted next.
+
+
+def _with_samples(two_folders, *names):
+    """Give the fixture's adapter a samples directory, as an import would."""
+    samples = two_folders["source_dir"] / "alice_samples"
+    samples.mkdir()
+    for name in names:
+        (samples / name).write_bytes(name.encode())
+    return samples
+
+
+@pytest.mark.parametrize("force_copy", [False, True], ids=["rename", "copy"])
+def test_a_move_carries_the_samples_directory(two_folders, monkeypatch, force_copy):
+    """Both paths, because both are real: same-drive is a rename and cross-drive
+    is the copy/verify/commit/unlink invariant, and the samples ride inside each
+    of them rather than being handled by one."""
+    _with_samples(two_folders, "1712345678901__000000500_0.jpg")
+    if force_copy:
+        monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+
+    mover = ModelMover(two_folders["hub"])
+    report = mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_MOVED]
+    assert report.outcomes[0].detail is None
+    moved = two_folders["destination_dir"] / "alice_samples"
+    assert os.listdir(moved) == ["1712345678901__000000500_0.jpg"]
+    assert not (two_folders["source_dir"] / "alice_samples").exists()
+    assert not (moved.parent / ("alice_samples" + PARTIAL_SUFFIX)).exists()
+
+
+def test_the_samples_are_counted_into_the_space_check(two_folders, monkeypatch):
+    """15 MB per run against a 1.9 GB copy: small, and not nothing when the
+    destination is nearly full. Only on the copy path — a rename copies nothing,
+    samples included."""
+    _with_samples(two_folders, "a.jpg", "b.jpg")
+    weights = os.path.getsize(two_folders["source_path"])
+    previews = sum(
+        os.path.getsize(two_folders["source_dir"] / "alice_samples" / name)
+        for name in ("a.jpg", "b.jpg")
+    )
+
+    mover = ModelMover(two_folders["hub"])
+    items = [(two_folders["source_id"], "alice.safetensors")]
+    assert mover.plan(items, two_folders["destination_id"]).bytes_to_copy == 0
+
+    monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+    assert (
+        mover.plan(items, two_folders["destination_id"]).bytes_to_copy
+        == weights + previews
+    )
+
+
+@pytest.mark.parametrize("force_copy", [False, True], ids=["rename", "copy"])
+def test_a_failed_samples_move_still_leaves_the_model_moved(
+    two_folders, monkeypatch, force_copy
+):
+    """Non-fatal, and asserted rather than assumed: losing a preview must not
+    cost the weights. The destination directory is occupied by something the
+    move must not write over, so the carry genuinely fails."""
+    _with_samples(two_folders, "1712345678901__000000500_0.jpg")
+    squatter = two_folders["destination_dir"] / "alice_samples"
+    squatter.mkdir()
+    (squatter / "mine.jpg").write_bytes(b"somebody else's file")
+    if force_copy:
+        monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+
+    mover = ModelMover(two_folders["hub"])
+    report = mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_MOVED]
+    assert "not carried" in (report.outcomes[0].detail or "")
+    # The file moved and its row committed; only the previews stayed behind.
+    assert os.path.exists(two_folders["destination_path"])
+    assert not os.path.exists(two_folders["source_path"])
+    assert os.listdir(squatter) == ["mine.jpg"]
+    assert_no_dangling_rows(two_folders["hub"])
+
+
+@pytest.mark.parametrize("force_copy", [False, True], ids=["rename", "copy"])
+def test_an_empty_samples_directory_at_the_destination_is_not_replaced(
+    two_folders, monkeypatch, force_copy
+):
+    """The one case where the two platforms disagreed, pinned on both.
+
+    ``os.rename`` over an **empty** existing directory silently replaces it on
+    POSIX and raises ``FileExistsError`` on Windows, where four CI shards run.
+    The non-empty squatter above therefore proves nothing about it: it fails
+    everywhere. Carrying the samples checks the name first, so the owner's
+    directory survives on every platform and the move still lands.
+    """
+    _with_samples(two_folders, "1712345678901__000000500_0.jpg")
+    (two_folders["destination_dir"] / "alice_samples").mkdir()
+    if force_copy:
+        monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+
+    mover = ModelMover(two_folders["hub"])
+    report = mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_MOVED]
+    assert "already exists" in (report.outcomes[0].detail or "")
+    assert os.listdir(two_folders["destination_dir"] / "alice_samples") == []
+    assert os.listdir(two_folders["source_dir"] / "alice_samples") == [
+        "1712345678901__000000500_0.jpg"
+    ], "the previews were moved into, or over, a directory already at that name"
+    assert os.path.exists(two_folders["destination_path"])
+
+
+def test_previews_that_arrived_are_not_reported_as_lost(two_folders, monkeypatch):
+    """The source removal is the LAST step, so it can fail with the previews
+    already at the destination.
+
+    Reporting that as "not carried" sends the owner hunting for previews that
+    are exactly where they should be — and their obvious next move, re-running
+    the move, hits the destination-exists refusal above. What is actually left
+    is a duplicate at the source, which is the residue every other interruption
+    in this module leaves and which belongs in the log, not the receipt.
+    """
+    _with_samples(two_folders, "1712345678901__000000500_0.jpg")
+    monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+
+    real_rmtree = mover_module.shutil.rmtree
+
+    def fail_on_the_source(path, *args, **kwargs):
+        if str(path) == str(two_folders["source_dir"] / "alice_samples"):
+            raise OSError("the source directory is locked")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(mover_module.shutil, "rmtree", fail_on_the_source)
+
+    mover = ModelMover(two_folders["hub"])
+    report = mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_MOVED]
+    assert report.outcomes[0].detail is None, (
+        "previews that arrived were reported as lost; the receipt counts this "
+        "as a file that moved without its training previews"
+    )
+    assert os.listdir(two_folders["destination_dir"] / "alice_samples") == [
+        "1712345678901__000000500_0.jpg"
+    ]
+    # The duplicate the failed removal left. Logged, not reported.
+    assert os.path.isdir(two_folders["source_dir"] / "alice_samples")
+
+
+def test_a_model_with_no_samples_directory_moves_as_before(two_folders):
+    """The common case, pinned: nothing is created beside a model that never had
+    previews."""
+    mover = ModelMover(two_folders["hub"])
+    mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    )
+    assert os.listdir(two_folders["destination_dir"]) == ["alice.safetensors"]
+
+
+# ===========================================================================
 # Refused before the first byte
 # ===========================================================================
 

@@ -49,6 +49,15 @@ copy, because an unplugged drive is not a deletion and must never be read as
 one. The default is the OS trash (``send2trash``), which is the undo;
 ``permanent=true`` unlinks, and that one has none.
 
+**A copy's training previews go with it.** An imported checkpoint carries a
+``<stem>_samples/`` directory beside it (``services/run_importer.py``), and the
+delete closes the lifecycle the import opens and a move carries: skipping it
+would leave a directory no route lists and no rescan registers, and one that then
+refuses the owner's *whole* re-import of that run — with the remedy only
+available outside the app. Unlike the file, it is **non-fatal**: the weights are
+what was asked for, and previews that will not go are a warning and some occupied
+disk rather than a failed deletion.
+
 **Bytes first, rows second, and per model.** Every copy of a model is removed
 before its hub rows are, so an interruption leaves a row naming a file that is
 not there — which the next scan turns into ``missing`` — rather than a file
@@ -61,6 +70,7 @@ and an import take, so nothing can be copying into a folder this is emptying.
 from __future__ import annotations
 
 import os
+import shutil
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -83,12 +93,14 @@ from pixlstash.services.model_mover import (
     discard_partial,
     file_digest,
     require_space,
+    samples_relpath,
 )
 from pixlstash.services.model_shelf_service import (
     MAX_MODELS_PER_EDIT,
     purge_deleted_models,
 )
 from pixlstash.utils.adapter_header import FILE_ENGINE
+from pixlstash.utils.aitoolkit_run import is_sample_filename
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.system_utils import TRASH_NAME
 
@@ -366,6 +378,113 @@ def _remove(path: str, *, permanent: bool) -> None:
         )
 
 
+def _holds_only_samples(directory: str) -> bool:
+    """Whether every entry is a preview the trainer wrote, and nothing else.
+
+    **The question the removal turns on, asked of the directory rather than of
+    the database.** ``<stem>_samples`` is derived by string manipulation and
+    recorded nowhere, so its path alone is a guess about who created it. What
+    settles the guess is the contents: ai-toolkit names every preview
+    ``<timestamp>__<step>_<index>.<ext>``, so a directory holding only those is
+    a directory of previews whoever put it there, and a single file that is not
+    one — an owner's favourite render, a note, a subdirectory — means it is
+    theirs and the model does not take it.
+
+    Symlinks count as "not a sample" (``follow_symlinks=False``): a link is a
+    reference to something outside this directory, and what it points at is not
+    this folder's to delete.
+
+    An empty directory passes. There is nothing in it to lose, and leaving
+    empties behind is how the re-import refusal gets triggered for no reason.
+    """
+    try:
+        entries = list(os.scandir(directory))
+    except OSError as exc:
+        logger.warning(
+            "Could not read %s to decide whether it holds only previews: %s. "
+            "Leaving it in place, which is the answer that cannot destroy "
+            "anything.",
+            directory,
+            exc,
+        )
+        return False
+    return all(
+        entry.is_file(follow_symlinks=False) and is_sample_filename(entry.name)
+        for entry in entries
+    )
+
+
+def _remove_samples(model_path: str, *, permanent: bool) -> None:
+    """Take the file's training previews with it — **if that is all they are**.
+
+    An imported checkpoint's previews sit beside it in ``<stem>_samples/``
+    (``services/run_importer.py``), and the lifecycle the import opens and a move
+    carries has to close here: a delete that skipped it would leave a directory
+    no route lists and no rescan registers, and one that then refuses the owner's
+    *entire* re-import of that run, with the remedy only available outside the
+    app.
+
+    **What licenses the removal is the directory's contents**, checked by
+    :func:`_holds_only_samples`. The model itself is a thing the caller named —
+    they selected that row and a ``model_file`` records exactly which file it is
+    — but this directory is only ever *inferred* from the model's name, so
+    removing it on the strength of the name alone would destroy an owner's own
+    folder of renders on a Shift+Delete they meant for a ``.safetensors``. A
+    directory of nothing but ``<timestamp>__<step>_<index>`` images is the
+    model's previews whoever wrote them; one holding anything else is theirs and
+    stays, which is the same answer the importer gives when it refuses to merge
+    into a directory that is already there.
+
+    **Non-fatal, unlike the file itself.** The weights are what the caller asked
+    to delete and their row is dropped on the strength of that; a previews
+    directory that will not go is a warning and some occupied disk, and must not
+    turn a completed deletion into a reported failure. It is removed *after* the
+    file for the same reason — the file is the thing being deleted.
+    """
+    directory = samples_relpath(model_path)
+    if not os.path.isdir(directory):
+        return
+    if os.path.islink(directory):
+        # ``isdir`` follows the link, so without this the removal is decided by
+        # which branch runs: ``rmtree`` happens to refuse a symlinked root and
+        # ``send2trash`` happens to move the link and spare its target. Neither
+        # is a property either function promises, and a later
+        # ``ignore_errors=True`` would silently turn the first into a deletion
+        # somewhere else entirely. Refused here, where it is stated and tested.
+        logger.warning(
+            "Not removing the training previews of %s: %s is a symbolic link, "
+            "and what it points at is not this folder's to delete.",
+            os.path.basename(model_path),
+            directory,
+        )
+        return
+    if not _holds_only_samples(directory):
+        logger.info(
+            "Left %s in place: it holds something other than this run's "
+            "previews, so it is not %s's to remove.",
+            directory,
+            os.path.basename(model_path),
+        )
+        return
+    try:
+        if permanent:
+            shutil.rmtree(directory)
+        else:
+            send2trash(directory)
+    except FileNotFoundError:
+        logger.debug("No samples directory at %s to remove.", directory)
+    except (TrashPermissionError, OSError) as exc:
+        logger.warning(
+            "Deleted %s but could not remove its training previews at %s: %s. "
+            "They are occupying disk and nothing on the shelf names them; "
+            "re-importing that run into this folder will be refused until they "
+            "are removed by hand.",
+            os.path.basename(model_path),
+            directory,
+            exc,
+        )
+
+
 def create_router(server) -> APIRouter:
     """Create the loose-file router.
 
@@ -601,7 +720,11 @@ def create_router(server) -> APIRouter:
         summary="Delete models from disk",
         description=(
             "Removes every registered copy of the named models and then their "
-            "shelf rows. `permanent=false` (the default) moves the files to "
+            "shelf rows. A model **imported from a training run** also loses "
+            "the `<stem>_samples/` directory of previews the import wrote "
+            "beside it; a directory beside a model PixlStash did not import is "
+            "left alone, because it is not ours to have made. "
+            "`permanent=false` (the default) moves the files to "
             f"this machine's {TRASH_NAME.lower()}, which is the undo; "
             "`permanent=true` unlinks them and there is none. Only the folders "
             "whose contents are yours are touched — the ones you registered and "
@@ -643,6 +766,8 @@ def create_router(server) -> APIRouter:
                     for path in paths:
                         _remove(path, permanent=payload.permanent)
                         done += 1
+                        # After the file, and never allowed to fail it.
+                        _remove_samples(path, permanent=payload.permanent)
                 except (TrashPermissionError, OSError) as exc:
                     # `done` files of this model are already gone. Its rows stay
                     # so the shelf keeps naming the copies that did not go, and

@@ -79,7 +79,7 @@ logger = get_logger(__name__)
 PICTURE_EXTRA_SERVABLE_FIELDS: frozenset[str] = frozenset()
 
 #: ``thumbnail`` is not a ``Character`` column at all: the handler generates a
-#: 64x64 face crop and returns image bytes. It is a live frontend consumer
+#: 256x256 face crop and returns image bytes. It is a live frontend consumer
 #: (``frontend/src/api/characters.js::getCharacterThumbnail``, and the server
 #: hands the SPA ``/characters/{id}/thumbnail`` URLs itself), so it must stay
 #: servable. It is *synthetic*, not a relationship: it discloses no related
