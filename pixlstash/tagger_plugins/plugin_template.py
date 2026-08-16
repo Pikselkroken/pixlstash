@@ -78,6 +78,18 @@ class MyCaptioner(TaggerPlugin):
 
     description = "Describe what your captioner does."
 
+    # Who wrote it and under what terms.  Keep these plain literals: tools read
+    # the header straight off the source with ``ast``, without importing you.
+    author = "Your Name <you@example.com>"  # an email address or a URL
+    license = "MIT"  # your *code*, an SPDX identifier where there is one
+
+    # One entry per model or remote service you load, empty when you load none.
+    # This is the one a user actually needs — your code's license says nothing
+    # about the weights you download.
+    models = [
+        {"name": "microsoft/Florence-2-base", "license": "MIT"},
+    ]
+
     # Capability flags decide which table the plugin appears in.  Implement
     # tag_images() as well if you set supports_tags.
     supports_tags = False

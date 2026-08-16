@@ -1033,6 +1033,7 @@ class PixlStashTaggerPlugin(TaggerPlugin):
         name: Plugin identifier used in ``tagger_settings``.
         display_name: Human-readable label shown in the UI.
         description: Short description.
+        author, license, models: Header fields, see :class:`TaggerPlugin`.
         supports_tags: Produces anomaly/quality tags.
         supports_descriptions: Does not produce captions.
         requires_download: Model must be downloaded on first use.
@@ -1041,6 +1042,11 @@ class PixlStashTaggerPlugin(TaggerPlugin):
     name: str = "pixlstash_tagger"
     display_name: str = "PixlStash Tagger"
     description: str = "Custom anomaly/quality tagger trained for PixlStash — detects blur, artefacts, and content-specific tags."
+    author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license: str = "GPL-3.0-only"
+    models: list[dict[str, str]] = [
+        {"name": "PersonalJeebus/pixlvault-anomaly-tagger", "license": "MIT"},
+    ]
     supports_tags: bool = True
     supports_descriptions: bool = False
     requires_download: bool = True

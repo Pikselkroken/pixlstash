@@ -58,6 +58,9 @@ class ColourFilterPlugin(ImagePlugin):
     name = "colour_filter"
     display_name = "Colour Filter"
     description = "Apply black & white, sepia, cool, warm, or vivid colour filters."
+    author = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license = "GPL-3.0-only"
+    models = []
     supports_images = True
     supports_videos = True
 

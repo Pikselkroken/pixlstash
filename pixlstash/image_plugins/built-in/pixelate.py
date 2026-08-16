@@ -39,6 +39,9 @@ class PixelatePlugin(ImagePlugin):
         "hair boundaries, stray colour pixels) while leaving smooth skin and "
         "plain backgrounds intact."
     )
+    author = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license = "GPL-3.0-only"
+    models = []
     supports_images = True
     supports_videos = False
 

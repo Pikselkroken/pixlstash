@@ -554,6 +554,63 @@ class Forgetful(ImagePlugin):
         assert "run" in errors[0]["message"]
 
 
+def test_a_malformed_models_header_is_refused_at_load_not_at_request_time():
+    """`list_plugins()` runs unguarded, so one bad header must not reach it.
+
+    Declaring the single dict the docs show as an *entry*, unwrapped, is the
+    natural mistake. Before the registry probed the schema at load, this
+    registered fine and then raised inside the comprehension in
+    `list_plugins()`, taking `GET /pictures/plugins` down for every plugin.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        path = _write(
+            os.path.join(temp_dir, "user"),
+            "unwrapped.py",
+            """
+from pixlstash.image_plugins.base import ImagePlugin
+
+
+class Unwrapped(ImagePlugin):
+    name = "unwrapped"
+    models = {"name": "example/model", "license": "MIT"}
+
+    def parameter_schema(self):
+        return []
+
+    def run(self, images, parameters=None, **kwargs):
+        return images
+""",
+        )
+        _write(
+            os.path.join(temp_dir, "user"),
+            "wellformed.py",
+            """
+from pixlstash.image_plugins.base import ImagePlugin
+
+
+class WellFormed(ImagePlugin):
+    name = "wellformed"
+    models = [{"name": "example/model", "license": "MIT"}]
+
+    def parameter_schema(self):
+        return []
+
+    def run(self, images, parameters=None, **kwargs):
+        return images
+""",
+        )
+        manager = _manager(temp_dir)
+        manager.reload()
+
+        assert manager.get_plugin("unwrapped") is None
+        errors = manager.list_errors()
+        assert len(errors) == 1
+        assert errors[0]["file"] == path
+        # The neighbour is still listed, which is the whole point: one bad
+        # header costs its own plugin, not the endpoint.
+        assert [schema["name"] for schema in manager.list_plugins()] == ["wellformed"]
+
+
 def test_registry_ignores_a_plugin_class_the_file_only_imported():
     """A user file importing another plugin for reference must not ship it."""
     with tempfile.TemporaryDirectory() as temp_dir:

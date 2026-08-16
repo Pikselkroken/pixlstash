@@ -59,6 +59,17 @@ class ImagePlugin(ABC):
         name: Unique snake_case identifier used to look up the plugin by name.
         display_name: Human-readable label shown in the UI.
         description: Short description of what the plugin does.
+        author: ``Name <contact>``, where the contact is an email address or a
+            URL. Empty when the plugin does not say.
+        license: SPDX identifier for the plugin's *own code*, where there is
+            one. Empty when the plugin does not say.
+        models: One entry per model or remote service the plugin uses, each a
+            dict with ``name`` (the identifier it is fetched by, e.g. a
+            HuggingFace repo id) and ``license`` (an SPDX identifier where the
+            model declares one, otherwise the terms it actually ships, said
+            plainly); empty when it loads none. This is the field a user
+            needs, because the plugin's own license says nothing about the
+            weights it downloads.
         supports_images: Whether the plugin handles still images via ``run``.
         supports_videos: Whether the plugin handles video files via ``run_video``.
     """
@@ -66,6 +77,11 @@ class ImagePlugin(ABC):
     name: str = ""
     display_name: str = ""
     description: str = ""
+    # Declared as literals on purpose: a tool reads this header off the source
+    # with ``ast`` rather than importing the plugin to find out what it is.
+    author: str = ""
+    license: str = ""
+    models: list[dict[str, str]] = []
     supports_images: bool = True
     supports_videos: bool = False
 
@@ -77,12 +93,17 @@ class ImagePlugin(ABC):
 
         Returns:
             A dict with keys ``name``, ``display_name``, ``description``,
-            ``supports_images``, ``supports_videos``, and ``parameters``.
+            ``author``, ``license``, ``models``, ``supports_images``,
+            ``supports_videos``, and ``parameters``.
         """
         return {
             "name": self.name,
             "display_name": self.display_name or self.name,
             "description": self.description or "",
+            "author": self.author or "",
+            "license": self.license or "",
+            # Copied so a caller cannot mutate the class attribute it came from.
+            "models": [dict(model) for model in self.models or []],
             "supports_images": bool(self.supports_images),
             "supports_videos": bool(self.supports_videos),
             "parameters": self.parameter_schema(),

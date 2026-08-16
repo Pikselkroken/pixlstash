@@ -494,6 +494,7 @@ class JoyCaptionPlugin(TaggerPlugin):
         name: Plugin identifier used in ``tagger_settings``.
         display_name: Human-readable label shown in the UI.
         description: Short description.
+        author, license, models: Header fields, see :class:`TaggerPlugin`.
         supports_tags: JoyCaption can produce Danbooru-style tags.
         supports_descriptions: JoyCaption can generate captions.
         requires_download: Model must be downloaded on first use.
@@ -506,6 +507,21 @@ class JoyCaptionPlugin(TaggerPlugin):
         "LLaVA-style LLM captioner — generates detailed descriptions and "
         "Danbooru tags. Requires ~8 GB VRAM (NF4). Requires bitsandbytes."
     )
+    author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license: str = "GPL-3.0-only"
+    models: list[dict[str, str]] = [
+        {
+            "name": "fancyfeast/llama-joycaption-beta-one-hf-llava",
+            # Not an SPDX id and not a declared one: the repo carries no
+            # `license` field at all, and this is the licence file it actually
+            # ships. Saying so is the point — a user weighing these terms has
+            # to read them, and "MIT" here would be a confident lie. The
+            # checkpoint is a composite (Llama-3.1-8B-Instruct plus a
+            # google/siglip2 vision tower, Apache-2.0, bundled in the same
+            # snapshot); the Llama terms are the restrictive half.
+            "license": "Llama 3.1 Community License (per LLAMA_LICENSE in the repo)",
+        },
+    ]
     supports_tags: bool = True
     supports_descriptions: bool = True
     requires_download: bool = True
