@@ -15,15 +15,15 @@
       Every adapter and checkpoint PixlStash has found on this machine. Group
       and Sort choose the order and whether the list is cut into groups; Show
       chooses which kinds are listed and which base models. Above the list, the
-      Name, Base and Size headings sort it too, and Kind, Base and Size each end
-      with a handle that resizes them: Left and Right move the edge, Home and
-      End take it to its narrowest and widest, Enter puts it back. The bar ends
-      in the app-wide controls: Settings and the stats sidebar toggle. Nothing
-      on this screen can be undone. A ring around a model's mark says who it is
-      assigned to. A name in italics has not been given one. A row that stands
-      for a training run says how many files it holds; Right and Left open and
-      close it. Right-click a row for everything that can be done to it. Escape
-      clears the selection.
+      Name, Base, Size and date headings sort it too, and every column but Name
+      begins with a handle that resizes it: Left and Right move the edge, Home
+      and End take it to its widest and narrowest, Enter puts it back. The bar
+      ends in the app-wide controls: Settings and the stats sidebar toggle.
+      Nothing on this screen can be undone. A ring around a model's mark says
+      who it is assigned to. A name in italics has not been given one. A row
+      that stands for a training run says how many files it holds; Right and
+      Left open and close it. Right-click a row for everything that can be done
+      to it. Escape clears the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -3522,7 +3522,12 @@ watch(
      strip would stand 33px and leave a 1px sliver of row under it. */
   box-sizing: border-box;
   height: var(--shelf-head-h);
-  padding: 0 var(--space-4) 0 var(--space-6);
+  /* The 4px top and bottom are the room a 3px focus ring needs to be INSIDE
+     the strip: `overflow: hidden` is what makes the gutter work, and it clips
+     a ring on a full-height cell against the strip's own edge. Everything in
+     here is vertically centred, so the only thing 8px of height buys is the
+     ring. */
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-6);
   border-left: var(--rail-w) solid transparent;
   border-bottom: 1px solid rgb(var(--v-theme-divider));
   background: rgb(var(--v-theme-background));
@@ -3647,12 +3652,15 @@ button.shelf-head-cell:hover {
 /* The hairline the reader actually sees, and the ONLY signal that a column can
    be resized — so it is a component-grade 0.4 rather than the `divider` token,
    which measures ~1.2:1 on this canvas and fails 1.4.11's 3:1. Same floor and
-   the same reasoning as §11's scrollbar thumb. */
+   the same reasoning as §11's scrollbar thumb.
+
+   Full height of the grip rather than inset, because the strip's own 4px block
+   padding is now the inset: the line stands the same 24px it always did. */
 .shelf-head-grip::after {
   content: "";
   position: absolute;
-  top: var(--space-2);
-  bottom: var(--space-2);
+  top: 0;
+  bottom: 0;
   left: 50%;
   width: 1px;
   background: rgba(var(--v-theme-on-background), 0.4);
