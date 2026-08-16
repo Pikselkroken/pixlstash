@@ -92,17 +92,22 @@ describe('formatUserDay', () => {
 
   it('carries no clock in the locale format either', () => {
     // `locale` delegates to the BROWSER's locale, so there is no string to pin
-    // — but there is a property, and it is the one a trimmed stamp broke: some
-    // locales put the clock first (vi-VN) and some separate it with a comma
-    // that is not U+002C (ar-EG). No `h:mm` anywhere is the whole claim.
+    // — and comparing against `Intl.DateTimeFormat` with the same options would
+    // be comparing the implementation with itself. What is left are two
+    // properties, both stated so that no locale can fail them for the wrong
+    // reason: `\p{Nd}` rather than `\d`, because `\d` is ASCII-only and would
+    // read Arabic-Indic digits as no digits at all.
     const day = formatUserDay(NOON, 'locale')
     expect(day).toBeTruthy()
-    expect(day).not.toMatch(/\d{1,2}:\d{2}/)
-    // And it is still a real day rather than a fragment of one: the year,
-    // month and day all survive.
-    expect(day).toMatch(/2024/)
-    expect(day).toMatch(/01/)
-    expect(day).toMatch(/20/)
+    // No clock. This is the property a trimmed stamp broke: some locales put
+    // the clock FIRST (vi-VN), so cutting at the first space kept `13:00`.
+    expect(day).not.toMatch(/\p{Nd}{1,2}:\p{Nd}{2}/u)
+    // And a whole day rather than a fragment of one: three number groups, for
+    // the year, the month and the day, whichever order and numeral system the
+    // locale writes them in. Trimming left ONE (`2024.` in ko-KR, `20.` in
+    // cs-CZ) or the clock's two, so this is what tells a day from a piece of
+    // one without naming a single locale.
+    expect(day.match(/\p{Nd}+/gu)).toHaveLength(3)
   })
 
   it('matches formatUserDate on the falsy and unparseable paths', () => {
