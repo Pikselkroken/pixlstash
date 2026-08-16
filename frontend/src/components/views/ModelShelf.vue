@@ -89,11 +89,6 @@
         </button>
       </div>
 
-      <!-- Reports the list actually on screen, not always the shelf's. -->
-      <span class="shelf-sub">{{
-        isShelfTab ? countLabel : runsCountLabel
-      }}</span>
-
       <!-- The one accented, labelled button in the bar, because it is the only
            thing here with a result behind it. Three ways in, one menu: a
            folder, a loose file, or a training run somebody else's tool wrote. -->
@@ -146,8 +141,8 @@
           </button>
           <!-- Shown only while the output root is UNSET, because setting it is
                a once-ever act: ai-toolkit writes every run under one folder.
-               Once it is set the runs get a destination of their own in the
-               sidebar, and there is nothing left for this menu to add. Hidden
+               Once it is set the runs have their own tab on this shelf, and
+               there is nothing left for this menu to add. Hidden
                rather than disabled, unlike the selection pill's verbs: those
                are about a selection the reader just made and owe an
                explanation, and this is about a job already done. -->
@@ -211,6 +206,16 @@
       >
         <v-icon size="19">mdi-folder-multiple-outline</v-icon>
       </button>
+
+      <!-- Reports the list actually on screen, not always the shelf's — and it
+           sits AFTER the verbs, in the gap the spacer opens, for one reason:
+           the two labels are different widths ("1,842 models · 12 copies" vs
+           "8 runs"), so anywhere to their left it shoves Add, the sweep and
+           Model folders sideways every time the tab changes. Here the spacer
+           absorbs the difference and nothing moves. -->
+      <span class="shelf-sub shelf-sub--ingap">{{
+        isShelfTab ? countLabel : runsCountLabel
+      }}</span>
 
       <span class="shelf-spacer"></span>
 
@@ -1128,7 +1133,15 @@
       @close="closeMove"
     />
     <ShelfStackProposalsDialog :open="stacksOpen" @close="closeStacks" />
-    <ModelFoldersDialog :open="foldersOpen" @close="closeFolders" />
+    <!-- Setting the output root from the registry dialog lands on the runs for
+         the same reason doing it from the Add menu does: the owner set it
+         because they have runs to import, so showing them beats leaving a new
+         tab to be discovered. -->
+    <ModelFoldersDialog
+      :open="foldersOpen"
+      @close="closeFolders"
+      @source-added="showTab('runs')"
+    />
 
     <!-- The shipped host-path picker again, in its file mode. A server-side
          picker rather than an `<input type=file>`: the file is on the machine
@@ -3255,9 +3268,19 @@ watch(
    `.bar-split-toggle`/`.bar-split-menu` already do it. NO container border —
    `--v-theme-border` against this chrome measures 1.28:1 light / 1.35:1 dark,
    which is a box with no job. Adjacency at gap 0 is what groups them. */
+/* A track behind the pair, so it reads as ONE control rather than as two
+   buttons that happen to be adjacent. The hairline is `--v-theme-divider`, the
+   same line the shelf rows and the selection pill use; the fill is the standing
+   `--hover-wash`, a wash the bar already speaks, which keeps the unselected
+   segment legible rather than introducing a second opaque surface colour that
+   would have to be kept in step with the toolbar's. */
 .shelf-viewswitch {
   display: inline-flex;
   gap: 0;
+  padding: 2px;
+  border: 1px solid rgb(var(--v-theme-divider));
+  border-radius: var(--radius-sm);
+  background: var(--hover-wash);
 }
 
 .shelf-viewseg {
@@ -3265,12 +3288,9 @@ watch(
   color: rgba(var(--v-theme-toolbar-text), 0.7);
 }
 
-.shelf-viewseg:first-child {
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-}
-
+.shelf-viewseg:first-child,
 .shelf-viewseg:last-child {
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-radius: calc(var(--radius-sm) - 1px);
 }
 
 /* Three layers, and the underline is the LEAST of them. `--active-bar` measures
@@ -3283,6 +3303,17 @@ watch(
   color: var(--active-text);
   font-weight: var(--weight-semibold);
   box-shadow: inset 0 -2px 0 var(--active-bar);
+}
+
+/* Inside a filled track the unselected segment must not carry a wash of its
+   own, or the pair reads as two selected things. */
+.shelf-viewseg:not(.shelf-viewseg--on):hover {
+  background: rgba(var(--v-theme-toolbar-text), 0.08);
+}
+
+/* The gap the count sits in is the bar's cluster gap, not a hair. */
+.shelf-sub--ingap {
+  margin-left: var(--space-4);
 }
 
 /* Raised so the focus ring is not clipped by the welded sibling. */

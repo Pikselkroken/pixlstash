@@ -32,9 +32,19 @@
         Set ai-toolkit folder
       </AppButton>
     </p>
-    <p v-else-if="loading && !runs.length" class="tr-note" role="status">
-      Reading runs…
-    </p>
+    <!-- The first read of a folder walks it and parses a `config.yaml` per run,
+         which is not instant on a real output root — and until now that showed
+         as an empty panel, which reads as "there is nothing here" rather than
+         as "working". The shared spinner idiom (`mdi-loading` + `mdi-spin`, the
+         one `AppButton` and the overlay panels already use), centred in the
+         space the grid will fill, so the activity is where the result appears.
+         A RELOAD does not take this branch: the grid stays up and the reload
+         button carries its own spinner, because replacing a list you are
+         reading with a spinner is worse than leaving it up a moment longer. -->
+    <div v-else-if="loading && !runs.length" class="tr-loading" role="status">
+      <v-icon size="28" class="mdi-spin">mdi-loading</v-icon>
+      <span>Reading runs…</span>
+    </div>
     <p v-else-if="error" class="tr-note" role="alert">{{ error }}</p>
     <p v-else-if="!runs.length" class="tr-note" role="status">
       Nothing in that folder looks like a training run yet.
@@ -571,6 +581,26 @@ function reload() {
 }
 
 /**
+ * Read the runs whenever the output root changes — including from nothing.
+ *
+ * The load used to hang off `onMounted` alone, which was wrong in the one case
+ * that matters most: setting the folder from THIS view's own empty state. The
+ * shelf answers that by showing the runs tab, but the runs tab is already
+ * showing, so nothing remounts and the panel sat empty next to a folder it now
+ * had. Depending on the folder itself is the fix rather than re-emitting a
+ * navigation that is already where it wants to be.
+ *
+ * `loadRuns` clears and reports an empty count when the id goes away, so
+ * forgetting the folder is the same edge handled by the same call.
+ */
+watch(
+  () => source.value?.id,
+  () => {
+    loadRuns();
+  },
+);
+
+/**
  * Reload when the tab is looked at again.
  *
  * `visibilitychange` covers switching tabs and un-minimising; `focus` covers
@@ -847,6 +877,27 @@ function batchReceipt(imported, failed) {
   padding-left: var(--space-3);
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.tr-loading {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* The global reduced-motion reset would freeze this into a static broken ring,
+   which reads as a bug rather than as restraint. Slowed, not stopped — the same
+   exemption `AppButton` takes for the same glyph. */
+@media (prefers-reduced-motion: reduce) {
+  .tr-loading .mdi-spin::before {
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 
 .tr-note {

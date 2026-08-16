@@ -228,7 +228,7 @@ const props = defineProps({
   open: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["close"]);
+const emit = defineEmits(["close", "source-added"]);
 
 const store = useModelFoldersStore();
 const librariesStore = useLibrariesStore();
@@ -398,7 +398,13 @@ async function onPicked(path) {
   const folder = relocating.value;
   if (!folder) {
     if (addReason.value) return;
-    store.add({ path, kind: addingSource.value ? SOURCE_KIND : "user" });
+    const asSource = addingSource.value;
+    // Awaited so the registry has the folder before anything acts on it: the
+    // shelf answers `source-added` by showing the runs, and it can only read
+    // them once `sourceFolder` resolves.
+    store.add({ path, kind: asSource ? SOURCE_KIND : "user" }).then((added) => {
+      if (added && asSource) emit("source-added");
+    });
     return;
   }
   if (relocateReason(folder)) return;

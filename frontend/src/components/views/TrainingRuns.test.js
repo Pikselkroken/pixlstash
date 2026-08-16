@@ -177,6 +177,60 @@ describe("drawing the grid", () => {
     expect(wrapper.emitted("set-folder")).toBeTruthy();
   });
 
+  it("reads the runs the moment the folder is set, without a remount", async () => {
+    // The case this view is most likely to be in when the folder is set: its
+    // OWN empty state is the control that sets it, so the shelf's "show the
+    // runs" answer is a no-op — the runs tab is already showing. Depending on
+    // `onMounted` alone left the panel blank beside a folder it now had.
+    const wrapper = await openWith([], [FOLDERS[1]]);
+    expect(wrapper.text()).toContain("No ai-toolkit output folder is set");
+    expect(listRuns).not.toHaveBeenCalled();
+
+    listRuns.mockResolvedValue([run(), run("Foxglove")]);
+    useModelFoldersStore().folders = FOLDERS;
+    await settle(wrapper);
+
+    expect(listRuns).toHaveBeenCalledWith(1);
+    expect(wrapper.findAll(".tr-card")).toHaveLength(2);
+  });
+
+  it("says it is working while the first read runs, rather than showing blank", async () => {
+    // A directory walk plus a config parse per run is not instant, and an empty
+    // panel reads as "there is nothing here" rather than as "working".
+    let release;
+    listRuns.mockReturnValue(new Promise((r) => (release = r)));
+    const store = useModelFoldersStore();
+    store.folders = FOLDERS;
+    store.loaded = true;
+    const wrapper = mount(TrainingRuns, globalOpts);
+    mounted.push(wrapper);
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".tr-loading").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Reading runs…");
+
+    release([run()]);
+    await settle(wrapper);
+    expect(wrapper.find(".tr-loading").exists()).toBe(false);
+    expect(wrapper.findAll(".tr-card")).toHaveLength(1);
+  });
+
+  it("keeps the grid up while a RELOAD runs, instead of replacing it", async () => {
+    // The reload button carries its own spinner. Swapping a list somebody is
+    // reading for a loading state is worse than leaving it up a moment longer.
+    const wrapper = await openWith([run()]);
+    let release;
+    listRuns.mockReturnValue(new Promise((r) => (release = r)));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".tr-loading").exists()).toBe(false);
+    expect(wrapper.findAll(".tr-card")).toHaveLength(1);
+    release([run(), run("Foxglove")]);
+    await settle(wrapper);
+    expect(wrapper.findAll(".tr-card")).toHaveLength(2);
+  });
+
   it("tells the shelf how many runs there are, for the count beside the tabs", async () => {
     const wrapper = await openWith([run(), run("Foxglove")]);
     expect(wrapper.emitted("count").at(-1)).toEqual([2]);
