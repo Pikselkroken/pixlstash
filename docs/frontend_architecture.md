@@ -2723,7 +2723,7 @@ in the meantime (409, something stacked its rows first) is counted rather than
 thrown — one stale group must not discard the others.
 
 **Tier 2 is absent from the UI because it is absent from the backend.** Prefix
-grouping (`JimmyBuss` beside `JimmyBuss2`) needs per-group adjudication with
+grouping (`JimmyVehicle` beside `JimmyVehicle2`) needs per-group adjudication with
 counter-evidence first; half an adjudication surface would be worse than none.
 
 #### Importing from ai-toolkit (F6)

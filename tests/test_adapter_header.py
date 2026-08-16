@@ -158,7 +158,7 @@ def test_ai_toolkit_output_is_fully_described(tmp_path):
     """The rich case, mirroring a real ai-toolkit file."""
     metadata = {
         "format": "pt",
-        "name": "JimmyBuss",
+        "name": "JimmyVehicle",
         "software": json.dumps(
             {
                 "name": "ai-toolkit",
@@ -168,7 +168,7 @@ def test_ai_toolkit_output_is_fully_described(tmp_path):
         ),
         "training_info": json.dumps({"step": 3000, "epoch": 333}),
         "ss_base_model_version": "zimage",
-        "ss_output_name": "JimmyBuss",
+        "ss_output_name": "JimmyVehicle",
         "ss_tag_frequency": json.dumps(
             {"1_jimmycarr": {"jimmycarr": 4, "portrait": 9}}
         ),
@@ -186,7 +186,7 @@ def test_ai_toolkit_output_is_fully_described(tmp_path):
     assert info.kind == "lora"
     assert info.tensor_count == 2
     assert info.base_model == "zimage"
-    assert info.display_name == "JimmyBuss"
+    assert info.display_name == "JimmyVehicle"
     assert info.training_step == 3000
     assert info.training_epoch == 333
     assert info.trained_by == "ai-toolkit 0.9.11"

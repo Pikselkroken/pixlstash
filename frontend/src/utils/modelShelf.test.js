@@ -76,8 +76,8 @@ describe("deriveModelName", () => {
     // needs five digits so `000002750` goes and the `2` in `v2` stays;
     // dropping that distinction merges six checkpoints of one run into six
     // unrelated-looking rows, or renames every `v2` file.
-    expect(deriveModelName("JimmyBuss_000002750.safetensors")).toBe(
-      "JimmyBuss",
+    expect(deriveModelName("JimmyVehicle_000002750.safetensors")).toBe(
+      "JimmyVehicle",
     );
     expect(deriveModelName("ohwx_woman-step00004500.safetensors")).toBe(
       "ohwx woman",
@@ -1216,14 +1216,14 @@ describe("stackReceipt", () => {
 
 describe("trainingStep", () => {
   it("reads the same suffix the name derivation strips", () => {
-    expect(trainingStep("JimmyBuss_000000500.safetensors")).toBe(500);
+    expect(trainingStep("JimmyVehicle_000000500.safetensors")).toBe(500);
     expect(trainingStep("ohwx_woman-step00004500.safetensors")).toBe(4500);
   });
 
   it("reports no step for a bare final, and for a version suffix", () => {
     // `v2` is not training bookkeeping — `deriveModelName` keeps it, so this
     // must not read it as a step.
-    expect(trainingStep("JimmyBuss.safetensors")).toBe(null);
+    expect(trainingStep("JimmyVehicle.safetensors")).toBe(null);
     expect(trainingStep("portrait_mix_v2.safetensors")).toBe(null);
   });
 });

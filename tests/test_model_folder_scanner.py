@@ -176,7 +176,7 @@ class TestAdapters:
         # indistinguishable from a choice.
         folder = tmp_path / "loras"
         folder.mkdir()
-        write_adapter(folder / "JimmyBuss_000002750.safetensors")
+        write_adapter(folder / "JimmyVehicle_000002750.safetensors")
         folder_id = register_folder(hub, folder)
 
         scanner.scan_folder(folder_id, str(folder), "user")

@@ -154,7 +154,7 @@ class TestDerivedName:
     @pytest.mark.parametrize(
         "filename,expected",
         [
-            ("JimmyBuss_000002750.safetensors", "JimmyBuss"),
+            ("JimmyVehicle_000002750.safetensors", "JimmyVehicle"),
             ("ohwx_woman-step00004500.safetensors", "ohwx woman"),
             ("hmmotion_minimax-h3_epoch12.safetensors", "hmmotion minimax h3"),
             ("k3nk-13ep.safetensors", "k3nk"),
@@ -168,13 +168,13 @@ class TestDerivedName:
         "filename,expected",
         [
             ("portrait_mix_v2.safetensors", "portrait mix v2"),
-            ("JimmyBuss2.safetensors", "JimmyBuss2"),
+            ("JimmyVehicle2.safetensors", "JimmyVehicle2"),
             ("sdxl_1.safetensors", "sdxl 1"),
         ],
     )
     def test_version_suffixes_survive(self, filename, expected):
         # A short trailing number is a version, not a step count. Stripping it
-        # would merge JimmyBuss and JimmyBuss2, which are two different runs.
+        # would merge JimmyVehicle and JimmyVehicle2, which are two different runs.
         assert derive_model_name(filename) == expected
 
     def test_repeated_suffixes_are_all_dropped(self):
@@ -190,6 +190,6 @@ class TestDerivedName:
         assert clean_asset_name("z_image_turbo_bf16.safetensors") == (
             "z image turbo bf16"
         )
-        assert clean_asset_name("JimmyBuss_000002750.safetensors") == (
-            "JimmyBuss 000002750"
+        assert clean_asset_name("JimmyVehicle_000002750.safetensors") == (
+            "JimmyVehicle 000002750"
         )

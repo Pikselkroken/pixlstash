@@ -349,7 +349,7 @@ def move_directory(source_path: str, destination_path: str) -> None:
 
 
 # A trained checkpoint's previews sit beside it, in a directory named from its
-# own stem: ``JimmyBuss_0001500.safetensors`` -> ``JimmyBuss_0001500_samples/``.
+# own stem: ``JimmyVehicle_0001500.safetensors`` -> ``JimmyVehicle_0001500_samples/``.
 # On disk in the folder rather than in a hub store, so a person opening that
 # folder sees what each file looked like, and so nothing has to be migrated when
 # they move the file somewhere PixlStash is not looking.

@@ -131,8 +131,8 @@ def clean_asset_name(filename: str) -> str:
 
 
 # Trailing tokens that record where in a training run a checkpoint was saved.
-# `JimmyBuss_000002750` and `ohwx_woman-step00004500` are one subject each, not
-# a subject called "JimmyBuss 000002750".
+# `JimmyVehicle_000002750` and `ohwx_woman-step00004500` are one subject each, not
+# a subject called "JimmyVehicle 000002750".
 #
 # The bare-digit rule needs five digits or more on purpose: ai-toolkit
 # zero-pads its step counts, while a genuine version suffix is short. So
@@ -165,8 +165,8 @@ def derive_model_name(filename: str) -> str:
         filename and marks the row as carrying the file's own name.
 
     Examples:
-        >>> derive_model_name("JimmyBuss_000002750.safetensors")
-        'JimmyBuss'
+        >>> derive_model_name("JimmyVehicle_000002750.safetensors")
+        'JimmyVehicle'
         >>> derive_model_name("ohwx_woman-step00004500.safetensors")
         'ohwx woman'
         >>> derive_model_name("portrait_mix_v2.safetensors")
