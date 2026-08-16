@@ -45,6 +45,12 @@
 - The documented Windows plugin directory was missing a path component. It is
   `%LOCALAPPDATA%\pixlstash\pixlstash\image-plugins\user\`, which is why hand-copying
   a plugin to the path the README gave appeared to do nothing.
+- Both command lines now document themselves in full. Every `pixlstash-cli`
+  verb explains itself under `<command> --help` rather than only listing its
+  arguments, the exit codes a script needs are in the top-level help, and
+  `pixlstash-server` names itself in its usage line instead of `app.py`.
+- Removed `pixlstash-server --retag-and-embed`. It was accepted and documented
+  but never read by anything, so it silently did nothing.
 
 # [1.9.0]
 

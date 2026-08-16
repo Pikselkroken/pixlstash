@@ -41,21 +41,54 @@ EXIT_OK = 0
 EXIT_REFUSED = 1
 EXIT_HUB_UNAVAILABLE = 3
 
+# Shown under every top-level `--help`. Exit codes belong in the help output
+# rather than only in this file's docstring: a script calling the CLI has to
+# tell "you asked for something I will not do" apart from "I could not open
+# the hub", and nothing else tells it.
+EPILOG = """\
+Every command has its own help, e.g.
+  pixlstash-cli libraries backup --help
+
+Exit codes:
+  0  the command did what it says
+  1  refused for a reason you can act on, or you answered no to a prompt
+  2  the command line itself was wrong
+  3  the hub database could not be opened
+"""
+
+# Every verb that names a library accepts the same three forms, so they are
+# documented in one place rather than drifting apart across five parsers.
+LIBRARY_ARG_HELP = (
+    "Which library: its name, its id from `list`, or its uuid. Quote a name "
+    "containing spaces; digits are matched against ids before names. A "
+    "detached library is not in `list` and answers only to its id or uuid."
+)
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Return the argument parser for the library CLI."""
     parser = argparse.ArgumentParser(
         prog="pixlstash-cli",
+        # Wrapped by hand: RawDescriptionHelpFormatter prints the description
+        # as written, which is the price of an epilog that keeps its layout.
         description=(
-            "PixlStash command line. Run this on the machine hosting "
+            "PixlStash command line. Run this on the machine hosting\n"
             "PixlStash, signed in as the user that owns it."
         ),
+        epilog=EPILOG,
+        # Keeps the epilog's exit-code list on separate lines instead of
+        # reflowing it into a paragraph.
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--hub",
         default=None,
         metavar="PATH",
-        help=f"Hub database to use (default: {default_hub_path()}).",
+        help=(
+            f"Hub database to use (default: {default_hub_path()}). Used by the "
+            "`libraries` commands; `plugins` never opens the hub. Global "
+            "options go before the group name."
+        ),
     )
     # Only the library verbs need the hub. Opening it for `plugins` would make
     # plugin installation fail on a machine that has never run the server.
@@ -75,12 +108,27 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = libraries.add_subparsers(dest="command", required=True)
 
     list_parser = subparsers.add_parser(
-        "list", help="Show the registered libraries and which one is active."
+        "list",
+        help="Show the registered libraries and which one is active.",
+        description=(
+            "Print every registered library with its id, name and folder. "
+            "`*` marks the active one; `(not found)` marks a registration "
+            "whose folder is missing — reconnect the drive, or point it "
+            "somewhere new with `relocate`."
+        ),
     )
     list_parser.set_defaults(handler=_cmd_list)
 
     create_parser = subparsers.add_parser(
-        "create", help="Create a folder, start an empty library in it, register it."
+        "create",
+        help="Create a folder, start an empty library in it, register it.",
+        description=(
+            "Create the folder, initialise an empty library in it, and "
+            "register it. A folder that already holds vault.db is refused; "
+            "use `attach` for that one. The first library on an installation "
+            "becomes the active one; any later library has to be switched to "
+            "in Settings › Libraries."
+        ),
     )
     create_parser.add_argument("folder", help="Folder to create the library in.")
     create_parser.add_argument(
@@ -89,7 +137,18 @@ def build_parser() -> argparse.ArgumentParser:
     create_parser.set_defaults(handler=_cmd_create)
 
     attach_parser = subparsers.add_parser(
-        "attach", help="Register a library that already exists on disk."
+        "attach",
+        help="Register a library that already exists on disk.",
+        description=(
+            "Register a library folder that already exists. The folder must "
+            "hold vault.db, and any login or tokens inside that vault are "
+            "ignored rather than imported. Attaching a library that was "
+            "detached earlier revives its original registration, and with it "
+            "the share links and API tokens issued from it — but only while "
+            "the folder still holds that same library; a different one at "
+            "that path is registered as a new library and the old tokens stay "
+            "inert. Overlapping an existing library warns rather than refuses."
+        ),
     )
     attach_parser.add_argument("folder", help="Folder containing vault.db.")
     attach_parser.add_argument(
@@ -100,15 +159,29 @@ def build_parser() -> argparse.ArgumentParser:
     detach_parser = subparsers.add_parser(
         "detach",
         help="Forget a library. No files are removed and nothing in the folder changes.",
+        description=(
+            "Deregister a library. No files are removed and nothing inside "
+            "the folder changes. The registration is kept rather than "
+            "deleted, so attaching this library again brings back its share "
+            "links and API tokens; until then they are inert. The active "
+            "library is refused — switch to another one first."
+        ),
     )
-    detach_parser.add_argument("library", help="Library name or id from `list`.")
+    detach_parser.add_argument("library", help=LIBRARY_ARG_HELP)
     detach_parser.set_defaults(handler=_cmd_detach)
 
     relocate_parser = subparsers.add_parser(
         "relocate",
         help="Point a library at a folder that has moved, keeping its share links.",
+        description=(
+            "Point an existing registration at a folder that has moved. The "
+            "library keeps its identity, so its share links and API tokens "
+            "keep working; detaching and attaching at the new path would mint "
+            "a new identity and leave them inert. The new folder must hold "
+            "vault.db."
+        ),
     )
-    relocate_parser.add_argument("library", help="Library name or id from `list`.")
+    relocate_parser.add_argument("library", help=LIBRARY_ARG_HELP)
     relocate_parser.add_argument("folder", help="Where the library now lives.")
     relocate_parser.set_defaults(handler=_cmd_relocate)
 
@@ -119,10 +192,14 @@ def build_parser() -> argparse.ArgumentParser:
             "Writes a consistent copy even while the library is open. The "
             "archive contains your credentials, so it is written owner-readable "
             "only; pictures in reference folders are outside the library and are "
-            "not included."
+            "not included. An existing destination file is never overwritten. "
+            "There is no restore verb: you unpack the archive yourself. It is "
+            "a zstd-compressed tar (a plain tar with --no-compress) holding "
+            "manifest.json, vault.db, hub.db and — unless --metadata-only was "
+            "given — the library's own files under images/."
         ),
     )
-    backup_parser.add_argument("library", help="Library name or id from `list`.")
+    backup_parser.add_argument("library", help=LIBRARY_ARG_HELP)
     backup_parser.add_argument(
         "destination", help="Output file, or a folder to write a dated name into."
     )
@@ -141,14 +218,31 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_parser = subparsers.add_parser(
         "prepare-legacy-identity",
         help="Explicitly approve one legacy owner/token migration before startup.",
+        description=(
+            "Approve moving one older library's owner and API tokens out of "
+            "its vault.db and into the hub. Needed once, before the first "
+            "normal start, on an installation that predates the hub: startup "
+            "deliberately will not guess which vault to trust. This records "
+            "the approval and nothing else — the copy, the verification and "
+            "the blanking of the old identity happen the next time PixlStash "
+            "starts."
+        ),
     )
     migrate_parser.add_argument(
         "folder", help="Legacy library folder containing vault.db."
     )
     migrate_parser.set_defaults(handler=_cmd_prepare_legacy_identity)
 
-    rename_parser = subparsers.add_parser("rename", help="Change a library's name.")
-    rename_parser.add_argument("library", help="Library name or id from `list`.")
+    rename_parser = subparsers.add_parser(
+        "rename",
+        help="Change a library's name.",
+        description=(
+            "Change a library's display name. Nothing on disk moves and no "
+            "link changes. Names are unique, so a name another library "
+            "already holds is refused."
+        ),
+    )
+    rename_parser.add_argument("library", help=LIBRARY_ARG_HELP)
     rename_parser.add_argument("new_name", help="The new display name.")
     rename_parser.set_defaults(handler=_cmd_rename)
 
@@ -173,6 +267,15 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
     install_parser = commands.add_parser(
         "install",
         help="Install a plugin from the plugins repository, a zip, a folder or a .py.",
+        description=(
+            "Read the source without importing it, work out whether it is a "
+            "captioning plugin or an image filter, and copy it into the "
+            "matching user plugin directory (`plugins list` prints both "
+            "paths). Prints the plan and asks before writing anything unless "
+            "--yes is given. A captioning plugin is loaded when the server "
+            "next starts; an image filter appears the next time the Filters "
+            "menu is listed."
+        ),
     )
     install_parser.add_argument(
         "source",
@@ -213,12 +316,29 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
     install_parser.set_defaults(handler=_cmd_plugins_install)
 
     list_parser = commands.add_parser(
-        "list", help="Show the installed plugins, grouped by kind."
+        "list",
+        help="Show the installed plugins, grouped by kind.",
+        description=(
+            "Print both plugin directories and what is installed in them. "
+            "`!` marks a plugin that will not load as it stands and `*` one "
+            "that replaces a built-in. Nothing is imported here, so a failure "
+            "that only happens at import — a missing dependency, say — is not "
+            "visible in this listing."
+        ),
     )
     list_parser.set_defaults(handler=_cmd_plugins_list)
 
     remove_parser = commands.add_parser(
-        "remove", help="Delete an installed plugin. This removes files."
+        "remove",
+        help="Delete an installed plugin. This removes files.",
+        description=(
+            "Delete an installed plugin's file or folder, after printing the "
+            "exact path and asking, unless --yes is given. The path deleted "
+            "is always inside one of the two plugin directories. Removing a "
+            "plugin that replaces a built-in filter brings the built-in back; "
+            "removing a captioning plugin takes effect when the server next "
+            "starts."
+        ),
     )
     remove_parser.add_argument("name", help="Plugin name from `plugins list`.")
     remove_parser.add_argument(
