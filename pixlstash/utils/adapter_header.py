@@ -373,7 +373,7 @@ def role_from_folder(path: str) -> Optional[str]:
 
 
 def classify_model_file(tensor_names, param_count: int, path: str = "") -> str:
-    """Return what a file *is*, from its tensor names, size and location.
+    """Return what a file *is*, from its tensor names, parameter count and location.
 
     The rule is deliberately asymmetric, and the order below is the ranking of
     how much each signal can be trusted:

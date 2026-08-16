@@ -91,9 +91,12 @@ _HASH_CHUNK_BYTES = 1024 * 1024
 # moment text encoders got a kind of their own: a 23 GB T5 is precisely the read
 # the finder exists to defer, and it would have gone back to being paid inline.
 #
-# 2 GiB sits above every VAE and CLIP measured on a real shelf (the largest a
-# 5 GB video VAE, the typical 0.3 GB) and below every base model and large
-# encoder, so the split lands where the stall does.
+# 2 GiB is where the stall starts to be worth deferring, not a boundary between
+# kinds — nothing here needs one, because this is only ever asked about the
+# non-adapter kinds. An image VAE and a CLIP measure a few hundred MB and are
+# hashed inline; a base model, a large text encoder and a multi-gigabyte video
+# VAE all sit above it and are left to the finder, which is right for each of
+# them for the same reason: they are a long read, whatever they are.
 _DEFER_HASH_BYTES = 2 * 1024**3
 
 # Files per write transaction. The hub's multi-process contract is "short

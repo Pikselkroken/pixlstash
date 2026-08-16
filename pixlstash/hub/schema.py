@@ -64,6 +64,13 @@ CURRENT_SCHEMA_VERSION = 2
 # build ignores it entirely.
 CURRENT_DATA_VERSION = 1
 
+# `model_file.state` for a copy the last scan actually looked at, spelled out
+# rather than imported from `services.model_folder_scanner`. That module imports
+# `hub.db`, which imports this one, so the import would be a cycle. Kept beside
+# the version counters so the duplication is visible rather than buried at its
+# one use in `_backfill_component_roles`.
+_BACKFILL_LIVE_STATE = "present"
+
 
 # Identity plus the per-user preference and machine/deployment columns that move
 # out of the vault's ``user`` table (multi-library plan §5).
@@ -712,6 +719,14 @@ def _backfill_component_roles(conn: sqlite3.Connection) -> int:
     are not evidence, so the row is left alone rather than resolved by picking
     a side.
 
+    **``present`` copies decide it when there are any.** ``model_file`` is also
+    the tombstone: a copy deleted months ago leaves its row behind with
+    ``state = 'missing'``, and a dead path in a differently-named folder would
+    otherwise manufacture a disagreement and veto a re-filing that every live
+    copy agrees on. A model with *no* present copy — every location on a drive
+    that is not plugged in — still falls back to the paths it has, because this
+    runs once and skipping it there would mislabel that drive permanently.
+
     Runs exactly once per hub (see :data:`CURRENT_DATA_VERSION`), because
     ``file_kind`` is owner-correctable and a backfill that re-ran would undo the
     correction on the next restart.
@@ -726,7 +741,7 @@ def _backfill_component_roles(conn: sqlite3.Connection) -> int:
     # `apply_migrations`, which a test may hand a bare `sqlite3.connect` with no
     # `row_factory` set.
     rows = conn.execute(
-        "SELECT m.id, f.path, mf.relpath "
+        "SELECT m.id, f.path, mf.relpath, mf.state "
         "FROM model m "
         "JOIN model_file mf ON mf.model_id = m.id "
         "JOIN model_folder f ON f.id = mf.model_folder_id "
@@ -734,11 +749,21 @@ def _backfill_component_roles(conn: sqlite3.Connection) -> int:
         (FILE_UNKNOWN, FILE_CHECKPOINT),
     ).fetchall()
 
-    roles_by_model: dict[int, set] = {}
-    for model_id, folder_path, relpath in rows:
-        roles_by_model.setdefault(model_id, set()).add(
-            role_from_folder(f"{folder_path}/{relpath}")
-        )
+    # Gathered per state so the present copies can be preferred whole. Taking
+    # the union and then dropping tombstones would be the same thing written
+    # so that a later reader cannot see the rule.
+    live_roles: dict[int, set] = {}
+    any_roles: dict[int, set] = {}
+    for model_id, folder_path, relpath, state in rows:
+        role = role_from_folder(f"{folder_path}/{relpath}")
+        any_roles.setdefault(model_id, set()).add(role)
+        if state == _BACKFILL_LIVE_STATE:
+            live_roles.setdefault(model_id, set()).add(role)
+
+    roles_by_model = {
+        model_id: live_roles.get(model_id) or roles
+        for model_id, roles in any_roles.items()
+    }
 
     refiled = 0
     for model_id, roles in roles_by_model.items():

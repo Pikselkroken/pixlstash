@@ -635,6 +635,67 @@ class TestComponentRoleBackfill:
             "SELECT file_kind FROM model WHERE id = ?", (model_id,)
         ).fetchone() == ("unknown",)
 
+    def test_a_tombstone_cannot_veto_what_the_live_copies_agree_on(self, hub):
+        # `model_file` is also the tombstone, so a copy deleted months ago leaves
+        # its row behind. Counting that dead path as a dissenting voice would
+        # block the re-filing every present copy agrees on.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 0")
+        model_id = add_model(hub, file_kind="unknown", sha256="t", kind=None)
+        add_file(hub, model_id, add_folder(hub, "/a"), "VAE/thing.safetensors")
+        add_file(
+            hub,
+            model_id,
+            add_folder(hub, "/b"),
+            "Downloads/thing.safetensors",
+            state="missing",
+        )
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE id = ?", (model_id,)
+        ).fetchone() == ("vae",)
+
+    def test_present_copies_that_disagree_still_veto(self, hub):
+        # Preferring the live copies is not the same as ignoring disagreement:
+        # two folders we can currently see, naming different roles, is exactly
+        # the case that must be left alone.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 0")
+        model_id = add_model(hub, file_kind="unknown", sha256="p", kind=None)
+        add_file(hub, model_id, add_folder(hub, "/a"), "VAE/thing.safetensors")
+        add_file(hub, model_id, add_folder(hub, "/b"), "Downloads/thing.safetensors")
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE id = ?", (model_id,)
+        ).fetchone() == ("unknown",)
+
+    def test_a_model_with_no_present_copy_is_still_refiled(self, hub):
+        # An unplugged drive. This runs once, so skipping it here would leave
+        # that drive's support files mislabelled for good.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 0")
+        model_id = add_model(hub, file_kind="checkpoint", sha256="o", kind=None)
+        add_file(
+            hub,
+            model_id,
+            add_folder(hub, "/detached"),
+            "TextEncoders/t5xxl.safetensors",
+            state="unreachable",
+        )
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE id = ?", (model_id,)
+        ).fetchone() == ("text_encoder",)
+
     def test_it_runs_once_and_never_undoes_a_correction(self, hub):
         # The reason this is not a schema step. `_apply_v2` re-runs on every
         # open; if this did too, an owner who corrected a row would find it
