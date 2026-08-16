@@ -63,6 +63,54 @@ def vram_limited_batch_cap(
     return max(1, int((task_budget_mb - base_mb) / max(1, per_item_mb)))
 
 
+#: Words that make an "out of memory" message a *device* one. Without one of
+#: these the phrase is ambiguous: ``sqlite3.OperationalError: out of memory``
+#: (SQLITE_NOMEM) says it too, and treating that as transient GPU pressure
+#: would retry a task that has nothing to do with the GPU.
+_DEVICE_WORDS = ("cuda", "gpu", "hip", "vram")
+
+#: How far up the ``__cause__``/``__context__`` chain to look. A plugin that
+#: wraps the driver's error in its own class is the common case; a chain deeper
+#: than this is not.
+_CAUSE_DEPTH = 5
+
+
+def is_vram_oom(error: BaseException) -> bool:
+    """True when *error* is an out-of-GPU-memory failure.
+
+    Type identity is the reliable signal (``torch.OutOfMemoryError``), but a
+    plugin may run its model through a runtime that raises its own exception
+    type for the same condition, so the message is checked as well — and the
+    wrapped-cause chain with it, because ``raise RuntimeError(...) from oom``
+    is exactly how a plugin reports one. ``torch`` is read from
+    :data:`sys.modules` for the same reason as in :func:`empty_cuda_cache`: a
+    process that never imported it cannot have raised its OOM.
+
+    Args:
+        error: The exception to classify.
+
+    Returns:
+        ``True`` for a GPU OOM, which callers treat as transient and retry.
+    """
+    torch = sys.modules.get("torch")
+    oom_type = getattr(torch, "OutOfMemoryError", None) if torch else None
+    seen = set()
+    current: BaseException | None = error
+    for _ in range(_CAUSE_DEPTH):
+        if current is None or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if isinstance(oom_type, type) and isinstance(current, oom_type):
+            return True
+        message = str(current).lower()
+        if "cuda_error_out_of_memory" in message:
+            return True
+        if "out of memory" in message and any(w in message for w in _DEVICE_WORDS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def empty_cuda_cache() -> bool:
     """Flush PyTorch's CUDA allocator cache back to the driver.
 

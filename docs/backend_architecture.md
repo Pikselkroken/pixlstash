@@ -844,6 +844,17 @@ Snapshot: id, kind, created_at, relative_path,
 
 **Release is unconditional.** A task's claimed picture ids and its in-flight slot are given back only by the `TaskRunner` completion callbacks, so *every* path that ends a task fires them, not just the worker's `finally`: `TaskRunner._cancel_queued_task` is the single cancel path (used by `cancel_pending_tasks()`, `stop()`'s drain and the worker's post-stop dequeue) and passes a `TaskCancelledError`, and `WorkPlanner._release_unsubmitted` hands back a task the planner found but decided not to submit. Anything that skips this wedges the finder at max in-flight for the life of the process and makes the claimed pictures permanently un-selectable — `start()` does not heal it.
 
+**A GPU out-of-memory failure is retried, not lost.** VRAM pressure is almost always another process (a ComfyUI run, a second model) that gives the card back shortly, so `BaseTask.run()` gives a task `VRAM_OOM_ATTEMPTS` (3) attempts. Two guards keep that narrow, because re-running `_run_task()` from the top is only safe for an inference pass that failed before it wrote anything:
+
+- **GPU-queue tasks only.** The CPU queue's import and purge tasks move and delete files; a blind second pass over one is a second effect, not a retry.
+- **A device out-of-memory only.** `is_vram_oom()` takes `torch.OutOfMemoryError` by type, or a message that says "out of memory" **and** names a device (`cuda`/`gpu`/`hip`/`vram`), walking `__cause__`/`__context__` because a plugin wraps the driver's error in its own class. The device word is what keeps `sqlite3.OperationalError: out of memory` (SQLITE_NOMEM) out.
+
+Between attempts `TaskRunner._pause_and_report_vram_oom` flushes the allocator cache — this returns *our own* cached-but-unused segments to the driver, which is what a fragmented allocation needs; it cannot reclaim what another process holds, and the pause is what covers that — emits `EventType.VRAM_OOM` so the SPA can raise a warning toast counting the attempts used, and waits `VRAM_OOM_RETRY_PAUSE_S` (5 s, kept short because the single GPU worker is parked on it and an interactive `submit_and_wait` queues behind it). A shutdown during the pause abandons the remaining attempts. Every retry sequence ends with a closing frame — `recovered` when a later attempt succeeded, `gave_up` when the task died — and the two counters are read for different jobs: `task.vram_oom_attempts` (how many attempts OOMed) decides *whether* a card is open, so a task that OOMed twice and then died of something else still closes it; `task.attempts_used` (which attempt actually ran) is what the frame reports, so a recovery names the attempt that did the work rather than the last one that failed, and a sequence that ended short of `max_attempts` is visibly an early stop rather than an exhausted retry.
+
+The retry lives in `run()` rather than in the worker loop so a task settles — `_done_event`, `completed_at` — exactly once, after the last attempt; a `submit_and_wait` caller must not be woken by an attempt that is about to be retried. `Vault.notify` deliberately does **not** wake the planner for `VRAM_OOM`: every other event means "there may be work to pick up", and this one means the GPU is full.
+
+**The consequence for callers: an OOM must be allowed to propagate.** `DescriptionWorkflow` and `DescriptionTask` re-raise it instead of falling into their "clear the description" path, because clearing a caption over a transient condition destroys data the retry would have produced; the picture keeps its sentinel and a later sweep picks it up. This only reaches as far as the OOMs that actually surface: a plugin that catches per image internally (JoyCaption) or falls back to CPU inside the service (Florence-2) reports a `None` caption instead, which is indistinguishable from "this image cannot be described" and is still cleared.
+
 **A raising finder costs only its own turn.** The planner catches per finder, not per cycle, so one failing `find_task()` is logged and skipped while the rest of the sweep continues; only shutdown abandons a cycle.
 
 **`on_all_tasks_complete()` fires from either edge.** "Exhausted and idle" can be entered by the last task completing *or* by the finder reporting no more work, whichever happens second. `WorkPlanner._claim_drain` is armed on submit and claimed under `_lock` by whichever edge sees the condition first, so the drain (a GPU session teardown for `MissingTagFinder`) is announced exactly once per burst and is not announced over a task that has just been taken.
@@ -2548,6 +2559,7 @@ a promise that Tailscale is local for every authentication mechanism.
 | `RESTORE_COMPLETED`    | ✗ internal  |
 | `RESTORE_FAILED`       | ✗ internal  |
 | `LIBRARY_SWITCHED`     | ✓ broadcast |
+| `VRAM_OOM`             | ✓ broadcast |
 <!-- AUTOGEN:end name="events" -->
 
 - Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans the filtered subset out to **owner-level** connected clients (see WebSocket authentication below).

@@ -217,7 +217,11 @@ class Vault:
             return
 
         self._task_runner = TaskRunner(
-            name="vault-task-runner", num_workers=worker_config.NUM_WORKERS
+            name="vault-task-runner",
+            num_workers=worker_config.NUM_WORKERS,
+            # So a GPU out-of-memory retry can raise a toast instead of only a
+            # log line. Bound method, like the finders' notifier below.
+            notifier=self.notify,
         )
         self._planner_work_finders = WorkPlanner.work_finders(
             database=self.db,
@@ -387,7 +391,15 @@ class Vault:
         Example:
             vault.notify(Vault.VaultEventType.NEW_PICTURE)
         """
-        if self._work_planner and self._work_planner.is_running():
+        # Waking the planner means "there may be work to pick up". A VRAM_OOM is
+        # the opposite statement — the GPU is full — and waking on it would send
+        # the planner looking for more GPU work three times per failing task, at
+        # the one moment there is no room for any.
+        if (
+            event_type is not EventType.VRAM_OOM
+            and self._work_planner
+            and self._work_planner.is_running()
+        ):
             self._work_planner.wake()
         with self._event_listeners_lock:
             listeners = list(self._event_listeners)
