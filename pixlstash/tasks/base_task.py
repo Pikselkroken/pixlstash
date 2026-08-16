@@ -105,7 +105,11 @@ class BaseTask(ABC):
         return None
 
     def on_cancel(self) -> None:
-        if self.status not in (TaskStatus.CANCELLED, TaskStatus.COMPLETED, TaskStatus.FAILED):
+        if self.status not in (
+            TaskStatus.CANCELLED,
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+        ):
             self._cancel_event.set()
         return None
 

@@ -229,7 +229,9 @@ class DescriptionTask(BaseTask):
             else:
                 # Only log caption generation as having failed if it was not cancelled
                 if not self._cancel_event.is_set():
-                    logger.error("Failed to generate description for picture %s", pic.id)
+                    logger.error(
+                        "Failed to generate description for picture %s", pic.id
+                    )
                 pic.description = ""
             descriptions_generated.append(pic)
         return descriptions_generated
@@ -237,7 +239,7 @@ class DescriptionTask(BaseTask):
     def on_cancel(self) -> None:
         if self._cancel_event.is_set():
             return
-        
+
         super().on_cancel()
         if self._cancel_event.is_set():
             logger.warning("Description task cancelled.")

@@ -264,7 +264,10 @@ class Florence2Service:
         }
 
     def generate_caption(
-        self, image_path: str, _retry_on_cpu: bool = True, stop_event: threading.Event|None = None,
+        self,
+        image_path: str,
+        _retry_on_cpu: bool = True,
+        stop_event: threading.Event | None = None,
     ) -> Optional[str]:
         """Generate a natural language caption for a single image or video file.
 
@@ -314,7 +317,8 @@ class Florence2Service:
                 if stop_event and stop_event.is_set():
                     logger.warning(
                         "Florence-2 captioning failed on GPU (%s); will not retry as"
-                         " a stop-event has been reached.", e
+                        " a stop-event has been reached.",
+                        e,
                     )
                     return None
                 logger.warning(
@@ -328,7 +332,10 @@ class Florence2Service:
             return None
 
     def generate_captions_batch(
-        self, image_paths: list, _retry_on_cpu: bool = True, stop_event: threading.Event|None = None,
+        self,
+        image_paths: list,
+        _retry_on_cpu: bool = True,
+        stop_event: threading.Event | None = None,
     ) -> dict:
         """Generate captions for a batch of still images.
 
@@ -354,7 +361,9 @@ class Florence2Service:
             valid_items = []
             for image_path in image_paths:
                 if stop_event and stop_event.is_set():
-                    logger.debug("Florence-2 generate captions batch stop-event reached, ending early")
+                    logger.debug(
+                        "Florence-2 generate captions batch stop-event reached, ending early"
+                    )
                     return {}
                 try:
                     image = Image.open(image_path).convert("RGB")
@@ -381,7 +390,9 @@ class Florence2Service:
             logger.debug("Batch inputs moved to %s", self._model_device)
 
             if stop_event and stop_event.is_set():
-                logger.debug("Florence-2 generate captions batch stop-event reached, ending early")
+                logger.debug(
+                    "Florence-2 generate captions batch stop-event reached, ending early"
+                )
                 return {}
 
             with torch.inference_mode():
@@ -993,7 +1004,7 @@ class Florence2Plugin(TaggerPlugin):
         self,
         image_paths: list,
         parameters: dict,
-        stop_event: threading.Event|None=None,
+        stop_event: threading.Event | None = None,
     ) -> dict:
         """Generate captions for a batch of image/video paths.
 
@@ -1017,7 +1028,9 @@ class Florence2Plugin(TaggerPlugin):
 
         for path in image_paths:
             if stop_event and stop_event.is_set():
-                logger.warning("Florence-2 generate descriptions stop-event reached, ending early.")
+                logger.warning(
+                    "Florence-2 generate descriptions stop-event reached, ending early."
+                )
                 return results
             path_str = str(path)
             ext = os.path.splitext(path_str)[1].lower()
@@ -1031,10 +1044,14 @@ class Florence2Plugin(TaggerPlugin):
         batch_size = self.service.description_batch_size()
         for idx in range(0, len(batch_items), batch_size):
             if stop_event and stop_event.is_set():
-                logger.warning("Florence-2 generate descriptions stop-event reached, ending early.")
+                logger.warning(
+                    "Florence-2 generate descriptions stop-event reached, ending early."
+                )
                 return results
             chunk = batch_items[idx : idx + batch_size]
-            captions = self.service.generate_captions_batch(chunk, stop_event=stop_event)
+            captions = self.service.generate_captions_batch(
+                chunk, stop_event=stop_event
+            )
             for path_str in chunk:
                 results[path_str] = captions.get(path_str)
 

@@ -139,7 +139,9 @@ class DescriptionWorkflow:
             path_to_id[picture_path] = picture.id
 
         try:
-            captions = plugin.generate_descriptions(image_paths, parameters=params, stop_event=self._describe_cancel)
+            captions = plugin.generate_descriptions(
+                image_paths, parameters=params, stop_event=self._describe_cancel
+            )
             for path, caption in captions.items():
                 pic_id = path_to_id.get(str(path))
                 if pic_id is not None:

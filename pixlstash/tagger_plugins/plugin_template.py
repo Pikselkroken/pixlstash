@@ -185,7 +185,7 @@ class MyCaptioner(TaggerPlugin):
         self,
         image_paths: list[str],
         parameters: dict[str, Any],
-        stop_event: threading.Event|None=None,
+        stop_event: threading.Event | None = None,
     ) -> dict[str, str | None]:
         """Caption a batch of images.
 
