@@ -1279,6 +1279,16 @@ describe("the receipts", () => {
     expect(text).toContain("1 model still has a copy");
     expect(text).toContain("1 model was already gone");
   });
+
+  it("does not report a refused engine as a file that is still on disk", () => {
+    // The reported bug: an engine row whose only copy is gone came back as
+    // "still has a copy", sending the reader to look on the disk for a file
+    // the shelf itself draws as missing.
+    expect(forgetReceipt(0, 0, 0, 1)).toBe(
+      "Nothing was forgotten. 1 model is one PixlStash downloaded for " +
+        "itself and would fetch again.",
+    );
+  });
 });
 
 describe("what a verb may reach", () => {
