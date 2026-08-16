@@ -451,8 +451,11 @@ def create_router(server) -> APIRouter:
 
         A model can hold several ``model_file`` rows — the shelf's whole
         content/location split — and only one of them need have travelled with
-        its previews. Ordered by the location primary key, so the answer is
-        stable rather than whatever SQLite hands back first.
+        its previews. Ordered by ``(model_folder_id, relpath)``, which **is**
+        ``model_file``'s primary key (``hub/schema.py``) — the table has no
+        ``id`` column — so the answer is stable rather than whatever SQLite
+        hands back first. Spelled out because a reviewer read "the location
+        primary key" as ``mf.id`` and called the ordering a mismatch.
 
         Raises:
             HTTPException: 404 when no such model row exists. A model that

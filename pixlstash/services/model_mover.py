@@ -415,8 +415,12 @@ def carry_samples(
             it, matching a copy-in, where the original file stays too.
 
     Returns:
-        None when there was nothing to carry or it was carried, or a short
-        message for the outcome's ``detail`` when it was not.
+        None when there was nothing to carry or the previews arrived, or a short
+        message for the outcome's ``detail`` when they did not. **Arriving is
+        what decides it, not the absence of an error**: the source removal is
+        the last step of a move, so it can fail with the previews already at the
+        destination, and that is a leftover duplicate for the log rather than a
+        loss for the receipt.
     """
     source_dir = samples_relpath(source_path)
     if not os.path.isdir(source_dir):
@@ -452,6 +456,31 @@ def carry_samples(
                 discard_partial_tree(partial)
                 raise
     except OSError as exc:
+        if os.path.isdir(destination_dir):
+            # **They did arrive.** ``move_directory`` copies, renames into place
+            # and removes the source *last*, so an rmtree that fails — a locked
+            # file on Windows, an EACCES on the source root, an NFS ``.nfs*``
+            # handle — raises after the previews are already at the destination.
+            # Reporting that as "not carried" sends the owner hunting for
+            # previews that are exactly where they should be, and their obvious
+            # next move is a re-run that the destination-exists check above then
+            # refuses. What is actually left is a duplicate at the source, which
+            # is the same residue every other interruption in this module
+            # leaves.
+            logger.warning(
+                "Carried the samples of %s to %s, but could not remove the "
+                "originals at %s: %s. The previews are at the destination; the "
+                "source copy is a duplicate and is safe to delete.",
+                os.path.basename(source_path),
+                destination_dir,
+                source_dir,
+                exc,
+            )
+            # Logged, not reported: ``detail`` means "the previews did not come
+            # with it" — that is what the schema says and what the receipt
+            # counts — and they did. Leftover bytes nobody names belong in the
+            # log, exactly as ``discard_partial`` puts them there.
+            return None
         logger.error(
             "Could not carry the samples of %s from %s to %s: %s. The model "
             "itself is registered at its new location; only the previews stayed "

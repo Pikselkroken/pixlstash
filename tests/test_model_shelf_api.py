@@ -4671,6 +4671,66 @@ def test_delete_moves_the_file_to_the_trash_and_takes_the_row_with_it(
     ), "the location rows outlived the model they point at"
 
 
+@pytest.mark.parametrize("permanent", [False, True], ids=["trash", "permanent"])
+def test_delete_takes_the_models_training_previews_with_it(
+    shelf_env, real_files, fake_trash, permanent
+):
+    """The lifecycle the import opens and a move carries has to close here.
+
+    A delete that skipped `<stem>_samples/` would leave a directory no route
+    lists and no rescan registers — and, worse, one that then refuses the
+    owner's **whole** re-import of that run, with the remedy only available
+    outside the app. Both gestures, because the trash path and the unlink path
+    remove it by different calls.
+    """
+    alice = shelf_env.model_ids["alice.safetensors"]
+    samples = real_files / "alice_samples"
+    samples.mkdir()
+    (samples / "1712345678901__000000500_0.jpg").write_bytes(b"\xff\xd8\xff")
+    bystander = real_files / "bob_samples"
+    bystander.mkdir()
+    (bystander / "keep.jpg").write_bytes(b"\xff\xd8\xff")
+
+    r = _delete(shelf_env, [alice], permanent=permanent)
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == [alice]
+
+    assert not samples.exists(), "the previews were orphaned in the folder"
+    assert bystander.exists(), "another model's previews were deleted"
+    assert (bystander / "keep.jpg").exists()
+
+
+def test_previews_that_will_not_delete_do_not_fail_the_deletion(
+    shelf_env, real_files, fake_trash, monkeypatch
+):
+    """Non-fatal, unlike the file itself: the weights are what was asked for.
+
+    Turning "the previews are stuck" into a refused deletion would leave the
+    model on the shelf naming a file that is already gone.
+    """
+    alice = shelf_env.model_ids["alice.safetensors"]
+    samples = real_files / "alice_samples"
+    samples.mkdir()
+    (samples / "a.jpg").write_bytes(b"\xff\xd8\xff")
+
+    real_send = model_files_routes.send2trash
+
+    def refuse_the_directory(path):
+        if os.path.isdir(path):
+            raise OSError("the previews directory is locked")
+        return real_send(path)
+
+    monkeypatch.setattr(model_files_routes, "send2trash", refuse_the_directory)
+
+    r = _delete(shelf_env, [alice])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["deleted"] == [alice], "a stuck previews directory failed the delete"
+    assert body["refused"] == []
+    assert not (real_files / "alice.safetensors").exists()
+    assert samples.exists(), "the fixture did not exercise the failure it meant to"
+
+
 def test_a_permanent_delete_unlinks_the_file_rather_than_trashing_it(
     shelf_env, real_files, monkeypatch
 ):

@@ -519,6 +519,48 @@ def test_an_empty_samples_directory_at_the_destination_is_not_replaced(
     assert os.path.exists(two_folders["destination_path"])
 
 
+def test_previews_that_arrived_are_not_reported_as_lost(two_folders, monkeypatch):
+    """The source removal is the LAST step, so it can fail with the previews
+    already at the destination.
+
+    Reporting that as "not carried" sends the owner hunting for previews that
+    are exactly where they should be — and their obvious next move, re-running
+    the move, hits the destination-exists refusal above. What is actually left
+    is a duplicate at the source, which is the residue every other interruption
+    in this module leaves and which belongs in the log, not the receipt.
+    """
+    _with_samples(two_folders, "1712345678901__000000500_0.jpg")
+    monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+
+    real_rmtree = mover_module.shutil.rmtree
+
+    def fail_on_the_source(path, *args, **kwargs):
+        if str(path) == str(two_folders["source_dir"] / "alice_samples"):
+            raise OSError("the source directory is locked")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(mover_module.shutil, "rmtree", fail_on_the_source)
+
+    mover = ModelMover(two_folders["hub"])
+    report = mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_MOVED]
+    assert report.outcomes[0].detail is None, (
+        "previews that arrived were reported as lost; the receipt counts this "
+        "as a file that moved without its training previews"
+    )
+    assert os.listdir(two_folders["destination_dir"] / "alice_samples") == [
+        "1712345678901__000000500_0.jpg"
+    ]
+    # The duplicate the failed removal left. Logged, not reported.
+    assert os.path.isdir(two_folders["source_dir"] / "alice_samples")
+
+
 def test_a_model_with_no_samples_directory_moves_as_before(two_folders):
     """The common case, pinned: nothing is created beside a model that never had
     previews."""

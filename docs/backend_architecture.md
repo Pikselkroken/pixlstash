@@ -2266,6 +2266,17 @@ longer wants was a file manager and then a rescan.
   here by `kind` rather than by `movable` because the managed store is
   `root_only` — the *folder* moves as a unit — while the files in it are
   individually the owner's.
+- **A copy's training previews go with it.** An imported checkpoint carries a
+  `<stem>_samples/` directory beside it, and the delete closes the lifecycle the
+  import opens and a move carries. Skipping it leaves a directory no route lists
+  and no rescan registers — and, sharper, one that then refuses the owner's
+  *whole* re-import of that run, because the importer refuses a batch whose
+  samples directory already exists and the only remedy would be a file manager.
+  Unlike the file it is **non-fatal**: the weights are what was asked for, so
+  previews that will not go are a warning and some occupied disk rather than a
+  failed deletion, and they are removed *after* the file for the same reason.
+  Both gestures remove it, by the call each of them uses — `send2trash` for the
+  trash, `shutil.rmtree` for a permanent delete.
 - **A model is deleted whole or not at all.** Every copy goes, so a model with
   one copy in a user folder and another in the cache is refused rather than
   half-deleted: unlinking the reachable half would leave the row the owner

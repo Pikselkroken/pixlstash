@@ -49,6 +49,15 @@ copy, because an unplugged drive is not a deletion and must never be read as
 one. The default is the OS trash (``send2trash``), which is the undo;
 ``permanent=true`` unlinks, and that one has none.
 
+**A copy's training previews go with it.** An imported checkpoint carries a
+``<stem>_samples/`` directory beside it (``services/run_importer.py``), and the
+delete closes the lifecycle the import opens and a move carries: skipping it
+would leave a directory no route lists and no rescan registers, and one that then
+refuses the owner's *whole* re-import of that run — with the remedy only
+available outside the app. Unlike the file, it is **non-fatal**: the weights are
+what was asked for, and previews that will not go are a warning and some occupied
+disk rather than a failed deletion.
+
 **Bytes first, rows second, and per model.** Every copy of a model is removed
 before its hub rows are, so an interruption leaves a row naming a file that is
 not there — which the next scan turns into ``missing`` — rather than a file
@@ -61,6 +70,7 @@ and an import take, so nothing can be copying into a folder this is emptying.
 from __future__ import annotations
 
 import os
+import shutil
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -83,6 +93,7 @@ from pixlstash.services.model_mover import (
     discard_partial,
     file_digest,
     require_space,
+    samples_relpath,
 )
 from pixlstash.services.model_shelf_service import (
     MAX_MODELS_PER_EDIT,
@@ -365,6 +376,46 @@ def _remove(path: str, *, permanent: bool) -> None:
         )
 
 
+def _remove_samples(model_path: str, *, permanent: bool) -> None:
+    """Take the file's training previews with it, or leave them and say so.
+
+    An imported checkpoint's previews sit beside it in ``<stem>_samples/``
+    (``services/run_importer.py``). **The lifecycle has to close here or it does
+    not close at all**: the import creates that directory, a move carries it, and
+    a delete that skipped it would leave a directory no route lists, no rescan
+    registers and nothing can reach — and, worse, one that then refuses the
+    owner's *entire* re-import of that run, because ``_resolve_targets`` refuses
+    a batch whose samples directory already exists. The remedy would only be
+    available outside the app.
+
+    **Non-fatal, unlike the file itself.** The weights are what the caller asked
+    to delete and their row is dropped on the strength of that; a previews
+    directory that will not go is a warning and some occupied disk, and must not
+    turn a completed deletion into a reported failure. It is removed *after* the
+    file for the same reason — the file is the thing being deleted.
+    """
+    directory = samples_relpath(model_path)
+    if not os.path.isdir(directory):
+        return
+    try:
+        if permanent:
+            shutil.rmtree(directory)
+        else:
+            send2trash(directory)
+    except FileNotFoundError:
+        logger.debug("No samples directory at %s to remove.", directory)
+    except (TrashPermissionError, OSError) as exc:
+        logger.warning(
+            "Deleted %s but could not remove its training previews at %s: %s. "
+            "They are occupying disk and nothing on the shelf names them; "
+            "re-importing that run into this folder will be refused until they "
+            "are removed by hand.",
+            os.path.basename(model_path),
+            directory,
+            exc,
+        )
+
+
 def create_router(server) -> APIRouter:
     """Create the loose-file router.
 
@@ -642,6 +693,8 @@ def create_router(server) -> APIRouter:
                     for path in paths:
                         _remove(path, permanent=payload.permanent)
                         done += 1
+                        # After the file, and never allowed to fail it.
+                        _remove_samples(path, permanent=payload.permanent)
                 except (TrashPermissionError, OSError) as exc:
                     # `done` files of this model are already gone. Its rows stay
                     # so the shelf keeps naming the copies that did not go, and
