@@ -499,7 +499,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # that writes the host filesystem.
     ("POST", "/api/v1/model-files/delete"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 unlinks the owner's model files (OS trash by default, permanent on request) out of registered host folders — the unlink half of POST /model-moves standing alone, and the shelf's only destructive verb. Takes no host path: the ids address rows the scanner wrote, every path is resolve_path_within its registered folder, and only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 unlinks the owner's model files (OS trash by default, permanent on request) out of registered host folders — the unlink half of POST /model-moves standing alone, and the shelf's only destructive verb. Takes no host path: the ids address rows the scanner wrote, every path is contained against its registered folder — lexically for the file so a symlinked model loses its link and not the bytes it points at, and by realpath for the directory holding it so no symlinked component can redirect the unlink (`_contained_path`) — and only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
