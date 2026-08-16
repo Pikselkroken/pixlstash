@@ -157,6 +157,10 @@ watch(
 
 // Desktop-shell preference: keep running in the tray when the window is closed.
 const hideToTrayOnClose = ref(true);
+// Desktop-shell preference: put a `pixlstash` command on the shell's PATH.
+// null means this install has nothing to install (Windows, or a dev run), and
+// the row is hidden rather than shown as a switch that would do nothing.
+const shellCommand = ref(null);
 
 async function refresh() {
   if (!desktop) return;
@@ -199,6 +203,8 @@ async function refreshDesktopPrefs() {
   try {
     const prefs = await desktop.getDesktopPrefs();
     hideToTrayOnClose.value = !!prefs.hideToTrayOnClose;
+    shellCommand.value =
+      typeof prefs.shellCommand === "boolean" ? prefs.shellCommand : null;
   } catch (e) {
     error.value = e?.message || String(e);
   }
@@ -209,6 +215,16 @@ async function setHideToTray(value) {
   hideToTrayOnClose.value = value;
   try {
     await desktop.setDesktopPrefs({ hideToTrayOnClose: value });
+  } catch (e) {
+    error.value = e?.message || String(e);
+  }
+}
+
+async function setShellCommand(value) {
+  if (!desktop?.setDesktopPrefs) return;
+  shellCommand.value = value;
+  try {
+    await desktop.setDesktopPrefs({ shellCommand: value });
   } catch (e) {
     error.value = e?.message || String(e);
   }
@@ -506,6 +522,19 @@ watch(
             density="compact"
             hide-details
             @update:model-value="setHideToTray($event)"
+          />
+        </SettingsRow>
+        <SettingsRow
+          v-if="shellCommand !== null"
+          label="Shell command"
+          sub="Puts a pixlstash command in ~/.local/bin so you can attach libraries and install plugins from a terminal."
+        >
+          <v-switch
+            :model-value="shellCommand"
+            color="accent"
+            density="compact"
+            hide-details
+            @update:model-value="setShellCommand($event)"
           />
         </SettingsRow>
         <SettingsRow

@@ -10,7 +10,7 @@ import {
   dialog,
   Tray,
 } from 'electron';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -23,7 +23,7 @@ import { detectHardware, gpuUpgrades, Hardware } from './backend/HardwareDetecto
 import { BackendManager, OVERLAY_ACCELS, launchWithOverlayFallback } from './backend/BackendManager';
 import { uniqueDownloadPath } from './downloads';
 import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
-import { ServerProcess } from './backend/ServerProcess';
+import { ServerProcess, devInterpreter } from './backend/ServerProcess';
 import {
   Accel,
   ACCEL_LABELS,
@@ -42,6 +42,7 @@ import {
   setBackendsRoot,
 } from './config';
 import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
+import { cliCommandHint, launcherPath, parseCliArgs, syncShim } from './cliShim';
 
 const execFileP = promisify(execFile);
 
@@ -95,6 +96,10 @@ let teardownComplete = false;
 // (keeping the backend / remote server alive) instead of quitting. Loaded from
 // disk at startup and toggled from Settings → Backend.
 let hideToTrayOnClose = true;
+// Desktop-shell preference: when true, `~/.local/bin/pixlstash` is kept pointing
+// at this install so the CLI is reachable from a plain shell. Opt-in: it writes
+// to a directory outside the app's own storage.
+let shellCommand = false;
 const pendingMediaSaves = new Map<
   string,
   { filePath: string; webContentsId: number; timeout: NodeJS.Timeout }
@@ -392,16 +397,51 @@ function loadDesktopPrefs(): void {
   if (prefs && typeof prefs.hideToTrayOnClose === 'boolean') {
     hideToTrayOnClose = prefs.hideToTrayOnClose;
   }
+  if (prefs && typeof prefs.shellCommand === 'boolean') {
+    shellCommand = prefs.shellCommand;
+  }
 }
 
 /** Persist the current shell preferences to disk. */
 function saveDesktopPrefs(): void {
   try {
     mkdirSync(dirname(desktopPrefsPath()), { recursive: true });
-    writeFileSync(desktopPrefsPath(), JSON.stringify({ hideToTrayOnClose }, null, 2));
+    writeFileSync(
+      desktopPrefsPath(),
+      JSON.stringify({ hideToTrayOnClose, shellCommand }, null, 2),
+    );
   } catch (e) {
     console.warn('[desktop-prefs] could not persist preferences:', e);
   }
+}
+
+/**
+ * Whether a shell shim is worth offering here: Windows has no per-user bin
+ * directory on PATH, and an unpackaged dev run has no durable launcher to point
+ * a shim at.
+ */
+function shimSupported(): boolean {
+  return process.platform !== 'win32' && app.isPackaged;
+}
+
+/**
+ * Rewrite (or remove) the shell shim and tell the backend which command works.
+ *
+ * Run at every startup and on every toggle, because the shim's target moves
+ * whenever the user moves the AppImage. Where no shim is installed the plain
+ * `<launcher> cli` form is still a working command, so the hint is never a lie.
+ * The backend reads PIXLSTASH_CLI_COMMAND from its inherited environment, so a
+ * toggle only reaches the Settings hint after the backend next restarts.
+ */
+function applyShellCommand(): void {
+  const launcher = launcherPath();
+  const installed = shimSupported() ? syncShim(shellCommand, launcher) : false;
+  process.env.PIXLSTASH_CLI_COMMAND = cliCommandHint(installed, launcher);
+}
+
+/** The desktop's hub database, which sits beside its own server config. */
+function hubPath(): string {
+  return join(dirname(serverConfigPath()), 'hub.db');
 }
 
 /** Bring the window forward and ask the renderer to open the Settings dialog. */
@@ -914,7 +954,7 @@ function registerIpc(): void {
         // open instead of booting a server that looks migrated but is not.
         await prepareLegacyIdentity(
           bundledInterpreter(),
-          join(configDir, 'hub.db'),
+          hubPath(),
           detectedLegacyIdentitySource,
         );
       }
@@ -1017,14 +1057,28 @@ function registerIpc(): void {
   });
 
   // Desktop-shell preferences (e.g. hide-to-tray-on-close).
-  ipcMain.handle('desktop:getPrefs', () => ({ hideToTrayOnClose }));
-  ipcMain.handle('desktop:setPrefs', (_e, prefs: { hideToTrayOnClose?: boolean }) => {
-    if (typeof prefs?.hideToTrayOnClose === 'boolean') {
-      hideToTrayOnClose = prefs.hideToTrayOnClose;
-      saveDesktopPrefs();
-    }
-    return { hideToTrayOnClose };
-  });
+  // shellCommand is null where there is nothing to install (Windows has no
+  // per-user bin dir on PATH; an unpackaged dev run has no durable launcher to
+  // point at), which is how Settings knows to leave the row out entirely.
+  ipcMain.handle('desktop:getPrefs', () => ({
+    hideToTrayOnClose,
+    shellCommand: shimSupported() ? shellCommand : null,
+  }));
+  ipcMain.handle(
+    'desktop:setPrefs',
+    (_e, prefs: { hideToTrayOnClose?: boolean; shellCommand?: boolean }) => {
+      if (typeof prefs?.hideToTrayOnClose === 'boolean') {
+        hideToTrayOnClose = prefs.hideToTrayOnClose;
+        saveDesktopPrefs();
+      }
+      if (typeof prefs?.shellCommand === 'boolean') {
+        shellCommand = prefs.shellCommand;
+        saveDesktopPrefs();
+        applyShellCommand();
+      }
+      return { hideToTrayOnClose, shellCommand: shimSupported() ? shellCommand : null };
+    },
+  );
 
   // External server (remote access) settings. The loopback the window uses is
   // never affected by these — only the optional second listener.
@@ -1099,8 +1153,39 @@ function registerIpc(): void {
   });
 }
 
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
+/**
+ * Run the bundled `pixlstash.cli` and exit with its status.
+ *
+ * Deliberately ahead of the single-instance lock and `whenReady`: taking the
+ * lock would hand a running window our arguments and quit, and a CLI run must
+ * work whether or not the app is already open. Nothing here creates a window,
+ * so this stays a fast process spawn rather than a full Chromium start.
+ *
+ * `stdio: 'inherit'` because the CLI writes to the terminal and asks for a y/n
+ * on destructive verbs; piping would hang that prompt with nothing shown.
+ */
+function runCli(args: string[]): void {
+  // Same interpreter choice the backend makes, so a dev run drives the repo's
+  // .venv and the CLI branch is exercisable without building the bundled env.
+  const child = spawn(
+    isDevBackend() ? devInterpreter() : bundledInterpreter(),
+    ['-m', 'pixlstash.cli', '--hub', hubPath(), ...args],
+    { stdio: 'inherit' },
+  );
+  // 3 is the CLI's own "hub unavailable" code; a runtime we cannot even launch
+  // is the same class of failure from the caller's side.
+  child.on('error', (e) => {
+    console.error(`Could not run the PixlStash CLI: ${e.message}`);
+    app.exit(3);
+  });
+  child.on('exit', (code, signal) => app.exit(signal ? 1 : (code ?? 1)));
+}
+
+const cliArgs = parseCliArgs(process.argv);
+const gotLock = cliArgs === null && app.requestSingleInstanceLock();
+if (cliArgs !== null) {
+  runCli(cliArgs);
+} else if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
@@ -1111,6 +1196,9 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     loadDesktopPrefs();
+    // Before boot(), so the backend inherits PIXLSTASH_CLI_COMMAND and the
+    // Settings hint names a command that actually runs on this install.
+    applyShellCommand();
     buildMenu();
     registerDownloadHandling();
     registerIpc();
