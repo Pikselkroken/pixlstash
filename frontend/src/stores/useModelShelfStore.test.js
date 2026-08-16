@@ -883,7 +883,10 @@ describe("the column widths", () => {
   it("clamps a width to the bounds rather than taking what it is given", () => {
     const store = useModelShelfStore();
     store.setColumnWidth("size", 4000);
-    expect(store.view.columnWidths.size).toBe(200);
+    // The ceiling came down from 200 to 150 when the date column made the
+    // shelf four resizable columns wide: the ~600px the panel has for columns
+    // is what was measured, and it is divided by however many there are.
+    expect(store.view.columnWidths.size).toBe(150);
     store.setColumnWidth("size", -20);
     expect(store.view.columnWidths.size).toBe(48);
   });
@@ -899,7 +902,12 @@ describe("the column widths", () => {
     for (const bad of ["wide", null, undefined, "", "64", [], {}, true, NaN]) {
       store.setColumnWidth("kind", bad);
     }
-    expect(store.view.columnWidths).toEqual({ kind: 64, base: 84, size: 74 });
+    expect(store.view.columnWidths).toEqual({
+      kind: 64,
+      base: 84,
+      size: 74,
+      date: 96,
+    });
   });
 
   it("falls through to the default for a stored width that is not a number", () => {
@@ -911,7 +919,12 @@ describe("the column widths", () => {
       }),
     );
     const store = useModelShelfStore();
-    expect(store.view.columnWidths).toEqual({ kind: 64, base: 84, size: 90 });
+    expect(store.view.columnWidths).toEqual({
+      kind: 64,
+      base: 84,
+      size: 90,
+      date: 96,
+    });
   });
 
   it("restores what was dragged, and clamps that too", () => {
@@ -922,7 +935,12 @@ describe("the column widths", () => {
     const blob = JSON.parse(
       window.localStorage.getItem("pixlstash:modelShelfView"),
     );
-    expect(blob.columnWidths).toEqual({ kind: 64, base: 150, size: 74 });
+    expect(blob.columnWidths).toEqual({
+      kind: 64,
+      base: 150,
+      size: 74,
+      date: 96,
+    });
 
     window.localStorage.setItem(
       "pixlstash:modelShelfView",
@@ -933,7 +951,8 @@ describe("the column widths", () => {
     expect(restored.view.columnWidths).toEqual({
       kind: 64,
       base: 150,
-      size: 200,
+      size: 150,
+      date: 96,
     });
   });
 
@@ -946,7 +965,12 @@ describe("the column widths", () => {
     );
     const store = useModelShelfStore();
     expect(store.view.sortKey).toBe("name");
-    expect(store.view.columnWidths).toEqual({ kind: 64, base: 84, size: 74 });
+    expect(store.view.columnWidths).toEqual({
+      kind: 64,
+      base: 84,
+      size: 74,
+      date: 96,
+    });
   });
 });
 

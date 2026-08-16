@@ -86,18 +86,25 @@ export const GROUP_BY_KEYS = ["none", "base_model", "folder", "feature"];
 export const FOLDER_LAYOUTS = ["drive", "alpha"];
 
 /**
- * The three data columns the reader can resize, and what each starts at.
+ * The four data columns the reader can resize, and what each starts at.
  *
- * The figures are the resolved design's own (ui_kits/app/model-shelf.html, row
- * anatomy) and were fixed widths in the stylesheet until the header strip gave
- * them a grip. The Name column is deliberately absent: it is the flexible
- * track that takes whatever the other three leave, so it has no width of its
- * own to remember.
+ * The first three figures are the resolved design's own
+ * (ui_kits/app/model-shelf.html, row anatomy) and were fixed widths in the
+ * stylesheet until the header strip gave them a grip. The Name column is
+ * deliberately absent: it is the flexible track that takes whatever the others
+ * leave, so it has no width of its own to remember.
+ *
+ * `date` is not in the kit — the column postdates it. 96px is what `ymd-jp`
+ * needs, the widest of the eight day formats (`2026年08月16日`: three
+ * full-width glyphs and eight tabular digits at `--text-xs`), and `locale`
+ * hands back whatever the reader's browser writes — so it is the figure that
+ * keeps the common formats clear of the ellipsis rather than a proof against
+ * every one, and the grip is there for the reader it does not suit.
  */
-export const COLUMN_KEYS = ["kind", "base", "size"];
+export const COLUMN_KEYS = ["kind", "base", "size", "date"];
 
 /** @type {Record<string, number>} */
-export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 84, size: 74 };
+export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 84, size: 74, date: 96 };
 
 /**
  * The bounds a dragged column is held inside.
@@ -105,17 +112,26 @@ export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 84, size: 74 };
  * The floor is what keeps a column from being dragged to nothing and then
  * being unfindable to drag back.
  *
- * The ceiling is set so that three columns at it CANNOT overflow the panel
- * sideways: 3 x 200 plus the rail, the identity slot, four gaps and the row's
- * padding is ~690px, which fits the shelf on a 1024px window with the stats
- * rail open. Past that the row would scroll horizontally, and the strip's
- * background and hairline stop at the scrollport — rows sliding through a
- * transparent header. The name is still the flexible track and still carries
- * `min-width: 0`, so a genuinely narrow window squeezes it; what this bound
- * rules out is the reader doing it to themselves with the new grips.
+ * The ceiling is set so that every column at it CANNOT overflow the panel
+ * sideways. The budget is the one the grips shipped with: the rail, the
+ * identity slot, the gaps and the row's padding cost ~90px, and ~690px total
+ * fits the shelf on a 1024px window with the stats rail open. Past that the row
+ * would scroll horizontally, and the strip's background and hairline stop at
+ * the scrollport — rows sliding through a transparent header.
+ *
+ * That left 600px to divide, which was 3 x 200 with three columns and is
+ * 4 x 150 now the date column is one of them. The ceiling moved rather than the
+ * budget: a fourth column at 200 would put the maxed-out shelf ~200px over a
+ * figure that was measured, and 150 is still nearly twice the widest default.
+ * A stored 200 from the previous build clamps down to it on the way in, which
+ * is what the read-back loop is for.
+ *
+ * The name is still the flexible track and still carries `min-width: 0`, so a
+ * genuinely narrow window squeezes it; what this bound rules out is the reader
+ * doing it to themselves with the grips.
  */
 export const MIN_COLUMN_WIDTH = 48;
-export const MAX_COLUMN_WIDTH = 200;
+export const MAX_COLUMN_WIDTH = 150;
 
 /**
  * Hold a width inside its bounds, or reject it.

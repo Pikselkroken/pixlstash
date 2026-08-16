@@ -747,6 +747,14 @@
               <span role="columnheader" :aria-sort="columnSortState('size')"
                 >Size</span
               >
+              <!-- Named for the axis it is drawn in, because that axis changes
+                   with the sort: a reader who hears `Size` then `Date added`
+                   knows which of the two dates the column holds. -->
+              <span
+                role="columnheader"
+                :aria-sort="columnSortState(DATE_COLUMN.sort)"
+                >{{ DATE_COLUMN.label }}</span
+              >
             </li>
             <!-- A row with one spanning cell, because a grid takes nothing but
                  rows: not selectable, because there is nothing here to select.
@@ -971,6 +979,17 @@
                 <span role="gridcell" class="shelf-col shelf-col--size">{{
                   row.file_size ? formatModelSize(row.file_size) : ""
                 }}</span>
+                <!-- The DAY, not the stamp: a column is scanned, and the clock
+                     is what stops it being scannable. The full stamp is in the
+                     title, which also names which of the two dates this is —
+                     the column follows the sort, so the same cell holds
+                     `Date added` on one shelf and `File date` on the next. -->
+                <span
+                  role="gridcell"
+                  class="shelf-col shelf-col--date"
+                  :title="dateTitle(row)"
+                  >{{ dateCell(row) }}</span
+                >
               </li>
 
               <!-- The run's other steps, rendered as ROWS rather than through
@@ -1016,6 +1035,16 @@
                   <span role="gridcell" class="shelf-col shelf-col--size">{{
                     member.file_size ? formatModelSize(member.file_size) : ""
                   }}</span>
+                  <!-- A step's OWN date, unlike its kind and base: when a run
+                       was saved is the one thing that differs from step to
+                       step, and answering it with the run's would print the
+                       same stamp down the whole strip. -->
+                  <span
+                    role="gridcell"
+                    class="shelf-col shelf-col--date"
+                    :title="dateTitle(member, true)"
+                    >{{ dateCell(member, true) }}</span
+                  >
                 </li>
               </template>
             </template>
@@ -1131,7 +1160,9 @@ import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { errorDetail } from "../../utils/apiError";
+import { formatUserDate, formatUserDay } from "../../utils/utils";
 import { isTypingTarget } from "../../utils/dom.js";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
@@ -1143,12 +1174,14 @@ import {
   bandUsage,
   capabilityLabel,
   copyPathsTitle,
+  dateColumnKey,
   defaultSortDirection,
   deletableModels,
   trashName,
   withEmptyFolders,
   withFolderSignals,
   formatModelSize,
+  modelDate,
   GROUP_BY_LABELS,
   movableCopies,
   SORT_LABELS,
@@ -1170,6 +1203,10 @@ const moves = useModelMovesStore();
 // owns the key before it clears anything. See `onShelfEscape`.
 const reviewSessionsStore = useReviewSessionsStore();
 const sidebarStore = useSidebarStore();
+// The date column is stamped in the reader's own format, through the same
+// `formatUserDate(iso, dateFormat)` pattern every other timestamp in the app
+// uses.
+const userPrefs = useUserPrefsStore();
 const rootEl = ref(null);
 const showMenuOpen = ref(false);
 const sortMenuOpen = ref(false);
@@ -2420,7 +2457,47 @@ function ringStyle(row) {
  * `aria-colspan` cannot drift apart. A grid where one row has a different cell
  * count is a grid a reader is lied to about.
  */
-const COLUMN_COUNT = 5;
+const COLUMN_COUNT = 6;
+
+/**
+ * The date column, named and sorted by whichever date axis it is drawn in.
+ *
+ * The only entry in the header strip that is not a constant. There is ONE date
+ * column and there are two date sort keys, so the heading has to move: it says
+ * `Date added` while the shelf is ordered on anything that is not a date and
+ * while it is ordered on `added_at`, and `File date` once the Sort panel has
+ * moved the shelf onto `file_mtime`. Pressing it then does what every other
+ * heading does — sort on the key it names, flip the direction if that key is
+ * already the sorted one — so the two axes stay reachable from the panel while
+ * the heading always names the one the cells beneath it are showing.
+ */
+const DATE_COLUMN = computed(() => {
+  const sort = dateColumnKey(store.view.sortKey);
+  return { key: "date", label: SORT_LABELS[sort].label, sort };
+});
+
+/**
+ * The day a row shows in the date column, or nothing when it cannot answer.
+ *
+ * An empty cell rather than a dash, exactly as the size column does it: the two
+ * are the row's figures, and a placeholder in a figure column is noise the eye
+ * has to step over on every scan.
+ *
+ * @param {Object} row - a shelf row, or a stack member with `own` set.
+ * @param {boolean} [own=false] - read the member's own date, not its run's.
+ */
+function dateCell(row, own = false) {
+  const iso = modelDate(row, store.view.sortKey, own);
+  return iso ? formatUserDay(iso, userPrefs.dateFormat) : "";
+}
+
+/** The same date in full, named by its axis, for the cell's tooltip. */
+function dateTitle(row, own = false) {
+  const iso = modelDate(row, store.view.sortKey, own);
+  return iso
+    ? `${DATE_COLUMN.value.label}: ${formatUserDate(iso, userPrefs.dateFormat)}`
+    : undefined;
+}
 
 /**
  * What an empty folder group says, per reason.
@@ -2695,14 +2772,14 @@ function toggleDirection() {
 }
 
 /* ── The header strip ──────────────────────────────────────────────────────
-   The three fixed data columns, in the order the rows draw them. `sort` is the
+   The four fixed data columns, in the order the rows draw them. `sort` is the
    SORT_KEYS value the heading orders on, or null where the column answers no
    sort key: `Kind` is a chip of whatever the row's capabilities happen to be
    and the API's `SortKey` has no member for it, so its heading names the
    column and offers a grip, but is not a button that would do nothing.
 
    The Name column is not in this list. It is the flexible track — it takes
-   whatever the other three leave — so it has a heading and a sort but no width
+   whatever the others leave — so it has a heading and a sort but no width
    to drag, and it is written out on its own in the template.
 
    Every heading is LEFT-aligned, including Size's, whose figures are not: the
@@ -2711,11 +2788,14 @@ function toggleDirection() {
    `SIZE` would sit under it and be a resize target as much as a sort one. */
 const NAME_COLUMN = { key: "name", label: "Name", sort: "name" };
 
-const SHELF_COLUMNS = [
+/* A computed and not a constant, for one entry: `DATE_COLUMN` renames itself
+   with the axis it is drawn in. The three ahead of it never move. */
+const SHELF_COLUMNS = computed(() => [
   { key: "kind", label: "Kind", sort: null },
   { key: "base", label: "Base", sort: "base_model" },
   { key: "size", label: "Size", sort: "size" },
-];
+  DATE_COLUMN.value,
+]);
 
 /** How far one arrow-key press moves a column edge. One --space-3. */
 const RESIZE_STEP = 8;
@@ -2953,13 +3033,14 @@ watch(
   background: rgb(var(--v-theme-background));
   color: rgb(var(--v-theme-on-background));
   outline: none;
-  /* `--shelf-col-kind` / `--shelf-col-base` / `--shelf-col-size` are NOT
-     declared here. `columnStyle` writes all three onto this element from
-     `view.columnWidths`, whose defaults are the resolved design's own
-     (ui_kits/app/model-shelf.html, row anatomy) — and a fallback copy of those
-     figures here would be a second literal of the same three numbers with
-     nothing keeping them equal, which is how a "cannot disagree" comment
-     becomes false. One declaration, in the store.
+  /* `--shelf-col-kind` / `--shelf-col-base` / `--shelf-col-size` /
+     `--shelf-col-date` are NOT declared here. `columnStyle` writes all four
+     onto this element from `view.columnWidths`, whose defaults are the
+     resolved design's own (ui_kits/app/model-shelf.html, row anatomy; the date
+     column is this feature's, sized for the widest day format) — and a
+     fallback copy of those figures here would be a second literal of the same
+     numbers with nothing keeping them equal, which is how a "cannot disagree"
+     comment becomes false. One declaration, in the store.
 
      FIXED widths, not `auto`: grouping makes one list per group, so `auto`
      tracks would be measured against that group's contents alone and the
@@ -3383,6 +3464,10 @@ watch(
 
 .shelf-head-col--size {
   width: var(--shelf-col-size);
+}
+
+.shelf-head-col--date {
+  width: var(--shelf-col-date);
 }
 
 /* The type, the weight, the tracking, the case and the 0.7 ink all come from
@@ -3972,6 +4057,15 @@ button.shelf-head-cell:hover {
 .shelf-col--size {
   width: var(--shelf-col-size);
   text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tabular but LEFT-aligned, unlike the size beside it: every day in a column is
+   the same width in the same format, so the digits line up either way, and Size
+   stays the one right-aligned track — which is what keeps a magnitude readable
+   as a magnitude rather than as one more figure in a row of them. */
+.shelf-col--date {
+  width: var(--shelf-col-date);
   font-variant-numeric: tabular-nums;
 }
 
