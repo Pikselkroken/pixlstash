@@ -573,6 +573,41 @@ class TestCliHintIsShort:
         assert mod.MODULE_INVOCATION in hint
         assert "pixlstash-backend" in hint
 
+    def test_a_launcher_that_declares_its_command_wins_over_every_guess(
+        self, monkeypatch
+    ):
+        """The desktop app knows the answer; this module cannot work it out.
+
+        Its console script is sealed inside the app image at a path that changes
+        every launch, and its hub is not the platform default, so both the bare
+        name and any ``sys.executable`` derivation would print a command that
+        edits the wrong registry or does not run at all.
+        """
+        mod = self._module()
+        # Docker detection is deliberately not consulted first: a declared
+        # command is the launcher speaking for itself.
+        monkeypatch.setattr(mod, "running_in_docker", lambda: True)
+        monkeypatch.setenv("PIXLSTASH_CLI_COMMAND", "pixlstash")
+
+        assert mod.cli_hint() == "pixlstash libraries list"
+
+    def test_an_empty_declaration_falls_through_to_the_normal_rules(
+        self, monkeypatch, tmp_path
+    ):
+        """An env var set to nothing must not print a hint that starts with a space."""
+        mod = self._module()
+        venv_bin = tmp_path / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        (venv_bin / "python3").write_text("")
+        (venv_bin / mod.CONSOLE_SCRIPT).write_text("")
+
+        monkeypatch.setenv("PIXLSTASH_CLI_COMMAND", "   ")
+        monkeypatch.setattr(mod.sys, "executable", str(venv_bin / "python3"))
+        monkeypatch.setattr(mod.shutil, "which", lambda _n: None)
+        monkeypatch.setattr(mod, "running_in_docker", lambda: False)
+
+        assert mod.cli_hint() == f"{mod.CONSOLE_SCRIPT} libraries list"
+
     def test_docker_keeps_the_container_name_it_cannot_infer(self, monkeypatch):
         mod = self._module()
         monkeypatch.setattr(mod, "running_in_docker", lambda: True)

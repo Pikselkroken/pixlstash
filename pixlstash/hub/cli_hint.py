@@ -101,6 +101,15 @@ def cli_hint(verb: str = "libraries list") -> str:
         directory with spaces survives the copy, and the home directory is
         abbreviated to ``~`` where the shell will expand it again.
     """
+    # A launcher that knows better than we can. The desktop app sets this: its
+    # console script is sealed inside the app image at a path that changes every
+    # launch, and its hub is not the platform default one, so the command that
+    # works there is the app's own launcher (or the shell shim pointing at it)
+    # and nothing this module could infer from ``sys.executable``.
+    declared = os.environ.get("PIXLSTASH_CLI_COMMAND", "").strip()
+    if declared:
+        return f"{declared} {verb}"
+
     if running_in_docker():
         container = os.environ.get("HOSTNAME") or socket.gethostname()
         return f"docker exec -it {shlex.quote(container)} {CONSOLE_SCRIPT} {verb}"
