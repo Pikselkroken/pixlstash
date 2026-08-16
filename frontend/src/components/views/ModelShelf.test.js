@@ -79,8 +79,10 @@ vi.mock("../../api/modelFiles", () => ({
 // because the bar's button is what this suite drives, and the assertion worth
 // having is which ids reach the route.
 const createStack = vi.fn();
+const unstackStack = vi.fn();
 vi.mock("../../api/modelStacks", () => ({
   createStack: (...args) => createStack(...args),
+  unstackStack: (...args) => unstackStack(...args),
   listStackProposals: vi.fn(),
 }));
 
@@ -201,6 +203,8 @@ beforeEach(() => {
   getModelMoveStatus.mockReset();
   getModelMoveStatus.mockResolvedValue({ status: "idle", results: [] });
   addModelFile.mockReset();
+  createStack.mockReset();
+  unstackStack.mockReset();
   listCharacters.mockReset().mockResolvedValue([]);
   listPictureSets.mockReset().mockResolvedValue([]);
 });
@@ -2566,6 +2570,84 @@ describe("a run's disclosure", () => {
     expect(wrapper.findAll(".shelf-row--member")).toHaveLength(1);
   });
 
+  it("labels a member by version when the stack spans versions", async () => {
+    // A stack is a subject now, not one training run: `Foxglove` and
+    // `Foxglove_v2` sit behind one row. Neither carries a step, so the old
+    // label called both of them "Final" — which is the one place the reader
+    // looks to tell a stack's members apart, saying nothing.
+    const wrapper = await mountShelf([
+      adapter({
+        id: 1,
+        stack_id: 8,
+        stack_position: 0,
+        filename: "Foxglove_v2.safetensors",
+      }),
+      adapter({
+        id: 2,
+        stack_id: 8,
+        stack_position: 1,
+        sha256: "c".repeat(64),
+        filename: "Foxglove.safetensors",
+      }),
+    ]);
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
+    // The exact string, not `toContain("v1")`: the version LEADS the label, and
+    // "Final · v1" would satisfy a containment check while reading backwards.
+    expect(textOf(wrapper.find(".shelf-row--member .shelf-row-name"))).toBe(
+      "v1 · Final",
+    );
+  });
+
+  it("treats v2 and V2.0 as ONE version, as the server does", async () => {
+    // The parity case. Comparing raw tokens here would count two versions and
+    // prefix every member of what is really a single-version run — the noise
+    // the label exists to avoid, in the case the guard was written for.
+    const wrapper = await mountShelf([
+      adapter({
+        id: 1,
+        stack_id: 11,
+        stack_position: 0,
+        filename: "Foxglove_v2.safetensors",
+      }),
+      adapter({
+        id: 2,
+        stack_id: 11,
+        stack_position: 1,
+        sha256: "e".repeat(64),
+        filename: "Foxglove_V2.0_000000500.safetensors",
+      }),
+    ]);
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
+    expect(textOf(wrapper.find(".shelf-row--member .shelf-row-name"))).toBe(
+      "Step 500",
+    );
+  });
+
+  it("leaves a one-version run labelled by its step alone", async () => {
+    // The positive control: repeating `v2` on every member of a run that is
+    // entirely v2 is the "shares a name by construction" noise the label exists
+    // to avoid, and the run's own row already says it.
+    const wrapper = await mountShelf([
+      adapter({
+        id: 1,
+        stack_id: 9,
+        stack_position: 0,
+        filename: "Foxglove_v2.safetensors",
+      }),
+      adapter({
+        id: 2,
+        stack_id: 9,
+        stack_position: 1,
+        sha256: "d".repeat(64),
+        filename: "Foxglove_v2_000000500.safetensors",
+      }),
+    ]);
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
+    expect(textOf(wrapper.find(".shelf-row--member .shelf-row-name"))).toBe(
+      "Step 500",
+    );
+  });
+
   it("opens and closes from the row with Right and Left", async () => {
     const wrapper = await mountShelf(run());
     const row = wrapper.find(".shelf-row");
@@ -2957,8 +3039,7 @@ describe("the manual stack verb", () => {
   it("sends the selected models, and only after the prompt is answered", async () => {
     // Two present adapters in one folder are the case the route accepts; the
     // gate itself is asserted in the bar's own suite. What matters here is that
-    // nothing is written until the confirmation comes back, because there is no
-    // way to unstack a run afterwards.
+    // nothing is written until the confirmation comes back.
     const inFolder = (id, sha) =>
       adapter({
         id,
@@ -2989,7 +3070,103 @@ describe("the manual stack verb", () => {
     createStack.mockResolvedValue({ stack_id: 3, member_count: 2 });
     await stack().trigger("click");
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(createStack).toHaveBeenCalledWith([1, 2]);
+    // `fuse: false` explicitly, because nothing selected is stacked. The flag
+    // is not cosmetic — with it on, this call would absorb whole stacks — so
+    // the default path has to be pinned rather than left to a truthiness test.
+    expect(createStack).toHaveBeenCalledWith([1, 2], null, { fuse: false });
+    confirmSpy.mockRestore();
+  });
+
+  it("fuses instead when something selected is already stacked", async () => {
+    // Stacking two stacks. Every member of both is selected, because the shelf
+    // selects a collapsed row atomically, and `fuse` is what lets the route
+    // take rows out of the stacks they are in and absorb those stacks whole.
+    const stacked = (id, sha, stackId, position) =>
+      adapter({
+        id,
+        sha256: sha.repeat(64),
+        stack_id: stackId,
+        stack_position: position,
+        locations: [
+          {
+            state: "present",
+            folder_id: 1,
+            folder_path: "/m",
+            relpath: `${id}`,
+          },
+        ],
+      });
+    const wrapper = await mountShelf([
+      stacked(1, "a", 7, 0),
+      stacked(2, "b", 7, 1),
+      stacked(3, "c", 8, 0),
+      stacked(4, "d", 8, 1),
+    ]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    store.toggleSelected(3);
+    await wrapper.vm.$nextTick();
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    createStack.mockResolvedValue({ stack_id: 9, member_count: 4 });
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Stack these"))
+      .trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(createStack).toHaveBeenCalledWith(
+      expect.arrayContaining([1, 2, 3, 4]),
+      null,
+      { fuse: true },
+    );
+    confirmSpy.mockRestore();
+  });
+
+  it("ungroups the selected stacks, one call each", async () => {
+    const stacked = (id, sha, stackId, position) =>
+      adapter({
+        id,
+        sha256: sha.repeat(64),
+        stack_id: stackId,
+        stack_position: position,
+        locations: [
+          {
+            state: "present",
+            folder_id: 1,
+            folder_path: "/m",
+            relpath: `${id}`,
+          },
+        ],
+      });
+    const wrapper = await mountShelf([
+      stacked(1, "a", 7, 0),
+      stacked(2, "b", 7, 1),
+      stacked(3, "c", 8, 0),
+      stacked(4, "d", 8, 1),
+    ]);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    store.toggleSelected(3);
+    await wrapper.vm.$nextTick();
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const ungroup = () =>
+      wrapper.findAll("button").find((b) => b.text().includes("Ungroup"));
+    await ungroup().trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Confirmed first: it is a structural edit, even though no byte moves.
+    expect(unstackStack).not.toHaveBeenCalled();
+
+    confirmSpy.mockReturnValue(true);
+    unstackStack.mockResolvedValue({ released: 2 });
+    await ungroup().trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // One call per STACK, not per selected row: the two selected rows cover
+    // two stacks, and a stack is what the verb acts on.
+    expect(unstackStack).toHaveBeenCalledTimes(2);
+    expect(unstackStack.mock.calls.map((c) => c[0]).sort()).toEqual([7, 8]);
     confirmSpy.mockRestore();
   });
 });
@@ -3735,7 +3912,13 @@ describe("Delete", () => {
     await wrapper.vm.$nextTick();
 
     await pressDelete();
-    expect(useNoticeStore().notices.at(-1).text).toContain("own model folders");
+    // And says WHICH folder. The sentence this replaced claimed PixlStash
+    // "only removes files from your own model folders", which is untrue — the
+    // managed store and PixlStash's own download folder are neither — and
+    // named nothing the reader could go and act on.
+    const said = useNoticeStore().notices.at(-1).text;
+    expect(said).toContain("/hf");
+    expect(said).toContain("Another tool owns that folder");
     expect(deleteModels).not.toHaveBeenCalled();
     wrapper.unmount();
   });

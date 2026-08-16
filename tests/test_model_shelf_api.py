@@ -3738,6 +3738,126 @@ def test_every_editing_verb_refuses_an_engine(shelf_env):
     )
 
 
+def _capabilities(shelf_env, model_id: int) -> list:
+    return [
+        row["capability"]
+        for row in shelf_env.server.hub.fetchall(
+            "SELECT capability FROM model_capability WHERE model_id = ? ORDER BY rowid",
+            (model_id,),
+        )
+    ]
+
+
+def test_the_features_a_model_serves_are_the_owners_to_set(shelf_env):
+    """The Kind column has always shown `Captioning` and `Faces` on rows
+    PixlStash classified, and the editor offered nothing but file kinds — a
+    value on screen the owner could not correct. The set is REPLACED, not
+    merged: it is two entries long, and a merge would leave no way to take one
+    off."""
+    model_id = shelf_env.model_ids["alice.safetensors"]
+
+    r = shelf_env.owner.patch(
+        f"{API}/models",
+        json={"ids": [model_id], "capabilities": ["captioner", "detector"]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["fields"] == ["capabilities"]
+    assert _capabilities(shelf_env, model_id) == ["captioner", "detector"]
+
+    # Ordered as sent, so `Captioning` stays the primary word the row reads by.
+    shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [model_id], "capabilities": ["face"]}
+    )
+    assert _capabilities(shelf_env, model_id) == ["face"]
+
+    # And empty clears it, which is how a row says it is not a tool.
+    shelf_env.owner.patch(f"{API}/models", json={"ids": [model_id], "capabilities": []})
+    assert _capabilities(shelf_env, model_id) == []
+
+
+def test_a_feature_this_build_has_never_heard_of_is_refused(shelf_env):
+    """`model_capability` carries no CHECK, so a typo stored silently would head
+    a feature group nothing else in the app has ever heard of. `checkpoint` is
+    refused with it: that is what the file IS, and the same dialog asks it as a
+    file kind."""
+    model_id = shelf_env.model_ids["alice.safetensors"]
+
+    for bad in (["captionr"], ["checkpoint"], ["other"]):
+        r = shelf_env.owner.patch(
+            f"{API}/models", json={"ids": [model_id], "capabilities": bad}
+        )
+        assert r.status_code == 400, f"{bad} was allowed: {r.text}"
+        assert "is not a feature" in r.text
+    assert _capabilities(shelf_env, model_id) == []
+
+
+def test_setting_the_file_kind_and_the_features_at_once_keeps_both(shelf_env):
+    """Correcting a file kind clears the capabilities we guessed — but not when
+    the same call states them, which is the owner answering both questions at
+    once. One dialog sends both, so the order inside the transaction is the
+    difference between the feature landing and vanishing."""
+    model_id = shelf_env.model_ids["alice.safetensors"]
+
+    r = shelf_env.owner.patch(
+        f"{API}/models",
+        json={
+            "ids": [model_id],
+            "file_kind": "unknown",
+            "capabilities": ["captioner"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert _capabilities(shelf_env, model_id) == ["captioner"]
+
+
+def test_a_model_in_a_shared_cache_that_we_did_not_choose_is_the_owners_to_correct(
+    shelf_env,
+):
+    """The refusal above is right about an engine and was wrong about everything
+    else in the HuggingFace cache, which is shared with every other tool on the
+    machine. Setting the Kind of a checkpoint the OWNER downloaded came back "1
+    of these are engines PixlStash downloaded for itself", about a file
+    PixlStash has never loaded. `builtin_caches` no longer calls those rows
+    engines, so the guard no longer reaches them."""
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (id, path, kind, owner, movable, created_at) "
+            "VALUES (9, '/hf', 'foreign', 'pixlstash', 'fixed', "
+            "'2026-08-11T00:00:00Z')"
+        )
+        model_id = int(
+            conn.execute(
+                "INSERT INTO model (file_kind, display_name, filename, provenance, "
+                "file_size, created_at) VALUES ('unknown', 'krea/Krea-2-Raw', "
+                "'models--krea--Krea-2-Raw', 'builtin', 99, '2026-08-11T00:00:00Z')"
+            ).lastrowid
+        )
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+            "seen_at) VALUES (?, 9, 'models--krea--Krea-2-Raw', 'present', "
+            "'2026-08-11T00:00:00Z')",
+            (model_id,),
+        )
+        conn.execute(
+            "INSERT INTO model_capability (model_id, capability) VALUES (?, 'other')",
+            (model_id,),
+        )
+
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [model_id], "file_kind": "checkpoint"}
+    )
+    assert r.status_code == 200, r.text
+    assert _model_row(shelf_env, model_id)["file_kind"] == "checkpoint"
+    # And the guess it overrules goes with it, or the shelf's Feature axis would
+    # keep filing the row under `Other` while its Kind column read `Checkpoint`.
+    assert (
+        shelf_env.server.hub.fetchall(
+            "SELECT capability FROM model_capability WHERE model_id = ?", (model_id,)
+        )
+        == []
+    )
+
+
 def test_forget_reports_an_engine_rather_than_deleting_it(shelf_env):
     """Reported like every other refusal rather than raised, and refused inside
     the same transaction as the state gate — forgetting one would delete a row
@@ -3869,11 +3989,12 @@ def test_a_row_with_no_base_model_folds_to_null(shelf_env):
 
 
 def test_every_stack_route_is_declared_owner_only():
-    """Not the §16.3 locality tier its shelf neighbours are on: neither route
+    """Not the §16.3 locality tier its shelf neighbours are on: no route here
     takes, walks, writes or unlinks a host path."""
     for method, path in (
         ("GET", "/api/v1/model-stacks/proposals"),
         ("POST", "/api/v1/model-stacks"),
+        ("DELETE", "/api/v1/model-stacks/{stack_id}"),
     ):
         declared = ROUTE_POLICIES.get((method, path))
         assert declared is not None, f"({method}, {path}) has no ROUTE_POLICIES entry"
@@ -3970,6 +4091,79 @@ def test_applying_a_stack_collapses_the_rows_and_reports_the_count(shelf_env):
             (bob, noname),
         )
         conn.execute("DELETE FROM adapter_stack WHERE id = ?", (body["stack_id"],))
+
+
+def test_fusing_two_stacks_over_http_leaves_one(shelf_env):
+    """Stacking two stacks fuses them, and the emptied rows are removed.
+
+    Restores the shelf afterwards, because the environment is module-scoped and
+    the seeded stack is what several other tests read.
+    """
+    bob = shelf_env.model_ids["bob.safetensors"]
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    alice = shelf_env.model_ids["alice.safetensors"]
+    seeded = shelf_env.server.hub.fetchone(
+        "SELECT stack_id FROM model WHERE id = ?", (alice,)
+    )["stack_id"]
+    assert seeded is not None, "this test needs alice to be in the seeded stack"
+
+    built = shelf_env.owner.post(
+        f"{API}/model-stacks", json={"model_ids": [bob, noname], "name": "Duo"}
+    ).json()
+
+    # Two stacks named by ONE member each, and `fuse` on.
+    r = shelf_env.owner.post(
+        f"{API}/model-stacks",
+        json={"model_ids": [bob, alice], "name": "Fused", "fuse": True},
+    )
+    assert r.status_code == 200, r.text
+    fused = r.json()["stack_id"]
+
+    # Every member of both came along, including the ones not named.
+    members = {
+        int(row["id"])
+        for row in shelf_env.server.hub.fetchall(
+            "SELECT id FROM model WHERE stack_id = ?", (fused,)
+        )
+    }
+    assert {bob, noname, alice} <= members
+    # And neither absorbed stack is left behind as an empty row.
+    for gone in (built["stack_id"], seeded):
+        assert (
+            shelf_env.server.hub.fetchone(
+                "SELECT id FROM adapter_stack WHERE id = ?", (gone,)
+            )
+            is None
+        )
+
+    # Restore: unstack the fused row, then rebuild the seeded stack exactly.
+    assert shelf_env.owner.delete(f"{API}/model-stacks/{fused}").status_code == 200
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO adapter_stack (id, name, created_at, updated_at) "
+            "VALUES (?, 'Seeded', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z')",
+            (seeded,),
+        )
+        for position, model_id in enumerate(_seeded_stack_members(shelf_env)):
+            conn.execute(
+                "UPDATE model SET stack_id = ?, stack_position = ? WHERE id = ?",
+                (seeded, position, model_id),
+            )
+
+
+def _seeded_stack_members(shelf_env):
+    """The ids the shelf fixture puts in its one stack, cover first."""
+    return [
+        shelf_env.model_ids["alice.safetensors"],
+        shelf_env.model_ids["dana.safetensors"],
+    ]
+
+
+def test_unstacking_an_unknown_stack_is_a_404(shelf_env):
+    """A wrong address, not a shelf that moved — so 404 rather than the
+    apply's 409, and nothing is written on the way to saying so."""
+    r = shelf_env.owner.delete(f"{API}/model-stacks/999999")
+    assert r.status_code == 404, r.text
 
 
 # ── The icon verb over HTTP (shelf plan, the sixth verb) ────────────────────

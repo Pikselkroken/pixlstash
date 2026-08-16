@@ -202,6 +202,84 @@ describe("what the dialog sends", () => {
     expect(wrapper.find("input[type=text]").element.value).toBe("  ");
     expect(submitButton(wrapper).attributes("disabled")).toBeDefined();
   });
+
+  it("sets the features a model serves, which the Kind column already showed", async () => {
+    // The reported gap: `Captioning`, `Faces` and `Detection` are what the Kind
+    // column reads on a classified row, and the editor offered only file kinds
+    // — a value on screen the owner could not correct.
+    const store = select([row(1, { file_kind: "unknown", kind: null })]);
+    const wrapper = mount(ShelfEditDialog, {
+      ...globalOpts,
+      props: { verb: "kind" },
+    });
+    await wrapper.vm.$nextTick();
+
+    const boxes = wrapper.findAll("input[type=checkbox]");
+    expect(boxes).toHaveLength(6);
+    await boxes[0].setValue(true); // Captioning
+    await boxes[2].setValue(true); // Detection
+    await submitButton(wrapper).trigger("click");
+
+    expect(store.editSelected).toHaveBeenCalledWith({
+      file_kind: "unknown",
+      // Ordered as ticked, so the first box is the word the Kind column shows.
+      capabilities: ["captioner", "detector"],
+    });
+  });
+
+  it("leaves the features alone when the reader did not touch them", async () => {
+    // Set kind is opened to change the file kind far more often than the
+    // features. A dialog that always posted the set would flatten a mixed
+    // selection onto whatever the first row happened to say.
+    const store = select([
+      row(1, { capabilities: ["captioner"] }),
+      row(2, { capabilities: ["face"] }),
+    ]);
+    const wrapper = mount(ShelfEditDialog, {
+      ...globalOpts,
+      props: { verb: "kind" },
+    });
+    await wrapper.vm.$nextTick();
+
+    await submitButton(wrapper).trigger("click");
+
+    expect(store.editSelected).toHaveBeenCalledWith({
+      file_kind: "adapter",
+      kind: "lora",
+    });
+  });
+
+  it("seeds the boxes from the selection and says when it cannot", async () => {
+    select([
+      row(1, { capabilities: ["face"] }),
+      row(2, { capabilities: ["face"] }),
+    ]);
+    const agreed = mount(ShelfEditDialog, {
+      ...globalOpts,
+      props: { verb: "kind" },
+    });
+    await agreed.vm.$nextTick();
+    expect(
+      agreed.findAll("input[type=checkbox]").filter((b) => b.element.checked),
+    ).toHaveLength(1);
+    expect(agreed.text()).not.toContain("not filed the same way");
+
+    // An empty box that means "they differ" and an empty box that means "none"
+    // are the same box, so the mixed case says which it is. A fresh pinia,
+    // because `select` TOGGLES: re-selecting the same ids on the same store
+    // would deselect them and mount the dialog over nothing.
+    setActivePinia(createPinia());
+    select([row(1, { capabilities: ["face"] }), row(2, { capabilities: [] })]);
+    const mixed = mount(ShelfEditDialog, {
+      ...globalOpts,
+      props: { verb: "kind" },
+    });
+    await mixed.vm.$nextTick();
+    expect(
+      mixed.findAll("input[type=checkbox]").filter((b) => b.element.checked),
+    ).toHaveLength(0);
+    expect(mixed.text()).toContain("not filed the same way");
+  });
 });
 
 describe("the bulk overwrite warning", () => {

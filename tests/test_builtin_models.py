@@ -29,7 +29,7 @@ from pixlstash.services.builtin_caches import (
     declare_huggingface_cache,
     declare_insightface_packs,
 )
-from pixlstash.utils.adapter_header import FILE_ENGINE, FILE_UNKNOWN
+from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_ENGINE, FILE_UNKNOWN
 from pixlstash.utils.insightface_model_utils import KNOWN_MODEL_PACKS
 
 
@@ -971,6 +971,137 @@ def test_a_capability_the_declaration_drops_stops_being_listed(
     assert _capabilities_by_name(server_hub, folder_id) == {
         "florence-community/Florence-2-base": ["captioner"]
     }
+
+
+def _file_kinds_by_name(hub, folder_id):
+    """`display_name -> file_kind` for one declared folder."""
+    return {
+        row["display_name"]: row["file_kind"]
+        for row in hub.fetchall(
+            "SELECT m.display_name, m.file_kind FROM model m "
+            "JOIN model_file mf ON mf.model_id = m.id "
+            "WHERE mf.model_folder_id = ?",
+            (folder_id,),
+        )
+    }
+
+
+def test_only_the_repos_pixlstash_fetches_are_declared_as_engines(
+    server_hub, tmp_path, monkeypatch
+):
+    """The HuggingFace cache is shared with every other tool on the machine, and
+    `engine` is the claim "PixlStash downloaded this for itself" — the claim
+    every shelf verb refuses on. Stamped over the whole cache it locked the owner
+    out of their own models: correcting the Kind of a checkpoint they downloaded
+    came back "1 of these are engines PixlStash downloaded for itself", about a
+    file PixlStash has never loaded."""
+    _hf_cache(
+        monkeypatch,
+        (
+            "florence-community/Florence-2-base",  # ours
+            "Qwen/Qwen-Image",  # theirs, and a known base model
+            "krea/Krea-2-Raw",  # theirs, and nothing recognises it
+        ),
+    )
+    folder_id = declare_huggingface_cache(server_hub, str(tmp_path))
+
+    assert _file_kinds_by_name(server_hub, folder_id) == {
+        "florence-community/Florence-2-base": FILE_ENGINE,
+        # Classified off the repo, which for a known base model is a real
+        # answer...
+        "Qwen/Qwen-Image": FILE_CHECKPOINT,
+        # ...and otherwise is the same word the unclaimed leftovers carry.
+        "krea/Krea-2-Raw": FILE_UNKNOWN,
+    }
+
+
+def test_a_found_repo_keeps_the_correction_its_owner_made(
+    server_hub, tmp_path, monkeypatch
+):
+    """The half that makes the curation stick. Every start-up re-declares the
+    cache, so a declaration that restated its own guess would revert the edit
+    between one launch and the next — the owner would see it land and then find
+    it undone, which is worse than the refusal it replaced."""
+    from pixlstash.services.model_shelf_service import update_models
+
+    _hf_cache(monkeypatch, ("krea/Krea-2-Raw",))
+    folder_id = declare_huggingface_cache(server_hub, str(tmp_path))
+    model_id = server_hub.fetchone(
+        "SELECT model_id FROM model_file WHERE model_folder_id = ?", (folder_id,)
+    )["model_id"]
+
+    update_models(
+        server_hub,
+        [model_id],
+        {"file_kind": "checkpoint", "kind": None, "display_name": "Krea 2 Raw"},
+    )
+    assert declare_huggingface_cache(server_hub, str(tmp_path)) == folder_id
+
+    row = server_hub.fetchone(
+        "SELECT file_kind, kind, display_name FROM model WHERE id = ?", (model_id,)
+    )
+    assert row["file_kind"] == "checkpoint"
+    assert row["kind"] is None
+    assert row["display_name"] == "Krea 2 Raw"
+    # The capability was our classification of the file, and the owner has just
+    # overruled it. Restating it would leave the shelf's Feature axis filing the
+    # row under the guess while its Kind column read the correction.
+    assert _capabilities_by_name(server_hub, folder_id) == {}
+
+
+def test_a_repo_we_already_mislabelled_as_ours_is_handed_back(
+    server_hub, tmp_path, monkeypatch
+):
+    """Every existing install has these rows stored as `engine` already, and the
+    rule above deliberately stops restating a found repo's file kind — so
+    without this the fix would only ever reach a cache declared for the first
+    time, and the owner who reported it would still be locked out. Safe to do
+    silently because `engine` is not a value any verb can set."""
+    _hf_cache(monkeypatch, ("krea/Krea-2-Raw",))
+    folder_id = declare_huggingface_cache(server_hub, str(tmp_path))
+    model_id = server_hub.fetchone(
+        "SELECT model_id FROM model_file WHERE model_folder_id = ?", (folder_id,)
+    )["model_id"]
+    # The row as the previous release wrote it.
+    with server_hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET file_kind = ? WHERE id = ?", (FILE_ENGINE, model_id)
+        )
+
+    assert declare_huggingface_cache(server_hub, str(tmp_path)) == folder_id
+
+    assert _file_kinds_by_name(server_hub, folder_id) == {
+        "krea/Krea-2-Raw": FILE_UNKNOWN
+    }
+
+
+def test_our_own_engines_are_still_the_declaration_to_state(
+    server_hub, tmp_path, monkeypatch
+):
+    """The other side of the same rule, and the reason it is keyed on OUR_REPOS
+    rather than dropped. PixlStash's own captioner is ours: the row says what we
+    say, and a rename would make the shelf lie about a file we load by path."""
+    _hf_cache(monkeypatch, ("florence-community/Florence-2-base",))
+    folder_id = declare_huggingface_cache(server_hub, str(tmp_path))
+    model_id = server_hub.fetchone(
+        "SELECT model_id FROM model_file WHERE model_folder_id = ?", (folder_id,)
+    )["model_id"]
+
+    # No verb offers this — `_refuse_builtin_engines` still refuses every one of
+    # them — so it is written underneath to pin what a re-declaration does.
+    with server_hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET display_name = 'Mine now', kind = 'lora' WHERE id = ?",
+            (model_id,),
+        )
+    assert declare_huggingface_cache(server_hub, str(tmp_path)) == folder_id
+
+    row = server_hub.fetchone(
+        "SELECT file_kind, kind, display_name FROM model WHERE id = ?", (model_id,)
+    )
+    assert row["file_kind"] == FILE_ENGINE
+    assert row["kind"] == "captioner"
+    assert row["display_name"] == "florence-community/Florence-2-base"
 
 
 def test_forgetting_a_model_takes_its_capabilities_with_it(server_hub, tmp_path):

@@ -1,4 +1,4 @@
-// The tier-1 stack dry run.
+// The stack dry run.
 //
 // The assertion worth having is that opening it groups nothing. "Detection
 // proposes, it never applies" is a promise made in three places in this
@@ -92,10 +92,44 @@ describe("the dry run", () => {
   });
 
   it("says which file will represent the run", async () => {
-    // The one decision in a tier-1 group a reader might disagree with, and it
+    // The one decision in a group a reader might disagree with, and it
     // is not readable from a list of steps.
     const wrapper = await openWith([proposal()]);
     expect(wrapper.find(".ssp-cover").text()).toContain("the final file");
+  });
+
+  it("names the version as the cover when the group spans versions", async () => {
+    // The whole decision in a `version_group`: the reader is agreeing that v2
+    // is what "Foxglove" now means on the shelf. No member here carries a step,
+    // so without the version the line would say "the final file" about three
+    // files that are all final.
+    const wrapper = await openWith([
+      proposal({
+        tier: "version_group",
+        key: "1:foxglove",
+        name: "Foxglove",
+        members: [
+          {
+            model_id: 1,
+            filename: "Foxglove_v2.safetensors",
+            step: null,
+            version: "v2",
+          },
+          {
+            model_id: 2,
+            filename: "Foxglove.safetensors",
+            step: null,
+            version: null,
+          },
+        ],
+      }),
+    ]);
+    // The exact string, not `toContain("v2")`: the documented decision is that
+    // the version LEADS, and "the final file, v2" would satisfy a containment
+    // check while saying the opposite.
+    expect(wrapper.find(".ssp-cover").text()).toBe(
+      "Shown as v2, the final file",
+    );
   });
 
   it("names the highest step as the cover when there is no final", async () => {
@@ -116,7 +150,7 @@ describe("the dry run", () => {
     expect(wrapper.findAll(".ssp-group")).toHaveLength(0);
   });
 
-  it("ticks every group, because tier 1 is a batch confirmation", async () => {
+  it("ticks a step group, because that much is a batch confirmation", async () => {
     const wrapper = await openWith([
       proposal(),
       proposal({ key: "1:foxglove", name: "Foxglove" }),
@@ -124,6 +158,38 @@ describe("the dry run", () => {
     const boxes = wrapper.findAll(".ssp-head input");
     expect(boxes).toHaveLength(2);
     expect(boxes.every((b) => b.element.checked)).toBe(true);
+  });
+
+  it("leaves a version group UNTICKED, because it merges trainings", async () => {
+    // The destructive default this dialog must not have. A version group fuses
+    // runs the owner may have kept apart on purpose — so one press must not be
+    // able to do it by omission, even now that Ungroup can take it back.
+    const wrapper = await openWith([
+      proposal(),
+      proposal({
+        tier: "version_group",
+        key: "1:foxglove",
+        name: "Foxglove",
+      }),
+    ]);
+    const boxes = wrapper.findAll(".ssp-head input");
+    expect(boxes.map((b) => b.element.checked)).toEqual([true, false]);
+  });
+
+  it("says on the row itself which group would merge versions", async () => {
+    // Unticked is not enough on its own: a reader scanning for what to tick
+    // needs the risky rows named, not inferred from an empty checkbox.
+    const wrapper = await openWith([
+      proposal({ tier: "version_group", key: "1:foxglove", name: "Foxglove" }),
+    ]);
+    expect(wrapper.find(".ssp-tier").text()).toBe("merges versions");
+  });
+
+  it("marks no tier chip on an ordinary step group", async () => {
+    // The positive control: the chip is a warning, so drawing it on every row
+    // would make it mean nothing.
+    const wrapper = await openWith([proposal()]);
+    expect(wrapper.find(".ssp-tier").exists()).toBe(false);
   });
 });
 
@@ -139,7 +205,7 @@ describe("applying", () => {
     expect(createStack).toHaveBeenCalledWith([1, 2, 3], "JimmyVehicle");
   });
 
-  it("keeps the runs that landed when one is refused", async () => {
+  it("keeps the groups that landed when one is refused", async () => {
     // A group whose rows were stacked between the dry run and the press comes
     // back 409. One stale group must not discard the others.
     const wrapper = await openWith([
@@ -155,8 +221,8 @@ describe("applying", () => {
 
     const notice = useNoticeStore().notices.at(-1);
     expect(notice.level).toBe("success");
-    expect(notice.text).toContain("Grouped 1 run.");
-    expect(notice.text).toContain("1 run could not be grouped");
+    expect(notice.text).toContain("Grouped 1 stack.");
+    expect(notice.text).toContain("1 stack could not be grouped");
     expect(fetchRows).toHaveBeenCalled();
   });
 

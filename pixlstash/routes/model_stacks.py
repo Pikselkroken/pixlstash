@@ -1,24 +1,31 @@
-"""Collapse loose adapters into stacks: propose one, apply one.
+"""Collapse loose adapters into stacks: propose, apply, fuse, undo.
 
-Two routes, and the split between them IS the design. ``GET`` reads the shelf
-and returns groups it believes belong together; it writes nothing, so the whole
-dry run can be drawn before the owner decides. ``POST`` is the only half that
-writes, and it is reached only after they have seen that.
+Three routes. ``GET`` reads the shelf and returns groups it believes belong
+together; it writes nothing, so the whole dry run can be drawn before the owner
+decides. ``POST`` is the half that writes, and it is reached only after they
+have seen that — or from the shelf directly, where it also **fuses**: given
+models that are already stacked it absorbs their stacks whole, which is how
+stacking two stacks yields one. ``DELETE`` is the undo, and the shelf's first:
+it breaks a stack up and leaves every file exactly where it sits on disk.
 
 **Detection proposes, it never applies** — the house rule this module is the
 third instance of, after folder monitoring and the ai-toolkit run scan.
 
-**Tier 1 only, on purpose.** Files differing solely by a training step are one
-run and there is nothing for a person to weigh, so the tier gets one dry run and
-one confirmation. Tier 2 (prefix grouping, ``JimmyVehicle`` beside ``JimmyVehicle2``)
-needs per-group adjudication with counter-evidence and is not here yet; its
-evidence model is a design question rather than missing code.
+**A stack is a subject, not a training run.** Groups come back as
+``step_group`` (one version, files differing only by a step) or
+``version_group`` (``Foxglove`` beside ``Foxglove_v2`` — several runs of one
+subject, covered by the newest version). Prefix grouping (``JimmyVehicle``
+beside ``JimmyVehicle2``) is still not here: only an explicit ``v<digits>``
+token is read as a version, and the ambiguous case needs per-group
+adjudication with counter-evidence, which is a design question rather than
+missing code.
 
-Authorization: both routes are ``OWNER_ONLY``, declared in
-``pixlstash/authz/registry.py`` and never inline. Neither touches the host
-filesystem — detection reads `model` rows the scan already wrote, and applying
-writes hub columns — so neither belongs on the §16.3 locality tier that
-``model-moves`` and the import block sit on. They surface folder ids, not paths.
+Authorization: all three routes are ``OWNER_ONLY``, declared in
+``pixlstash/authz/registry.py`` and never inline. None touches the host
+filesystem — detection reads `model` rows the scan already wrote, and applying,
+fusing and unstacking write hub columns — so none belongs on the §16.3 locality
+tier that ``model-moves`` and the import block sit on. They surface folder ids,
+not paths.
 """
 
 from __future__ import annotations
@@ -30,17 +37,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.stack_detector import (
+    MAX_MEMBERS_PER_STACK,
     MIN_GROUP_SIZE,
     StackRefused,
     apply_stack,
     propose_stacks,
+    unstack,
 )
 
 logger = get_logger(__name__)
 
-# Ceiling on one apply. A stack is a training run; runs have tens of steps, not
-# thousands, and a caller sending more is confused rather than lucky.
-MAX_MEMBERS_PER_STACK = 200
+# The ceiling is imported, not redeclared: `apply_stack` widens the set when
+# fusing, so it owns the only count that is authoritative. This route's check
+# below is the cheap early one on what the caller actually sent.
 
 
 class ProposedMemberResponse(BaseModel):
@@ -54,27 +63,42 @@ class ProposedMemberResponse(BaseModel):
         default=None,
         description=(
             "The training step the filename records, or null for the bare final "
-            "file. A group with no stepped member is never proposed."
+            "file of its version."
+        ),
+    )
+    version: Optional[str] = Field(
+        default=None,
+        description=(
+            "The trailing version token the filename carries (`v2`, `V2.1`), "
+            "verbatim, or null when it carries none. Compare it by parsing, not "
+            "as a string: case and a `.0` are not differences. A group with "
+            "neither a stepped member nor two versions is never proposed."
         ),
     )
     file_size: Optional[int] = None
 
 
 class StackProposalResponse(BaseModel):
-    """One group detection believes is a training run."""
+    """One group detection believes is a single subject."""
 
     model_config = ConfigDict(extra="allow")
 
     tier: str = Field(
         description=(
-            "`step_group` — files differing only by a training step. The tier "
-            "that needs no judgement, so it is confirmed in one batch."
+            "`step_group` — one version, files differing only by a training "
+            "step. `version_group` — two or more versions of one subject, so "
+            "the group spans training runs."
         )
     )
     key: str = Field(
         description="Stable per-folder identity for the group, for the UI's list."
     )
-    name: str = Field(description="The derived name the members share.")
+    name: str = Field(
+        description=(
+            "The subject the members share, carrying the version when they all "
+            "have the same one and dropping it when the group spans versions."
+        )
+    )
     folder_id: int = Field(
         description=(
             "Groups never span folders: two runs on different disks can share a "
@@ -83,7 +107,9 @@ class StackProposalResponse(BaseModel):
         )
     )
     members: list[ProposedMemberResponse] = Field(
-        description="Cover first: the bare final, else the highest step."
+        description=(
+            "Cover first: newest version, then its bare final, else its highest step."
+        )
     )
     total_size: int = Field(
         description="Sum over the group, which is what a stack shows."
@@ -107,12 +133,28 @@ class ApplyStackRequest(BaseModel):
         description=(
             "The models to collapse, by hub `model.id`. Order is **recomputed** "
             "server-side, so the caller cannot choose the cover by reordering "
-            "this list; the bare final leads, else the highest step."
+            "this list; the newest version leads, then its bare final, else its "
+            "highest step."
         )
     )
     name: Optional[str] = Field(
         default=None,
-        description="What to call the stack. Null leaves it unnamed.",
+        description=(
+            "What to call the stack. Null leaves it unnamed, except when fusing "
+            "— there it inherits the first name among the stacks absorbed."
+        ),
+    )
+    fuse: bool = Field(
+        default=False,
+        description=(
+            "Allow models that are **already stacked**, absorbing their stacks "
+            "whole — this is what makes stacking two stacks fuse them. Every "
+            "member of every stack named comes along, including ones not listed "
+            "in `model_ids`, because a stack is atomic and half of one is not a "
+            "stack. Off by default: the proposals flow confirms a dry run over "
+            "loose files, and a row stacked in the meantime must be left where "
+            "it is rather than torn out."
+        ),
     )
 
 
@@ -123,6 +165,14 @@ class ApplyStackResponse(BaseModel):
 
     stack_id: int
     member_count: int
+
+
+class UnstackResponse(BaseModel):
+    """Body of ``DELETE /model-stacks/{stack_id}``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    released: int = Field(description="How many models are loose on the shelf again.")
 
 
 def create_router(server) -> APIRouter:
@@ -138,16 +188,18 @@ def create_router(server) -> APIRouter:
 
     @router.get(
         "/model-stacks/proposals",
-        summary="Groups of loose adapters that look like one training run",
+        summary="Groups of loose adapters that look like one subject",
         description=(
             "The dry run. Returns the groups detection believes belong together "
             "and **writes nothing**, so the whole list can be drawn before the "
             "owner decides about any of it.\n\n"
             "Only adapters with no stack are considered: a run imported from "
             "ai-toolkit is already a stack, and a stack that has been ratified "
-            "must never be re-proposed. Grouping is per folder and needs at "
-            "least one member carrying a step suffix, or the shared name is a "
-            "duplicate rather than a run."
+            "must never be re-proposed. Grouping is per folder, on the name with "
+            "the training step and the version token removed, and needs a "
+            "difference those account for — a stepped member, or two versions. "
+            "Without either, the shared name is a duplicate rather than a "
+            "subject with a history."
         ),
         tags=["model_shelf"],
         response_model=StackProposalsResponse,
@@ -168,6 +220,7 @@ def create_router(server) -> APIRouter:
                             model_id=m.model_id,
                             filename=m.filename,
                             step=m.step,
+                            version=m.version,
                             file_size=m.file_size,
                         )
                         for m in p.members
@@ -187,7 +240,12 @@ def create_router(server) -> APIRouter:
             "a snapshot the owner may have been looking at for a minute, so a "
             "row stacked in the meantime is dropped rather than torn out of the "
             "stack it already has; if fewer than two survive that check the call "
-            "is a 409 and nothing is written."
+            "is a 409 and nothing is written.\n\n"
+            "**`fuse` stacks the stacks.** With it, models that already belong "
+            "to a stack are taken, and their stacks are absorbed *whole* and "
+            "then removed — so stacking two stacks yields one. Without it (the "
+            "default) an already-stacked model is refused, which is what the "
+            "proposals flow needs."
         ),
         tags=["model_shelf"],
         response_model=ApplyStackResponse,
@@ -203,7 +261,7 @@ def create_router(server) -> APIRouter:
                 status_code=400,
                 detail=(
                     f"A stack takes at most {MAX_MEMBERS_PER_STACK} models; a "
-                    "training run has tens of steps, not thousands."
+                    "subject has a few versions of tens of steps, not thousands."
                 ),
             )
         if len(unique_ids) < MIN_GROUP_SIZE:
@@ -212,7 +270,10 @@ def create_router(server) -> APIRouter:
             )
         try:
             stack_id = apply_stack(
-                server.hub, unique_ids, (payload.name or "").strip() or None
+                server.hub,
+                unique_ids,
+                (payload.name or "").strip() or None,
+                fuse=payload.fuse,
             )
         except StackRefused as exc:
             # 409 rather than 400: the request was well formed and was refused by
@@ -225,5 +286,34 @@ def create_router(server) -> APIRouter:
         return ApplyStackResponse(
             stack_id=stack_id, member_count=int(row["n"] or 0) if row else 0
         )
+
+    @router.delete(
+        "/model-stacks/{stack_id}",
+        summary="Break a stack apart",
+        description=(
+            "The undo. Clears `stack_id` and `stack_position` on every member "
+            "and removes the `adapter_stack` row, leaving the files loose on the "
+            "shelf as the individual adapters they always were.\n\n"
+            "**Nothing on disk is touched** — this writes two hub columns and "
+            "deletes one row; no file is moved, renamed or unlinked. Unknown "
+            "`stack_id` is a 404 and nothing is written.\n\n"
+            "The released models become *loose*, so "
+            "`GET /model-stacks/proposals` may offer to regroup them. That is "
+            "not a bug: they are still files whose names look like one subject. "
+            "Unstacking undoes a grouping; it does not record a refusal."
+        ),
+        tags=["model_shelf"],
+        response_model=UnstackResponse,
+    )
+    def delete_stack(request: Request, stack_id: int):
+        server.auth.ensure_secure_when_required(request)
+        try:
+            released = unstack(server.hub, stack_id)
+        except StackRefused as exc:
+            # 404 rather than the 409 the apply uses: this one is "that stack is
+            # not there", which is a wrong address rather than a shelf that
+            # moved under a well-aimed request.
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return UnstackResponse(released=released)
 
     return router

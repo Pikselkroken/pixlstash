@@ -249,6 +249,45 @@ export function capabilityLabel(capability) {
 }
 
 /**
+ * What each non-adapter `file_kind` is called on screen.
+ *
+ * Named as roles rather than as file types, because the reader deciding what to
+ * keep is asking what the file DOES beside a checkpoint. `checkpoint` repeats
+ * the word `CAPABILITY_LABELS` uses, deliberately: a scanned checkpoint records
+ * no capability and a DECLARED one records `checkpoint`, and the two are one
+ * heading on the feature axis rather than a group of one beside a bucket of
+ * eighty.
+ *
+ * `adapter` and `engine` are absent, and that is what {@link fileKindLabel}
+ * returning "" means: an adapter is named by its algorithm and an engine by the
+ * features it declares, both of which say more than the word "Adapter".
+ *
+ * Not exported, for `ADAPTER_KIND_LABELS`' reason one table down: `file_kind`
+ * is owner-correctable over `PATCH /models` and carries no CHECK, so a caller
+ * indexing this raw with a row storing `constructor` gets `Object`'s
+ * constructor FUNCTION — truthy, so a `|| ""` fallback never fires, and it
+ * lands in a group label where `localeCompare` throws and takes the whole
+ * `groups` computed with it. `fileKindLabel` is the only way in.
+ */
+const FILE_KIND_LABELS = {
+  checkpoint: "Checkpoint",
+  vae: "VAE",
+  text_encoder: "Text encoder",
+  unknown: "Unclassified",
+};
+
+/**
+ * Name one `file_kind` for display.
+ *
+ * @param {string} fileKind - a stored `model.file_kind`.
+ * @returns {string} e.g. `Checkpoint`, or `""` for a kind named some other way.
+ */
+export function fileKindLabel(fileKind) {
+  const key = String(fileKind || "");
+  return Object.hasOwn(FILE_KIND_LABELS, key) ? FILE_KIND_LABELS[key] : "";
+}
+
+/**
  * Look a free-text value up in a label table, falling through to itself.
  *
  * `Object.hasOwn` rather than a plain index, because both tables are keyed by
@@ -1229,14 +1268,95 @@ export function deletableModels(rows, foldersById = null) {
 }
 
 /**
+ * Why this selection cannot be deleted, in the reader's own terms.
+ *
+ * The three gates {@link deletableModels} checks, said back. The sentence it
+ * replaced claimed PixlStash "only removes files from your own model folders,
+ * and never from a drive that is not plugged in", which was two thirds of one
+ * gate and untrue on its face: the shelf deletes from the managed store and
+ * from PixlStash's own download folder, neither of which is a folder the owner
+ * registered. It also named no folder, so the one thing the reader wanted — WHY
+ * this file and what to do instead — was the thing it left out.
+ *
+ * The folder is named by its PATH rather than by a kind, because the path is
+ * the answer: `~/.cache/huggingface/hub` explains itself, and no vocabulary of
+ * ours explains it better. A folder another tool owns (`movable: fixed`, which
+ * is what the HuggingFace cache carries and what the column means) gets the one
+ * clause that is actually actionable, since the tool that put the file there is
+ * the one that can take it away.
+ *
+ * Every reason present is reported, not the first: a selection of forty can be
+ * blocked three different ways, and a reader who fixes the drive only to hit
+ * the folder rule has been sent round twice.
+ *
+ * @param {Array<Object>} rows - the selected rows, none of them deletable.
+ * @param {Map<number, Object>|null} foldersById - `model_folder.id` to folder.
+ * @returns {string} one to three sentences, or "" for an empty selection.
+ */
+export function undeletableNotice(rows, foldersById = null) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return "";
+  if (!foldersById) {
+    // The registry has not loaded or could not be read, which is the one case
+    // where the honest answer is that we do not know yet.
+    return "The folder list has not loaded yet, so nothing can be deleted.";
+  }
+  let engine = false;
+  let unreachable = false;
+  const folders = new Set();
+  let anotherToolOwns = false;
+  for (const row of list) {
+    for (const part of row?.members?.length ? row.members : [row]) {
+      if (part?.file_kind === "engine") engine = true;
+      for (const loc of part?.locations || []) {
+        if (loc?.state === "unreachable") {
+          unreachable = true;
+          continue;
+        }
+        const folder = foldersById.get(Number(loc?.folder_id));
+        if (folder && !folder.deletable) {
+          folders.add(String(folder.path || ""));
+          if (folder.movable === "fixed") anotherToolOwns = true;
+        }
+      }
+    }
+  }
+  const notes = [];
+  if (folders.size) {
+    // One path is named; several are counted. A notice listing six paths is one
+    // nobody finishes reading.
+    const where =
+      folders.size === 1
+        ? [...folders][0]
+        : `${folders.size} folders PixlStash does not delete from`;
+    notes.push(
+      `PixlStash does not delete from ${where}. It removes files from folders you registered, its own managed store and the folder it downloads engines into.`,
+    );
+    if (anotherToolOwns) {
+      notes.push("Another tool owns that folder, so remove them with that.");
+    }
+  }
+  if (engine) {
+    notes.push(
+      "PixlStash downloaded some of these for itself and would fetch them again.",
+    );
+  }
+  if (unreachable) {
+    notes.push("Some sit on a drive that is not plugged in.");
+  }
+  return notes.join(" ");
+}
+
+/**
  * Fold each stack's members into the one row that stands for them.
  *
- * A training run is many `model` rows and the list query returns all of them,
- * so without this a six-step run reads as six unrelated adapters — which is the
+ * A stack is many `model` rows and the list query returns all of them, so
+ * without this a six-step run reads as six unrelated adapters — which is the
  * state the shelf shipped in until F5.
  *
  * The **cover** is `stack_position` 0, which the backend already ordered: the
- * bare final file if the run wrote one, else its highest step. A stack whose
+ * newest version, and within it the bare final file if the run wrote one, else
+ * its highest step. A stack whose
  * cover is filtered out of view collapses onto its lowest surviving position
  * rather than vanishing, because a run half-hidden by a base-model filter is
  * still a run and dropping it would make the filter lie about what is on disk.
@@ -1249,7 +1369,10 @@ export function deletableModels(rows, foldersById = null) {
  *
  * @param {Array<Object>} rows - shown rows, already narrowed by the filters.
  * @returns {Array<Object>} one row per unstacked model and per stack, each
- *   stacked row carrying `memberIds`, `memberCount` and `members`.
+ *   stacked row carrying `memberIds`, `memberCount`, `members` and
+ *   `spansVersions`. All four describe what is SHOWN — a filter that hides half
+ *   a stack changes them, which is deliberate and is why they are recomputed
+ *   here rather than read off the payload.
  */
 export function collapseStacks(rows) {
   const list = Array.isArray(rows) ? rows : [];
@@ -1282,33 +1405,69 @@ export function collapseStacks(rows) {
       // filter can hide part of a run, and a badge reading 6 over a strip that
       // opens to 4 would be describing rows the reader cannot reach.
       memberCount: members.length,
+      // Computed ONCE per stack, here, rather than per member row at render:
+      // the member label needs to know whether the stack spans versions, and
+      // asking that question inside the label made it O(n²) in the members —
+      // 200 members is 40,000 filename parses, redone on every re-render.
+      //
+      // Compared on the PARSED version, matching `propose_stacks`, so `v2` and
+      // `V2.0` are one version here exactly as they are on the server.
+      spansVersions:
+        new Set(members.map((m) => versionSortKey(modelVersion(m.filename))))
+          .size > 1,
     });
   }
   return out;
 }
 
 /**
- * Say how many runs were grouped, and how many were not.
+ * Say how many stacks were made, and how many were not.
  *
  * One call per group, so a partial outcome is real: a group whose rows were
  * stacked between the dry run and the confirmation comes back 409 and is
  * counted rather than throwing, or one stale group would discard the others.
  *
- * @param {number} grouped - runs collapsed into a stack.
- * @param {number} failed - runs the server refused.
+ * "Stacks", not "runs": a stack can span training runs now — several versions
+ * of one character LoRA — so calling every one of them a run would be false.
+ *
+ * @param {number} grouped - stacks made.
+ * @param {number} failed - groups the server refused.
  * @returns {string}
  */
 export function stackReceipt(grouped, failed) {
-  const runs = (n) => `${n.toLocaleString()} ${n === 1 ? "run" : "runs"}`;
+  const stacks = (n) => `${n.toLocaleString()} ${n === 1 ? "stack" : "stacks"}`;
   if (!grouped) {
     return failed
-      ? `Nothing was grouped. ${runs(failed)} could not be, and the files are unchanged.`
+      ? `Nothing was grouped. ${stacks(failed)} could not be, and the files are unchanged.`
       : "Nothing to group.";
   }
   const note = failed
-    ? ` ${runs(failed)} could not be grouped; something changed them first.`
+    ? ` ${stacks(failed)} could not be grouped; something changed them first.`
     : "";
-  return `Grouped ${runs(grouped)}.${note}`;
+  return `Grouped ${stacks(grouped)}.${note}`;
+}
+
+/**
+ * Say how many stacks were broken up, and how many were not.
+ *
+ * Says **where the files went**, which the grouping receipt does not have to:
+ * "ungrouped" on its own is the one word in this view that a reader could
+ * reasonably fear meant "deleted", and the whole point of the verb is that
+ * nothing on disk moved.
+ *
+ * @param {number} released - stacks dissolved.
+ * @param {number} failed - stacks the server refused.
+ * @returns {string}
+ */
+export function unstackReceipt(released, failed) {
+  const stacks = (n) => `${n.toLocaleString()} ${n === 1 ? "stack" : "stacks"}`;
+  if (!released) {
+    return failed
+      ? `Nothing was ungrouped. ${stacks(failed)} could not be, and the files are unchanged.`
+      : "Nothing to ungroup.";
+  }
+  const note = failed ? ` ${stacks(failed)} could not be ungrouped.` : "";
+  return `Ungrouped ${stacks(released)}; the files are still on the shelf.${note}`;
 }
 
 /**
@@ -1329,6 +1488,54 @@ export function trainingStep(filename) {
   if (!last || !TRAINING_SUFFIX_RE.test(last)) return null;
   const digits = last.replace(/\D/g, "");
   return digits ? Number(digits) : null;
+}
+
+/** A trailing version token. Mirrors `_VERSION_SUFFIX_RE` in `model_utils.py`.
+ *
+ * Only an explicit `v<digits>` counts, optionally with one decimal. A bare
+ * trailing `2` is not a version: `JimmyVehicle` beside `JimmyVehicle2` is the
+ * ambiguous prefix case, and reading it as a version would merge two subjects.
+ */
+const VERSION_SUFFIX_RE = /^v(\d+)(?:\.(\d+))?$/i;
+
+/**
+ * The version a filename records, or null when it carries none.
+ *
+ * Mirrors `split_model_version`: runs on top of {@link deriveModelName}, so
+ * training bookkeeping is already gone and `Foxglove_v2_000000500` answers the
+ * same as `Foxglove_v2`.
+ *
+ * **Returned exactly as the file wrote it**, `V2.1` and all, because this token
+ * is shown to a reader. Never compare two of these as strings — put them
+ * through {@link versionSortKey}, which is what agrees with the server about
+ * `v2` and `V2.0` being one version.
+ *
+ * @param {string} filename
+ * @returns {string|null}
+ */
+export function modelVersion(filename) {
+  const tokens = deriveModelName(filename).split(/\s+/).filter(Boolean);
+  const last = tokens[tokens.length - 1];
+  // Verbatim, matching `split_model_version`: this token is shown, and the
+  // comparison that matters goes through {@link versionSortKey} instead.
+  return last && VERSION_SUFFIX_RE.test(last) ? last : null;
+}
+
+/**
+ * Order two version tokens, newest highest. Mirrors `version_sort_key`.
+ *
+ * **This is what versions must be compared on, never the raw token.** The
+ * backend tests distinctness on the parsed pair, so `v2` and `V2.0` are one
+ * version there; comparing strings here instead made the shelf call them two
+ * and label a run's members with a version it does not have. An unversioned
+ * file reads as `v1`, exactly as the server reads it.
+ *
+ * @param {string|null} version - a token from {@link modelVersion}.
+ * @returns {string} a stable `major.minor` key for identity comparison.
+ */
+export function versionSortKey(version) {
+  const match = VERSION_SUFFIX_RE.exec(version || "");
+  return match ? `${Number(match[1])}.${Number(match[2] || 0)}` : "1.0";
 }
 
 /**

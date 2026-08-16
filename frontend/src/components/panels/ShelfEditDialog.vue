@@ -61,6 +61,34 @@
           @keydown.enter.prevent="submit"
         />
       </label>
+
+      <!-- What it is FOR, which is a different question from what it IS: one
+           repo can caption and detect. The Kind column has always shown these
+           words on rows PixlStash classified, so leaving them out of the editor
+           put a value on screen that the reader could not correct. Checkboxes
+           rather than radios because the set is genuinely plural, and untouched
+           they are not sent at all. -->
+      <fieldset class="sed-field sed-fieldset">
+        <legend class="sed-label">What these files are for</legend>
+        <p class="sed-hint">Optional. Leave empty if they are not a tool.</p>
+        <label
+          v-for="option in CAPABILITIES"
+          :key="option"
+          class="sed-radio"
+          :title="`File these under ${capabilityLabel(option)} on the Feature axis.`"
+        >
+          <input
+            type="checkbox"
+            :checked="capabilities.includes(option)"
+            @change="toggleCapability(option, $event.target.checked)"
+          />
+          <span>{{ capabilityLabel(option) }}</span>
+        </label>
+        <p v-if="capabilitiesDiffer" class="sed-hint">
+          The selected models are not filed the same way. Ticking a box sets all
+          of them.
+        </p>
+      </fieldset>
     </template>
 
     <!-- The first of the shelf's two confirmations, shown inline rather than as
@@ -106,7 +134,7 @@ import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
-import { adapterKindKey } from "../../utils/modelShelf";
+import { adapterKindKey, capabilityLabel } from "../../utils/modelShelf";
 
 const props = defineProps({
   /** `rename` | `base-model` | `kind`, or `""` when the dialog is closed. */
@@ -127,12 +155,41 @@ const FILE_KINDS = [
   { value: "unknown", label: "Unclassified" },
 ];
 
+// The features a model may be filed under, in the shelf's own vocabulary. Two
+// of the eight stored values are missing on purpose and the server refuses them
+// too: `checkpoint` is what the file IS and the radios above already ask it,
+// and `other` is the classifier's shrug, which an empty set says without
+// printing a heading for it.
+const CAPABILITIES = [
+  "captioner",
+  "tagger",
+  "detector",
+  "face",
+  "search",
+  "scorer",
+];
+
 const name = ref("");
 const baseModel = ref("");
 const kind = ref("");
 const fileKind = ref("adapter");
+const capabilities = ref([]);
+// Untouched, the set is not sent at all. A dialog that always posted it would
+// flatten a mixed selection onto whatever the first row happened to say, on a
+// verb the reader opened to change the file kind.
+const capabilitiesTouched = ref(false);
+const capabilitiesDiffer = ref(false);
 const working = ref(false);
 const firstFieldEl = ref(null);
+
+function toggleCapability(capability, on) {
+  capabilitiesTouched.value = true;
+  const next = capabilities.value.filter((item) => item !== capability);
+  // Appended, never re-sorted: the order is what the server stores and what the
+  // Kind column reads primary-first, so the first box ticked is the word the
+  // row shows.
+  capabilities.value = on ? [...next, capability] : next;
+}
 
 const count = computed(() => store.selectedRows.length);
 
@@ -208,6 +265,17 @@ watch(
       (row) => adapterKindKey(row.kind) === adapterKindKey(rows[0]?.kind),
     );
     kind.value = sharedKind ? rows[0]?.kind || "" : "";
+    // Seeded from the selection when it agrees, and left EMPTY when it does not
+    // — with a line saying so, because an empty box that means "they differ"
+    // and an empty box that means "none" are the same box otherwise.
+    const sets = rows.map((row) =>
+      (Array.isArray(row.capabilities) ? row.capabilities : []).join(","),
+    );
+    capabilitiesDiffer.value = sets.some((set) => set !== sets[0]);
+    capabilities.value = capabilitiesDiffer.value
+      ? []
+      : (rows[0]?.capabilities || []).filter((c) => CAPABILITIES.includes(c));
+    capabilitiesTouched.value = false;
     working.value = false;
     await nextTick();
     firstFieldEl.value?.focus();
@@ -226,6 +294,7 @@ function changes() {
   if (fileKind.value === "adapter" && kind.value.trim()) {
     patch.kind = kind.value.trim();
   }
+  if (capabilitiesTouched.value) patch.capabilities = capabilities.value;
   return patch;
 }
 
@@ -281,6 +350,14 @@ async function submit() {
 
 /* Not an alert: it appears as the reader types rather than in response to a
    failure, and a live alert would interrupt them mid-word. */
+/* Sits under a legend and above its boxes, so it is quieter than the label and
+   never mistaken for one of the options. */
+.sed-hint {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-panel), 0.7);
+}
+
 .sed-warning {
   margin: 0;
   padding: var(--space-3) var(--space-4);
