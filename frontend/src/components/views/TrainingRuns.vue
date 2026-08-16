@@ -698,13 +698,22 @@ function batchReceipt(imported, failed) {
 /* The panel sits inside `.shelf`, which owns the toolbar and the positioning
    context the pill docks against. The bottom inset is what keeps the last row
    of cards out from under that pill. */
+/* The inset matches `.shelf-body`, which carries NO horizontal padding at all —
+   its rows run to the edges and take their own `--space-3` inset from the
+   shared row rule. A 16px box around this grid put the two tabs on different
+   left edges and wasted a column of grid width at every viewport. `--space-3`
+   horizontally lines the first card up with where a row's content starts.
+
+   The 56px foot is the shelf's own figure and is there for the same reason:
+   room under the last card for the pill to float over nothing, so the bottom
+   cards are readable and clickable at the one moment they matter. */
 .tr {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: var(--space-5) var(--space-5) 56px;
-  gap: var(--space-4);
+  padding: var(--space-3) var(--space-3) 56px;
+  gap: var(--space-3);
 }
 
 .tr-meta {
