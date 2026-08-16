@@ -1737,13 +1737,18 @@ attachment set it replaces.
 **A row is flex, not a grid, and its columns are STATED ONCE.** Grouping makes
 one `role="treegrid"` list per group, so `auto` tracks would be measured against
 that group's contents alone and the columns would step sideways from one folder
-to the next — which is the alignment #891 exists to hold. The three widths are
-custom properties (`--shelf-col-kind`, `--shelf-col-base`, `--shelf-col-size`),
-declared on `.shelf` at the resolved design's own 64/84/74px and **overridden on
-the element from `view.columnWidths`**, so the headings, the rows and a stack's
-member rows all resolve one declaration and cannot drift apart. The name takes
-the rest — it is the flexible track and therefore has no remembered width — and
-the FILENAME takes the whole of a second line under it in the mono face: it is
+to the next — which is the alignment #891 exists to hold. The four widths are
+custom properties (`--shelf-col-kind`, `--shelf-col-base`, `--shelf-col-size`,
+`--shelf-col-date`), **written onto the element from `view.columnWidths`** and
+declared nowhere else, so the headings, the rows and a stack's member rows all
+resolve one declaration and cannot drift apart. The first three defaults are the
+resolved design's own 64/84/74px; the date column postdates the kit, and its
+96px is what `ymd-jp` needs, the widest of the eight day formats — `locale`
+returns whatever the reader's browser writes, so it is the figure that keeps the
+common formats clear of the ellipsis rather than a proof against every one, and
+the grip is there for the reader it does not suit. The name takes the rest — it
+is the flexible track and therefore has no remembered width — and the FILENAME
+takes the whole of a second line under it in the mono face: it is
 what the file is actually called, which the name above it often is not, and it
 is the string that gets pasted into a ComfyUI node, so it is drawn rather than
 parked in a tooltip.
@@ -1765,8 +1770,8 @@ down a grouped list. So the strip is a `role="group"` of controls —
   direction; pressing another starts at that column's OWN end. `Kind` is a
   heading and not a button: the API's `SortKey` has no member for it, and a
   control that does nothing is worse than none. The toolbar's `Sort` panel
-  keeps the whole five-key vocabulary, including the two with no column
-  (`Date added`, `File date`).
+  keeps the whole five-key vocabulary, and it is the only way onto `File date`,
+  since the date column can name only one axis at a time (below).
 
   **`defaultSortDirection` is applied in `setView`, not in either control.**
   There are two writers of `view.sortKey` — the headings and `ShelfSortPanel`
@@ -1804,7 +1809,7 @@ down a grouped list. So the strip is a `role="group"` of controls —
   drag, so a refused or lost capture cannot leave one live forever.
 
   **The floor is per column and the ceiling is measured, not guessed.**
-  `MIN_COLUMN_WIDTHS` (kind 64, base 72, size 56) is a map beside
+  `MIN_COLUMN_WIDTHS` (kind 64, base 72, size 56, date 80) is a map beside
   `DEFAULT_COLUMN_WIDTHS` because what "too narrow" means differs per column —
   `Kind` holds a word like `Checkpoint` and `Size` holds five characters — and
   every floor is at or under that column's default, or a stored default would
@@ -1812,11 +1817,13 @@ down a grouped list. So the strip is a `role="group"` of controls —
   sanity bound on a stored blob: the limit a drag actually meets is
   `widenable()` in the component, which reads the Name track's `offsetWidth`
   and refuses to take it below `MIN_NAME_WIDTH` (200px). That is the same
-  guarantee the old flat 200px ceiling was making — three columns cannot
+  guarantee the old flat ceiling was making — 200px for three columns, then
+  150px once the date column made it four — that the columns cannot
   overflow the panel sideways and slide rows under a strip whose background
   stops at the scrollport — but made against the panel in front of the reader
   rather than against a guess at the narrowest one, which on a wide shelf had
-  pinned Name at about half the width. An unmeasured track (0, so not laid out
+  pinned Name at about half the width and had to be re-derived every time a
+  column was added. An unmeasured track (0, so not laid out
   — or jsdom) means unlimited, because a grip that silently refuses to move is
   the worse failure. Widths are written into the same versioned view
   blob **once per gesture, not per frame** — `rememberView` rebuilds the whole
@@ -1826,7 +1833,7 @@ down a grouped list. So the strip is a `role="group"` of controls —
   would turn a stored `null` into that column's floor instead of falling
   through to the default.
 
-  `DEFAULT_COLUMN_WIDTHS` in the store is the *only* declaration of the three
+  `DEFAULT_COLUMN_WIDTHS` in the store is the *only* declaration of the four
   figures; `.shelf` deliberately carries no CSS fallback copy, which would be a
   second literal with nothing keeping it equal.
 
@@ -1845,6 +1852,46 @@ it takes its own rung inside the sticky stratum (`--shelf-head-z`) to stay above
 the group headings, and **`.shelf-dim` — the visible half of the move's `inert`
 — was raised above both**: an opaque band at full brightness over a dimmed list
 reads as usable when it is not, which is the failure the veil exists to prevent.
+
+**The date column FOLLOWS the sort.** Two of the five sort keys are dates
+(`added_at`, `file_mtime`) and there is one date column, so the column shows —
+and its heading names — whichever of the two the shelf is currently ordered on;
+every non-date key falls back to `added_at`, the default axis. A column pinned to
+one of them would read as unordered the moment the shelf was sorted on the other,
+which is the state that made a date column worth having rather than a second one
+worth adding. `DATE_COLUMN` is therefore the one entry in `SHELF_COLUMNS` that is
+computed rather than constant: its `label` and its `sort` move together, so
+pressing the heading does what every other heading does — sort on the key it
+names, flip the direction if that key is already the sorted one — and the hidden
+`columnheader` carries the same moving name, so a reader who cannot see the strip
+hears which axis the cells are drawn in. `File date` is reached from the `Sort`
+panel; arriving there renames the column rather than adding one.
+
+`modelDate` (`utils/modelShelf.js`) mirrors `SORT_VALUE` in the store so the
+column cannot disagree with the order the rows are drawn in, and the two
+aggregates it reads are not shaped alike. `newest_member_at` is grouped per
+STACK, so on `added_at` a run's date is its newest member's and never its
+cover's — and every member row carries the run's value too, which is why an
+expanded member is read for its own instead. `newest_file_mtime` is grouped per
+MODEL (`_LOCATION_JOIN`, `model_shelf_service.py`), so on `file_mtime` a
+collapsed run shows its COVER's file date: that is what the sort ordered that row
+on, and taking a maximum in the view would print a date the sort does not use.
+Opening the run is what shows a step written later. `file_mtime` arrives as
+`st_mtime_ns` and is divided down to milliseconds; a value out of `Date`'s range
+answers empty rather than throwing, because this runs inside render.
+
+The cell holds the **day** — `formatUserDay(iso, dateFormat)` — and its `title`
+the full stamp, both from `utils/utils.js` like every other timestamp in the
+app: a column is scanned, and the clock is a third of the width of `locale`, the
+default. `formatUserDay` is BUILT from the date parts and never trimmed off a
+formatted stamp: `locale` delegates to the browser's own locale, which puts the
+clock before the date in vi-VN and behind an Arabic comma in ar-EG, so cutting
+at the first space printed a clock to some readers and a bare `2024.` to others.
+Both `locale` branches go through one cached `Intl.DateTimeFormat` per option
+set — constructing one per call costs ~83 ms per 3,600 cells against ~3 ms
+reusing it, and this list is documented at 1,800 rows. A row that cannot answer
+gets an empty cell, not a dash, exactly as the size column does — a placeholder
+in a figure column is noise the eye steps over on every scan.
 
 **Rows are not focus stops while they carry no verb.**
 1,800 empty tab stops would be a trap, so the shelf root takes `tabindex="-1"`

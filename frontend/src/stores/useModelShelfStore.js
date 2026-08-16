@@ -86,18 +86,25 @@ export const GROUP_BY_KEYS = ["none", "base_model", "folder", "feature"];
 export const FOLDER_LAYOUTS = ["drive", "alpha"];
 
 /**
- * The three data columns the reader can resize, and what each starts at.
+ * The four data columns the reader can resize, and what each starts at.
  *
- * The figures are the resolved design's own (ui_kits/app/model-shelf.html, row
- * anatomy) and were fixed widths in the stylesheet until the header strip gave
- * them a grip. The Name column is deliberately absent: it is the flexible
- * track that takes whatever the other three leave, so it has no width of its
- * own to remember.
+ * The first three figures are the resolved design's own
+ * (ui_kits/app/model-shelf.html, row anatomy) and were fixed widths in the
+ * stylesheet until the header strip gave them a grip. The Name column is
+ * deliberately absent: it is the flexible track that takes whatever the others
+ * leave, so it has no width of its own to remember.
+ *
+ * `date` is not in the kit — the column postdates it. 96px is what `ymd-jp`
+ * needs, the widest of the eight day formats (`2026年08月16日`: three
+ * full-width glyphs and eight tabular digits at `--text-xs`), and `locale`
+ * hands back whatever the reader's browser writes — so it is the figure that
+ * keeps the common formats clear of the ellipsis rather than a proof against
+ * every one, and the grip is there for the reader it does not suit.
  */
-export const COLUMN_KEYS = ["kind", "base", "size"];
+export const COLUMN_KEYS = ["kind", "base", "size", "date"];
 
 /** @type {Record<string, number>} */
-export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 84, size: 74 };
+export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 84, size: 74, date: 96 };
 
 /**
  * The floor each column is held above, per column rather than one figure.
@@ -110,19 +117,25 @@ export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 84, size: 74 };
  * that column's default, which is what keeps a stored default from being
  * clamped UP on read-back.
  *
+ * `Date` is the fourth: 96px is what the widest of the day formats needs, so
+ * its floor is the point below which the common ones start ellipsising rather
+ * than a proof against every one.
+ *
  * @type {Record<string, number>}
  */
-export const MIN_COLUMN_WIDTHS = { kind: 64, base: 72, size: 56 };
+export const MIN_COLUMN_WIDTHS = { kind: 64, base: 72, size: 56, date: 80 };
 
 /**
  * The ceiling, which is a sanity bound on a stored blob and NOT the limit a
  * drag actually meets.
  *
- * It used to be 200, chosen so three columns at the ceiling could not overflow
- * the panel sideways on a 1024px window. That bound was doing the wrong job:
- * it is a guess about the narrowest panel anyone has, so on a wide one it
- * stopped the reader at three columns totalling ~640px and a Name track that
- * could never be less than about half the shelf. The real limit is the panel
+ * It was a flat 200 for three columns, then 150 once the date column made it
+ * four, chosen each time so every column at the ceiling could not overflow the
+ * panel sideways on a 1024px window. That bound was doing the wrong job: it is
+ * a guess about the narrowest panel anyone has, so on a wide one it stopped the
+ * reader at four columns totalling ~600px and a Name track that could never be
+ * less than about half the shelf — and it had to be re-derived every time a
+ * column was added. The real limit is the panel
  * in front of the reader, so the header strip measures the Name track and
  * refuses to widen a column past `MIN_NAME_WIDTH` — see `ModelShelf.vue`. This
  * figure only has to be a number no legitimate column reaches.

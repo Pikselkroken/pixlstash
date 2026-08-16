@@ -59,6 +59,7 @@ vi.mock("../api/modelIcons", () => ({
 
 import {
   assignReceipt,
+  COLUMN_KEYS,
   deleteReceipt,
   editReceipt,
   forgetReceipt,
@@ -883,6 +884,8 @@ describe("the column widths", () => {
   it("clamps a width to the bounds rather than taking what it is given", () => {
     const store = useModelShelfStore();
     store.setColumnWidth("size", 4000);
+    // 400 is a sanity bound on a stored blob and nothing else: the limit a
+    // drag meets is the Name track, measured in the component.
     expect(store.view.columnWidths.size).toBe(400);
     store.setColumnWidth("size", -20);
     expect(store.view.columnWidths.size).toBe(56);
@@ -894,8 +897,13 @@ describe("the column widths", () => {
     // Every floor is at or under that column's default, or a stored default
     // would be clamped UP on the way back in.
     const store = useModelShelfStore();
-    for (const key of ["kind", "base", "size"]) store.setColumnWidth(key, 0);
-    expect(store.view.columnWidths).toEqual({ kind: 64, base: 72, size: 56 });
+    for (const key of COLUMN_KEYS) store.setColumnWidth(key, 0);
+    expect(store.view.columnWidths).toEqual({
+      kind: 64,
+      base: 72,
+      size: 56,
+      date: 80,
+    });
   });
 
   it("ignores a column it does not have and a width that is not one", () => {
@@ -909,7 +917,12 @@ describe("the column widths", () => {
     for (const bad of ["wide", null, undefined, "", "64", [], {}, true, NaN]) {
       store.setColumnWidth("kind", bad);
     }
-    expect(store.view.columnWidths).toEqual({ kind: 64, base: 84, size: 74 });
+    expect(store.view.columnWidths).toEqual({
+      kind: 64,
+      base: 84,
+      size: 74,
+      date: 96,
+    });
   });
 
   it("falls through to the default for a stored width that is not a number", () => {
@@ -921,7 +934,12 @@ describe("the column widths", () => {
       }),
     );
     const store = useModelShelfStore();
-    expect(store.view.columnWidths).toEqual({ kind: 64, base: 84, size: 90 });
+    expect(store.view.columnWidths).toEqual({
+      kind: 64,
+      base: 84,
+      size: 90,
+      date: 96,
+    });
   });
 
   it("restores what was dragged, and clamps that too", () => {
@@ -932,7 +950,12 @@ describe("the column widths", () => {
     const blob = JSON.parse(
       window.localStorage.getItem("pixlstash:modelShelfView"),
     );
-    expect(blob.columnWidths).toEqual({ kind: 64, base: 150, size: 74 });
+    expect(blob.columnWidths).toEqual({
+      kind: 64,
+      base: 150,
+      size: 74,
+      date: 96,
+    });
 
     window.localStorage.setItem(
       "pixlstash:modelShelfView",
@@ -944,6 +967,7 @@ describe("the column widths", () => {
       kind: 64,
       base: 150,
       size: 400,
+      date: 96,
     });
   });
 
@@ -956,7 +980,12 @@ describe("the column widths", () => {
     );
     const store = useModelShelfStore();
     expect(store.view.sortKey).toBe("name");
-    expect(store.view.columnWidths).toEqual({ kind: 64, base: 84, size: 74 });
+    expect(store.view.columnWidths).toEqual({
+      kind: 64,
+      base: 84,
+      size: 74,
+      date: 96,
+    });
   });
 });
 
