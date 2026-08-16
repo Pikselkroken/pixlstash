@@ -1769,13 +1769,27 @@ down a grouped list. So the strip is a `role="group"` of controls —
   while the heading beside it gave A-to-Z. `setView` fills the direction in
   only when the key actually changes and the caller named none, so the
   direction toggle and a re-pick of the current key are both untouched.
-- **A grip is a `role="separator"` that resizes.** It sits on the column's right
+- **A grip is a `role="separator"` that resizes.** It sits on the column's LEFT
   edge — 24px of grab area for WCAG 2.5.8 around a 1px drawn hairline, which is
   the only signal a column is resizable and is therefore a component-grade 0.4
   alpha rather than the `divider` token (1.4.11 wants 3:1, and `divider` on this
-  canvas is ~1.2:1). It drags with pointer capture and answers the window-
-  splitter keys: Left/Right by 8px, Home/End to the bounds, **Enter to the
-  default** — with a double-click doing the same, because a width is remembered
+  canvas is ~1.2:1).
+
+  **Left, because a fixed column's right edge does not move when it resizes.**
+  Name is the flexible track and the three fixed columns are anchored to the
+  strip's right edge, so `kind`'s right edge is pinned by `base` and `size`
+  whatever `kind` is doing. A grip drawn there stands still under the pointer
+  while the whole left half of the strip slides — which reads as the drag going
+  backwards, and it puts a seam past `Size` where no column boundary is while
+  leaving none between `Name` and `Kind`. On the left edge the hairline
+  tracks the pointer, so **leftwards widens**, and the grab area is centred on
+  the 12px seam rather than flush to the column so it stays off the heading's
+  left-aligned label.
+
+  It drags with pointer capture and answers the window-splitter keys, which
+  move the SEPARATOR rather than the number: Left widens and Right narrows by
+  8px, Home/End take the separator to its ends (so Home is the column at its
+  widest), **Enter to the default** — with a double-click doing the same, because a width is remembered
   for good once it is dragged and a reset is otherwise the reader's only way out
   of a mis-drag. It sets no `preventDefault` on `pointerdown`: `.shelf` already
   suppresses selection and the grip sets `touch-action: none`, and calling it

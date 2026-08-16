@@ -1065,12 +1065,15 @@ describe("resizing the columns", () => {
     await fire(wrapper, grip, "pointerup", to, 0);
   };
 
+  // Leftwards widens: the grip is the column's left edge, and the three fixed
+  // columns are anchored to the strip's right edge, so that is the direction
+  // that keeps the edge under the pointer.
   it("widens the column the grip belongs to, and remembers it", async () => {
     const wrapper = await mountShelf([adapter()]);
     const store = useModelShelfStore();
     expect(store.view.columnWidths.base).toBe(84);
 
-    await drag(wrapper, gripOf(wrapper, "base"), 200, 240);
+    await drag(wrapper, gripOf(wrapper, "base"), 240, 200);
     expect(store.view.columnWidths.base).toBe(124);
     // The variable the rows read, not a per-cell style: one declaration, so a
     // heading and the cells under it cannot drift apart.
@@ -1087,7 +1090,7 @@ describe("resizing the columns", () => {
     // A column dragged to nothing takes its own grip off the screen with it,
     // and there is no way back.
     const wrapper = await mountShelf([adapter()]);
-    await drag(wrapper, gripOf(wrapper, "size"), 400, 0);
+    await drag(wrapper, gripOf(wrapper, "size"), 0, 400);
     expect(useModelShelfStore().view.columnWidths.size).toBe(48);
   });
 
@@ -1095,9 +1098,9 @@ describe("resizing the columns", () => {
     const wrapper = await mountShelf([adapter()]);
     const store = useModelShelfStore();
     const grip = gripOf(wrapper, "kind");
-    await drag(wrapper, grip, 100, 120);
+    await drag(wrapper, grip, 120, 100);
     expect(store.view.columnWidths.kind).toBe(84);
-    await fire(wrapper, grip, "pointermove", 300, 0);
+    await fire(wrapper, grip, "pointermove", 0, 0);
     expect(store.view.columnWidths.kind).toBe(84);
   });
 
@@ -1109,15 +1112,15 @@ describe("resizing the columns", () => {
     const store = useModelShelfStore();
     const grip = gripOf(wrapper, "base");
 
-    await fire(wrapper, grip, "pointerdown", 200);
-    await fire(wrapper, grip, "pointermove", 220);
+    await fire(wrapper, grip, "pointerdown", 220);
+    await fire(wrapper, grip, "pointermove", 200);
     expect(store.view.columnWidths.base).toBe(104);
 
     // The release happened somewhere else. The next move arrives with nothing
     // held down, and that is the drag over.
-    await fire(wrapper, grip, "pointermove", 260, 0);
+    await fire(wrapper, grip, "pointermove", 160, 0);
     expect(store.view.columnWidths.base).toBe(104);
-    await fire(wrapper, grip, "pointermove", 400, 0);
+    await fire(wrapper, grip, "pointermove", 20, 0);
     expect(store.view.columnWidths.base).toBe(104);
   });
 
@@ -1141,10 +1144,12 @@ describe("resizing the columns", () => {
     expect(grip.attributes("tabindex")).toBe("0");
     expect(grip.attributes("aria-valuenow")).toBe("64");
 
-    await grip.trigger("keydown", { key: "ArrowRight" });
+    // The keys move the separator, so Left widens — the same mapping the
+    // pointer has, because the grip is the column's left edge.
+    await grip.trigger("keydown", { key: "ArrowLeft" });
     expect(store.view.columnWidths.kind).toBe(72);
-    await grip.trigger("keydown", { key: "ArrowLeft" });
-    await grip.trigger("keydown", { key: "ArrowLeft" });
+    await grip.trigger("keydown", { key: "ArrowRight" });
+    await grip.trigger("keydown", { key: "ArrowRight" });
     expect(store.view.columnWidths.kind).toBe(56);
     expect(gripOf(wrapper, "kind").attributes("aria-valuenow")).toBe("56");
     expect(gripOf(wrapper, "kind").attributes("aria-valuetext")).toBe(
@@ -1156,9 +1161,11 @@ describe("resizing the columns", () => {
     const wrapper = await mountShelf([adapter()]);
     const store = useModelShelfStore();
     const grip = gripOf(wrapper, "base");
-    await grip.trigger("keydown", { key: "End" });
-    expect(store.view.columnWidths.base).toBe(200);
+    // Home is the separator as far left as it goes, which is the column at its
+    // widest.
     await grip.trigger("keydown", { key: "Home" });
+    expect(store.view.columnWidths.base).toBe(200);
+    await grip.trigger("keydown", { key: "End" });
     expect(store.view.columnWidths.base).toBe(48);
   });
 
@@ -1169,12 +1176,12 @@ describe("resizing the columns", () => {
     const store = useModelShelfStore();
     const grip = gripOf(wrapper, "size");
 
-    await drag(wrapper, grip, 400, 500);
+    await drag(wrapper, grip, 500, 400);
     expect(store.view.columnWidths.size).toBe(174);
     await grip.trigger("keydown", { key: "Enter" });
     expect(store.view.columnWidths.size).toBe(74);
 
-    await drag(wrapper, grip, 400, 500);
+    await drag(wrapper, grip, 500, 400);
     await grip.trigger("dblclick");
     expect(store.view.columnWidths.size).toBe(74);
     expect(
@@ -1190,14 +1197,14 @@ describe("resizing the columns", () => {
     const grip = gripOf(wrapper, "base");
     const write = vi.spyOn(Storage.prototype, "setItem");
 
-    await fire(wrapper, grip, "pointerdown", 200);
-    await fire(wrapper, grip, "pointermove", 210);
+    await fire(wrapper, grip, "pointerdown", 230);
     await fire(wrapper, grip, "pointermove", 220);
-    await fire(wrapper, grip, "pointermove", 230);
+    await fire(wrapper, grip, "pointermove", 210);
+    await fire(wrapper, grip, "pointermove", 200);
     expect(useModelShelfStore().view.columnWidths.base).toBe(114);
     expect(write).not.toHaveBeenCalled();
 
-    await fire(wrapper, grip, "pointerup", 230, 0);
+    await fire(wrapper, grip, "pointerup", 200, 0);
     expect(write).toHaveBeenCalledTimes(1);
     expect(
       JSON.parse(window.localStorage.getItem("pixlstash:modelShelfView"))

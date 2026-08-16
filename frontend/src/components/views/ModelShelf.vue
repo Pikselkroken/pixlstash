@@ -15,15 +15,15 @@
       Every adapter and checkpoint PixlStash has found on this machine. Group
       and Sort choose the order and whether the list is cut into groups; Show
       chooses which kinds are listed and which base models. Above the list, the
-      Name, Base and Size headings sort it too, and Kind, Base and Size each end
-      in a handle that resizes them: Left and Right move the edge, Home and End
-      take it to its narrowest and widest, Enter puts it back. The bar ends in
-      the app-wide controls: Settings and the stats sidebar toggle. Nothing on
-      this screen can be undone. A ring around a model's mark says who it is
-      assigned to. A name in italics has not been given one. A row that stands
-      for a training run says how many files it holds; Right and Left open and
-      close it. Right-click a row for everything that can be done to it. Escape
-      clears the selection.
+      Name, Base and Size headings sort it too, and Kind, Base and Size each
+      begin with a handle that resizes them: Left and Right move the edge, Home
+      and End take it to its widest and narrowest, Enter puts it back. The bar
+      ends in the app-wide controls: Settings and the stats sidebar toggle.
+      Nothing on this screen can be undone. A ring around a model's mark says
+      who it is assigned to. A name in italics has not been given one. A row
+      that stands for a training run says how many files it holds; Right and
+      Left open and close it. Right-click a row for everything that can be done
+      to it. Escape clears the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -447,7 +447,7 @@
             </button>
           </span>
           <!-- The heading and its grip are one element wide, because the grip
-               is positioned against the heading's own right edge. Without the
+               is positioned against the heading's own left edge. Without the
                wrapper it would either be a flex item of its own — widening
                every column past what the rows draw — or clipped by the
                heading's overflow. -->
@@ -2707,8 +2707,9 @@ function toggleDirection() {
 
    Every heading is LEFT-aligned, including Size's, whose figures are not: the
    heading is a label naming the column and the figures are a magnitude being
-   compared, and the grip lives on the column's right edge — a right-aligned
-   `SIZE` would sit under it and be a resize target as much as a sort one. */
+   compared. The grip lives on the column's LEFT edge, so it is held clear of
+   the label by sitting in the seam rather than flush against the column — see
+   `.shelf-head-grip`. */
 const NAME_COLUMN = { key: "name", label: "Name", sort: "name" };
 
 const SHELF_COLUMNS = [
@@ -2819,8 +2820,10 @@ function onResizeMove(event) {
     endResize();
     return;
   }
+  // Leftwards WIDENS: the grip is the column's left edge, so the width grows
+  // away from the pointer's direction of travel and the edge stays under it.
   const { key, startX, startWidth } = resizing.value;
-  store.setColumnWidth(key, startWidth + (event.clientX - startX), false);
+  store.setColumnWidth(key, startWidth - (event.clientX - startX), false);
 }
 
 function endResize() {
@@ -2834,7 +2837,10 @@ function endResize() {
  * The keyboard half of the same gesture, which is the whole reason the grip is
  * a focusable `separator` rather than a decoration on the heading.
  *
- * Left/Right/Home/End are the window-splitter pattern's own keys. `Enter` is
+ * Left/Right/Home/End are the window-splitter pattern's own keys, and they move
+ * the SEPARATOR, not the number: the grip is the column's left edge, so Left
+ * widens and Home — the separator as far left as it goes — is the widest the
+ * column gets. That is the same mapping the pointer has. `Enter` is
  * the pattern's "restore the default position", and here it is the ONLY way
  * back: a width is remembered for good once it has been dragged, so without a
  * reset a mis-drag is permanent short of clearing the browser's storage. A
@@ -2843,10 +2849,10 @@ function endResize() {
  */
 function onGripKeydown(key, event) {
   const width = {
-    ArrowLeft: () => store.view.columnWidths[key] - RESIZE_STEP,
-    ArrowRight: () => store.view.columnWidths[key] + RESIZE_STEP,
-    Home: () => MIN_COLUMN_WIDTH,
-    End: () => MAX_COLUMN_WIDTH,
+    ArrowLeft: () => store.view.columnWidths[key] + RESIZE_STEP,
+    ArrowRight: () => store.view.columnWidths[key] - RESIZE_STEP,
+    Home: () => MAX_COLUMN_WIDTH,
+    End: () => MIN_COLUMN_WIDTH,
     Enter: () => DEFAULT_COLUMN_WIDTHS[key],
   }[event.key];
   if (!width) return;
@@ -3440,20 +3446,26 @@ button.shelf-head-cell:hover {
   white-space: nowrap;
 }
 
-/* 24px wide and centred ON the column's right edge, so the grab area is the
-   visual seam rather than something beside it. 24 is WCAG 2.5.8's floor and
-   the grab area is decoupled from the drawn hairline by the pseudo-element
-   below, so it costs nothing to hit: the strip's 12px gap takes half of it and
-   the column's own last 12px take the other, which no heading's label reaches
-   (the widest is `BASE` at ~30px in an 84px column, and every heading is
-   left-aligned so none of them ends near the edge). The last column's grip
-   lands inside the row's right padding, which is why the strip does not clip
-   and why it stops exactly where the next column begins. */
+/* The grip sits on the column's LEFT edge, in the seam before it, because that
+   is the only edge of a fixed column that MOVES when the column is resized.
+   Name is the flexible track and the three fixed columns are anchored to the
+   strip's right edge, so a column's right edge is pinned by whatever follows
+   it: a grip drawn there stands still while the whole left half of the strip
+   slides under the pointer, which is what the reader reads as the drag going
+   the wrong way. On the left edge the hairline tracks the pointer exactly.
+   It also puts a seam between Name and Kind and none past Size, which is the
+   set of seams that actually exist.
+
+   24px wide, WCAG 2.5.8's floor, centred on the 12px gap's midpoint rather
+   than flush to the column: that keeps the grab area off the heading's label,
+   which is left-aligned and starts at the column's own edge. 6px of each
+   neighbour is all it takes, and the previous column's last 6px are dead
+   space — the widest heading is `BASE` at ~30px in an 84px column. */
 .shelf-head-grip {
   position: absolute;
   top: 0;
   bottom: 0;
-  right: calc(var(--space-6) / -2);
+  left: calc(var(--space-6) / -2 - var(--space-4) / 2);
   width: var(--space-6);
   cursor: col-resize;
   touch-action: none;
