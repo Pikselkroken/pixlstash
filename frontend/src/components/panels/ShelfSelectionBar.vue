@@ -8,7 +8,7 @@
        the error colour (#933). -->
   <div
     v-if="store.selectedRows.length"
-    class="shelf-selbar"
+    class="selbar"
     role="toolbar"
     aria-label="Selected models"
   >
@@ -884,92 +884,6 @@ defineExpose({
 </script>
 
 <style scoped>
-/* ── The pill ──────────────────────────────────────────────────────────────
-   Positioned by the shelf, which is the only thing that knows where its list
-   ends; this owns the object and not its place. `--elevation-4` and the pill
-   radius are what make it read as floating ABOVE the rows rather than as a
-   docked strip the list stops at. */
-.shelf-selbar {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
-  border: 1px solid rgb(var(--v-theme-divider));
-  border-radius: var(--radius-pill);
-  box-shadow: var(--elevation-4);
-}
-
-.selbar-count {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-2);
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-}
-
-.selbar-size {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-regular);
-  color: rgba(var(--v-theme-on-surface), 0.7);
-}
-
-.selbar-chevron {
-  margin-left: calc(var(--space-1) * -1);
-}
-
-/* Round, 34px, and the hover wash is the only thing that draws a box: a border
-   per verb would make seven of them into a fence. */
-.selbar-btn {
-  width: 34px;
-  height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.selbar-btn:hover:not(:disabled) {
-  background: var(--hover-wash);
-}
-
-/* The only verb in the pill that destroys bytes. Colour is the whole signal —
-   no border, no fill — so it reads as one of the row rather than as a second
-   kind of control, and the hover wash is the error colour at the same weight
-   the neutral one uses. */
-.selbar-btn--danger {
-  color: rgb(var(--v-theme-error));
-}
-
-.selbar-btn--danger:hover:not(:disabled) {
-  background: rgba(var(--v-theme-error), 0.08);
-}
-
-/* Shown and dimmed rather than hidden, so the row of verbs never reflows under
-   the pointer as the selection grows. The reason is in the `title`. */
-.selbar-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.selbar-sep {
-  width: 1px;
-  height: 22px;
-  background: rgb(var(--v-theme-divider));
-}
-
 /* ── The verb menu ─────────────────────────────────────────────────────────
    The same panel vocabulary as the toolbar popovers and the undo receipt:
    surface, hairline, `--elevation-4`. Global rather than scoped because the
