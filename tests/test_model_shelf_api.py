@@ -52,11 +52,11 @@ from pixlstash.db_models.adapter_attachment import AdapterAttachment
 from pixlstash.routes import model_folders as model_folders_routes
 from pixlstash.routes.model_imports import sample_path_within
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
-from tests.network_vectors import LAN_IPV4
 from pixlstash.server import Server
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.services.model_mover import SHELF_IO_LOCK
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
+from tests.network_vectors import LAN_IPV4
 from tests.test_model_folder_scanner import write_adapter, write_checkpoint
 
 API = "/api/v1"

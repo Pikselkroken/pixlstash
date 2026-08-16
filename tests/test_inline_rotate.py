@@ -488,11 +488,11 @@ def test_a_bad_direction_is_refused(client, server):
 
 
 # ---------------------------------------------------------------------------
-# 4. Cache token
+# 4. Cache version
 # ---------------------------------------------------------------------------
 
 
-def test_the_batch_thumbnail_endpoint_serves_a_token_carrying_the_orientation(
+def test_the_batch_thumbnail_endpoint_serves_a_version_carrying_the_orientation(
     client, server
 ):
     """Through the real endpoint, because the helper alone proves nothing.
@@ -543,7 +543,7 @@ def test_the_batch_thumbnail_endpoint_serves_a_token_carrying_the_orientation(
 
 
 def test_a_180_rotate_changes_the_thumbnail_cache_version(client, server):
-    """W and H are unchanged by a 180° turn, so the token needs the orientation.
+    """W and H are unchanged by a 180° turn, so the version needs the orientation.
 
     Thumbnails are served ``max-age=3600``. On dimensions alone the URL would be
     byte-identical after the rotate and the browser would paint the pre-rotate
@@ -554,7 +554,7 @@ def test_a_180_rotate_changes_the_thumbnail_cache_version(client, server):
     """
     picture_id = _upload(client)
 
-    def _token(session):
+    def _version(session):
         picture = session.get(Picture, picture_id)
         # Pin the dimensions so the comparison isolates the orientation: a
         # regenerated 180° thumbnail genuinely has the same width and height.
@@ -564,14 +564,14 @@ def test_a_180_rotate_changes_the_thumbnail_cache_version(client, server):
         session.commit()
         return ImageUtils.thumbnail_cache_version(320, 240, picture.orientation)
 
-    before = server.vault.db.run_task(_token)
+    before = server.vault.db.run_task(_version)
     assert before == "320x240"
 
     assert _rotate(client, [picture_id], "180").status_code == 200
-    after = server.vault.db.run_task(_token)
+    after = server.vault.db.run_task(_version)
     assert after != before, (
         "a 180° rotate leaves the thumbnail's width and height unchanged, so the "
-        "cache token must carry the orientation or the browser serves a stale "
+        "cache version must carry the orientation or the browser serves a stale "
         "bitmap from an identical URL"
     )
     assert after == "320x240o3"

@@ -942,9 +942,10 @@ def test_env_claim_rejects_password_below_login_floor(server, monkeypatch, caplo
 def test_registration_guard_unchanged_in_docker_but_message_actionable(
     server, monkeypatch
 ):
-    """Under PIXLSTASH_IN_DOCKER=1 the guard REJECTS exactly as before (the
-    bridge-gateway IP carries no operator-vs-attacker signal), but the 403
-    tells the operator about the env-var provisioning path."""
+    """Under PIXLSTASH_IN_DOCKER=1 the guard REJECTS exactly as before (a
+    container bridge gateway is an RFC 1918 address and carries no
+    operator-vs-attacker signal), but the 403 tells the operator about the
+    env-var provisioning path."""
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
     # Host traffic appears in-container as the container bridge's gateway
     # (Docker's is in 172.17.x); the guard reads only that it is private and

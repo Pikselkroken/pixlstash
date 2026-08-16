@@ -2220,15 +2220,14 @@ _PRIVATE_ADDRESS_ROOTS = (
     "tests",
     "website",
 )
-_PRIVATE_ADDRESS_FILES = (
-    "CHANGELOG.md",
-    "Dockerfile",
-    "Dockerfile.demo",
-    "Dockerfile.gpu",
-    "README.md",
-    "docker-compose.yml",
-    "fly.toml",
-)
+# Directories whose *immediate* files are read whatever they are called —
+# Dockerfiles, docker-entrypoint.sh, .env.example, the frontend's build and
+# Playwright configs. Derived rather than listed on purpose: a hand-kept file
+# list is how three Dockerfiles came to be named here and then filtered
+# straight back out by the suffix set below, and it would have gone on missing
+# every root file added after it. Nothing walks *into* these, so node_modules
+# is still never opened.
+_PRIVATE_ADDRESS_FLAT_DIRS = (".", "frontend")
 # docs/reviews/ is gitignored and machine-local, so a fresh checkout is not
 # guaranteed to have it and nothing CI-enforced may read it (CLAUDE.md, and
 # the same rule that keeps the authz coverage matrix in docs/ proper).
@@ -2242,6 +2241,9 @@ _PRIVATE_ADDRESS_SUFFIXES = frozenset(
         ".json",
         ".md",
         ".mjs",
+        ".bat",
+        ".iss",
+        ".ps1",
         ".py",
         ".sh",
         ".toml",
@@ -2271,11 +2273,20 @@ def _is_sanctioned_private_literal(line: str, start: int) -> bool:
 
 
 def _private_address_offenders(root: Path, repo_root: Path) -> list[str]:
-    """Return ``"<path>:<lineno>: <line>"`` for every unsanctioned literal."""
+    """Return ``"<path>:<lineno>: <line>"`` for every unsanctioned literal.
+
+    A file named directly is read whatever it is called; the suffix list only
+    decides what to open when walking a directory. Naming a file and then
+    filtering it out by extension is how ``Dockerfile``, ``Dockerfile.demo``
+    and ``Dockerfile.gpu`` sat in the list unscanned.
+    """
     offenders: list[str] = []
-    paths = [root] if root.is_file() else sorted(root.rglob("*"))
+    named = root.is_file()
+    paths = [root] if named else sorted(root.rglob("*"))
     for path in paths:
-        if not path.is_file() or path.suffix not in _PRIVATE_ADDRESS_SUFFIXES:
+        if not path.is_file():
+            continue
+        if not named and path.suffix not in _PRIVATE_ADDRESS_SUFFIXES:
             continue
         rel = path.relative_to(repo_root)
         if rel.as_posix().startswith(_PRIVATE_ADDRESS_SKIP):
@@ -2297,11 +2308,24 @@ def _private_address_offenders(root: Path, repo_root: Path) -> list[str]:
 
 def test_no_unsanctioned_private_address_literal():
     """A bare RFC 1918 literal is somebody's network until proven otherwise."""
+    roots = [REPO_ROOT / name for name in _PRIVATE_ADDRESS_ROOTS]
+    flat = [REPO_ROOT / name for name in _PRIVATE_ADDRESS_FLAT_DIRS]
+    missing = sorted(
+        str(d.relative_to(REPO_ROOT)) for d in (*roots, *flat) if not d.is_dir()
+    )
+    assert not missing, (
+        "these scan targets no longer exist, so the guardrail silently stopped "
+        f"covering them: {missing}. Re-point or remove the entry."
+    )
+
     offenders: list[str] = []
-    for name in (*_PRIVATE_ADDRESS_ROOTS, *_PRIVATE_ADDRESS_FILES):
-        target = REPO_ROOT / name
-        if target.exists():
-            offenders += _private_address_offenders(target, REPO_ROOT)
+    for root in roots:
+        offenders += _private_address_offenders(root, REPO_ROOT)
+    for directory in flat:
+        # Files only. A subdirectory here would be walked, and the one sitting
+        # in frontend/ is node_modules.
+        for path in sorted(p for p in directory.iterdir() if p.is_file()):
+            offenders += _private_address_offenders(path, REPO_ROOT)
     assert not offenders, (
         "these lines carry a private-network address that push-time secret "
         "scanning will stop a push over:\n  "
@@ -2339,4 +2363,23 @@ def test_private_address_guardrail_has_teeth(tmp_path):
     caught = {o.split(":", 1)[0] for o in offenders}
     assert caught == {"bad.md", "mixed.md", "longer.md"}, (
         f"the guardrail reported the wrong set of files: {offenders}"
+    )
+
+
+def test_private_address_guardrail_reads_a_named_file_of_any_kind(tmp_path):
+    """The selection half, which the regex teeth above cannot reach.
+
+    A file reached through ``_PRIVATE_ADDRESS_FLAT_DIRS`` is opened because it
+    was named, not because of its extension — the bug this pins is three
+    Dockerfiles that were listed and then filtered back out by the suffix set.
+    """
+    dockerfile = tmp_path / "Dockerfile.demo"
+    dockerfile.write_text(f"EXPOSE 9537  # was {_TEETH_OFFENDER}\n")
+
+    walked = _private_address_offenders(tmp_path, tmp_path)
+    assert not walked, f"a directory walk must still go by extension, but read {walked}"
+
+    named = _private_address_offenders(dockerfile, tmp_path)
+    assert [o.split(":", 1)[0] for o in named] == ["Dockerfile.demo"], (
+        f"a named file must be read whatever it is called; got {named}"
     )
