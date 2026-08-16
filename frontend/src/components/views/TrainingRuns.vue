@@ -462,19 +462,19 @@ async function submit() {
 }
 
 .tr-mark {
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-background), 0.7);
   flex-shrink: 0;
 }
 
 .tr-title {
   font-size: var(--text-lg);
   font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-on-surface));
+  color: rgb(var(--v-theme-on-background));
 }
 
 .tr-sub {
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-background), 0.7);
 }
 
 /* Truncates from the LEFT: the run folder's own name is the identifying end of
@@ -488,7 +488,7 @@ async function submit() {
   max-width: 32ch;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-background), 0.7);
 }
 
 /* auto-fill rather than auto-fit: a single run keeps a card's width instead of
@@ -539,7 +539,7 @@ async function submit() {
   justify-content: center;
   gap: var(--space-1);
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 .tr-card-body {
@@ -561,12 +561,12 @@ async function submit() {
   flex-wrap: wrap;
   gap: var(--space-2);
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 .tr-card-note {
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 /* The decisions, pinned below the grid rather than floating over it: the cards
@@ -592,7 +592,7 @@ async function submit() {
   margin-bottom: var(--space-2);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-background), 0.7);
 }
 
 .tr-select {
@@ -616,11 +616,11 @@ async function submit() {
   align-items: center;
   gap: var(--space-2);
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface));
+  color: rgb(var(--v-theme-on-background));
 }
 
 .tr-step-size {
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-background), 0.7);
   font-size: var(--text-xs);
 }
 
@@ -633,12 +633,21 @@ async function submit() {
 .tr-note {
   margin: 0;
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface-variant));
+  color: rgba(var(--v-theme-on-background), 0.7);
 }
 
+/* The colour carries the variant; the TEXT stays full strength. The warning hue
+   as a foreground measures 3.09:1 on the light background — under the 4.5:1
+   floor, on the one sentence in this view that says a run is about to be deleted
+   from disk. Tint and border instead, the recipe `library-chip--warn` and
+   `DedupAutoStackDialog` already use. */
 .tr-warning {
   margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: rgba(var(--v-theme-warning), 0.12);
+  border: 1px solid rgba(var(--v-theme-warning), 0.35);
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-on-background));
 }
 </style>
