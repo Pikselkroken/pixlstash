@@ -606,9 +606,7 @@ def test_desktop_session_rejected_from_non_local_ip(server, monkeypatch):
 
     # A private RFC 1918 LAN IP must ALSO be rejected: the external listener is
     # reached over the LAN, so the backstop is pinned to loopback, not is_local_ip.
-    monkeypatch.setattr(
-        server.auth, "_get_real_client_ip", lambda request: LAN_IPV4
-    )
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: LAN_IPV4)
     assert client.get(f"{API_PREFIX}/protected").status_code == 401
 
     # Sanity: a loopback client with the same cookie is still authenticated.
@@ -639,9 +637,7 @@ def test_registration_blocked_from_lan_ip(server, monkeypatch):
     assert server.auth.get_user().password_hash is None
 
     # Private RFC 1918 LAN IP — also refused.
-    monkeypatch.setattr(
-        server.auth, "_get_real_client_ip", lambda request: LAN_IPV4
-    )
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: LAN_IPV4)
     response = client.post(
         f"{API_PREFIX}/login",
         json={"username": "attacker", "password": "attackerpass"},
@@ -686,9 +682,7 @@ def test_login_with_existing_credentials_allowed_from_lan(server, monkeypatch):
     # Remote write protection off so the registration gate is the only thing
     # under test here.
     monkeypatch.setitem(server.auth._server_config, "require_local_for_write", False)
-    monkeypatch.setattr(
-        server.auth, "_get_real_client_ip", lambda request: LAN_IPV4
-    )
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: LAN_IPV4)
     with TestClient(server.api) as client:
         response = client.post(
             f"{API_PREFIX}/login",
@@ -732,9 +726,7 @@ def test_change_password_on_unclaimed_account_blocked_from_lan(server, monkeypat
     assert getattr(public_exc.value, "status_code", None) == 403
 
     # Private RFC 1918 LAN IP — also refused.
-    monkeypatch.setattr(
-        server.auth, "_get_real_client_ip", lambda request: LAN_IPV4
-    )
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: LAN_IPV4)
     with pytest.raises(Exception) as lan_exc:
         server.auth.change_password(_fake_request(LAN_IPV4), payload)
     assert getattr(lan_exc.value, "status_code", None) == 403
@@ -778,9 +770,7 @@ def test_change_password_on_claimed_account_allowed_from_lan(server, monkeypatch
     monkeypatch.setattr(server.auth, "get_user_for_request", lambda request: claimed)
 
     # Now change it again from a LAN IP with the correct current password.
-    monkeypatch.setattr(
-        server.auth, "_get_real_client_ip", lambda request: LAN_IPV4
-    )
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: LAN_IPV4)
     result = server.auth.change_password(
         _fake_request(LAN_IPV4),
         SimpleNamespace(current_password="firstpass", new_password="secondpass"),
@@ -865,9 +855,7 @@ def test_env_claim_provisions_unclaimed_account(server, monkeypatch):
     # Registration-gate policy no longer applies (the account is claimed);
     # disable the separate remote-write gate so the login itself is under test.
     monkeypatch.setitem(server.auth._server_config, "require_local_for_write", False)
-    monkeypatch.setattr(
-        server.auth, "_get_real_client_ip", lambda request: LAN_IPV4
-    )
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: LAN_IPV4)
     with TestClient(server.api) as client:
         response = client.post(
             f"{API_PREFIX}/login",
@@ -958,8 +946,9 @@ def test_registration_guard_unchanged_in_docker_but_message_actionable(
     bridge-gateway IP carries no operator-vs-attacker signal), but the 403
     tells the operator about the env-var provisioning path."""
     monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
-    # A bridge-gateway address out of RFC 1918 is how host traffic actually
-    # appears in-container; the guard cares that it is private, not which block.
+    # Host traffic appears in-container as the container bridge's gateway
+    # (Docker's is in 172.17.x); the guard reads only that it is private and
+    # not loopback, so any RFC 1918 stand-in exercises the same branch.
     monkeypatch.setattr(
         server.auth, "_get_real_client_ip", lambda request: PRIVATE_172_IPV4
     )
@@ -987,9 +976,7 @@ def test_registration_guard_unchanged_in_docker_but_message_actionable(
 def test_registration_message_unchanged_outside_docker(server, monkeypatch):
     """Without the Docker flag the 403 detail is byte-identical to before."""
     monkeypatch.delenv("PIXLSTASH_IN_DOCKER", raising=False)
-    monkeypatch.setattr(
-        server.auth, "_get_real_client_ip", lambda request: LAN_IPV4
-    )
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: LAN_IPV4)
     client = TestClient(server.api)
     response = client.post(
         f"{API_PREFIX}/login",

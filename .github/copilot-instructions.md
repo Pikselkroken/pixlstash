@@ -437,9 +437,7 @@ Pushes are scanned for secrets and private information, and the scan reads
 **added lines** — which is why a literal already merged to `develop` is not
 somebody else's problem: merging `develop` into a branch re-presents it as an
 added line, and #963 was blocked by a literal it had never touched. The rules
-below are the vocabulary that scan is quiet about. The authority is
-`lib/secret-scan.js` in the Piecework repository (`EXAMPLE_VALUES` there);
-this section is the part that applies here.
+below are the vocabulary that scan is quiet about.
 
 | You need | Write | Why |
 |---|---|---|

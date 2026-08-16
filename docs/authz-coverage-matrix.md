@@ -842,7 +842,7 @@ an unparseable XFF hop (`is_loopback_ip` fails **open** on unparseable input); a
 appending proxy (`$proxy_add_x_forwarded_for`) blocks all of them.
 
 Container port-mapping is **not** a bypass: Docker bridge / rootless slirp source addresses
-sit in `172.16.0.0/12` / `10.0.0.0/8`, not loopback. SSH local port-forwarding *is* (the hop
+are `172.17.x` / `10.0.2.x`, not loopback. SSH local port-forwarding *is* (the hop
 originates on the host), but that presupposes shell access.
 
 **Over-blocking checked — no regression.** The e2e topology is loopback end to end:
