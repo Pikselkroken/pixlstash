@@ -1489,6 +1489,82 @@ describe("drive bands", () => {
     ).toBeUndefined();
   });
 
+  it("says what kind of drive it is on the glyph, and nothing when unsure", async () => {
+    // The kind rides the mark the band already carries, because the row has no
+    // horizontal room for a chip — which is the whole reason this exists. A
+    // null kind is the normal answer on macOS and for any filesystem the
+    // backend will not vouch for, and it must draw the plain disk rather than
+    // the word "Unknown".
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: "9",
+        mount_point: "/mnt/nas",
+        label: "Archive",
+        kind: "network",
+        total_bytes: 1024 ** 4,
+        free_bytes: 512 * 1024 ** 3,
+        shelf_bytes: 0,
+        folder_ids: [1],
+      },
+      {
+        device_id: "10",
+        mount_point: "/mnt/plain",
+        label: "Plain",
+        total_bytes: 1024 ** 4,
+        free_bytes: 512 * 1024 ** 3,
+        shelf_bytes: 0,
+        folder_ids: [2],
+      },
+    ]);
+    // The auto-stub swallows `v-icon`'s slot, and the glyph IS the slot here.
+    const wrapper = await mountShelf(
+      [inFolder(1, 1, "/mnt/nas/loras"), inFolder(2, 2, "/mnt/plain/loras")],
+      [],
+      [],
+      {
+        global: {
+          ...globalOpts.global,
+          stubs: {
+            ...globalOpts.global.stubs,
+            "v-icon": { template: "<i><slot /></i>" },
+          },
+        },
+      },
+    );
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
+    await wrapper.vm.$nextTick();
+
+    const icons = wrapper.findAll(".shelf-band-icon");
+    expect(icons[0].text()).toBe("mdi-nas");
+    expect(icons[0].attributes("title")).toBe("Network share");
+    expect(icons[1].text()).toBe("mdi-harddisk");
+    expect(icons[1].attributes("title")).toBeUndefined();
+    expect(textOf(wrapper.findAll(".shelf-band")[1])).not.toContain("Unknown");
+  });
+
+  it("drops the mount point when it is already the band's name", async () => {
+    // With no volume label the name IS the mount point, and drawing both
+    // rendered `/` twice — which reads as a rendering fault, not as detail.
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: "9",
+        mount_point: "/",
+        label: null,
+        total_bytes: 1024 ** 4,
+        free_bytes: 512 * 1024 ** 3,
+        shelf_bytes: 0,
+        folder_ids: [1],
+      },
+    ]);
+    const wrapper = await mountShelf([inFolder(1, 1, "/models")]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
+    await wrapper.vm.$nextTick();
+
+    const band = wrapper.find(".shelf-band");
+    expect(textOf(band.find(".shelf-band-name"))).toBe("/");
+    expect(band.find(".shelf-band-path").exists()).toBe(false);
+  });
+
   it("keys the meter once for the view, not once per band", async () => {
     listModelFolderDevices.mockResolvedValue([
       {

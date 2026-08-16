@@ -16,6 +16,44 @@ logger = logging.getLogger(__name__)
 # matching without a real disk, a real label or root.
 _BY_LABEL_DIR = "/dev/disk/by-label"
 _MOUNTS_FILE = "/proc/mounts"
+_SYS_BLOCK_CLASS = "/sys/class/block"
+
+# What kind of storage a drive is, in the only four flavours whose evidence
+# cannot lie about itself. See `device_kind` for what is deliberately missing.
+DEVICE_KIND_LOCAL = "local"
+DEVICE_KIND_NETWORK = "network"
+DEVICE_KIND_RAMDISK = "ramdisk"
+DEVICE_KIND_REMOVABLE = "removable"
+DEVICE_KINDS = (
+    DEVICE_KIND_LOCAL,
+    DEVICE_KIND_NETWORK,
+    DEVICE_KIND_RAMDISK,
+    DEVICE_KIND_REMOVABLE,
+)
+
+# Every one of these puts the bytes on another machine, which is the single
+# fact about a drive that most changes what the owner will do with it. `fuse.`
+# names carry the helper that mounted them, so sshfs and rclone are matched by
+# their own full names rather than by a prefix that would also catch a local
+# fuse filesystem.
+_NETWORK_FSTYPES = frozenset(
+    {
+        "9p",
+        "afs",
+        "afpfs",
+        "cifs",
+        "fuse.rclone",
+        "fuse.sshfs",
+        "ncpfs",
+        "nfs",
+        "nfs4",
+        "smb3",
+        "smbfs",
+        "sshfs",
+    }
+)
+
+_RAM_FSTYPES = frozenset({"ramfs", "tmpfs"})
 
 # What this machine calls the place a deleted file goes. Windows says "Recycle
 # Bin"; macOS and every Linux desktop say "Trash". Used in the delete route's
@@ -46,6 +84,11 @@ class StorageDevice:
         free_bytes: What is left on it. Free, not "used": a shelf that reports
             how much room is left answers the question the owner is asking
             before a 24 GB checkpoint lands.
+        kind: One of :data:`DEVICE_KINDS`, or ``None`` where the platform will
+            not say. It is the connection, not the medium: it separates a
+            network share and a memory disk and a stick from a disk in the
+            machine, which is what changes how fast the bytes move and whether
+            they survive a reboot. See :func:`device_kind`.
     """
 
     device_id: str
@@ -53,6 +96,7 @@ class StorageDevice:
     label: Optional[str]
     total_bytes: int
     free_bytes: int
+    kind: Optional[str] = None
 
 
 def mount_point_of(path: str) -> str:
@@ -91,6 +135,38 @@ def _unescape_mount_field(field: str) -> str:
     return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
 
 
+def _linux_mounts() -> dict[str, tuple[str, str]]:
+    """``/proc/mounts`` as mount point → (device node, filesystem type).
+
+    One parse for the two questions the drive band asks — what this volume is
+    called, and what kind of storage it is — because both answers are in the
+    same three fields of the same line. Reading the file twice for them would
+    be two syscalls to learn what one already said.
+
+    Returns:
+        The table, or an empty dict if it cannot be read. The callers all treat
+        "not in the table" as "we do not know", which is what a missing file
+        means anyway.
+    """
+    try:
+        with open(_MOUNTS_FILE, encoding="utf-8") as handle:
+            return {
+                _unescape_mount_field(parts[1]): (
+                    os.path.realpath(parts[0]),
+                    parts[2],
+                )
+                for line in handle
+                if len(parts := line.split()) >= 3
+            }
+    except OSError as exc:
+        logger.debug(
+            "Cannot read %s (%s); drive bands lose their labels and their kind.",
+            _MOUNTS_FILE,
+            exc,
+        )
+        return {}
+
+
 def _linux_volume_label(mount_point: str) -> Optional[str]:
     """The volume label of the Linux filesystem mounted at *mount_point*.
 
@@ -103,22 +179,10 @@ def _linux_volume_label(mount_point: str) -> Optional[str]:
         The label, or ``None`` if the filesystem has none (a root partition
         usually does not) or the tables cannot be read.
     """
-    try:
-        with open(_MOUNTS_FILE, encoding="utf-8") as handle:
-            mounted = {
-                _unescape_mount_field(parts[1]): os.path.realpath(parts[0])
-                for line in handle
-                if len(parts := line.split()) >= 2
-            }
-    except OSError as exc:
-        logger.debug(
-            "Cannot read %s (%s); drive bands lose their labels.", _MOUNTS_FILE, exc
-        )
+    mounted = _linux_mounts().get(mount_point)
+    if mounted is None:
         return None
-
-    device = mounted.get(mount_point)
-    if device is None:
-        return None
+    device = mounted[0]
     try:
         entries = os.listdir(_BY_LABEL_DIR)
     except OSError:
@@ -165,6 +229,120 @@ def _windows_volume_label(mount_point: str) -> Optional[str]:
     # might not, and a reviewer should not have to check the grammar to see
     # that a failed call cannot leak a stale buffer.
     return (buffer.value or None) if ok else None
+
+
+def _linux_device_kind(mount_point: str) -> Optional[str]:
+    """What kind of storage is mounted at *mount_point* on Linux.
+
+    Off the table :func:`_linux_mounts` already built, plus at most one
+    ``/sys`` read: the filesystem type answers network and RAM outright, and
+    ``removable`` is a one-byte file udev maintains beside the block device.
+    """
+    entry = _linux_mounts().get(mount_point)
+    if entry is None:
+        return None
+    device, fstype = entry
+    # A network filesystem IS the connection, whatever is spinning at the far
+    # end, and tmpfs IS memory. Neither is an inference.
+    if fstype in _NETWORK_FSTYPES:
+        return DEVICE_KIND_NETWORK
+    if fstype in _RAM_FSTYPES:
+        return DEVICE_KIND_RAMDISK
+    if not device.startswith("/dev/"):
+        # A fstype we do not recognise, backed by something that is not a block
+        # device at all: fuse mounts of every description land here. Saying
+        # `local` about them would be a guess.
+        return None
+    if _linux_is_removable(os.path.basename(device)):
+        return DEVICE_KIND_REMOVABLE
+    return DEVICE_KIND_LOCAL
+
+
+def _linux_is_removable(device_name: str) -> bool:
+    """Whether the block device backing *device_name* says it is removable.
+
+    ``/sys/class/block/sdb1`` is a symlink into the parent disk's directory, so
+    ``..`` from a partition lands on the disk that carries the flag; a whole
+    device carries it directly. Both are plain one-byte reads.
+
+    A ``False`` here is weaker than a ``True``: an SSD in a USB enclosure
+    reports 0, so the band calls it a local disk. That is the direction to be
+    wrong in — it makes no claim about speed rather than a false one.
+    """
+    candidates = (
+        os.path.join(_SYS_BLOCK_CLASS, device_name, "removable"),
+        os.path.join(_SYS_BLOCK_CLASS, device_name, "..", "removable"),
+    )
+    for candidate in candidates:
+        try:
+            with open(candidate, encoding="ascii") as handle:
+                return handle.read().strip() == "1"
+        except OSError as exc:
+            # Expected on the first candidate for a partition, which is why the
+            # miss is not itself worth a line. Both missing is a real gap, and
+            # that is what the line after the loop says.
+            last_error = exc
+    logger.debug(
+        "No `removable` flag for %r under %s (%s); its band will call the drive local.",
+        device_name,
+        _SYS_BLOCK_CLASS,
+        last_error,
+    )
+    return False
+
+
+def _windows_device_kind(mount_point: str) -> Optional[str]:
+    """What kind of storage *mount_point* is on Windows.
+
+    ``GetDriveTypeW`` beside the ``GetVolumeInformationW`` call above, and the
+    same ctypes idiom: it answers the connection class only, which is exactly
+    the part that does not lie. Windows can be asked whether a disk has a seek
+    penalty, but only through two ``DeviceIoControl`` calls that report through
+    a USB bridge or a Storage Space as though the enclosure were the disk, so
+    this deliberately does not distinguish an SSD from a platter.
+    """
+    try:
+        import ctypes
+
+        root = mount_point if mount_point.endswith("\\") else mount_point + "\\"
+        drive_type = ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(root))
+    except (AttributeError, OSError, ValueError) as exc:
+        logger.debug("GetDriveTypeW failed for %r (%s).", mount_point, exc)
+        return None
+    # 2 REMOVABLE, 3 FIXED, 4 REMOTE, 6 RAMDISK. 0 UNKNOWN, 1 NO_ROOT_DIR and
+    # 5 CDROM all fall through to None: two of them are failures wearing a
+    # number, and an optical drive is not somewhere models live.
+    return {
+        2: DEVICE_KIND_REMOVABLE,
+        3: DEVICE_KIND_LOCAL,
+        4: DEVICE_KIND_NETWORK,
+        6: DEVICE_KIND_RAMDISK,
+    }.get(drive_type)
+
+
+def device_kind(mount_point: str) -> Optional[str]:
+    """What kind of storage the filesystem at *mount_point* is, or ``None``.
+
+    One of :data:`DEVICE_KINDS`, and **null is a normal answer**: macOS has
+    neither ``/proc/mounts`` nor ``/sys`` and the stdlib will not name a
+    filesystem type there, so every band on a Mac reports nothing and draws the
+    plain disk glyph. The band must never print "Unknown" for this.
+
+    What is deliberately NOT here is the SSD-versus-platter question the speed
+    of a disk actually turns on. Linux will answer it —
+    ``/sys/block/<dev>/queue/rotational`` is one more one-byte read — but it
+    answers wrongly in exactly the setups where being wrong costs most: a VM's
+    virtio disk reports rotational on an NVMe host, an LVM or LUKS mapper
+    reports its own default rather than the disk underneath, and a SATA SSD in
+    a USB enclosure reports "fast" for a 35 MB/s link. A drive band that
+    mislabels a slow disk as fast is worse than one that says nothing, so the
+    four kinds here are the ones whose evidence cannot lie.
+    """
+    if sys.platform.startswith("linux"):
+        return _linux_device_kind(mount_point)
+    if sys.platform == "win32":
+        return _windows_device_kind(mount_point)
+    return None
 
 
 def volume_label(mount_point: str) -> Optional[str]:
@@ -220,6 +398,7 @@ def describe_storage_device(path: str) -> Optional[StorageDevice]:
         label=volume_label(mount_point),
         total_bytes=int(usage.total),
         free_bytes=int(usage.free),
+        kind=device_kind(mount_point),
     )
 
 

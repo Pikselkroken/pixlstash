@@ -568,11 +568,37 @@
               @dragleave="onBandDragLeave(group.band)"
               @drop="onBandDrop(group.band, $event)"
             >
-              <v-icon size="15" class="shelf-band-icon">mdi-harddisk</v-icon>
-              <span class="shelf-band-name">{{ group.band.label }}</span>
-              <span v-if="group.band.mountPoint" class="shelf-band-path">{{
-                group.band.mountPoint
-              }}</span>
+              <!-- Which disk, as one group. It takes the slack so that every
+                   band's meter and figures begin at the same x — two meters
+                   that do not share a left edge cannot be compared down the
+                   column, which is the only reason to draw the meter twice. -->
+              <span class="shelf-band-id">
+                <!-- The kind rides the glyph rather than arriving as a chip:
+                     the disk mark is on every band already and says nothing,
+                     and a chip would be a fourth variable-width thing ahead of
+                     the meter as well as a second dialect of the `Locked` and
+                     `Managed` chips one level down. The word is in the title
+                     for the reader who wants it, and null draws the plain
+                     disk — never the word "Unknown". -->
+                <v-icon
+                  size="15"
+                  class="shelf-band-icon"
+                  :title="DRIVE_KINDS[group.band.kind]?.label"
+                  >{{
+                    DRIVE_KINDS[group.band.kind]?.icon || "mdi-harddisk"
+                  }}</v-icon
+                >
+                <span class="shelf-band-name">{{ group.band.label }}</span>
+                <!-- Only when it says something the name did not. With no
+                     volume label the name IS the mount point, and drawing both
+                     rendered `/` twice, which reads as a fault rather than as
+                     detail. -->
+                <span
+                  v-if="group.band.mountPoint !== group.band.label"
+                  class="shelf-band-path"
+                  >{{ group.band.mountPoint }}</span
+                >
+              </span>
               <!-- Three segments carving up one track, not fills stacked on top
                    of each other. The shelf's share is a PART of what is used, so
                    `other` is the REST of the used space: laid end to end the
@@ -587,63 +613,85 @@
                    this same heading, so labelling the meter made every band
                    announce its figures twice. `role="meter"` would be worse —
                    it carries one `aria-valuenow` and this is three numbers. -->
-              <span
-                v-if="usage(group.band)"
-                class="shelf-band-meter"
-                :class="{ 'shelf-band-meter--low': usage(group.band).lowFree }"
-                aria-hidden="true"
-              >
+              <span class="shelf-band-usage">
                 <span
-                  class="shelf-band-seg shelf-band-seg--shelf"
-                  :style="{ width: `${meter(group.band).shelfPct}%` }"
-                ></span>
-                <span
-                  class="shelf-band-seg shelf-band-seg--other"
-                  :style="{ width: `${meter(group.band).otherPct}%` }"
-                ></span>
-                <!-- The ghost: what a drop would add, carved out of the free
+                  v-if="usage(group.band)"
+                  class="shelf-band-meter"
+                  :class="{
+                    'shelf-band-meter--low': usage(group.band).lowFree,
+                  }"
+                  aria-hidden="true"
+                >
+                  <span
+                    class="shelf-band-seg shelf-band-seg--shelf"
+                    :style="{ width: `${meter(group.band).shelfPct}%` }"
+                  ></span>
+                  <span
+                    class="shelf-band-seg shelf-band-seg--other"
+                    :style="{ width: `${meter(group.band).otherPct}%` }"
+                  ></span>
+                  <!-- The ghost: what a drop would add, carved out of the free
                      segment rather than laid over it, so the four still sum to
                      the drive. Hatched, never a solid, because a projection is
                      provisional and a measurement is not — and the two must not
                      be one reading apart. -->
+                  <span
+                    v-if="projection(group.band)"
+                    class="shelf-band-seg shelf-band-seg--ghost"
+                    :class="{
+                      'shelf-band-seg--ghost-reject': !projection(group.band)
+                        .fits,
+                    }"
+                    :style="{ width: `${projection(group.band).addedPct}%` }"
+                  ></span>
+                  <span
+                    class="shelf-band-seg shelf-band-seg--free"
+                    :style="{ width: `${meter(group.band).freePct}%` }"
+                  ></span>
+                </span>
                 <span
-                  v-if="projection(group.band)"
-                  class="shelf-band-seg shelf-band-seg--ghost"
+                  class="shelf-band-figures"
                   :class="{
-                    'shelf-band-seg--ghost-reject': !projection(group.band)
-                      .fits,
+                    'shelf-band-figures--low':
+                      !projection(group.band) && usage(group.band)?.lowFree,
+                    'shelf-band-figures--reject':
+                      bandDropState(group.band) === 'reject',
                   }"
-                  :style="{ width: `${projection(group.band).addedPct}%` }"
-                ></span>
-                <span
-                  class="shelf-band-seg shelf-band-seg--free"
-                  :style="{ width: `${meter(group.band).freePct}%` }"
-                ></span>
-              </span>
-              <span
-                class="shelf-band-figures"
-                :class="{
-                  'shelf-band-figures--low':
-                    !projection(group.band) && usage(group.band)?.lowFree,
-                  'shelf-band-figures--reject':
-                    bandDropState(group.band) === 'reject',
-                }"
-              >
-                <!-- The non-colour half of the low and reject states. Colour is
+                >
+                  <!-- The non-colour half of the low and reject states. Colour is
                      additive here, never the carrier: the distinction has to
                      survive greyscale, and the glyph and the words ("Only", "will
                      not fit") both do. A drop that fits gets the tray glyph
                      rather than none, so the label under a hatched meter is
                      marked as being about the drag and not about the disk. -->
-                <v-icon v-if="projection(group.band)" size="16">{{
-                  projection(group.band).fits
-                    ? "mdi-tray-arrow-down"
-                    : "mdi-alert-circle-outline"
-                }}</v-icon>
-                <v-icon v-else-if="usage(group.band)?.lowFree" size="16"
-                  >mdi-alert-outline</v-icon
-                >
-                <span>{{ meterLabel(group.band) }}</span>
+                  <v-icon v-if="projection(group.band)" size="16">{{
+                    projection(group.band).fits
+                      ? "mdi-tray-arrow-down"
+                      : "mdi-alert-circle-outline"
+                  }}</v-icon>
+                  <v-icon v-else-if="usage(group.band)?.lowFree" size="16"
+                    >mdi-alert-outline</v-icon
+                  >
+                  <!-- One anchor number, then its context. The reader's
+                       question is "will this fit", and the run-on sentence
+                       gave the answer, what it is measured against and our own
+                       share the same size, weight and ink — three numbers to
+                       parse for one. Split, not shortened: the other two are
+                       the reason to believe the first.
+
+                       ONE flex item holding both halves, not two. The gap
+                       would draw the space between them, but a gap is not a
+                       character: the accessible name is the text nodes run
+                       together, and two items are read aloud as "GB freeof".
+                       So they share an inline context and `rest` carries the
+                       space itself. -->
+                  <span>
+                    <strong class="shelf-band-lead">{{
+                      meterLabel(group.band).lead
+                    }}</strong
+                    >{{ meterLabel(group.band).rest }}
+                  </span>
+                </span>
               </span>
             </h3>
 
@@ -2643,6 +2691,26 @@ const BAND_LEGEND = [
   { key: "free", label: "Free" },
 ];
 
+/**
+ * The drive kinds the backend will vouch for, and the glyph each one wears.
+ *
+ * Four, because these are the four whose evidence cannot lie: a filesystem type
+ * and a removable flag are facts, where the SSD-versus-platter question is a
+ * guess that a VM, an LVM mapper or a USB enclosure each answer wrongly. The
+ * table is keyed by the wire value and an unlisted or null key falls through to
+ * the plain disk — `local` therefore has a glyph of its own only so that the
+ * three that matter are read as a difference rather than as decoration.
+ *
+ * The label is a `title`, never drawn: the row is short of horizontal room,
+ * which is the whole reason this change exists.
+ */
+const DRIVE_KINDS = {
+  local: { icon: "mdi-harddisk", label: "Disk in this machine" },
+  network: { icon: "mdi-nas", label: "Network share" },
+  removable: { icon: "mdi-usb-flash-drive", label: "Removable drive" },
+  ramdisk: { icon: "mdi-memory", label: "Memory disk — cleared on reboot" },
+};
+
 const showsBandLegend = computed(() =>
   shownGroups.value.some((group) => group.bandStart && usage(group.band)),
 );
@@ -2656,17 +2724,23 @@ const showsBandLegend = computed(() =>
  */
 function meterLabel(band) {
   const projected = projection(band);
-  if (projected) return projectionLabel(projected);
+  if (projected) return { lead: projectionLabel(projected), rest: "" };
   const use = bandUsage(band);
-  if (!use) return "Capacity unknown";
+  if (!use) return { lead: "", rest: "Capacity unknown" };
   const free = formatModelSize(band.freeBytes);
   const total = formatModelSize(band.totalBytes);
   const shelf = formatModelSize(band.shelfBytes);
   // One word for the low state, and it states the fact and stops. Nothing is
   // broken and there is nothing to click, so this is not the error voice and
   // gets no action — the same register as the offline banner.
-  const lead = use.lowFree ? "Only " : "";
-  return `${lead}${free} free of ${total} · ${shelf} on the shelf`;
+  const only = use.lowFree ? "Only " : "";
+  return {
+    lead: `${only}${free} free`,
+    // `rest` carries the space that separates it from `lead`: the two are one
+    // text run, and the flex gap that would draw that space cannot be read
+    // aloud. The two branches above have no lead to separate from.
+    rest: ` of ${total} · ${shelf} on the shelf`,
+  };
 }
 
 /**
@@ -3332,9 +3406,15 @@ watch(
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-3);
+  /* The gap BETWEEN the two halves, not between five peers. One gap for
+     everything was what made the row read as five things of equal rank
+     rather than as "which disk" and "how full". */
+  gap: var(--space-3) var(--space-5);
   margin: 0;
-  padding: var(--space-3) var(--space-4);
+  /* A step more block padding than the folder headers below it, because rank
+     here is size and space (§5.1) and a surface tint of a few luminance values
+     was carrying it alone. */
+  padding: var(--space-4);
   background: rgb(var(--v-theme-surface));
   border-top: 1px solid rgb(var(--v-theme-border));
   border-bottom: 1px solid rgb(var(--v-theme-divider));
@@ -3350,7 +3430,30 @@ watch(
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 
+/* Which disk. Takes the slack, so the usage half lands on the same x on every
+   band and the meters can be read down the column. `min-width: 0` is what lets
+   the path inside it ellipsise instead of pushing the meter out of line. */
+.shelf-band-id {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* How full. Never shrinks: the meter is a fixed 190px and the figures are a
+   number the reader came here for. */
+.shelf-band-usage {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: none;
+}
+
+/* A step up the ramp, because this heads the folder headers below it and those
+   are `--text-sm` semibold too — the outer level was the quieter of the two. */
 .shelf-band-name {
+  font-size: var(--text-base);
   font-weight: var(--weight-semibold);
 }
 
@@ -3496,6 +3599,16 @@ watch(
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* The one number the reader is actually after, at full strength and a step up
+   the ramp from the context that follows it. The rest of the line keeps the
+   2xs and the 0.7 it always had, so this is a division of the existing line
+   rather than a louder one. */
+.shelf-band-lead {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-on-background));
 }
 
 /* ── The column strip ──────────────────────────────────────────────────────
