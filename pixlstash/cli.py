@@ -236,6 +236,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write a plain .tar. Faster for large image sets, which barely compress.",
     )
+    backup_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Do not ask for confirmation. Only asked when the destination looks "
+            "too small; a cron job wants this so it cannot hang on the question."
+        ),
+    )
     backup_parser.set_defaults(handler=_cmd_backup)
 
     restore_parser = subparsers.add_parser(
@@ -585,6 +593,10 @@ def _cmd_backup(registry: LibraryRegistry, args: argparse.Namespace) -> int:
             metadata_only=args.metadata_only,
             compress=not args.no_compress,
             tool_version=_tool_version(),
+            # Only ever called when the destination looks too small. --yes is
+            # the scripted answer; without it a cron job would hang on a
+            # question nobody is there to read.
+            confirm=(lambda message: True) if args.yes else _confirm,
         )
     except BackupError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -624,15 +636,10 @@ def _cmd_restore(args: argparse.Namespace) -> int:
     hub_path = args.hub or default_hub_path()
     scratch = None
     try:
-        scratch = restore.restore_scratch(args.folder)
-        plan = restore.plan_restore(args.archive, args.folder, hub_path, scratch)
-        file_count = len(
-            [
-                name
-                for _, _, files in os.walk(os.path.join(scratch, "library"))
-                for name in files
-            ]
-        )
+        # Planned before anything is unpacked: the plan is read from the front
+        # of the archive, so the question below is asked before the copy rather
+        # than after it.
+        plan = restore.plan_restore(args.archive, args.folder, hub_path)
 
         print(f"Archive:  {plan.archive}")
         print(f'Library:  "{plan.library_name}" ({plan.picture_count} picture(s))')
@@ -681,11 +688,16 @@ def _cmd_restore(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
 
+        if plan.space_warning:
+            print(f"warning: {plan.space_warning}", file=sys.stderr)
+
         if not args.yes and not _confirm("Restore it?"):
             print("Cancelled. Nothing was written.")
             return EXIT_REFUSED
 
-        result = restore.perform_restore(plan, scratch, file_count)
+        # Only now is anything written: staging is created after the answer.
+        scratch = restore.restore_scratch(args.folder)
+        result = restore.perform_restore(plan, scratch)
     except restore.RestoreError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_REFUSED

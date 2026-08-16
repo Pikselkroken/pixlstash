@@ -37,13 +37,14 @@ import tarfile
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 import zstandard
 from tqdm import tqdm
 
 from pixlstash.hub.registry import VAULT_FILENAME, Library
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.system_utils import space_shortfall
 from pixlstash.services.library_switch_service import known_vault_revisions
 from pixlstash.services.portable_identity import (
     PortableIdentityScrubError,
@@ -72,6 +73,13 @@ def progress_disabled() -> bool:
 
 # Only the owner may read a backup: it carries the hub.
 BACKUP_FILE_MODE = 0o600
+
+# What a backup is called. zstd rather than gzip: it decompresses several times
+# faster at a better ratio, which is what a restore of a large library feels.
+# `restore` identifies an archive by its magic bytes rather than its name, so a
+# renamed file still works — the suffix is for the person reading the folder.
+ARCHIVE_SUFFIX = ".tar.zst"
+UNCOMPRESSED_SUFFIX = ".tar"
 
 # Files that belong to the live database rather than to the library's contents.
 # The archived copies are made with VACUUM INTO, so the originals (and their WAL
@@ -102,6 +110,12 @@ class BackupResult:
     def has_external_folders(self) -> bool:
         """Whether the library points at folders the archive does not contain."""
         return bool(self.reference_folders)
+
+
+# Asked only when the destination looks too small. The service never reads
+# stdin itself: the CLI owns prompting, so a scripted caller passes None and
+# gets a refusal instead of a hang.
+ConfirmCallback = Callable[[str], bool]
 
 
 class BackupError(RuntimeError):
@@ -395,6 +409,7 @@ def create_backup(
     metadata_only: bool = False,
     compress: bool = True,
     tool_version: str = "unknown",
+    confirm: Optional[ConfirmCallback] = None,
 ) -> BackupResult:
     """Write *library* and the hub to a ``.tar.zst`` (or ``.tar``) at *destination*.
 
@@ -409,6 +424,9 @@ def create_backup(
         compress: zstd the archive. Worth it for the databases, close to wasted
             on JPEG and PNG, so a large image set may prefer it off.
         tool_version: Recorded in the manifest.
+        confirm: Asked, with a message, when the destination looks too small to
+            hold the archive. ``None`` declines — a scripted caller gets a
+            refusal rather than a prompt it cannot answer.
 
     Returns:
         A :class:`BackupResult` describing what was written.
@@ -517,7 +535,11 @@ def create_backup(
             payload.extend(library_payload)
         file_count = len(payload)
 
-        byte_size = _write_archive(payload, destination, compress)
+        payload_bytes = _payload_bytes(payload)
+        _confirm_free_space(destination, payload_bytes, confirm)
+        _announce_start(destination, file_count, payload_bytes, compress)
+
+        byte_size = _write_archive(payload, destination, compress, payload_bytes)
     finally:
         hub_source.close()
         hub_guard.close()
@@ -544,8 +566,21 @@ def create_backup(
 
 
 def _resolve_destination(library: Library, destination: str, compress: bool) -> str:
-    """Expand a directory destination into a dated filename."""
-    suffix = ".tar.zst" if compress else ".tar"
+    """Expand a directory destination into a dated filename, and fix the suffix.
+
+    A directory has always produced a correctly suffixed, dated name. An
+    explicit filename did not: ``backup lib ~/backups/monday`` wrote a file
+    called ``monday`` with nothing to say what it was, and a year later neither
+    the user nor ``file`` can tell it from any other blob. The suffix is not
+    decoration here — ``restore`` sniffs the magic bytes, but the *human*
+    picking a file out of a folder has only the name.
+
+    So the correct suffix is applied rather than assumed: an already-correct one
+    is left alone, the other archive suffix is swapped (``--no-compress`` on a
+    name ending ``.tar.zst`` would otherwise lie about the contents), and
+    anything else gains one.
+    """
+    suffix = ARCHIVE_SUFFIX if compress else UNCOMPRESSED_SUFFIX
     expanded = os.path.abspath(os.path.expanduser(destination))
     if os.path.isdir(expanded):
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -553,7 +588,12 @@ def _resolve_destination(library: Library, destination: str, compress: bool) -> 
             char if char.isalnum() or char in "-_" else "-" for char in library.name
         )
         return os.path.join(expanded, f"{safe_name}-{stamp}{suffix}")
-    return expanded
+    if expanded.endswith(suffix):
+        return expanded
+    other = UNCOMPRESSED_SUFFIX if compress else ARCHIVE_SUFFIX
+    if expanded.endswith(other):
+        return expanded[: -len(other)] + suffix
+    return expanded + suffix
 
 
 def _destination_exists_error(destination: str) -> BackupError:
@@ -642,7 +682,80 @@ def _fsync_directory(path: str) -> None:
         ) from exc
 
 
-def _add_payload(tar: tarfile.TarFile, payload: list[tuple[str, str]]) -> None:
+def _payload_bytes(payload: list[tuple[str, str]]) -> int:
+    """Total size of everything to be archived, for the space check and the bar.
+
+    A missing file is counted as zero rather than raised on: this is a
+    denominator, and ``_validate_regular_file`` is what turns a vanished payload
+    into an error with a path in it, a moment later.
+    """
+    total = 0
+    for absolute, _ in payload:
+        try:
+            total += os.lstat(absolute).st_size
+        except OSError:
+            continue
+    return total
+
+
+def human_bytes(count: int) -> str:
+    """Format a byte count the way the CLI reports sizes."""
+    size = float(count)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def _confirm_free_space(
+    destination: str, needed_bytes: int, confirm: Optional[ConfirmCallback]
+) -> None:
+    """Ask before starting a backup that looks too big for the destination.
+
+    A warning and a question rather than a refusal: the estimate is the
+    uncompressed payload, so a library of already-compressed JPEGs will be close
+    and a library of PNGs may come in well under. Refusing on an estimate would
+    block backups that would have fitted.
+
+    Raises:
+        BackupError: The caller declined.
+    """
+    shortfall = space_shortfall(os.path.dirname(destination) or ".", needed_bytes)
+    if shortfall is None:
+        return
+    required, free = shortfall
+    message = (
+        f"{os.path.dirname(destination) or '.'} may not have room: this backup "
+        f"needs about {human_bytes(required)} including 10% headroom, and "
+        f"{human_bytes(free)} is free. Compression usually makes it smaller, so "
+        "this is an estimate rather than a refusal. Continue anyway?"
+    )
+    if confirm is None or not confirm(message):
+        raise BackupError(
+            "Cancelled: not enough free space at the destination. Nothing was written."
+        )
+
+
+def _announce_start(
+    destination: str, file_count: int, payload_bytes: int, compress: bool
+) -> None:
+    """Say what is about to happen, before the bar takes over the line.
+
+    A progress bar that appears with no preamble leaves the reader guessing what
+    is being counted and where it is going. Printed to stderr beside the bar so
+    stdout stays the report.
+    """
+    print(
+        f"Archiving {file_count} file(s), {human_bytes(payload_bytes)} to "
+        f"{destination}" + ("" if compress else " (uncompressed)"),
+        file=sys.stderr,
+    )
+
+
+def _add_payload(
+    tar: tarfile.TarFile, payload: list[tuple[str, str]], total: int
+) -> None:
     """Add every payload file to *tar*, reporting progress while it happens.
 
     Measured in bytes rather than files. A library is a 6 GB checkpoint sitting
@@ -654,15 +767,6 @@ def _add_payload(tar: tarfile.TarFile, payload: list[tuple[str, str]]) -> None:
     keeps a cron backup's mail from being a wall of redrawn bars. It draws on
     stderr, so the report on stdout stays clean and pipeable.
     """
-    total = 0
-    for absolute, _ in payload:
-        try:
-            total += os.lstat(absolute).st_size
-        except OSError:
-            # Sized only to draw a bar. A file that has gone missing is the
-            # payload validation's business, a line below, where it is an error
-            # with a path in it rather than a silently wrong denominator.
-            continue
     with tqdm(
         total=total,
         unit="B",
@@ -679,7 +783,10 @@ def _add_payload(tar: tarfile.TarFile, payload: list[tuple[str, str]]) -> None:
 
 
 def _write_archive(
-    payload: list[tuple[str, str]], destination: str, compress: bool
+    payload: list[tuple[str, str]],
+    destination: str,
+    compress: bool,
+    payload_bytes: int,
 ) -> int:
     """Stream to a private adjacent temp, then publish atomically."""
     destination_dir = os.path.dirname(destination) or "."
@@ -697,7 +804,7 @@ def _write_archive(
             with os.fdopen(temp_fd, "wb") as raw:
                 temp_fd = -1
                 with tarfile.open(fileobj=raw, mode="w") as tar:
-                    _add_payload(tar, payload)
+                    _add_payload(tar, payload, payload_bytes)
                 raw.flush()
                 os.fsync(raw.fileno())
         else:
@@ -706,7 +813,7 @@ def _write_archive(
                 temp_fd = -1
                 with compressor.stream_writer(raw, closefd=False) as stream:
                     with tarfile.open(mode="w|", fileobj=stream) as tar:
-                        _add_payload(tar, payload)
+                        _add_payload(tar, payload, payload_bytes)
                 raw.flush()
                 os.fsync(raw.fileno())
         completed = os.lstat(temp_path)
