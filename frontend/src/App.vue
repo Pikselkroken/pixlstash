@@ -55,6 +55,7 @@ import TelemetryConsentDialog from "./components/dialogs/TelemetryConsentDialog.
 import ImageGrid from "./components/views/ImageGrid.vue";
 import DuplicateQueue from "./components/views/DuplicateQueue.vue";
 import ModelShelf from "./components/views/ModelShelf.vue";
+import TrainingRuns from "./components/views/TrainingRuns.vue";
 import ReviewSessionsOverlay from "./components/views/ReviewSessionsOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import ThumbnailUpgradeBanner from "./components/panels/ThumbnailUpgradeBanner.vue";
@@ -137,7 +138,9 @@ const error = ref(null);
 const {
   isDuplicatesView,
   isModelsView,
+  isTrainingRunsView,
   handleSelectModels,
+  handleSelectTrainingRuns,
   handleSelectCharacter,
   handleSelectSet,
   handleSelectFolder,
@@ -535,6 +538,7 @@ defineExpose({
             @select-character="handleSelectCharacter"
             @select-duplicates="handleSelectDuplicates"
             @select-models="handleSelectModels"
+            @select-training-runs="handleSelectTrainingRuns"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
@@ -609,7 +613,12 @@ defineExpose({
               <ModelShelf
                 v-else-if="isModelsView"
                 @open-settings="openSettingsDialog"
+                @select-training-runs="handleSelectTrainingRuns"
               />
+              <!-- The ai-toolkit runs waiting to be imported. Like the shelf it
+                   lists files on this machine rather than pictures, so it
+                   replaces the grid instead of floating over it. -->
+              <TrainingRuns v-else-if="isTrainingRunsView" />
               <ImageGrid
                 v-else
                 ref="gridContainer"

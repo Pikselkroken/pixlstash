@@ -127,7 +127,7 @@ frontend/src/
 └── components/
     ├── TitleBar.vue             # Shared library chrome plus Electron title bar: active-library entry point, breadcrumb, window controls, update alert
     ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
-    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, LoginScreen
+    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, TrainingRuns, LoginScreen
     ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbComfyPanel/TbExportPanel/TbImportPanel/GbFilterPanel/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
     ├── reviews/     # Tag-review surfaces (see below)
     │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
@@ -144,7 +144,7 @@ frontend/src/
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
-    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors), and `BaseModelInput` (the completing base-model field, shared by the shelf's bulk dialog and its inline row editor)
+    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors), `BaseModelInput` (the completing base-model field, shared by the shelf's bulk dialog and its inline row editor), and `AiToolkitIcon` (the one non-mdi glyph in the app: ai-toolkit's mark, traced as a `currentColor` path because they publish it only as raster)
 ```
 
 ---
@@ -157,7 +157,7 @@ frontend/src/
 | UI component library | Vuetify 3 |
 | State management | **Pinia** — 21 domain stores in `src/stores/`; `App.vue` owns only UI-shell state |
 | HTTP client | Axios (singleton `apiClient`) |
-| Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`, `/duplicates`) render `App.vue` via `<RouterView>`. `useViewStore` owns the app's single route watcher and syncs params to Pinia stores (§4.5); `App.vue`'s nav handlers call `router.push()` to update the URL. `/duplicates` is deliberately NOT a grid view: `parseRouteView` returns `null` for it, so the selection stores keep whatever the user was looking at. **The route is the single source of truth for what the grid shows** — only explicit entry clicks push routes; sidebar tab/category switches never do (see Key Design Principles). |
+| Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`, `/duplicates`, `/models`, `/training-runs`) render `App.vue` via `<RouterView>`. `useViewStore` owns the app's single route watcher and syncs params to Pinia stores (§4.5); `App.vue`'s nav handlers call `router.push()` to update the URL. `/duplicates` is deliberately NOT a grid view: `parseRouteView` returns `null` for it, so the selection stores keep whatever the user was looking at. **The route is the single source of truth for what the grid shows** — only explicit entry clicks push routes; sidebar tab/category switches never do (see Key Design Principles). |
 | Build tool | Vite 5 |
 | Unit tests | Vitest (jsdom environment) — test files co-located as `*.test.js` in `utils/` |
 | End-to-end tests | Playwright (`frontend/e2e/`) — drives the real SPA against a backend booted on a throwaway copy of the `test-data/` fixture. See `frontend/e2e/README.md`. |
@@ -614,7 +614,7 @@ The shape is the same in both, and is a **CSS reflow of unchanged source order**
 - `.editor-span` (`grid-column: 1 / -1`) for rows that must not be halved: `AdapterTray` in both (its cards auto-fill at 180px), plus the set editor's appearance row, whose eight 32px icon columns, "or" divider, thumbnail and colour box have an intrinsic width around 570px. **The icon grid stays at 8 columns**; if it ever has to shrink, the appearance row was wrongly put in a column.
 - `@media (max-width: 720px)` collapses both to one column. Vuetify caps the dialog at `calc(100% - 48px)`, so below a 768px viewport it is no longer 720 wide and the columns shrink with it — 299px each at a 720px viewport, under the ~300px the fields want.
 
-720 is an existing rung on the dialog-width ladder (`ModelFoldersDialog`); 820 is the two-pane-with-nav-rail tier (`UserSettingsDialog`, `ModelImportDialog`) and these are forms. That ladder is ten literal values across twenty-odd numeric `:width` call sites with no token behind it — a real system gap, but not this change's to close.
+720 is an existing rung on the dialog-width ladder (`ModelFoldersDialog`); 820 is the two-pane-with-nav-rail tier (`UserSettingsDialog`) and these are forms. That ladder is ten literal values across twenty-odd numeric `:width` call sites with no token behind it — a real system gap, but not this change's to close.
 
 #### `ProjectEditor.vue` (177 lines)
 Create/rename/delete a project. Props: `open`, `project`. Emits: `close`, `saved`, `deleted`.
@@ -1544,6 +1544,18 @@ adapters and checkpoints found by the scanner — and no picture selection can
 express that. Like Duplicates it is excluded from `selectionOwnsHighlight` in
 `SideBar.vue`, or the underlying picture selection would light a second active
 destination in the rail.
+
+**`/training-runs` is its sibling, on the same pattern.** `TrainingRuns.vue`
+replaces the grid from `isTrainingRunsView` and lists the ai-toolkit runs
+waiting to be imported — files on this machine again, and again nothing a
+picture selection can express. Its sidebar entry and the two offers to set the
+output folder all read one signal, `useModelFoldersStore.sourceFolder`: before
+it exists there is a destination to create and no list to show, and after it
+exists there is a list and nothing left to create. `SideBar.vue` refreshes the
+folder registry on mount for exactly this reason — otherwise the destination
+would stay missing after a restart until something else happened to fetch it —
+and skips that read on a read-only session, which has no business asking for
+owner-only host paths.
 
 **And like Duplicates its bar carries the shell chrome.** Replacing the grid
 also replaces the grid's toolbar, so `.shelf-toolbar` ends in
@@ -2807,12 +2819,39 @@ counter-evidence first; half an adjudication surface would be worse than none.
 
 #### Importing from ai-toolkit (F6)
 
+**Setting the folder is a dialog; what is inside it is a view.** The output root
+is a *setting* — one folder, set once, because ai-toolkit writes every run under
+a single root — so it is registered from the model-folders dialog (its
+`Set ai-toolkit folder` button) or from the shelf's `Add` menu, and both offers
+disappear once `useModelFoldersStore.sourceFolder` exists. The runs *inside* it
+are not a setting and change without PixlStash doing anything, so they are a
+destination of their own: `TrainingRuns.vue` at `/training-runs`, with a sidebar
+entry that appears from the same signal. This split is the reason the list can
+stay current at all — a dialog is opened, read once and dismissed, so a run that
+finished while it was open used to be invisible until it was closed and
+reopened. Do not move the run grid back behind a dialog.
+
+**The view reloads itself; it does not poll.** `loadRuns` runs on mount, on
+`visibilitychange` and on `window.focus`, which is the shape of the real
+workflow — leave PixlStash, train, come back. A manual refresh sits in the view
+header for the case those never fire (both windows visible side by side). There
+is deliberately **no "new runs available" badge**: knowing one had appeared means
+polling the listing, and the listing carries every run's checkpoints and sample
+lists, so polling it to light a dot costs more than the button it would save.
+
+**A reload must not move the ground.** It happens unprompted, so `loadRuns`
+restores the grid's scroll offset and keeps the picked run with its ticked
+checkpoints. A run that has *vanished* — imported from another window, or
+deleted — drops the selection instead, or the import bar would point at a run
+that is no longer there.
+
 **The card grid is built on a promise the listing route makes**, and the promise
 is what must not be eroded: `GET /model-folders/{id}/runs` reads filenames and
 one `config.yaml` per run, and hashes, copies, moves and writes nothing. So the
 whole grid — names, steps, sizes, previews, what the config says the run trained
 against — is drawn for an entire output root before the user has committed to
-anything. Do not add a call to `ModelImportDialog` that breaks that.
+anything. That is also what makes reloading on every focus affordable. Do not
+add a call to `TrainingRuns` that breaks it.
 
 **One run at a time**, `role="radiogroup"` rather than a multi-select. The
 destination, the step selection and the receipt are all per-run, so ticking two
@@ -2838,7 +2877,7 @@ outside.
 
 **`delete_after_import` is disclosed before the press, not in the receipt.** It
 is the one part of an import that cannot be undone, and it is a property of the
-*source folder* rather than a choice made in the dialog. `importReceipt` names
+*source folder* rather than a choice made in the view. `importReceipt` names
 the deletion only when something actually landed: the server unlinks last and
 only after each row is committed, so "nothing imported" and "the run is gone"
 cannot both be true, and saying it anyway would tell the reader their run was

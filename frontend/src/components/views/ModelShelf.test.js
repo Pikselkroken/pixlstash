@@ -84,8 +84,10 @@ vi.mock("../../api/modelStacks", () => ({
   listStackProposals: vi.fn(),
 }));
 
+const createModelFolder = vi.fn();
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
+  createModelFolder: (...args) => createModelFolder(...args),
   listModelFolderDevices: (...args) => listModelFolderDevices(...args),
   listModelFolders: (...args) => listModelFolders(...args),
 }));
@@ -128,7 +130,6 @@ const globalOpts = {
       ModelFoldersDialog: true,
       ShelfEditDialog: true,
       ShelfMoveDialog: true,
-      ModelImportDialog: true,
       // The host-path picker `Add file` opens. Real, it would drag Vuetify's
       // dialog provider into a suite that installs none; stubbed, it still
       // emits `select`, which is the whole of what this view listens for.
@@ -193,6 +194,12 @@ beforeEach(() => {
   listModelFolderDevices.mockResolvedValue([]);
   listModelFolders.mockReset();
   listModelFolders.mockResolvedValue([]);
+  createModelFolder.mockReset();
+  createModelFolder.mockResolvedValue({
+    id: 7,
+    path: "/home/g/ai-toolkit/output",
+    kind: "source",
+  });
   // `idle` is what a machine with no move in flight reports, and `adopt()`
   // adopts nothing from it — so the mount path stays silent instead of warning
   // from an unawaited promise.
@@ -3464,5 +3471,63 @@ describe("Delete", () => {
     await pressDelete();
     expect(confirmSpy).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
+  });
+});
+
+describe("setting the ai-toolkit output folder", () => {
+  const SOURCE = {
+    id: 7,
+    path: "/home/g/ai-toolkit/output",
+    kind: "source",
+    movable: "external",
+    file_count: 0,
+    present_bytes: 0,
+  };
+
+  const addItems = (wrapper) =>
+    wrapper.findAll(".shelf-mi").map((b) => b.text());
+
+  it("offers to set it while none is registered", async () => {
+    const wrapper = await mountShelf([]);
+    expect(addItems(wrapper).some((t) => t.includes("Set ai-toolkit"))).toBe(
+      true,
+    );
+    wrapper.unmount();
+  });
+
+  it("stops offering once it is set, because the runs get their own destination", async () => {
+    // Not replaced by an Import item: what is INSIDE the folder is a view now,
+    // reached from the sidebar. This menu adds things, and once the one output
+    // root exists there is nothing here left to add.
+    listModelFolders.mockResolvedValue([SOURCE]);
+    const wrapper = await mountShelf([]);
+    const items = addItems(wrapper);
+    expect(items.some((t) => t.includes("Set ai-toolkit"))).toBe(false);
+    expect(items.some((t) => t.includes("Import from ai-toolkit"))).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("registers the picked folder as the output root and goes to its runs", async () => {
+    // Navigating is the point of setting it: the owner set it because they have
+    // runs to import, so landing them on the list beats announcing a new
+    // sidebar entry.
+    const wrapper = await mountShelf([]);
+    const setItem = wrapper
+      .findAll(".shelf-mi")
+      .find((b) => b.text().includes("Set ai-toolkit"));
+    await setItem.trigger("click");
+    await wrapper.vm.$nextTick();
+
+    const browsers = wrapper.findAllComponents({ name: "FolderBrowser" });
+    await browsers.at(-1).vm.$emit("select", "/home/g/ai-toolkit/output");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    expect(createModelFolder).toHaveBeenCalledWith({
+      path: "/home/g/ai-toolkit/output",
+      kind: "source",
+    });
+    expect(wrapper.emitted("select-training-runs")).toBeTruthy();
+    wrapper.unmount();
   });
 });

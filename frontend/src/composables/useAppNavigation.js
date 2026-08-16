@@ -355,6 +355,16 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     pushAppRoute({ name: "models" });
   }
 
+  // The training runs sitting in the ai-toolkit output root. A route and not a
+  // dialog: what is inside that folder changes without PixlStash doing
+  // anything, so it has to be somewhere that can be re-entered and reloaded.
+  const isTrainingRunsView = computed(() => route.name === "training-runs");
+
+  /** Open the ai-toolkit training runs. */
+  function handleSelectTrainingRuns() {
+    pushAppRoute({ name: "training-runs" });
+  }
+
   /**
    * Open the duplicate triage queue, optionally scoped to one collection object.
    *
@@ -383,7 +393,9 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   return {
     isDuplicatesView,
     isModelsView,
+    isTrainingRunsView,
     handleSelectModels,
+    handleSelectTrainingRuns,
     handleSelectCharacter,
     handleSelectSet,
     handleSelectFolder,

@@ -94,21 +94,23 @@
             <v-icon size="16">mdi-file-plus-outline</v-icon>
             <span>Add file…</span>
           </button>
-          <!-- Shown only once an ai-toolkit output root is registered. Hidden
+          <!-- Shown only while the output root is UNSET, because setting it is
+               a once-ever act: ai-toolkit writes every run under one folder.
+               Once it is set the runs get a destination of their own in the
+               sidebar, and there is nothing left for this menu to add. Hidden
                rather than disabled, unlike the selection pill's verbs: those
                are about a selection the reader just made and owe an
-               explanation, and this is about a folder they have not set up,
-               which the folders dialog is the place to say. -->
-          <template v-if="hasSourceFolder">
+               explanation, and this is about a job already done. -->
+          <template v-if="!hasSourceFolder">
             <span class="shelf-mi-sep"></span>
             <button
               class="shelf-mi"
               type="button"
               role="menuitem"
-              @click="openImport"
+              @click="openAddSource"
             >
-              <v-icon size="16">mdi-import</v-icon>
-              <span>Import from ai-toolkit</span>
+              <AiToolkitIcon :size="16" />
+              <span>Set ai-toolkit output folder…</span>
             </button>
           </template>
         </div>
@@ -1054,7 +1056,6 @@
       :destination-folder-id="movePreselected"
       @close="closeMove"
     />
-    <ModelImportDialog :open="importOpen" @close="closeImport" />
     <ShelfStackProposalsDialog :open="stacksOpen" @close="closeStacks" />
     <ModelFoldersDialog :open="foldersOpen" @close="closeFolders" />
 
@@ -1069,6 +1070,16 @@
       pick-model-file
       @select="onFilePicked"
       @close="closeAddFile"
+    />
+
+    <!-- The same picker in its directory mode, registering what it returns as
+         the ai-toolkit output root rather than as a folder to catalogue. -->
+    <FolderBrowser
+      :open="addSourceOpen"
+      :registered-paths="foldersStore.registeredPaths"
+      already-registered-label="Already a model folder"
+      @select="onSourcePicked"
+      @close="closeAddSource"
     />
 
     <!-- Corner-anchored inside the panel that is busy, never a centred modal:
@@ -1108,9 +1119,10 @@ import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
-import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
+import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
+import { SOURCE_KIND } from "../../api/modelFolders";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
@@ -1160,7 +1172,7 @@ import {
 // Settings lives in App.vue's sidebar dialog, so the toolbar's Settings button
 // asks for it the way the duplicates queue does. The stats toggle needs no
 // event: TbGlobalActions flips the sidebar store itself.
-const emit = defineEmits(["open-settings"]);
+const emit = defineEmits(["open-settings", "select-training-runs"]);
 
 const store = useModelShelfStore();
 const entityLists = useEntityListsStore();
@@ -1709,7 +1721,7 @@ function onBandDrop(band, event) {
 function shelfOwnsTheKey(event) {
   if (
     moveOpen.value ||
-    importOpen.value ||
+    addSourceOpen.value ||
     stacksOpen.value ||
     foldersOpen.value ||
     addFileOpen.value ||
@@ -1897,26 +1909,42 @@ function stepLabel(row) {
   return typeof step === "number" ? `Step ${step.toLocaleString()}` : "";
 }
 
-// ── Import from ai-toolkit (shelf plan F6) ──────────────────────────────────
+// ── Set the ai-toolkit output folder (shelf plan F6) ────────────────────────
+//
+// Setting the folder is all this menu does. The runs inside it are a
+// destination of their own (`/training-runs`), reached from the sidebar, and
+// the sidebar entry appears from the same signal that hides this item: once the
+// output root exists there is nothing left here to add.
 
-const importOpen = ref(false);
+const addSourceOpen = ref(false);
 
-/** Whether any ai-toolkit output root is registered at all. */
-const hasSourceFolder = computed(() =>
-  foldersStore.folders.some((folder) => folder.kind === "source"),
-);
+/** Whether the ai-toolkit output root has been set. */
+const hasSourceFolder = computed(() => Boolean(foldersStore.sourceFolder));
 
-function openImport() {
-  importOpen.value = true;
+function openAddSource() {
+  addSourceOpen.value = true;
 }
 
-async function closeImport() {
-  importOpen.value = false;
+async function closeAddSource() {
+  addSourceOpen.value = false;
   await nextTick();
-  // The button can unmount under us: the import may have been the last run in
-  // the only source folder, and `delete_after_import` then empties it. Falling
-  // back to the shelf root beats dropping focus to <body>.
+  // The button can unmount under us: this item is the last thing in the menu
+  // when the shelf has no folders at all. Falling back to the shelf root beats
+  // dropping focus to <body>.
   (addBtnRef.value?.isConnected ? addBtnRef.value : rootEl.value)?.focus();
+}
+
+/**
+ * Register the picked folder as the output root, then go straight to its runs.
+ *
+ * Navigating is the point of having set it: the owner asked for this because
+ * they have runs to import, and landing them on the list is one less step than
+ * telling them a new sidebar entry now exists.
+ */
+async function onSourcePicked(path) {
+  const added = await foldersStore.add({ path, kind: SOURCE_KIND });
+  await closeAddSource();
+  if (added) emit("select-training-runs");
 }
 
 // ── Add file (shelf plan F6's remainder) ────────────────────────────────────

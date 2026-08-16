@@ -7,6 +7,7 @@ import {
   watch,
   nextTick,
 } from "vue";
+import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import ImageImporter from "../io/ImageImporter.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
 import PictureSetEditor from "../editors/PictureSetEditor.vue";
@@ -19,7 +20,12 @@ import FolderBrowser from "../editors/FolderBrowser.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
-import { API_BASE_URL, appendShareToken, isReadOnly, sessionContext } from "../../utils/apiClient";
+import {
+  API_BASE_URL,
+  appendShareToken,
+  isReadOnly,
+  sessionContext,
+} from "../../utils/apiClient";
 import {
   patchCharacter,
   getCharacterSummary,
@@ -84,6 +90,7 @@ import { useSortStore } from "../../stores/useSortStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useGridStore } from "../../stores/useGridStore";
+import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { errorDetail } from "../../utils/apiError";
 import {
@@ -155,6 +162,14 @@ const hasFolderFilter = computed(
 // no pictures, so there is no selection to express.
 const isDuplicatesView = computed(() => route.name === "duplicates");
 const isModelsView = computed(() => route.name === "models");
+const isTrainingRunsView = computed(() => route.name === "training-runs");
+
+// The runs destination exists only once an ai-toolkit output root is set, the
+// same rule the folders dialog's button follows: with no folder there is
+// nothing to list, and a permanent entry for a tool most libraries never use
+// would be a destination that always reads empty.
+const modelFoldersStore = useModelFoldersStore();
+const hasTrainingRuns = computed(() => Boolean(modelFoldersStore.sourceFolder));
 
 // A shared library keeps the duplicate affordances VISIBLE and inert rather
 // than hiding them: a read-only visitor should still see that the feature
@@ -173,6 +188,7 @@ const props = defineProps({
 const emit = defineEmits([
   "select-duplicates",
   "select-models",
+  "select-training-runs",
   "select-character",
   "select-set",
   "import-finished",
@@ -853,11 +869,15 @@ async function browseFolderPath(path, prefetchChildren = false) {
    caption with no chevron, or a dimmed caption you can still collapse, are both
    worse than either state on its own. */
 function projectHasPeople(projectId) {
-  return sortedCharacters.value.some((c) => entityBelongsToProject(c, projectId));
+  return sortedCharacters.value.some((c) =>
+    entityBelongsToProject(c, projectId),
+  );
 }
 
 function projectHasSets(projectId) {
-  return nonReferenceSets.value.some((s) => entityBelongsToProject(s, projectId));
+  return nonReferenceSets.value.some((s) =>
+    entityBelongsToProject(s, projectId),
+  );
 }
 
 /* Whether a reference-folder row can disclose children, i.e. whether its
@@ -1425,8 +1445,8 @@ const selectedProjectObj = computed(() =>
 
 const visibleCharacters = computed(() => {
   if (projectViewMode.value === "global") return sortedCharacters.value;
-  return sortedCharacters.value.filter(
-    (c) => entityBelongsToProject(c, selectedProjectId.value),
+  return sortedCharacters.value.filter((c) =>
+    entityBelongsToProject(c, selectedProjectId.value),
   );
 });
 
@@ -1482,8 +1502,8 @@ const projectMenuSetGroups = computed(() => {
 
 const visibleSets = computed(() => {
   if (projectViewMode.value === "global") return nonReferenceSets.value;
-  return nonReferenceSets.value.filter(
-    (s) => entityBelongsToProject(s, selectedProjectId.value),
+  return nonReferenceSets.value.filter((s) =>
+    entityBelongsToProject(s, selectedProjectId.value),
   );
 });
 
@@ -1996,11 +2016,7 @@ async function deleteSetsByIds(ids) {
   if (!window.confirm(msg)) return;
 
   try {
-    await Promise.all(
-      normalizedIds.map((id) =>
-        deletePictureSet(id),
-      ),
-    );
+    await Promise.all(normalizedIds.map((id) => deletePictureSet(id)));
     emit("select-set", null);
     await fetchPictureSets();
     await fetchSidebarData();
@@ -2358,10 +2374,7 @@ async function toggleSetLock(set) {
   closeSidebarCtxMenu();
   if (!set?.id) return;
   try {
-    await patchPictureSet(
-      set.id,
-      { locked: !set.locked },
-    );
+    await patchPictureSet(set.id, { locked: !set.locked });
     refreshSidebar();
     lockedSetsStore.fetch();
   } catch (e) {
@@ -2499,7 +2512,8 @@ function isCountSelected(id) {
  * guards travel together.
  */
 const selectionOwnsHighlight = computed(
-  () => !hasFolderFilter.value && !isDuplicatesView.value && !isModelsView.value,
+  () =>
+    !hasFolderFilter.value && !isDuplicatesView.value && !isModelsView.value,
 );
 
 const isAllPicturesRowActive = computed(() => {
@@ -3290,6 +3304,16 @@ async function characterSaved() {
 }
 
 onMounted(() => {
+  // Whether the Training runs destination exists is a fact about the registered
+  // folders, and nothing else on the first screen reads them — the shelf and the
+  // folders dialog both load this store, but only once the owner has gone
+  // looking. Without this the destination would stay missing after a restart
+  // until something else happened to fetch the registry. Owner-only data, so a
+  // read-only session does not ask and does not collect a 403 at boot.
+  if (!isReadOnly.value && !modelFoldersStore.loaded) {
+    modelFoldersStore.refresh({ quiet: true });
+  }
+
   // When the session is scoped to a project via a share token, initialise
   // SideBar's internal project view state before any data is fetched.
   // This path DOES emit so App.vue can push the correct route.
@@ -3628,10 +3652,7 @@ async function toggleCharacterProjectMembership(charId) {
     selectedProjectId.value,
   );
   try {
-    await patchCharacter(
-      charId,
-      membershipPatch,
-    );
+    await patchCharacter(charId, membershipPatch);
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
       characters.value[idx] = withEntityProjectIds(
@@ -3654,10 +3675,7 @@ async function toggleSetProjectMembership(setId) {
     selectedProjectId.value,
   );
   try {
-    await patchPictureSet(
-      setId,
-      membershipPatch,
-    );
+    await patchPictureSet(setId, membershipPatch);
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
       pictureSets.value[idx] = withEntityProjectIds(
@@ -3709,10 +3727,7 @@ async function moveCharacterToProject(charId, projectId) {
   )
     return;
   try {
-    await patchCharacter(
-      charId,
-      { project_id: projectId },
-    );
+    await patchCharacter(charId, { project_id: projectId });
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
       characters.value[idx] = withEntityProjectIds(characters.value[idx], [
@@ -3738,10 +3753,7 @@ async function moveSetToProject(setId, projectId) {
   )
     return;
   try {
-    await patchPictureSet(
-      setId,
-      { project_id: projectId },
-    );
+    await patchPictureSet(setId, { project_id: projectId });
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
       pictureSets.value[idx] = withEntityProjectIds(pictureSets.value[idx], [
@@ -4923,9 +4935,7 @@ defineExpose({
           <!-- Duplicates keeps its dock row so the count stays reachable when
                the sidebar is narrow; the badge is the only thing here that
                reports pending work. -->
-          <div
-            :class="['sidebar-collapsed-row', { active: isDuplicatesView }]"
-          >
+          <div :class="['sidebar-collapsed-row', { active: isDuplicatesView }]">
             <div
               :class="[
                 'sidebar-collapsed-item',
@@ -5428,6 +5438,21 @@ defineExpose({
                   ><v-icon size="18">mdi-layers-outline</v-icon></span
                 >
                 <span class="sidebar-list-label">Models</span>
+              </button>
+            </div>
+
+            <div v-if="hasTrainingRuns" class="sidebar-all-pictures-row">
+              <button
+                type="button"
+                class="sidebar-list-item sidebar-destination-btn"
+                :class="{ active: isTrainingRunsView }"
+                :aria-current="isTrainingRunsView ? 'page' : undefined"
+                @click="emit('select-training-runs')"
+              >
+                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
+                  ><AiToolkitIcon :size="18"
+                /></span>
+                <span class="sidebar-list-label">Training runs</span>
               </button>
             </div>
 
@@ -6064,8 +6089,7 @@ defineExpose({
                               (selectedCharacterIdSet.size > 0
                                 ? selectedCharacterIdSet.has(char.id)
                                 : selectionStore.selectedCharacter ===
-                                  char.id) &&
-                              selectionOwnsHighlight,
+                                  char.id) && selectionOwnsHighlight,
                             droppable:
                               dragOverCharacter === char.id && !dropRejected,
                             'not-droppable':
@@ -6383,10 +6407,7 @@ defineExpose({
                         sidebarThumbnailSizeModel + 'px',
                     }"
                   >
-                    <ProjectFiles
-                      :projectId="p.id"
-                      compact
-                    />
+                    <ProjectFiles :projectId="p.id" compact />
                   </div>
                 </template>
               </div>
@@ -6490,7 +6511,10 @@ defineExpose({
         </button>
         <button
           class="sidebar-ctx-item"
-          :disabled="isReadOnly || duplicateCountFor('character', sidebarCtxCharacter) === 0"
+          :disabled="
+            isReadOnly ||
+            duplicateCountFor('character', sidebarCtxCharacter) === 0
+          "
           :title="isReadOnly ? READ_ONLY_DEDUP_HINT : undefined"
           @click="findDuplicatesIn('character', sidebarCtxCharacter)"
         >
@@ -6583,7 +6607,9 @@ defineExpose({
       <template v-if="sidebarCtxSet">
         <button
           class="sidebar-ctx-item"
-          :disabled="isReadOnly || duplicateCountFor('set', sidebarCtxSet) === 0"
+          :disabled="
+            isReadOnly || duplicateCountFor('set', sidebarCtxSet) === 0
+          "
           :title="isReadOnly ? READ_ONLY_DEDUP_HINT : undefined"
           @click="findDuplicatesIn('set', sidebarCtxSet)"
         >
@@ -6805,7 +6831,9 @@ defineExpose({
       <template v-if="sidebarCtxProject">
         <button
           class="sidebar-ctx-item"
-          :disabled="isReadOnly || duplicateCountFor('project', sidebarCtxProject) === 0"
+          :disabled="
+            isReadOnly || duplicateCountFor('project', sidebarCtxProject) === 0
+          "
           :title="isReadOnly ? READ_ONLY_DEDUP_HINT : undefined"
           @click="findDuplicatesIn('project', sidebarCtxProject)"
         >
