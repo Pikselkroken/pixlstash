@@ -1549,7 +1549,7 @@ describe("capabilities", () => {
 
   it("files an adapter under its algorithm, spelled as the Kind column spells it", async () => {
     // Most of the shelf. The row's own Kind cell has always read `LoRA`, so
-    // "No feature recorded" was the axis contradicting the cell beside it and
+    // The catch-all was the axis contradicting the cell beside it and
     // collapsing the whole shelf into one bucket. Two spellings of one
     // algorithm fold, which is why the key is the label and not `row.kind`.
     listAdapters.mockResolvedValue([
@@ -1600,13 +1600,13 @@ describe("capabilities", () => {
     store.setView({ groupBy: "feature" });
 
     expect(store.groups).toHaveLength(1);
-    expect(store.groups[0].label).toBe("No feature recorded");
+    expect(store.groups[0].label).toBe("Other");
     expect(store.groups[0].rows).toHaveLength(1);
   });
 
   it("files a scanned checkpoint under Checkpoint, beside the declared ones", async () => {
     // The reported bug: 80 rows whose Kind cell reads `Checkpoint` sat under
-    // "No feature recorded" while a `Checkpoint` header two rows up held the
+    // the catch-all while a `Checkpoint` header two rows up held the
     // single packaged model that declares the capability. Nothing writes
     // `model_capability` for a scanned file, so the file kind has to be what
     // heads the group — and it has to be the SAME key the capability uses, or
@@ -1651,8 +1651,8 @@ describe("capabilities", () => {
         kind: null,
         capabilities: [],
       }),
-      // Unclassified stays a shrug: "Unclassified" beside "No feature recorded"
-      // would be two shrugs presented as one feature and one not.
+      // Unclassified stays a shrug, and the shrug is `Other`: a heading called
+      // "Unclassified" beside it would be the same answer twice.
       adapter({
         id: 11,
         sha256: "f".repeat(64),
@@ -1665,14 +1665,17 @@ describe("capabilities", () => {
     await store.fetchRows();
     store.setView({ groupBy: "feature" });
 
+    // Alphabetical, `Other` included: it is a capability like the rest now
+    // rather than the pinned-last "not set" group, which is what the base-model
+    // and folder axes still have and this axis no longer does.
     expect(store.groups.map((g) => g.label)).toEqual([
+      "Other",
       "Text encoder",
       "VAE",
-      "No feature recorded",
     ]);
-    // No capability marks either one, so the header keeps the axis's own glyph
-    // rather than borrowing a wrong one.
-    expect(store.groups[0].icon).toBe("");
+    // No capability marks a VAE or a text encoder, so those headers keep the
+    // axis's own glyph rather than borrowing a wrong one.
+    expect(store.groups[1].icon).toBe("");
   });
 
   it("says nothing for an adapter whose kind is blank, rather than heading a group with it", async () => {
@@ -1688,7 +1691,7 @@ describe("capabilities", () => {
     store.setView({ groupBy: "feature" });
 
     expect(store.groups).toHaveLength(1);
-    expect(store.groups[0].label).toBe("No feature recorded");
+    expect(store.groups[0].label).toBe("Other");
     expect(store.adapterKindOptions).toEqual([]);
   });
 
@@ -1709,7 +1712,7 @@ describe("capabilities", () => {
     expect(store.visibleRows.map((r) => r.id)).toEqual([8]);
     // ...and still without a feature, or a checkbox claiming it has one.
     expect(store.groups).toHaveLength(1);
-    expect(store.groups[0].label).toBe("No feature recorded");
+    expect(store.groups[0].label).toBe("Other");
     expect(store.adapterKindOptions).toEqual([]);
   });
 
@@ -1726,7 +1729,7 @@ describe("capabilities", () => {
     store.setView({ groupBy: "feature" });
 
     expect(store.groups).toHaveLength(1);
-    expect(store.groups[0].label).toBe("No feature recorded");
+    expect(store.groups[0].label).toBe("Other");
   });
 
   it("matches HAS this capability rather than IS this kind", async () => {

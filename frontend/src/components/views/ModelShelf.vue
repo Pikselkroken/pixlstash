@@ -2957,9 +2957,9 @@ function kindLabel(row) {
   if (named) return named;
   const capabilities = Array.isArray(row.capabilities) ? row.capabilities : [];
   if (capabilities.length) return capabilities.map(capabilityLabel).join(", ");
-  // The axis still files `unknown` under "No feature recorded" where the cell
-  // says "Unclassified": a shrug is not a heading. The CELL always names what
-  // the row is.
+  // The axis still files `unknown` under `Other` where the cell says
+  // "Unclassified": a shrug is not a heading of its own. The CELL always names
+  // what the row is.
   return adapterKindLabel(row.kind) || "Adapter";
 }
 

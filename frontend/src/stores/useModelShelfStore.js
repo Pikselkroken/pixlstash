@@ -601,7 +601,7 @@ function groupsOf(row, axis) {
       : [];
     if (!capabilities.length) {
       // An adapter's algorithm IS its heading here. The row's own Kind column
-      // has always read `LoRA`, so filing it under "No feature recorded" left
+      // has always read `LoRA`, so filing it under the catch-all left
       // the axis saying one thing and the cell beside it another — and it
       // swallowed most of the shelf into one bucket, which is the one shape a
       // grouping axis must not take. A checkpoint has no algorithm either, and
@@ -633,7 +633,7 @@ function groupsOf(row, axis) {
       }
       // The same argument one file kind over. A checkpoint, a VAE and a text
       // encoder never declare a capability — nothing scans one and writes
-      // `model_capability` — so all three sat under "No feature recorded" while
+      // `model_capability` — so all three sat under the catch-all while
       // the cell beside them read `Checkpoint`. The sting is sharper here than
       // for adapters: a DECLARED checkpoint (an HF-cache repo, which enters as
       // `file_kind=engine`) DOES record the capability, so the axis drew a
@@ -651,8 +651,8 @@ function groupsOf(row, axis) {
       //
       // `unknown` is excluded for the reason the algorithm above is: an
       // unclassified file is the classifier's shrug, and a heading called
-      // "Unclassified" beside "No feature recorded" is two shrugs presented as
-      // one feature and one not.
+      // "Unclassified" beside `Other` is the same shrug twice. It falls to
+      // `Other` with everything else that says nothing.
       if (row.file_kind !== "unknown" && fileKindLabel(row.file_kind)) {
         return [
           {
@@ -665,11 +665,19 @@ function groupsOf(row, axis) {
           },
         ];
       }
+      // Whatever is left is `Other`, the SAME group the stored capability of
+      // that name lands in. Two headings were two answers to one question:
+      // "the classifier looked and found nothing it names" and "nobody has
+      // said" are a distinction the reader cannot act on differently, and a
+      // shelf that draws both makes them scan two buckets for one file.
+      // Merged on the capability's own key, so it is one group and not two
+      // spelled the same, exactly as `checkpoint` is above.
       return [
         {
-          key: UNSET_GROUP_KEY,
-          label: "No feature recorded",
+          key: "other",
+          label: capabilityLabel("other"),
           labelKind: "name",
+          icon: capabilityIcon("other"),
         },
       ];
     }
