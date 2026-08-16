@@ -19,6 +19,9 @@ class ScalingPlugin(ImagePlugin):
     name = "scaling"
     display_name = "Scaling"
     description = "Scale images up or down using common interpolation algorithms."
+    author = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license = "GPL-3.0-only"
+    models = []
     supports_images = True
     supports_videos = False
 

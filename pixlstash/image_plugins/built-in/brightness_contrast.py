@@ -13,6 +13,9 @@ class BrightnessContrastPlugin(ImagePlugin):
     name = "brightness_contrast"
     display_name = "Brightness / Contrast"
     description = "Adjust brightness and contrast for images or videos."
+    author = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license = "GPL-3.0-only"
+    models = []
     supports_images = True
     supports_videos = True
 

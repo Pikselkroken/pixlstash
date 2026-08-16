@@ -125,7 +125,15 @@ class ImagePluginManager:
                     )
                 )
                 return None
-            return plugin_class()
+            plugin = plugin_class()
+            # Exercise the schema once here, where a failure is containable.
+            # `list_plugins()` comprehends over every plugin and runs unguarded,
+            # so one plugin raising in `parameter_schema()` — or declaring a
+            # `models` header that is not a list of dicts — would take
+            # `GET /pictures/plugins` down for all of them. The tagger registry
+            # probes at load for the same reason (`_register_user_plugin`).
+            plugin.plugin_schema()
+            return plugin
         except Exception as exc:
             message = f"Failed to initialize plugin: {exc}"
             self._errors.append(PluginLoadError(file=path, message=message))

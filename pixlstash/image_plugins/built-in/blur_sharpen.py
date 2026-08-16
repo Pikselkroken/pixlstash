@@ -15,6 +15,9 @@ class BlurSharpenPlugin(ImagePlugin):
     name = "blur_sharpen"
     display_name = "Blur / Sharpen"
     description = "Apply blur or sharpen effect to images or videos."
+    author = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license = "GPL-3.0-only"
+    models = []
     supports_images = True
     supports_videos = True
 

@@ -96,6 +96,11 @@ class MyCaptioner(TaggerPlugin):
     name = "my_captioner"            # unique snake_case id
     display_name = "My Captioner"    # label in the settings table
     description = "What it does."
+    author = "Your Name <you@example.com>"   # email address or URL
+    license = "MIT"                  # your own code, SPDX where there is one
+    models = [                       # every model or service you load
+        {"name": "microsoft/Florence-2-base", "license": "MIT"},
+    ]
     supports_descriptions = True     # appears in the Description plugin table
     supports_tags = False            # ...and/or the Tag plugin table
     requires_download = False        # True offers a download button
@@ -247,6 +252,26 @@ error. Say what you need in your plugin's own README.
 explicit exception to the GPL-3.0 backend, so your plugin can carry whatever license you
 like (see [licensing.md](licensing.md)). Importing anything else from `pixlstash` puts
 you back under the GPL.
+
+**Say which license, in the class.** `author`, `license` and `models` default to `""`,
+`""` and `[]`, so a plugin that omits them still loads and a caller simply shows nothing
+for it — but they are how anyone finds out what they are about to run before they run it.
+`models` is the one that matters: it lists every model or remote service the plugin loads,
+each entry a `{"name": ..., "license": ...}` dict, because *your* license says nothing
+about the weights you download. Use an SPDX identifier where the model declares one, and
+where it does not, say plainly what it does ship rather than guessing an SPDX id at it.
+
+The built-ins declare theirs:
+
+| Plugin | Code | Models |
+|---|---|---|
+| `florence2` | `GPL-3.0-only` | `florence-community/Florence-2-base`, `…-large-ft` — MIT |
+| `wd14` | `GPL-3.0-only AND Apache-2.0` (it adapts Kohya_ss) | `SmilingWolf/wd-convnext-tagger-v3` — Apache-2.0 |
+| `joycaption` | `GPL-3.0-only` | `fancyfeast/llama-joycaption-beta-one-hf-llava` — no declared license; ships the Llama 3.1 Community License |
+| `pixlstash_tagger` | `GPL-3.0-only` | `PersonalJeebus/pixlvault-anomaly-tagger` — MIT |
+
+Keep all three as plain literals. They are meant to be read off the source with `ast`,
+without importing the module and running it, so a computed value reads as absent.
 
 ## 9. Known limitations
 

@@ -11,6 +11,7 @@ a model, and copies of it with one mistake spliced in.
 
 from __future__ import annotations
 
+import ast
 import io
 import os
 import re
@@ -1053,6 +1054,156 @@ def test_the_installer_writes_where_the_registries_read():
     assert (
         os.path.join(root, *plugin_install._SUBDIRS[IMAGE]) == image_user_plugin_dir()
     )
+
+
+# ----------------------------------------------------------------------
+# The plugin header
+# ----------------------------------------------------------------------
+
+
+def _header_literals(path: Path) -> dict[str, dict[str, object]]:
+    """Return ``{class_name: {attr: value}}`` for the header of each class.
+
+    Reads the source the way a tool outside PixlStash has to — ``ast`` only,
+    no import — so an attribute computed at runtime shows up as absent here.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    headers: dict[str, dict[str, object]] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        found: dict[str, object] = {}
+        for statement in node.body:
+            target = None
+            if isinstance(statement, ast.AnnAssign) and statement.value is not None:
+                target = statement.target
+            elif isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+                target = statement.targets[0]
+            if not isinstance(target, ast.Name):
+                continue
+            if target.id in ("name", "author", "license", "models"):
+                try:
+                    found[target.id] = ast.literal_eval(statement.value)
+                except ValueError:
+                    # Computed rather than declared: nothing to read without
+                    # importing the module, so it is absent as far as this goes.
+                    continue
+        # An empty `name` is an abstract intermediate (the base classes), which
+        # `_analyse` skips for the same reason: it is nobody's plugin.
+        if found.get("name"):
+            headers[node.name] = found
+    return headers
+
+
+def _shipped_plugin_sources() -> list[Path]:
+    """Every file that ships a plugin class, enumerated like ``builtin_names``.
+
+    The two templates are in here as well: they are what a third-party author
+    copies, so a header missing from one is a header missing from every plugin
+    written after it.
+    """
+    from pixlstash.tagger_plugins.registry import _FIRST_PARTY_PLUGINS
+
+    package = Path(plugin_install.__file__).parent
+    sources = sorted(
+        {
+            *(
+                package / "tagger_plugins" / f"{module.rsplit('.', 1)[1]}.py"
+                for module, _class_name in _FIRST_PARTY_PLUGINS
+            ),
+            *(package / "image_plugins" / "built-in").glob("*.py"),
+            package / "tagger_plugins" / "plugin_template.py",
+        }
+    )
+    # Parametrising over an empty list is `1 skipped` and exit 0 — the glob
+    # coming back empty (a renamed folder, a packaging change) would drop every
+    # image plugin from this check without failing anything. Count instead.
+    assert len(sources) >= 12, f"only found {len(sources)} shipped plugin sources"
+    assert all(path.is_file() for path in sources), sources
+    return sources
+
+
+@pytest.mark.parametrize("source", _shipped_plugin_sources(), ids=lambda p: p.name)
+def test_every_shipped_plugin_declares_a_readable_header(source):
+    """author/license/models are literals a tool can read without importing."""
+    headers = _header_literals(source)
+    assert headers, f"{source.name} declares no plugin class"
+    for class_name, header in headers.items():
+        where = f"{class_name} in {source.name}"
+        assert header.get("author"), f"{where} declares no author"
+        assert header.get("license"), f"{where} declares no license"
+        models = header.get("models")
+        assert isinstance(models, list), f"{where} declares no models list"
+        for model in models:
+            assert isinstance(model, dict), f"{where} has a non-dict models entry"
+            assert model.get("name"), f"{where} has a models entry with no name"
+            assert model.get("license"), f"{where} has a models entry with no license"
+
+
+def _stub_plugins():
+    """Return one minimal subclass of each base, declaring nothing extra."""
+    from pixlstash.image_plugins.base import ImagePlugin
+    from pixlstash.tagger_plugins.base import TaggerPlugin
+
+    class StubFilter(ImagePlugin):
+        name = "stub_filter"
+
+        def parameter_schema(self):
+            return []
+
+        def run(self, images, parameters=None, **_kwargs):
+            return images
+
+    class StubCaptioner(TaggerPlugin):
+        name = "stub_captioner"
+
+        def parameter_schema(self):
+            return []
+
+        def needs_download(self, parameters=None):
+            return False
+
+        def init(self, parameters):
+            pass
+
+        def unload(self):
+            pass
+
+        def is_loaded(self):
+            return False
+
+    return StubFilter, StubCaptioner
+
+
+def test_the_header_defaults_let_a_plugin_omit_it():
+    """Omitting all three still loads; the schema just carries empty values."""
+    for stub in _stub_plugins():
+        schema = stub().plugin_schema()
+        assert schema["author"] == ""
+        assert schema["license"] == ""
+        assert schema["models"] == []
+
+
+def test_plugin_schema_forwards_the_header():
+    """Both `plugin_schema()` implementations carry the header to the registry."""
+    for stub in _stub_plugins():
+        stub.author = "Someone <someone@example.com>"
+        stub.license = "MIT"
+        stub.models = [{"name": "example/model", "license": "Apache-2.0"}]
+        schema = stub().plugin_schema()
+        assert schema["author"] == "Someone <someone@example.com>"
+        assert schema["license"] == "MIT"
+        assert schema["models"] == [{"name": "example/model", "license": "Apache-2.0"}]
+
+
+def test_the_schema_never_hands_out_the_declared_models_list():
+    """A caller mutating what it got back must not rewrite the declaration."""
+    for stub in _stub_plugins():
+        stub.models = [{"name": "example/model", "license": "MIT"}]
+        schema = stub().plugin_schema()
+        schema["models"].append({"name": "not/declared", "license": "Proprietary"})
+        schema["models"][0]["license"] = "Proprietary"
+        assert stub.models == [{"name": "example/model", "license": "MIT"}]
 
 
 def test_the_cli_names_itself_the_way_it_was_actually_invoked(

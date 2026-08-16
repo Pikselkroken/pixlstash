@@ -60,6 +60,9 @@ class MyFilter(ImagePlugin):
     name = "my_filter"                 # unique snake_case id
     display_name = "My Filter"         # label in the menus
     description = "What it does."      # shown above the parameters
+    author = "Your Name <you@example.com>"   # email address or URL
+    license = "MIT"                    # your own code, SPDX where there is one
+    models = []                        # every model or service you load
     supports_images = True             # offered for still images
     supports_videos = False            # ...and/or video files, via run_video
 
@@ -230,6 +233,15 @@ will simply be absent.
 `docs/licensing.md`) precisely so plugins can be authored under any license. The only
 import a plugin should take from PixlStash is
 `from pixlstash.image_plugins.base import ImagePlugin`. Anything deeper is not a contract.
+
+**Say which license, in the class.** `author`, `license` and `models` default to `""`,
+`""` and `[]`, so a plugin that omits them still loads and a caller simply shows nothing
+for it — but they are how anyone finds out what they are about to run before they run it.
+`models` lists every model or remote service the plugin loads, each entry a
+`{"name": ..., "license": ...}` dict, because *your* license says nothing about the weights
+you download; the built-in filters load none and declare `[]`. Keep all three as plain
+literals — they are meant to be read off the source with `ast`, without importing the
+module, so a computed value reads as absent.
 
 ## 9. Known limitations
 
