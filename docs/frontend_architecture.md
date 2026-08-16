@@ -2033,10 +2033,18 @@ for.
   returns null when there is none, which a root partition usually has not. The
   fallback chain is label → mount point → the folder's own path, so the header
   is never empty and never invented.
-- **The row is two halves, and the split is what makes the meters comparable.**
-  `.shelf-band-id` (glyph, name, path) is the flexible one and
-  `.shelf-band-usage` (meter, figures) never shrinks, so every band's meter
-  begins at the same x however long the drive's name is. One gap between five
+- **The row is three tracks, and the meter is what spends the slack.**
+  `.shelf-band-id` (glyph, name, path) is a `min-width: 320px` track rather
+  than the flexible one — at `flex: 1 1 auto` it swallowed every spare pixel on
+  a wide window and left a dead ~1,200px band between the drive's name and its
+  meter, which moves the slack rather than using it. The meter then takes all
+  of what is left (`flex: 1 1 auto`, floor 190px, **no ceiling** — a ceiling
+  only moves the empty space back between the meter and the figures), and
+  `.shelf-band-figures` carries `margin-left: auto` so the numbers stay on the
+  row's right edge. The segments are percentages, so the width is spent on
+  legibility: measured at a 2000px row, the shelf's own slice of a nearly-empty
+  900 GB drive is 77px against 11px at the old fixed 190. Every band's meter
+  still begins at the same x however long the drive's name is. One gap between five
   peers had the meter starting ~400px apart on two bands of the same list, and
   two meters that do not share a left edge cannot be read down the column —
   which is the only reason to draw the meter more than once. The path is drawn

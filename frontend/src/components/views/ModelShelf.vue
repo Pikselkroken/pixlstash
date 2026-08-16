@@ -680,18 +680,15 @@
                        parse for one. Split, not shortened: the other two are
                        the reason to believe the first.
 
-                       ONE flex item holding both halves, not two. The gap
-                       would draw the space between them, but a gap is not a
-                       character: the accessible name is the text nodes run
-                       together, and two items are read aloud as "GB freeof".
-                       So they share an inline context and `rest` carries the
-                       space itself. -->
-                  <span>
-                    <strong class="shelf-band-lead">{{
-                      meterLabel(group.band).lead
-                    }}</strong
-                    >{{ meterLabel(group.band).rest }}
-                  </span>
+                       Two items, so the gap can give the anchor room to be one
+                       — but `rest` still carries its own leading space, and
+                       that is not redundant: the accessible name is the text
+                       nodes run together with no regard for a gap, so without
+                       it the line is read aloud as "GB freeof". -->
+                  <strong class="shelf-band-lead">{{
+                    meterLabel(group.band).lead
+                  }}</strong>
+                  <span>{{ meterLabel(group.band).rest }}</span>
                 </span>
               </span>
             </h3>
@@ -3441,24 +3438,27 @@ watch(
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 
-/* Which disk. Takes the slack, so the usage half lands on the same x on every
-   band and the meters can be read down the column. `min-width: 0` is what lets
-   the path inside it ellipsise instead of pushing the meter out of line. */
+/* Which disk. A track with a FLOOR rather than one that takes the slack: at
+   `flex: 1 1 auto` it swallowed every spare pixel on a wide window and left a
+   dead 1,200px band between the drive's name and its meter — the slack moved
+   rather than being used. 320px is what a volume label and a mount point ask
+   for, so most bands start their meter on the same x and can be read down the
+   column, and a longer name pushes its own meter right instead of being cut. */
 .shelf-band-id {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 0 1 auto;
+  min-width: 320px;
 }
 
-/* How full. Never shrinks: the meter is a fixed 190px and the figures are a
-   number the reader came here for. */
+/* How full, and the half that takes the room. */
 .shelf-band-usage {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  flex: none;
+  gap: var(--space-5);
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* A step up the ramp, because this heads the folder headers below it and those
@@ -3515,9 +3515,17 @@ watch(
    stops here" when the next segment carries straight on (#893). */
 .shelf-band-meter {
   display: flex;
-  width: 190px;
+  /* GROWS, and takes ALL of what is left, which is what spends the row's slack
+     on something instead of pooling it in a gap. The segments are percentages,
+     so a wider track is the same three facts drawn where the small one is
+     legible: measured at a 2000px row, the shelf's own slice of a nearly-empty
+     900 GB drive is 77px here against 11px at the old fixed 190. There is
+     deliberately no ceiling — one only moves the empty space back between the
+     meter and the figures, which is the arrangement this replaced. 190 stays
+     as the floor a narrow panel falls back to. */
+  flex: 1 1 auto;
+  min-width: 190px;
   height: 10px;
-  flex: none;
   padding: 1px;
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
@@ -3605,7 +3613,10 @@ watch(
 .shelf-band-figures {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  /* Pinned to the row's right edge, so whatever the meter does not take is
+     spent BETWEEN the graphic and the numbers rather than pooled at one end. */
+  margin-left: auto;
+  gap: var(--space-3);
   font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
