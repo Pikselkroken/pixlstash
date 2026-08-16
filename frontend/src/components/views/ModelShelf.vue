@@ -27,12 +27,14 @@
          header already says it and a second announcer double-speaks. -->
     <p class="visually-hidden" role="status">{{ sortAnnouncement }}</p>
 
-    <!-- The toolbar changes the VIEW. The two things on it that are not view
+    <!-- The toolbar changes the VIEW. The three things on it that are not view
          controls are the ones with no selection to hang on — Add, which makes a
-         row that does not exist yet, and the stack sweep, which proposes over
-         the whole shelf — so they sit together on the left, apart from the view
-         controls, and both open something before they write anything. Every
-         other verb lives on the row or in the selection pill (#904). -->
+         row that does not exist yet; the stack sweep, which proposes over the
+         whole shelf; and Model folders, which edits the registry the shelf
+         reads — so they sit together on the left, apart from the view controls.
+         The test the left group applies: it opens something, it writes nothing
+         on the press, and it has no selection to hang on. Every other verb
+         lives on the row or in the selection pill (#904). -->
     <div class="shelf-toolbar">
       <span class="shelf-title">Models</span>
       <span class="shelf-sub">{{ countLabel }}</span>
@@ -73,7 +75,7 @@
             class="shelf-mi"
             type="button"
             role="menuitem"
-            @click="openFolders()"
+            @click="openFolders(addBtnRef)"
           >
             <v-icon size="16">mdi-folder-plus-outline</v-icon>
             <span>Add folder…</span>
@@ -114,13 +116,43 @@
       <button
         ref="stacksBtnRef"
         class="bar-btn bar-btn--boxed"
-        :class="{ 'bar-btn--open': stacksOpen }"
         type="button"
         title="Stack training runs — review proposed stacks"
         aria-label="Stack training runs"
+        aria-haspopup="dialog"
         @click="stacksOpen = true"
       >
         <v-icon size="19">mdi-layers-plus</v-icon>
+      </button>
+
+      <!-- The registry the shelf reads, and the only door to it once the empty
+           state is gone: Add ▾ spells this "Add folder…", which is the wrong
+           promise for rescan, relocate and forget.
+
+           No count badge: `bar-filter-badge` counts a deviation from a default
+           the reader set, and a folder count never returns to zero (the managed
+           store always exists), so a permanent number beside Show's identical
+           pill would mean something else entirely.
+
+           No `bar-btn--open`, and the sweep above lost its copy in the same
+           change: `App.css` declares that class for "the toolbar button while
+           its MENU is open", and both of these open an `AppDialog`, which sets
+           `:scrim="true"`. The highlight is painted under the scrim for exactly
+           as long as it applies, and neither button has the chevron the rule
+           rotates. Group/Sort/Show keep it because they really are menus.
+           `aria-haspopup="dialog"` on both, and `aria-expanded` on neither:
+           focus moves into the dialog rather than into anything the button
+           owns. -->
+      <button
+        ref="foldersBtnRef"
+        class="bar-btn bar-btn--boxed"
+        type="button"
+        title="Model folders — add, rescan, move or forget a folder"
+        aria-label="Model folders"
+        aria-haspopup="dialog"
+        @click="openFolders(foldersBtnRef)"
+      >
+        <v-icon size="19">mdi-folder-multiple-outline</v-icon>
       </button>
 
       <span class="shelf-spacer"></span>
@@ -359,9 +391,11 @@
           machine. Add the folder where you keep them.
         </p>
         <button
+          ref="emptyFoldersBtnRef"
           class="tbm-action tbm-action--primary"
           type="button"
-          @click="openFolders()"
+          aria-haspopup="dialog"
+          @click="openFolders(emptyFoldersBtnRef)"
         >
           Add a model folder
         </button>
@@ -1014,10 +1048,15 @@ const sortMenuOpen = ref(false);
 const foldersOpen = ref(false);
 const addMenuOpen = ref(false);
 const groupMenuOpen = ref(false);
-// One button behind every dialog the toolbar's left half opens, so focus has
-// one place to come back to however the reader got there. The menu item that
-// opened it is gone by then — it unmounts with the menu.
+// The toolbar buttons behind the dialogs its left half opens, so focus has a
+// place to come back to however the reader got there. A menu item cannot be
+// that place — it unmounts with the menu.
 const addBtnRef = ref(null);
+const foldersBtnRef = ref(null);
+// The empty state's own door. Unlike the two above it is NOT always mounted —
+// the first scan that finds a model replaces the empty state with the list —
+// which is the case `closeFolders`' `isConnected` check exists for.
+const emptyFoldersBtnRef = ref(null);
 const selBarRef = ref(null);
 /** Read once, dismissed for this visit; a refetch says it again. */
 const offlineDismissed = ref(false);
@@ -1775,9 +1814,15 @@ async function onFilePicked(path) {
 // making it reactive would deep-track an element tree for nothing.
 const folderInvoker = shallowRef(null);
 
-function openFolders(event) {
-  folderInvoker.value =
-    event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+/**
+ * @param {HTMLElement} invoker Control to hand focus back to on close. Every
+ *   door names one, and names the durable control rather than the pressed
+ *   element: the `Add folder…` item is gone by the time the dialog closes, so
+ *   it names the Add button it hangs off. The earlier version read
+ *   `event.currentTarget` and was dead — no call site ever passed an event.
+ */
+function openFolders(invoker) {
+  folderInvoker.value = invoker;
   foldersOpen.value = true;
 }
 
@@ -1787,8 +1832,9 @@ async function closeFolders() {
   folderInvoker.value = null;
   await nextTick();
   // The empty-state button unmounts the moment the first folder is scanned in,
-  // so fall back to the toolbar control rather than dropping focus to <body>.
-  (returnTo?.isConnected ? returnTo : addBtnRef.value)?.focus();
+  // so fall back to the toolbar's folder button — the one door that is always
+  // mounted — rather than dropping focus to <body>.
+  (returnTo?.isConnected ? returnTo : foldersBtnRef.value)?.focus();
 }
 
 // `missing` is a fact (the folder was readable, the file was not in it);

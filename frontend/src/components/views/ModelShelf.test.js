@@ -2339,6 +2339,94 @@ describe("the manual stack verb", () => {
   });
 });
 
+describe("the model-folders door", () => {
+  // Deleted once already, in the toolbar consolidation for #904, and nothing in
+  // this suite noticed: the shelf kept rendering the dialog with no control left
+  // to open it. Asserted on a POPULATED shelf, because the empty state's own
+  // button unmounts exactly when the registry starts needing edits.
+  it("opens the folders dialog from the toolbar", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const folders = wrapper.find(
+      '.shelf-toolbar button[aria-label="Model folders"]',
+    );
+    expect(folders.exists()).toBe(true);
+    expect(
+      wrapper.findComponent({ name: "ModelFoldersDialog" }).props("open"),
+    ).toBe(false);
+
+    await folders.trigger("click");
+    expect(
+      wrapper.findComponent({ name: "ModelFoldersDialog" }).props("open"),
+    ).toBe(true);
+  });
+
+  // Focus return needs a real document, because `activeElement` is the whole
+  // assertion and a detached wrapper has none. Both doors are asserted: the
+  // toolbar button rides the fallback, and the Add item names the Add button
+  // because the item itself unmounts with the menu. Deleting either half of
+  // the plumbing — the `folderInvoker` write or the `.focus()` — fails this.
+  async function closeFoldersFrom(wrapper, opener) {
+    await opener.trigger("click");
+    wrapper.findComponent({ name: "ModelFoldersDialog" }).vm.$emit("close");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+  }
+
+  it("hands focus back to whichever door opened it", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    document.body.appendChild(wrapper.element);
+
+    const folders = wrapper.find(
+      '.shelf-toolbar button[aria-label="Model folders"]',
+    );
+    await closeFoldersFrom(wrapper, folders);
+    expect(document.activeElement).toBe(folders.element);
+
+    const add = wrapper.find(
+      '.shelf-toolbar button[title="Add models to the shelf"]',
+    );
+    const addItem = wrapper
+      .findAll(".shelf-mi")
+      .find((b) => b.text().includes("Add folder"));
+    await closeFoldersFrom(wrapper, addItem);
+    expect(document.activeElement).toBe(add.element);
+
+    wrapper.unmount();
+  });
+
+  it("returns to the empty-state button, until the first scan unmounts it", async () => {
+    // The empty state is the one door that can disappear underneath its own
+    // dialog. While it is still there it gets focus back like any other — a
+    // reader who opened it to look and closed without adding must not be
+    // thrown to a toolbar icon they never pressed. Once a scan has found
+    // something the button is gone, and THAT is what the `isConnected`
+    // fallback is for.
+    const wrapper = await mountShelf([]);
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+
+    const emptyBtn = wrapper
+      .findAll(".shelf-state button")
+      .find((b) => b.text().includes("Add a model folder"));
+    await closeFoldersFrom(wrapper, emptyBtn);
+    expect(document.activeElement).toBe(emptyBtn.element);
+
+    // Now the scan lands while the dialog is open: the empty state unmounts.
+    await emptyBtn.trigger("click");
+    store.rows = [adapter({ id: 1 })];
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-state").exists()).toBe(false);
+    wrapper.findComponent({ name: "ModelFoldersDialog" }).vm.$emit("close");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(document.activeElement).toBe(
+      wrapper.find('.shelf-toolbar button[aria-label="Model folders"]').element,
+    );
+
+    wrapper.unmount();
+  });
+});
+
 describe("Escape", () => {
   // The key is handled on the WINDOW, so every assertion here needs a real
   // event path out of the shelf — a detached wrapper's keydown bubbles into
