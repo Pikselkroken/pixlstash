@@ -283,6 +283,7 @@ const emit = defineEmits([
   "set-icon",
   "clear-icons",
   "move",
+  "open-location",
   "forget",
   "delete",
 ]);
@@ -612,10 +613,42 @@ const stackTitle = computed(
 );
 
 /**
+ * Can the host be asked to show this row's folder? (#933)
+ *
+ * Gated on a `present` copy, which is the RECORDED half of the route's own
+ * gate: a `missing` row names a folder with nothing of ours in it and an
+ * `unreachable` one names a drive that is not plugged in, so either would come
+ * back 409. The other half is `os.path.isfile`, which only the server can
+ * answer, so a row whose file went between the list and the press is a 409 the
+ * view has its own sentence for.
+ *
+ * A collapsed stack spreads its COVER, so this reads the cover's copies and the
+ * cover's folder is what opens: one press, one window, on the file that was
+ * right-clicked. A run whose cover is gone while a step of it is not is
+ * therefore refused rather than opening some other member's folder, which would
+ * answer a different question from the one the row asked.
+ *
+ * Single selection only, like Rename: forty rows would be forty windows.
+ */
+const openable = computed(
+  () =>
+    single.value &&
+    (store.selectedRows[0]?.locations ?? []).some(
+      (loc) => loc.state === "present",
+    ),
+);
+
+const openTitle = computed(() =>
+  openable.value
+    ? "Show this file where it lives, on the machine running PixlStash"
+    : "There is no copy of this on that machine right now",
+);
+
+/**
  * Put the selection's filenames on the clipboard.
  *
- * The one verb in the design's context menu the shelf can answer without a new
- * route: the names are already on the rows. It is also the answer to "I need
+ * The other verb in the design's context menu the shelf can answer without a
+ * new route: the names are already on the rows. It is also the answer to "I need
  * this in a ComfyUI node", which is why it is worth a line at all.
  *
  * A notice rather than silence, because a clipboard write has no visible
@@ -678,6 +711,8 @@ const verbHandlers = computed(() => ({
   stackTitle: stackTitle.value,
   movable: movable.value.length > 0 && !moves.busy,
   moveTitle: moveTitle.value,
+  openable: openable.value,
+  openTitle: openTitle.value,
   forgettable: forgettable.value.length > 0,
   forgetTitle: forgetTitle.value,
   deletable: deletable.value.length > 0,
@@ -787,6 +822,16 @@ const VerbMenu = (props) => {
       title: props.moveTitle,
     }),
     sep(),
+    // The two verbs that answer "where is this file, actually" — the first
+    // asks the server's own desktop, the second answers on this machine.
+    // Single selection only for the opener: it is one window per press.
+    props.single
+      ? item("mdi-folder-open-outline", "Open in file manager", {
+          on: () => props.onVerb("open-location"),
+          disabled: !props.openable,
+          title: props.openTitle,
+        })
+      : null,
     item(
       "mdi-content-copy",
       props.single ? "Copy filename" : "Copy filenames",
@@ -831,6 +876,7 @@ defineExpose({
   assignable,
   membership,
   movable,
+  openable,
   selectedBytes,
   stackable,
   withIcons,

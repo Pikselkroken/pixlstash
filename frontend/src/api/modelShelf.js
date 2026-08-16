@@ -178,3 +178,19 @@ export async function forgetModels(ids) {
 export async function deleteModels(ids, { permanent = false } = {}) {
   return unwrap(apiClient.post("/model-files/delete", { ids, permanent }));
 }
+
+/**
+ * Ask the server host to show a model's folder in its desktop file manager.
+ *
+ * The one shelf call that acts on the machine rather than on the library, so
+ * it is loopback-only at the gate: a shelf opened over the LAN cannot drive
+ * the server's desktop, and neither can a headless one — that comes back 500
+ * rather than pretending a window opened somewhere.
+ *
+ * @param {number} id - hub `model.id`. A collapsed stack passes its cover, so
+ *   the cover's folder is the one that opens.
+ * @returns {Promise<{status: string}>}
+ */
+export async function openModelLocation(id) {
+  return unwrap(apiClient.post(`/models/${id}/open-location`));
+}
