@@ -48,9 +48,41 @@
   installs a plugin's `requirements.txt` unless you pass `--with-deps`.
   `plugins remove` deletes an installed plugin, wherever it came from, and can
   only ever reach a file directly inside the two plugin directories.
+- An image filter plugin now registers the first concrete `ImagePlugin` subclass
+  the file itself defines. A class the file only imports is no longer registered
+  in place of the one you wrote (which, since a user plugin wins a name
+  collision, could replace a built-in filter with it), and an abstract base
+  above your real class no longer wins. A file whose only plugin class is
+  abstract still reports the class and the method it is missing. A plugin whose
+  class is built elsewhere — by a factory or a decorator in another module —
+  will now be reported as absent rather than loaded; give the file a class of
+  its own.
+- A user image filter that replaces a built-in of the same name is now logged
+  against *your* file. The log used to name the built-in as the duplicate being
+  ignored, which pointed away from the cause; `pixlstash-cli plugins list`
+  already marked such a file `(replaces the built-in)`.
 - The documented Windows plugin directory was missing a path component. It is
   `%LOCALAPPDATA%\pixlstash\pixlstash\image-plugins\user\`, which is why hand-copying
   a plugin to the path the README gave appeared to do nothing.
+- Both command lines now document themselves in full. Every `pixlstash-cli`
+  verb explains itself under `<command> --help` rather than only listing its
+  arguments, the exit codes a script needs are in the top-level help, and
+  `pixlstash-server` names itself in its usage line instead of `app.py`.
+- Removed `pixlstash-server --retag-and-embed`. It was accepted and documented
+  but never read by anything, so it silently did nothing.
+- The model shelf can now delete models from disk, so getting rid of a 6 GB
+  checkpoint no longer means a trip to the file manager and a rescan. It is in
+  the selection pill, the row's right-click menu and on the `Delete` key, and it
+  works the way your file manager does: on its own it moves the files to your
+  Trash (Recycle Bin on Windows), and with Shift held it deletes them
+  permanently. Only your own model folders and PixlStash's own store are
+  touched — the engines it downloaded for itself, the InsightFace packs and the
+  HuggingFace cache it shares with your other tools are refused, and so is
+  anything with a copy on a drive that is not plugged in. Two things the trash
+  cannot do for you: Windows deletes a file outright when it is bigger than the
+  Recycle Bin allows, which a multi-GB checkpoint often is, and on Linux and
+  macOS the trash sits on the same drive as the file — so the space comes back
+  when you empty it, not when you delete.
 
 # [1.9.0]
 

@@ -9,6 +9,8 @@ import {
   adapterKindKey,
   adapterKindLabel,
   assignmentRing,
+  deletableModels,
+  trashName,
   RING_STYLES,
   bandGroups,
   bandProjection,
@@ -1336,5 +1338,85 @@ describe("assignmentRing", () => {
         sets: [{ id: 5, set_icon: "mdi-star", set_color: "#00897b" }],
       }).iconHue,
     ).toBe("#00897b");
+  });
+});
+
+describe("deletableModels", () => {
+  const folders = new Map([
+    [1, { id: 1, kind: "user" }],
+    [2, { id: 2, kind: "managed", owner: "pixlstash" }],
+    [3, { id: 3, kind: "foreign", owner: "huggingface" }],
+  ]);
+
+  const at = (folderId, state = "present") => ({
+    file_kind: "adapter",
+    locations: [{ folder_id: folderId, relpath: "a.st", state }],
+  });
+
+  it("takes a file in a folder the owner registered", () => {
+    expect(deletableModels([at(1)], folders)).toHaveLength(1);
+  });
+
+  it("takes a file in the store PixlStash keeps for what it was given", () => {
+    // `Add file` and an import both land there, so a shelf that could not
+    // delete from it could not undo either of them.
+    expect(deletableModels([at(2)], folders)).toHaveLength(1);
+  });
+
+  it("leaves the folders PixlStash keeps for itself alone", () => {
+    expect(deletableModels([at(3)], folders)).toEqual([]);
+  });
+
+  it("leaves a copy on a drive that is not plugged in alone", () => {
+    // "We could not look", not "it is gone". Deleting the row would orphan the
+    // bytes with nothing on the shelf naming them.
+    expect(deletableModels([at(1, "unreachable")], folders)).toEqual([]);
+  });
+
+  it("refuses the whole model when one of its copies is untouchable", () => {
+    // Whole or not at all: unlinking the reachable half would leave the row the
+    // owner wanted gone still on the shelf, rebuilt by the next scan.
+    const both = {
+      file_kind: "adapter",
+      locations: [
+        { folder_id: 1, relpath: "a.st", state: "present" },
+        { folder_id: 3, relpath: "a.st", state: "present" },
+      ],
+    };
+    expect(deletableModels([both], folders)).toEqual([]);
+  });
+
+  it("refuses an engine PixlStash downloaded for itself", () => {
+    // It is declared again on every start, so the file would come straight back
+    // — after whatever needed it had broken.
+    const engine = { ...at(1), file_kind: "engine" };
+    expect(deletableModels([engine], folders)).toEqual([]);
+  });
+
+  it("judges a stack across its members, never on its cover", () => {
+    // A run is deleted whole, exactly as it is moved whole; a cover whose steps
+    // sit in the HuggingFace cache is not deletable because the cover is.
+    const stack = {
+      file_kind: "adapter",
+      locations: [{ folder_id: 1, relpath: "cover.st", state: "present" }],
+      members: [at(1), at(3)],
+    };
+    expect(deletableModels([stack], folders)).toEqual([]);
+  });
+
+  it("deletes nothing while the folder registry is unknown", () => {
+    // The safe direction to fail in, and the one Move already fails in.
+    expect(deletableModels([at(1)], null)).toEqual([]);
+  });
+});
+
+describe("trashName", () => {
+  it("says Recycle Bin on Windows and Trash everywhere else", () => {
+    expect(trashName({ userAgentData: { platform: "Windows" } })).toBe(
+      "Recycle Bin",
+    );
+    expect(trashName({ userAgent: "Mozilla/5.0 (Macintosh)" })).toBe("Trash");
+    // No navigator at all (a worker, an old jsdom) still names something.
+    expect(trashName(null)).toBe("Trash");
   });
 });

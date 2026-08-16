@@ -6,7 +6,7 @@
 // distinguishable from a chosen one; and `unknown` must never read as a
 // checkpoint.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
@@ -19,6 +19,7 @@ const listEngines = vi.fn();
 // And the unclassified block, for the same reason, now that it is on by
 // default (#927): one route, one more result set, its own double.
 const listUnclassified = vi.fn();
+const deleteModels = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
@@ -28,6 +29,11 @@ vi.mock("../../api/modelShelf", () => ({
     return listAdapters(...args);
   },
   listCheckpoints: (...args) => listCheckpoints(...args),
+  // The shelf's destructive verb. Mocked for the same reason the folder reads
+  // are — it is a network call on a user gesture — and because a suite that
+  // really called it would be asserting the server's gate rather than the
+  // view's.
+  deleteModels: (...args) => deleteModels(...args),
   // The base-model field asks for its completion list as it opens. Answered
   // with nothing here: the list is the widget's own suite's business, and left
   // unmocked this is a network call on a double-click.
@@ -2333,6 +2339,94 @@ describe("the manual stack verb", () => {
   });
 });
 
+describe("the model-folders door", () => {
+  // Deleted once already, in the toolbar consolidation for #904, and nothing in
+  // this suite noticed: the shelf kept rendering the dialog with no control left
+  // to open it. Asserted on a POPULATED shelf, because the empty state's own
+  // button unmounts exactly when the registry starts needing edits.
+  it("opens the folders dialog from the toolbar", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const folders = wrapper.find(
+      '.shelf-toolbar button[aria-label="Model folders"]',
+    );
+    expect(folders.exists()).toBe(true);
+    expect(
+      wrapper.findComponent({ name: "ModelFoldersDialog" }).props("open"),
+    ).toBe(false);
+
+    await folders.trigger("click");
+    expect(
+      wrapper.findComponent({ name: "ModelFoldersDialog" }).props("open"),
+    ).toBe(true);
+  });
+
+  // Focus return needs a real document, because `activeElement` is the whole
+  // assertion and a detached wrapper has none. Both doors are asserted: the
+  // toolbar button rides the fallback, and the Add item names the Add button
+  // because the item itself unmounts with the menu. Deleting either half of
+  // the plumbing — the `folderInvoker` write or the `.focus()` — fails this.
+  async function closeFoldersFrom(wrapper, opener) {
+    await opener.trigger("click");
+    wrapper.findComponent({ name: "ModelFoldersDialog" }).vm.$emit("close");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+  }
+
+  it("hands focus back to whichever door opened it", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    document.body.appendChild(wrapper.element);
+
+    const folders = wrapper.find(
+      '.shelf-toolbar button[aria-label="Model folders"]',
+    );
+    await closeFoldersFrom(wrapper, folders);
+    expect(document.activeElement).toBe(folders.element);
+
+    const add = wrapper.find(
+      '.shelf-toolbar button[title="Add models to the shelf"]',
+    );
+    const addItem = wrapper
+      .findAll(".shelf-mi")
+      .find((b) => b.text().includes("Add folder"));
+    await closeFoldersFrom(wrapper, addItem);
+    expect(document.activeElement).toBe(add.element);
+
+    wrapper.unmount();
+  });
+
+  it("returns to the empty-state button, until the first scan unmounts it", async () => {
+    // The empty state is the one door that can disappear underneath its own
+    // dialog. While it is still there it gets focus back like any other — a
+    // reader who opened it to look and closed without adding must not be
+    // thrown to a toolbar icon they never pressed. Once a scan has found
+    // something the button is gone, and THAT is what the `isConnected`
+    // fallback is for.
+    const wrapper = await mountShelf([]);
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+
+    const emptyBtn = wrapper
+      .findAll(".shelf-state button")
+      .find((b) => b.text().includes("Add a model folder"));
+    await closeFoldersFrom(wrapper, emptyBtn);
+    expect(document.activeElement).toBe(emptyBtn.element);
+
+    // Now the scan lands while the dialog is open: the empty state unmounts.
+    await emptyBtn.trigger("click");
+    store.rows = [adapter({ id: 1 })];
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-state").exists()).toBe(false);
+    wrapper.findComponent({ name: "ModelFoldersDialog" }).vm.$emit("close");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(document.activeElement).toBe(
+      wrapper.find('.shelf-toolbar button[aria-label="Model folders"]').element,
+    );
+
+    wrapper.unmount();
+  });
+});
+
 describe("Escape", () => {
   // The key is handled on the WINDOW, so every assertion here needs a real
   // event path out of the shelf — a detached wrapper's keydown bubbles into
@@ -2800,5 +2894,190 @@ describe("the app-wide toolbar tail", () => {
     expect(cluster.lastElementChild.classList.contains("tb-stats-btn")).toBe(
       true,
     );
+  });
+});
+
+describe("Delete", () => {
+  // The file-manager gesture, spelled the way Explorer spells it: Del trashes,
+  // Shift+Del deletes permanently. Handled on the WINDOW beside Escape, so
+  // every assertion needs a real event path out of the shelf.
+  const FOLDER = { id: 1, path: "/m", kind: "user", movable: "per_item" };
+
+  const inFolder = (id) =>
+    adapter({
+      id,
+      locations: [
+        { state: "present", folder_id: 1, folder_path: "/m", relpath: `${id}` },
+      ],
+    });
+
+  async function mountWithSelection() {
+    listModelFolders.mockResolvedValue([FOLDER]);
+    const wrapper = await mountShelf([inFolder(1)]);
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  }
+
+  function pressDelete(extra = {}) {
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Delete", bubbles: true, ...extra }),
+    );
+    return new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  beforeEach(() => {
+    deleteModels.mockReset();
+    deleteModels.mockResolvedValue({
+      deleted: [1],
+      files_removed: 1,
+      permanent: false,
+      refused: [],
+    });
+  });
+
+  // The `window.confirm` spies below are restored here rather than at the end
+  // of each test: a failed assertion never reaches its own `mockRestore`, and a
+  // leaked spy turns one red test into four.
+  afterEach(() => vi.restoreAllMocks());
+
+  it("asks before it deletes, and deletes nothing when the answer is no", async () => {
+    // The key opens a prompt, never a deletion: a stray Del with forty rows
+    // selected has to cost one Escape and nothing else.
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await pressDelete();
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(confirmSpy.mock.calls[0][0]).toContain("Trash");
+    expect(deleteModels).not.toHaveBeenCalled();
+
+    confirmSpy.mockReturnValue(true);
+    await pressDelete();
+    expect(deleteModels).toHaveBeenCalledWith([1], { permanent: false });
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
+  it("makes Shift+Delete a permanent one, and says so in the prompt", async () => {
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await pressDelete({ shiftKey: true });
+    expect(confirmSpy.mock.calls[0][0]).toContain("permanently");
+    expect(deleteModels).toHaveBeenCalledWith([1], { permanent: true });
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
+  it("leaves the key to whoever is being typed in", async () => {
+    // A Del in a search field is a character, not a file deletion. This is the
+    // guard Escape already had, and it matters far more here.
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const field = document.createElement("input");
+    document.body.appendChild(field);
+
+    field.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Delete", bubbles: true }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(deleteModels).not.toHaveBeenCalled();
+
+    field.remove();
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
+  it("does nothing for a selection it could only get refused for", async () => {
+    // The gate is the server's, and this is the same one drawn client-side so
+    // the prompt is never shown for files PixlStash will not unlink.
+    listModelFolders.mockResolvedValue([
+      { id: 1, path: "/hf", kind: "foreign", movable: "fixed" },
+    ]);
+    const wrapper = await mountShelf([inFolder(1)]);
+    document.body.appendChild(wrapper.element);
+    useModelShelfStore().toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await pressDelete();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
+  it("counts a run's members, and deletes exactly what it counted", async () => {
+    // The wrong-count-in-a-destructive-prompt case. A stack is ONE row standing
+    // for its whole run, and the call sends every member — so a prompt counting
+    // rows would offer "Move this model to the Trash?" over six checkpoints and
+    // tens of gigabytes.
+    listModelFolders.mockResolvedValue([FOLDER]);
+    const wrapper = await mountShelf([
+      adapter({
+        id: 1,
+        stack_id: 7,
+        stack_position: 0,
+        locations: [
+          { state: "present", folder_id: 1, folder_path: "/m", relpath: "1" },
+        ],
+      }),
+      adapter({
+        id: 2,
+        stack_id: 7,
+        stack_position: 1,
+        sha256: "b".repeat(64),
+        locations: [
+          { state: "present", folder_id: 1, folder_path: "/m", relpath: "2" },
+        ],
+      }),
+    ]);
+    document.body.appendChild(wrapper.element);
+    useModelShelfStore().toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    deleteModels.mockResolvedValue({
+      deleted: [1, 2],
+      files_removed: 2,
+      permanent: false,
+      refused: [],
+    });
+
+    await pressDelete();
+    expect(confirmSpy.mock.calls[0][0]).toContain("2 models");
+    expect(deleteModels).toHaveBeenCalledWith([1, 2], { permanent: false });
+    wrapper.unmount();
+  });
+
+  it("says why rather than doing nothing when the key finds nothing", async () => {
+    // The pill's button is disabled there; `Delete` has no disabled state, so
+    // without this a valid-looking selection answers a keypress with silence.
+    listModelFolders.mockResolvedValue([
+      { id: 1, path: "/hf", kind: "foreign", movable: "fixed" },
+    ]);
+    const wrapper = await mountShelf([inFolder(1)]);
+    document.body.appendChild(wrapper.element);
+    useModelShelfStore().toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    await pressDelete();
+    expect(useNoticeStore().notices.at(-1).text).toContain("own model folders");
+    expect(deleteModels).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("stops listening once the shelf is gone", async () => {
+    // The view is v-else-if'd away when another one opens, and a window
+    // listener that outlived it would delete files from another screen.
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    wrapper.unmount();
+
+    await pressDelete();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 });

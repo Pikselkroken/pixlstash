@@ -3,6 +3,7 @@ import { defineStore } from "pinia";
 import { clearModelIcons, setModelIcon } from "../api/modelIcons";
 import {
   BASE_MODEL_UNASSIGNED,
+  deleteModels,
   editModels,
   forgetModels,
   listAdapters,
@@ -22,6 +23,7 @@ import {
   capabilityLabel,
   compareGroups,
   locationState,
+  trashName,
   modelName,
   offlineFolders,
   UNSET_GROUP_KEY,
@@ -205,6 +207,101 @@ export function forgetReceipt(gone, kept, vanished = 0) {
       : "Nothing to forget.";
   }
   return [`Forgot ${modelCount(gone)}.`, ...notes].join(" ");
+}
+
+/**
+ * Say what a delete destroyed, where it put it, and what it left alone.
+ *
+ * Where the bytes went is the first thing the reader needs, because it is the
+ * difference between recoverable and not — so the trash is named rather than
+ * implied, and a permanent delete says so in the same slot.
+ *
+ * The refusals are grouped by reason rather than counted together: "on a drive
+ * that is not plugged in" is something the reader can act on, and "PixlStash's
+ * own" is something they should stop trying to. Rolling both into "2 kept"
+ * would leave them re-selecting rows to find out which was which.
+ *
+ * @param {number} gone - models whose files and rows were destroyed.
+ * @param {Array<{reason: string}>} refused - the server's refusals, verbatim.
+ * @param {boolean} permanent - whether the files were unlinked or trashed.
+ * @param {string} trash - what the SERVER calls its trash.
+ * @param {number} [filesRemoved=0] - how many files actually moved. Zero with
+ *   `gone` above it is the row-only case — every copy was already off the disk —
+ *   and saying "moved to the Trash" there would name a place the reader could go
+ *   and fail to find them.
+ */
+export function deleteReceipt(
+  gone,
+  refused,
+  permanent,
+  trash,
+  filesRemoved = 0,
+) {
+  const counts = new Map();
+  for (const item of refused || []) {
+    counts.set(item?.reason, (counts.get(item?.reason) || 0) + 1);
+  }
+  const notes = [];
+  const note = (reason, sentence) => {
+    const n = counts.get(reason);
+    if (n) notes.push(sentence(n));
+    counts.delete(reason);
+  };
+  note(
+    "not_a_user_folder",
+    (n) =>
+      `${modelCount(n)} ${n === 1 ? "sits" : "sit"} in a folder PixlStash keeps for itself and ${n === 1 ? "was" : "were"} left alone.`,
+  );
+  note(
+    "is_a_builtin_engine",
+    (n) =>
+      `${modelCount(n)} ${n === 1 ? "is one" : "are ones"} PixlStash downloaded for itself and would fetch again.`,
+  );
+  note(
+    "unreachable_copy",
+    (n) =>
+      `${modelCount(n)} ${n === 1 ? "has a copy" : "have copies"} on a drive that is not plugged in.`,
+  );
+  note(
+    "trash_unavailable",
+    (n) =>
+      `There is no ${trash} this server can reach, so ${modelCount(n)} ${n === 1 ? "was" : "were"} kept. Hold Shift to delete permanently.`,
+  );
+  note(
+    "partly_deleted",
+    (n) =>
+      `${modelCount(n)} lost some of ${n === 1 ? "its" : "their"} copies before the delete failed, and ${n === 1 ? "was" : "were"} kept on the shelf so you can see what is left.`,
+  );
+  note(
+    "escapes_its_folder",
+    (n) =>
+      `${modelCount(n)} ${n === 1 ? "is" : "are"} recorded at a path outside the folder ${n === 1 ? "it belongs" : "they belong"} to; rescan that folder.`,
+  );
+  note(
+    "no_such_model",
+    (n) => `${modelCount(n)} ${n === 1 ? "was" : "were"} already gone.`,
+  );
+  // Anything the server adds later, and `delete_failed`: named as kept rather
+  // than dropped, because a row still on the shelf with its file still on disk
+  // is the one outcome the reader must not be left to discover for themselves.
+  const rest = [...counts.values()].reduce((sum, n) => sum + n, 0);
+  if (rest) {
+    notes.push(
+      `${modelCount(rest)} could not be deleted; the server log says why.`,
+    );
+  }
+
+  if (!gone) {
+    return notes.length
+      ? `Nothing was deleted. ${notes.join(" ")}`
+      : "Nothing to delete.";
+  }
+  const head = !filesRemoved
+    ? `Removed ${modelCount(gone)} from the shelf; the files were already gone.`
+    : permanent
+      ? `Permanently deleted ${modelCount(gone)}.`
+      : `Moved ${modelCount(gone)} to the ${trash}.`;
+  return [head, ...notes].join(" ");
 }
 
 /**
@@ -1281,6 +1378,55 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
+   * Delete the selection from disk, then say what went and what did not.
+   *
+   * The shelf's only destructive verb. The confirmation is the view's — this
+   * runs after it — and both of the things that decide what is destroyed come
+   * from the gesture rather than from anything this store remembers: `permanent`
+   * from the press's own Shift, and `ids` from the list the prompt counted, so
+   * the reader can never agree to one number and have another one deleted.
+   *
+   * @param {Object} [options]
+   * @param {boolean} [options.permanent=false] - Shift+Delete: unlink rather
+   *   than trash.
+   * @param {number[]} [options.ids] - the models to delete. Defaults to the
+   *   whole selection, stacks expanded; the view narrows it to the subset the
+   *   route will accept.
+   * @returns {Promise<boolean>} true when the call was made at all.
+   */
+  async function deleteSelected({ permanent = false, ids } = {}) {
+    const notices = useNoticeStore();
+    const targets = ids?.length ? ids : selectedModelIds.value;
+    if (!targets.length) return false;
+    try {
+      const body = await deleteModels(targets, { permanent });
+      clearSelection();
+      await fetchRows();
+      const gone = body?.deleted?.length ?? 0;
+      notices.push({
+        level: gone ? "success" : "info",
+        text: deleteReceipt(
+          gone,
+          body?.refused ?? [],
+          Boolean(body?.permanent),
+          // The server's word for its own trash, because the server is the
+          // machine the files were on. `trashName()` is the browser's guess and
+          // stands in only for an older backend.
+          body?.trash_name || trashName(),
+          body?.files_removed ?? 0,
+        ),
+      });
+      return true;
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "Could not delete those models.",
+      });
+      return false;
+    }
+  }
+
+  /**
    * Attach or detach one character/set across the selected adapters.
    *
    * `PUT /adapters/{sha256}/attachments` REPLACES one adapter's whole set, so
@@ -1486,6 +1632,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     editSelected,
     editModelIds,
     forgetSelected,
+    deleteSelected,
     setIconOnSelected,
     clearIconsOnSelected,
     selectedModelIds,

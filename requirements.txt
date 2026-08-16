@@ -16,6 +16,7 @@ pillow==12.3.0
 opencv-python==4.13.0.92
 scipy==1.17.1
 platformdirs==4.9.4
+send2trash==2.1.0
 tomli==2.4.0
 colorlog==6.10.1
 onnxruntime==1.24.3

@@ -312,7 +312,7 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | [pixlstash/pixl_logging.py](../pixlstash/pixl_logging.py) | Uvicorn log config + coloured formatter. |
 | [pixlstash/stacking.py](../pixlstash/stacking.py) | Picture stacking (duplicates / variants). |
 | [pixlstash/image_loading_dataset_prepper.py](../pixlstash/image_loading_dataset_prepper.py) | Dataset preparation utilities for offline training scripts. |
-| [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (create/attach/detach/relocate/backup/rename) and `plugins` (install/list/remove). Only the `libraries` group opens the hub — see §8.1. |
+| [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (list/create/attach/detach/relocate/backup/prepare-legacy-identity/rename) and `plugins` (install/list/remove). Only the `libraries` group opens the hub — see §8.1. |
 | [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it. See §8.1. |
 
 ---
@@ -509,6 +509,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/login                                                                 | auth            | Login                                                      |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                     |
 | POST   | /api/v1/model-files                                                           | model_shelf     | Add one model file to the shelf                            |
+| POST   | /api/v1/model-files/delete                                                    | model_shelf     | Delete models from disk                                    |
 | GET    | /api/v1/model-folders                                                         | model_shelf     | List registered model folders                              |
 | POST   | /api/v1/model-folders                                                         | model_shelf     | Register a model folder                                    |
 | GET    | /api/v1/model-folders/devices                                                 | model_shelf     | Capacity of the drives the model folders sit on            |
@@ -530,6 +531,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                         |
 | POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                       |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                         |
+| POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager             |
 | GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                    |
 | POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                 |
 | POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                |
@@ -899,7 +901,7 @@ Built-in plugins: `brightness_contrast`, `blur_sharpen`, `colour_filter`, `pixel
 
 User-supplied image plugins are loaded from `user_data_dir("pixlstash")/image-plugins/user` (`registry.user_plugin_dir()`). **The tagger plugins use the same discovery mechanism** (§9, "User-supplied plugins") — keep the two in step rather than letting them drift, and note where they already differ: taggers also accept a package folder, built-ins win a name collision instead of losing it, and `TaggerPluginManager.plugin_dirs()` returns a `{source: path}` dict (the JSON `GET /taggers/plugin-diagnostics` emits) where `ImagePluginManager.plugin_dirs()` returns a list of tuples it iterates internally. Neither folder is served on an `ANY_TOKEN` route: the tagger path is behind the `LOCAL_OWNER_ONLY` route named above, and for image plugins both the folders and the load errors — whose `file` field was the *full* path of the failing plugin — are no longer served at all (§16.3, 2026-08-15). A consequence worth knowing before debugging one: **a broken image plugin is now reported only in the server log**, where the tagger equivalent has a local-owner-only route to render it.
 
-[docs/writing-image-filter-plugins.md](writing-image-filter-plugins.md) is the contract, and its §10 tabulates every divergence from the tagger system. Three of those are silent rather than loud, and all three are the image side being the looser of the two: a **user plugin replaces a built-in of the same name** (taggers reject it), **only the first `ImagePlugin` subclass in a module is registered** and the search does not check where the class was defined, so an imported one wins over the one you wrote (taggers register every class the module *defines*), and the **parameter schema is a different schema** — a dropdown is `type: "string"` plus `enum`, with no `select` branch in `PluginParametersUI.vue` at all. `ImagePlugin.parameter_schema`'s docstring and the shipped template both described the `select`/`options` form that does not render; both were corrected when the guide was written.
+[docs/writing-image-filter-plugins.md](writing-image-filter-plugins.md) is the contract, and its §10 tabulates every divergence from the tagger system. Three of those are quiet rather than loud, and all three are the image side being the looser of the two: a **user plugin replaces a built-in of the same name** (taggers reject it), **only the first `ImagePlugin` subclass in a module is registered** so a file defining two concrete plugins ships one (taggers register every class the module *defines*), and the **parameter schema is a different schema** — a dropdown is `type: "string"` plus `enum`, with no `select` branch in `PluginParametersUI.vue` at all. The other two halves of the class-selection divergence were closed in #968: `_find_plugin_class` now excludes classes the module merely imported (as `TaggerPluginManager._register_module_plugins` does; its extra `__module__` prefix clause covers the package shape, which this loader does not accept), so a plugin that imports a built-in for reference can no longer be shipped in place of the class its author wrote. An abstract class is demoted to a *fallback* rather than skipped: an intermediate base above the real class no longer wins, while a file whose only plugin class is abstract still produces `Can't instantiate abstract class X with abstract method run`, which names the class and the missing method — the reason not to copy the tagger's outright skip here. The shadowing itself is still user-wins, but it is now recorded: a `PluginLoadError` on the manager's own error list, and — since that list is served nowhere (above) — a log line, which is the only place a user will see it. Both name the **user** file as the one taking over, where the log used to name the built-in as "the duplicate" and so point away from the cause. `ImagePlugin.parameter_schema`'s docstring and the shipped template both described the `select`/`options` form that does not render; both were corrected when the guide was written.
 
 ### 8.1 Installing plugins from the CLI (issue #958)
 
@@ -936,8 +938,8 @@ Four properties are load-bearing:
 - **Built-in names are refused**, and read out of the shipped sources
   (`image_plugins/built-in/*.py`, `_FIRST_PARTY_PLUGINS`) rather than listed a
   second time. The two kinds fail in opposite directions and both fail quietly:
-  a user image plugin *replaces* a built-in with no message anywhere, and a user
-  captioning plugin loses to one and never loads.
+  a user image plugin *replaces* a built-in (recorded since #968, but only in
+  the server log), and a user captioning plugin loses to one and never loads.
 - **`plugins remove` is the first CLI verb that deletes.** It is scoped by
   location, not provenance — anything in the two user directories, however it
   got there — so what it guarantees instead is containment, and it takes two
@@ -2046,6 +2048,85 @@ the shelf when the call returns and the owner never has to rescan.
   discarded and the call is a 400, because the scanner would not have registered
   it either and a file the shelf never lists is not what "added" means.
 
+### `Delete`: models off the shelf and off the disk (#933)
+
+`POST /api/v1/model-files/delete`
+([`routes/model_files.py`](../pixlstash/routes/model_files.py)) is the shelf's
+only destructive verb, and it lives beside `Add file` because the two are one
+authority — a file in a registered folder, written or unlinked. Before it, the
+shelf could rename a model, move it and forget a row whose file was *already*
+gone, but the only way to actually delete the 6 GB checkpoint the owner no
+longer wants was a file manager and then a rescan.
+
+- **The trash is the default and the undo.** `permanent=false` hands each path
+  to `send2trash`, so the OS keeps the bytes recoverable by the mechanism the
+  owner already knows; `permanent=true` unlinks, and there is no undo, no
+  operation-log half and no scrapheap behind it (the shelf-wide ruling of
+  2026-08-09 stands). The frontend sends `true` only for Shift+Delete, the
+  Windows-Explorer gesture. A machine with no trash we can reach — a container —
+  refuses with `trash_unavailable` rather than quietly unlinking instead, which
+  is the one substitution that could not be taken back. **Two honest limits on "the trash is the
+  undo":** Windows deletes outright anything larger than the Recycle Bin's
+  per-volume quota, which a multi-GB checkpoint routinely is, and a
+  freedesktop trash lives on the same volume as the file — so trashing frees no
+  space until the trash itself is emptied. The confirmation says the first out
+  loud; neither is something PixlStash can fix from here.
+- **Only the folders whose contents are the owner's.** `user`, and the
+  `managed` store PixlStash keeps for files it was *given* — which is where
+  `Add file` and an import land, so a shelf that could not delete from it could
+  not undo either of them. Everything else is refused whole: the engines
+  PixlStash re-declares on every start, the InsightFace packs, and the
+  HuggingFace cache, which is a symlink store shared with every other tool on
+  the machine. That is the line `model_mover._plan_one` draws for a move, drawn
+  here by `kind` rather than by `movable` because the managed store is
+  `root_only` — the *folder* moves as a unit — while the files in it are
+  individually the owner's.
+- **A model is deleted whole or not at all.** Every copy goes, so a model with
+  one copy in a user folder and another in the cache is refused rather than
+  half-deleted: unlinking the reachable half would leave the row the owner
+  wanted gone still on the shelf, rebuilt by the next scan. `unreachable` is
+  refused for the reason Forget refuses it — an unplugged drive is not a
+  deletion — and `missing` is not a refusal at all: there is nothing to unlink
+  and the row is exactly what was asked for.
+- **Bytes first, rows second, per model.** The unlink runs before
+  `purge_deleted_models` drops the rows, so an interruption leaves a row naming
+  a file that is not there — which the next scan marks `missing` — rather than a
+  file nothing on the shelf can see, which is the tombstone invariant the
+  mover's ordering exists to protect, read in the other direction. A model whose
+  unlink fails keeps its rows; the refusal distinguishes `delete_failed`
+  (nothing went) from **`partly_deleted`** (some copies went and one did not),
+  because "could not be deleted" over a model that has already lost half its
+  copies is the one sentence this route must not produce.
+- **The gate reads share one transaction, and the purge has a gate of its own.**
+  `forget_models` documents why the first is necessary: two `hub.fetchall` calls
+  take and release the hub lock between them, so a background
+  `ModelFolderScanner` can rewrite the states being gated on. The unlink cannot
+  run inside that transaction — a 24 GB file would hold the hub's write lock for
+  the length of a disk operation — so the remaining window is closed on the
+  other side: `purge_deleted_models` deletes the location rows this call emptied
+  and then drops a `model` row **only when no location row for it survives**. A
+  copy the scanner registered while the files were going therefore keeps its
+  model alive instead of being purged out from under a file that is really
+  there, and the route logs the difference.
+- **The link, never what the link points at.** Containment here is *not*
+  `resolve_path_within`, which returns a `realpath`: unlinking that would delete
+  the bytes a symlinked model points at and leave the link, gutting any other
+  row naming those bytes. A symlinked model is ordinary practice on this shelf
+  (`_present_copy` contains lexically for exactly that reason), so
+  `_contained_path` contains the file lexically and `realpath`s the *directory*
+  holding it — a `..` cannot escape, a symlinked directory component cannot
+  redirect the unlink out of the folder, and what is removed is the name the
+  shelf catalogues. A row that still escapes is refused as
+  `escapes_its_folder`: a broken row, never a request to unlink somebody's file
+  elsewhere on the disk.
+- **It holds the machine-wide `SHELF_IO_LOCK`** for the whole call, the same
+  slot an add, a move and an import take, so nothing can be copying into a
+  folder this is emptying.
+- Authorization is `LOCAL_OWNER_ONLY` (§16.3). It takes no host path — the body
+  is a list of hub `model.id` — so it is on that tier for the destruction
+  alone, which is the unlink half of `POST /model-moves` without the copy that
+  justifies it.
+
 ### Hub and library identity
 
 `hub.db` sits beside `server-config.json`, outside every image library. It owns
@@ -2547,6 +2628,10 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
     Three narrowings inside the handler, none of them the authz tier: only a `present` copy is served (`missing` says the scan looked and found nothing, `unreachable` says the drive is unplugged, and a forgotten folder leaves its rows **tombstoned rather than deleted** — so serving on any other state would hand out bytes from a folder the owner un-registered); a checkpoint hash is refused with the same 404 as the detail route beside it; and the join is contained with `path_is_within` even though neither half is caller-supplied, because on *this* route a `..` from a faulty scan or a restored hub would be an arbitrary-file reader rather than a wrong row — the same argument B7 makes for containing its writes. The containment is lexical first for the reason `path_is_within` documents: a model symlinked into a models directory is ordinary practice, and realpath-only containment refuses every one of them. A known hash with no readable copy is **409, not 404**, because "no such adapter" and "the file is not here right now" call for different behaviour from the caller. The digest is deliberately not re-verified on the way out: that reads every byte twice per request, and the caller addressed the file by the hash it can check itself. Both directions and both halves of the tier are pinned in `tests/test_model_shelf_api.py`; the share-token direction is asserted rather than reasoned about, because this is a **GET** and the `test_share_tokens_never_reach_a_folder_mutator` docstring warns in as many words that a GET on this tier is refused by the gate alone. Arithmetic, not judgement.
 
     **It is the third member of the templated `READ_BLOCKED_GET_PATHS` gap, and the sharpest.** The belt matches literal paths, so no templated locality GET can be on it; the two already there serve a run listing and a preview image, and this one streams model weights. Under the documented `AUTHZ_GATE_ENFORCING = False` rollback a share token would therefore not read a directory but download every adapter on the shelf. It is recorded rather than closed here because closing it means prefix matching in a belt every request passes through — its own change with its own review — and a bespoke `startswith` for one route is the special case that rots. The gate refuses it today, proved by mutation in `tests/test_model_shelf_api.py::test_no_share_token_can_download_a_model_file`; `tests/test_authz_host_capability_16_3.py::test_every_untemplated_locality_get_is_on_the_read_blocked_belt` fails the build if a fourth is added without this decision being made again.
+
+  - **Updated 2026-08-16 (#933, `Delete from disk`) — the locality total is now `34 = 29 local + 5 loopback`.** `POST /api/v1/model-files/delete` removes every registered copy of the named models — to the OS trash by default, permanently on request — and then drops their hub rows. It is the **unlink half of `POST /model-moves` standing alone**, without the copy that justifies it, and it is the first route on this tier for *destruction* alone. It takes **no host path**: the body is a list of hub `model.id`, and every path it touches is contained against the folder the scanner recorded, so a row that escapes its folder is refused rather than unlinked. The containment is `_contained_path` rather than the mover's `resolve_path_within`, and deliberately: that one returns a `realpath`, so on a symlinked model it would delete the bytes the link points at and leave the link. This contains the file lexically and `realpath`s the *directory* holding it, so a `..` cannot escape, a symlinked directory component cannot redirect the unlink, and what is removed is the name the shelf catalogues. Two narrowings inside the handler are not the authz tier and are worth reading beside it: only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; and a model with an `unreachable` copy is refused, because an unplugged drive is not a deletion. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_29_local_5_loopback`. Arithmetic, not judgement.
+
+  - **Updated 2026-08-16 (#933, `Open in file manager`) — the locality total is now `35 = 29 local + 6 loopback`, and this is the first route added to the loopback tier since the e2e test hook in 2026-07-23.** `POST /api/v1/models/{model_id}/open-location` shows the folder holding a model's file in the file manager of the machine PixlStash runs on. It is the **fourth** file-manager spawn on this tier, not the fifth: `reference-folders/{folder_id}/open`, `pictures/{id}/open-location` and `server-config/open` are the other three, and `POST /server/restart` re-execs the process rather than spawning a GUI — a miscount this section has carried since 2026-07-21 and which the fourth route is the occasion to correct. It is the first to live in a shared helper (`pixlstash/utils/host_open.py`) rather than inline, and the helper is not merely a fourth copy moved: it **reads the POSIX opener's exit status**, which the three inline copies discard with `check=False`. That matters exactly here, because a headless or containerised host usually has `xdg-open` and it exits non-zero when there is no desktop to hand the path to — so discarding the status would report a window that never opened. The three that predate it are left where they are for now, since each wraps the spawn in different error handling and each has tests patching `subprocess.run` in its own module. The tier needs no new argument: the authority is the host's own shell, which is what the red line exists for, so `allow_remote_host_ops` is not consulted and a LAN or Tailscale owner is refused as firmly as a public one. **It is on this tier for the spawn, not for an input** — the request has no body, the id is a hub `model.id`, and the path is the scanner's own `model_folder.path` joined to `model_file.relpath` and contained with `path_is_within` — literally the same `_present_copy` call `GET /adapters/{sha256}/file` makes, so a `..` cannot escape and a symlinked component is followed exactly as it is for the bytes that route already streams. It is **not** the stricter `_contained_path` the delete verb added, and deliberately: what is at stake here is which window opens on the owner's own screen, not which file is unlinked. Two handler narrowings that are not the tier: only a `present` copy is opened, so a model that is `missing` or on an unplugged drive is **409 rather than 404** — the row exists and the bytes do not — and a headless or containerised host answers 500 with a sentence naming the cause, because a click that silently does nothing is the failure this route is easiest to ship. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_29_local_6_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 
@@ -3413,8 +3498,8 @@ re-derives, per picture:
 - `thumbnail_width` / `thumbnail_height`, NULLed so `MissingThumbnailFinder`
   regenerates the bitmap.
 
-**The thumbnail cache token had to grow an orientation component.**
-`ImageUtils.thumbnail_cache_token` was `"<W>x<H>"`, and thumbnails are served
+**The thumbnail cache version had to grow an orientation component.**
+`ImageUtils.thumbnail_cache_version` was `"<W>x<H>"`, and thumbnails are served
 `Cache-Control: private, max-age=3600, must-revalidate`. A 180° rotate leaves W
 and H unchanged, as does a 90° rotate of a square picture — so the regenerated
 bitmap would have arrived at a byte-identical URL and the browser would have gone
@@ -3635,7 +3720,7 @@ as a string.
 |---|---|
 | `member_count` | the stack's **real live member count**, its depth. NOT the count within the group, and routinely larger: measured on a 17k-picture library, 36 of 116 stack-touching groups name only ONE member of a stack. |
 | `leader_picture_id` | the member at `stack_position` 0, ranked by exactly the window function in `Picture._get_stack_leader_ids`, so the deck's face is the same picture the grid leads that stack with. |
-| `leader_thumbnail_version` | the leader's `?v=` token (`ImageUtils.thumbnail_cache_token`), so the face renders from the queue payload alone. |
+| `leader_thumbnail_version` | the leader's `?v=` version (`ImageUtils.thumbnail_cache_version`), so the face renders from the queue payload alone. |
 | `matched_picture_ids` | which of the stack's members are in this group. |
 | `stackable` / `blocked_by_sets` | the **unit-level rollup** of the per-candidate values: false when ANY member is frozen, because a stack cannot be partially stacked. |
 

@@ -2,8 +2,10 @@
   <!-- The floating pill, the SAME object the photo grid docks over its tiles:
        bottom-centre, panel surface, pill radius, elevation-4. Nine labelled
        buttons in a docked bar was a sentence to re-read on every selection;
-       seven icons is a chord you learn once, and the words are never gone —
-       hover has them and right-click has all of them (#904). -->
+       a row of icons is a chord you learn once, and the words are never gone —
+       hover has them and right-click has all of them (#904). The last of them
+       is the only one that destroys bytes, which is why it is the only one in
+       the error colour (#933). -->
   <div
     v-if="store.selectedRows.length"
     class="shelf-selbar"
@@ -179,6 +181,25 @@
       <v-icon size="19">mdi-playlist-remove</v-icon>
     </button>
 
+    <!-- The one verb that destroys bytes, so it is the one verb drawn in the
+         error colour. `aria-label` follows the modifier rather than staying
+         fixed like the others': a screen-reader user holding Shift is being
+         offered a different, unrecoverable operation, and a stable name would
+         be the one place that did not say so. -->
+    <button
+      class="selbar-btn selbar-btn--danger"
+      type="button"
+      data-verb="delete"
+      :aria-label="deleteLabel"
+      :disabled="!deletable.length"
+      :title="deleteTitle"
+      @click="emit('delete', $event.shiftKey)"
+    >
+      <v-icon size="19">{{
+        shiftHeld ? "mdi-delete-forever-outline" : "mdi-delete-outline"
+      }}</v-icon>
+    </button>
+
     <v-menu
       v-model="moreMenuOpen"
       :close-on-content-click="false"
@@ -240,14 +261,19 @@
 // whole reason the context menu lives here and not in the view: every `title`
 // below is a refusal sentence, and a second copy of them would drift.
 
-import { computed, h, ref } from "vue";
+import { computed, h, onMounted, onUnmounted, ref } from "vue";
 
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
-import { formatModelSize, movableCopies } from "../../utils/modelShelf";
+import {
+  deletableModels,
+  formatModelSize,
+  movableCopies,
+  trashName,
+} from "../../utils/modelShelf";
 
 const emit = defineEmits([
   "rename",
@@ -257,7 +283,9 @@ const emit = defineEmits([
   "set-icon",
   "clear-icons",
   "move",
+  "open-location",
   "forget",
+  "delete",
 ]);
 
 const store = useModelShelfStore();
@@ -360,6 +388,77 @@ const clearIconTitle = computed(() =>
     : `Clear the ${withIcons.value.length} pictures in this selection`,
 );
 
+/**
+ * Is Shift down right now?
+ *
+ * Cosmetic ONLY: it decides which word the delete verb shows, never what the
+ * verb does. What it does comes off the triggering event's own `shiftKey`, so a
+ * key state this ref missed — the window lost focus mid-press, the menu was
+ * opened from a keyboard shortcut — can make the label a moment stale and can
+ * never make a trash into an unlink. The confirmation names the operation
+ * either way, and that is the gate.
+ *
+ * On the window because the label has to change while the pointer sits over the
+ * button, which is not an element the key is delivered to.
+ */
+const shiftHeld = ref(false);
+
+function trackShift(event) {
+  shiftHeld.value = Boolean(event.shiftKey);
+}
+
+// A blur with Shift down never fires the keyup, which would otherwise leave the
+// pill offering `Permanently delete` for the rest of the session.
+function dropShift() {
+  shiftHeld.value = false;
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", trackShift);
+  window.addEventListener("keyup", trackShift);
+  window.addEventListener("blur", dropShift);
+});
+onUnmounted(() => {
+  window.removeEventListener("keydown", trackShift);
+  window.removeEventListener("keyup", trackShift);
+  window.removeEventListener("blur", dropShift);
+});
+
+/** `model_folder.id` to the folder row, for the delete and move folder rules. */
+const foldersById = computed(
+  () => new Map(folders.folders.map((folder) => [Number(folder.id), folder])),
+);
+
+/**
+ * The selected models a delete would actually act on.
+ *
+ * The same gates the route enforces, so the button is never offered where it
+ * could only come back refused. Unlike Forget, this one acts on files that are
+ * THERE — which is why the tooltip says where they are going.
+ */
+const deletable = computed(() =>
+  deletableModels(store.selectedRows, foldersById.value),
+);
+
+/** `Move to Trash` / `Move to Recycle Bin`, or `Permanently delete` on Shift. */
+const deleteLabel = computed(() =>
+  shiftHeld.value ? "Permanently delete" : `Move to ${trashName()}`,
+);
+
+const deleteTitle = computed(() => {
+  if (!deletable.value.length) {
+    return (
+      "Only models in your own folders can be deleted. PixlStash's own " +
+      "engines, and anything on a drive that is not plugged in, are left alone"
+    );
+  }
+  const n = deletable.value.length;
+  const subject = n === store.selectedRows.length ? "these" : `${n} of these`;
+  return shiftHeld.value
+    ? `Delete ${subject} from disk. There is no undo`
+    : `Move ${subject} to your ${trashName()}. Hold Shift to delete permanently`;
+});
+
 const forgetTitle = computed(() => {
   if (!forgettable.value.length) {
     return "Only models whose files are gone can be removed from the shelf";
@@ -425,11 +524,6 @@ const assignTitle = computed(() => {
   if (assignable.value.length === total) return undefined;
   return `Applies to the ${assignable.value.length} of ${total} that can be assigned`;
 });
-
-/** `model_folder.id` to the folder row, for `movableCopies`' folder rules. */
-const foldersById = computed(
-  () => new Map(folders.folders.map((folder) => [Number(folder.id), folder])),
-);
 
 /**
  * The copies in the selection a move could pick up.
@@ -519,10 +613,42 @@ const stackTitle = computed(
 );
 
 /**
+ * Can the host be asked to show this row's folder? (#933)
+ *
+ * Gated on a `present` copy, which is the RECORDED half of the route's own
+ * gate: a `missing` row names a folder with nothing of ours in it and an
+ * `unreachable` one names a drive that is not plugged in, so either would come
+ * back 409. The other half is `os.path.isfile`, which only the server can
+ * answer, so a row whose file went between the list and the press is a 409 the
+ * view has its own sentence for.
+ *
+ * A collapsed stack spreads its COVER, so this reads the cover's copies and the
+ * cover's folder is what opens: one press, one window, on the file that was
+ * right-clicked. A run whose cover is gone while a step of it is not is
+ * therefore refused rather than opening some other member's folder, which would
+ * answer a different question from the one the row asked.
+ *
+ * Single selection only, like Rename: forty rows would be forty windows.
+ */
+const openable = computed(
+  () =>
+    single.value &&
+    (store.selectedRows[0]?.locations ?? []).some(
+      (loc) => loc.state === "present",
+    ),
+);
+
+const openTitle = computed(() =>
+  openable.value
+    ? "Show this file where it lives, on the machine running PixlStash"
+    : "There is no copy of this on that machine right now",
+);
+
+/**
  * Put the selection's filenames on the clipboard.
  *
- * The one verb in the design's context menu the shelf can answer without a new
- * route: the names are already on the rows. It is also the answer to "I need
+ * The other verb in the design's context menu the shelf can answer without a
+ * new route: the names are already on the rows. It is also the answer to "I need
  * this in a ComfyUI node", which is why it is worth a line at all.
  *
  * A notice rather than silence, because a clipboard write has no visible
@@ -585,12 +711,21 @@ const verbHandlers = computed(() => ({
   stackTitle: stackTitle.value,
   movable: movable.value.length > 0 && !moves.busy,
   moveTitle: moveTitle.value,
+  openable: openable.value,
+  openTitle: openTitle.value,
   forgettable: forgettable.value.length > 0,
   forgetTitle: forgetTitle.value,
-  onVerb: (verb) => {
+  deletable: deletable.value.length > 0,
+  deleteLabel: deleteLabel.value,
+  deleteTitle: deleteTitle.value,
+  onVerb: (verb, event) => {
     contextOpen.value = false;
     moreMenuOpen.value = false;
     if (verb === "copy-filenames") copyFilenames();
+    // The gesture decides, not the tracked key state: `shiftHeld` drives the
+    // label and nothing else, so a stale one can never turn a trash into an
+    // unlink.
+    else if (verb === "delete") emit("delete", Boolean(event?.shiftKey));
     else emit(verb);
   },
   onAttach,
@@ -687,6 +822,16 @@ const VerbMenu = (props) => {
       title: props.moveTitle,
     }),
     sep(),
+    // The two verbs that answer "where is this file, actually" — the first
+    // asks the server's own desktop, the second answers on this machine.
+    // Single selection only for the opener: it is one window per press.
+    props.single
+      ? item("mdi-folder-open-outline", "Open in file manager", {
+          on: () => props.onVerb("open-location"),
+          disabled: !props.openable,
+          title: props.openTitle,
+        })
+      : null,
     item(
       "mdi-content-copy",
       props.single ? "Copy filename" : "Copy filenames",
@@ -694,13 +839,30 @@ const VerbMenu = (props) => {
     ),
     sep(),
     // NOT the danger treatment: removing a model whose file is already gone
-    // destroys a row, not bytes. `Delete from disk`, which the design puts
-    // below this in red, has no route behind it yet (#933).
+    // destroys a row, not bytes. The one below it does destroy bytes, which is
+    // what the red is for.
     item("mdi-playlist-remove", "Remove from shelf", {
       on: () => props.onVerb("forget"),
       disabled: !props.forgettable,
       title: props.forgetTitle,
     }),
+    // The label IS the operation here, and it changes under Shift — the
+    // file-manager gesture, spelled the way Windows Explorer spells it. The
+    // event is handed on rather than the tracked key state, so what runs is
+    // what the reader's hand was doing at the moment they pressed.
+    item(
+      props.deleteLabel === "Permanently delete"
+        ? "mdi-delete-forever-outline"
+        : "mdi-delete-outline",
+      props.deleteLabel,
+      {
+        on: (event) => props.onVerb("delete", event),
+        disabled: !props.deletable,
+        title: props.deleteTitle,
+        kbd: "Del",
+        danger: true,
+      },
+    ),
   ]);
 };
 
@@ -709,10 +871,12 @@ const VerbMenu = (props) => {
 // evaluates its argument where it stands.
 defineExpose({
   openContextMenu,
+  deletable,
   forgettable,
   assignable,
   membership,
   movable,
+  openable,
   selectedBytes,
   stackable,
   withIcons,
@@ -781,6 +945,18 @@ defineExpose({
   background: var(--hover-wash);
 }
 
+/* The only verb in the pill that destroys bytes. Colour is the whole signal —
+   no border, no fill — so it reads as one of the row rather than as a second
+   kind of control, and the hover wash is the error colour at the same weight
+   the neutral one uses. */
+.selbar-btn--danger {
+  color: rgb(var(--v-theme-error));
+}
+
+.selbar-btn--danger:hover:not(:disabled) {
+  background: rgba(var(--v-theme-error), 0.08);
+}
+
 /* Shown and dimmed rather than hidden, so the row of verbs never reflows under
    the pointer as the selection grows. The reason is in the `title`. */
 .selbar-btn:disabled {
@@ -844,6 +1020,17 @@ defineExpose({
   flex: none;
   font-size: 16px;
   color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+/* The destructive row. Both the label and its glyph take the error colour: the
+   menu is a list of neutral verbs and this is the one that cannot be undone. */
+.shelf-mi--danger,
+.shelf-mi--danger > .v-icon {
+  color: rgb(var(--v-theme-error));
+}
+
+.shelf-mi--danger:hover:not(:disabled) {
+  background: rgba(var(--v-theme-error), 0.08);
 }
 
 .shelf-mi--disabled,

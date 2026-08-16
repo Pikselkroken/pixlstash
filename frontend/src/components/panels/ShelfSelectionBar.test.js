@@ -10,6 +10,7 @@ import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
 import ShelfSelectionBar from "./ShelfSelectionBar.vue";
+import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
 // `AddToEntityControl` is stubbed rather than mounted: it reads the shared
@@ -360,5 +361,171 @@ describe("the selection bar", () => {
     await clear.trigger("click");
     expect(store.selectedRows).toHaveLength(0);
     expect(store.rows).toHaveLength(1);
+  });
+});
+
+describe("the delete verb", () => {
+  /** Register folder 1, which every `row()` above puts its copy in. */
+  function registerFolder(kind = "user") {
+    const folders = useModelFoldersStore();
+    folders.folders = [
+      { id: 1, path: "/m", kind, movable: "per_item", owner: null },
+    ];
+    return folders;
+  }
+
+  it("offers Delete for a file in the owner's own folder", () => {
+    registerFolder("user");
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    const del = verb(wrapper, "delete");
+    expect(del.attributes("disabled")).toBeUndefined();
+    expect(del.attributes("aria-label")).toBe("Move to Trash");
+  });
+
+  it("refuses a file in a folder PixlStash keeps for itself", () => {
+    // The HuggingFace cache is a symlink store shared with every other tool on
+    // the machine. The shelf lists it so the owner can see what it costs, not
+    // so the shelf can unlink from it.
+    registerFolder("foreign");
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    const del = verb(wrapper, "delete");
+    expect(del.attributes("disabled")).toBeDefined();
+    expect(del.attributes("title")).toContain("your own folders");
+  });
+
+  it("refuses a copy on a drive it could not read", () => {
+    // `unreachable` is "we could not look", and the bytes are still out there.
+    registerFolder("user");
+    selectRows([row(1, "unreachable")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(verb(wrapper, "delete").attributes("disabled")).toBeDefined();
+  });
+
+  it("refuses the whole model when one of its copies is untouchable", () => {
+    // Deleted whole or not at all: unlinking the reachable half would leave the
+    // row the owner wanted gone still on the shelf.
+    const folders = registerFolder("user");
+    folders.folders = [
+      ...folders.folders,
+      { id: 2, path: "/hf", kind: "foreign", movable: "fixed", owner: "hf" },
+    ];
+    selectRows([
+      row(1, "present", {
+        locations: [
+          { state: "present", folder_id: 1, relpath: "a" },
+          { state: "present", folder_id: 2, relpath: "b" },
+        ],
+      }),
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(verb(wrapper, "delete").attributes("disabled")).toBeDefined();
+  });
+
+  it("says Permanently delete while Shift is held", async () => {
+    registerFolder("user");
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { shiftKey: true }));
+    await wrapper.vm.$nextTick();
+    const del = verb(wrapper, "delete");
+    expect(del.attributes("aria-label")).toBe("Permanently delete");
+    expect(del.attributes("title")).toContain("no undo");
+
+    window.dispatchEvent(new KeyboardEvent("keyup", { shiftKey: false }));
+    await wrapper.vm.$nextTick();
+    expect(verb(wrapper, "delete").attributes("aria-label")).toBe(
+      "Move to Trash",
+    );
+  });
+
+  it("reads permanence off the press, not off the tracked key state", async () => {
+    // The label may be a moment stale — a blur with Shift down never fires its
+    // keyup — and a stale label must never turn a trash into an unlink.
+    registerFolder("user");
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+
+    await verb(wrapper, "delete").trigger("click");
+    expect(wrapper.emitted("delete")).toEqual([[false]]);
+
+    await verb(wrapper, "delete").trigger("click", { shiftKey: true });
+    expect(wrapper.emitted("delete")[1]).toEqual([true]);
+  });
+
+  it("puts the same verb in the context menu, in the danger treatment", async () => {
+    registerFolder("user");
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    const item = wrapper
+      .findAll(".shelf-mi")
+      .find((mi) => mi.text().includes("Move to Trash"));
+    expect(item.classes()).toContain("shelf-mi--danger");
+
+    await item.trigger("click", { shiftKey: true });
+    expect(wrapper.emitted("delete")).toEqual([[true]]);
+  });
+});
+
+describe("Open in file manager", () => {
+  // The verb acts on the machine PixlStash runs on rather than on the library,
+  // so what this file can assert is the gate and the emit: whether the item is
+  // offered, and that pressing it hands the decision to the view.
+  const item = (wrapper) =>
+    wrapper
+      .findAll(".shelf-mi")
+      .find((mi) => mi.text().includes("Open in file manager"));
+
+  it("is offered for one model whose file is actually there", () => {
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(item(wrapper).attributes("disabled")).toBeUndefined();
+  });
+
+  it("is offered when ONE of several copies is there", () => {
+    // A model catalogued in two folders, one of them on a drive that is not
+    // plugged in: the present copy is what opens, so the verb is live. `every`
+    // rather than `some` would refuse it and there would be no way to reach a
+    // file that is sitting right there.
+    selectRows([
+      row(1, "present", {
+        locations: [
+          {
+            state: "unreachable",
+            folder_id: 2,
+            folder_path: "/nas",
+            relpath: "x",
+          },
+          { state: "present", folder_id: 1, folder_path: "/m", relpath: "x" },
+        ],
+      }),
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(item(wrapper).attributes("disabled")).toBeUndefined();
+  });
+
+  it("is refused when the copy is missing or its drive is unplugged", async () => {
+    for (const state of ["missing", "unreachable"]) {
+      setActivePinia(createPinia());
+      selectRows([row(1, state)]);
+      const wrapper = mount(ShelfSelectionBar, globalOpts);
+      expect(item(wrapper).attributes("disabled")).toBeDefined();
+      expect(item(wrapper).attributes("title")).toContain("no copy of this");
+    }
+  });
+
+  it("is a single-selection verb: forty rows would be forty windows", () => {
+    selectRows([row(1, "present"), row(2, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(item(wrapper)).toBeUndefined();
+  });
+
+  it("emits rather than calling, like every other verb here", async () => {
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    await item(wrapper).trigger("click");
+    expect(wrapper.emitted("open-location")).toHaveLength(1);
   });
 });

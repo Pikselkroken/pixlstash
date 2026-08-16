@@ -12,7 +12,7 @@ requirements.
 
 ## Generating the Certificate
 
-Replace `<your-server-ip>` with your server's LAN IP (e.g. `192.168.68.123`).
+Replace `<your-server-ip>` with your server's LAN IP.
 
 ```bash
 cd ~/Projects/pixlstash

@@ -3,9 +3,10 @@
   "note": "Per-test wall clock in seconds (setup + call + teardown), used by --ci-shard to balance the backend gate's shards by time. Regenerate with scripts/record_test_durations.py. Stale or missing entries are safe: those tests fall back to their round-robin position.",
   "recorded_from": [
     "GitHub Actions CI run 31312307563 (develop @ a66d8b999f4ef0bca8e725eb61d89ffdf90bedaf), backend gate shards",
-    "local run for tests/test_security_supported_versions.py (newly gated; the rest of the map is unchanged)"
+    "local run for tests/test_security_supported_versions.py (newly gated; the rest of the map is unchanged)",
+    "local run for tests/test_cli_documentation.py (newly gated; the rest of the map is unchanged)"
   ],
-  "test_count": 2480,
+  "test_count": 2488,
   "total_seconds": 6518.81,
   "durations": {
     "tests/multi_project_authz/test_generic_field_reader_allowlist.py::test_bbox_is_serialised_exactly_as_the_relationship_path_did": 4.0,
@@ -482,6 +483,14 @@
     "tests/test_ci_shards.py::test_unusable_duration_maps_degrade_to_round_robin[truncated.json-{\"durations\": {\"tests/a.py::t\": 1.0]": 0.0,
     "tests/test_ci_shards.py::test_unusable_duration_maps_degrade_to_round_robin[wrong_shape.json-[\"tests/a.py::t\", 1.0]]": 0.0,
     "tests/test_ci_shards.py::test_windows_subset_files_all_exist": 0.0,
+    "tests/test_cli_documentation.py::test_entry_points_are_named_as_they_are_installed": 0.0,
+    "tests/test_cli_documentation.py::test_every_command_has_a_description": 0.0,
+    "tests/test_cli_documentation.py::test_every_parameter_has_help": 0.0,
+    "tests/test_cli_documentation.py::test_every_subcommand_is_listed_with_a_summary": 0.0,
+    "tests/test_cli_documentation.py::test_no_parameter_is_documented_without_being_read[app]": 0.0,
+    "tests/test_cli_documentation.py::test_no_parameter_is_documented_without_being_read[cli]": 0.0,
+    "tests/test_cli_documentation.py::test_the_help_is_the_documentation_it_claims_to_be": 0.0,
+    "tests/test_cli_documentation.py::test_the_walk_reaches_every_command": 0.0,
     "tests/test_clip_text_embedding_similarity.py::test_clip_text_embedding_similarity_measures[Clementine holding a black assault rifle]": 3.34,
     "tests/test_clip_text_embedding_similarity.py::test_embedding_storage_and_retrieval": 0.21,
     "tests/test_clip_text_embedding_similarity.py::test_picture_embedding_storage_and_retrieval": 0.23,
@@ -858,7 +867,7 @@
     "tests/test_dedup_tiers_api.py::test_decided_page_paging_is_stable_across_seams": 4.85,
     "tests/test_dedup_tiers_api.py::test_decided_rows_carry_the_display_ready_decision_stamp": 5.16,
     "tests/test_dedup_tiers_api.py::test_enabling_the_embedding_tier_alone_is_rejected": 4.52,
-    "tests/test_dedup_tiers_api.py::test_every_candidate_carries_a_thumbnail_cache_token": 4.58,
+    "tests/test_dedup_tiers_api.py::test_every_candidate_carries_a_thumbnail_cache_version": 4.58,
     "tests/test_dedup_tiers_api.py::test_expanding_a_deck_pages_and_clamps": 4.41,
     "tests/test_dedup_tiers_api.py::test_expanding_a_stack_with_no_live_members_is_a_404": 4.38,
     "tests/test_dedup_tiers_api.py::test_keep_separate_then_reopen_round_trips_through_the_api": 4.86,

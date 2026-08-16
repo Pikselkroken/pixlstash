@@ -366,6 +366,18 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # constraints would reject) and that is a data check, not a scope one.
     ("PATCH", "/api/v1/models"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/models/forget"): RoutePolicy(_OWNER),
+    # The shelf's sixth verb, and the one route on this block that spawns a
+    # process on the host's desktop. Same authority — and same red-line tier —
+    # as POST /pictures/{id}/open-location: what it can do is bounded by what
+    # the file manager can do, which is everything the owner's session can, so
+    # a LAN or Tailscale caller must never reach it and no flag may say
+    # otherwise. It takes no host path (a hub `model.id`, joined to the folder
+    # the scanner recorded and contained), which is why the tier is about the
+    # spawn rather than the input.
+    ("POST", "/api/v1/models/{model_id}/open-location"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3.1 RED LINE: opens a model's folder in the host file manager (open_in_file_manager → os.startfile/open/xdg-open — the same host-GUI spawn as pictures/open-location and reference-folders/open); loopback-only, allow_remote_host_ops can NOT loosen it",
+    ),
     # The base-model field's completion list. OWNER_ONLY on the same default
     # pin as the rest of the shelf, and NOT ANY_TOKEN: it returns per-object
     # data — the distinct `base_model` strings recorded on this machine's model
@@ -491,6 +503,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/model-files"): RoutePolicy(
         _LOCAL,
         justification="§16.3 takes a caller-supplied host path, copies that file into a registered host folder and registers it — the POST /model-folders path-taking class carrying the file writing of POST /model-moves, minus the unlink; the read is bounded to one regular .safetensors file and the write is contained against the destination folder; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # The unlink half (#933), and the shelf's only destructive verb. Takes no
+    # host path — the ids address rows the scanner wrote — but it REMOVES the
+    # owner's files, which is the unlink of POST /model-moves without the copy
+    # that justifies it, so it sits on the same tier as every other shelf route
+    # that writes the host filesystem.
+    ("POST", "/api/v1/model-files/delete"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 unlinks the owner's model files (OS trash by default, permanent on request) out of registered host folders — the unlink half of POST /model-moves standing alone, and the shelf's only destructive verb. Takes no host path: the ids address rows the scanner wrote, every path is contained against its registered folder — lexically for the file so a symlinked model loses its link and not the bytes it points at, and by realpath for the directory holding it so no symlinked component can redirect the unlink (`_contained_path`) — and only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(

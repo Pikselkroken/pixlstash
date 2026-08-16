@@ -64,11 +64,20 @@ All four id-taking verbs address rows by hub ``model.id`` rather than by hash,
 because a 24 GB checkpoint is listable long before it is hashed and would
 otherwise be the one row on the shelf that cannot be corrected.
 
-Authorization is declared, never inline: every route here but the download is
-``OWNER_ONLY`` in ``pixlstash/authz/registry.py`` (that one is
-``LOCAL_OWNER_ONLY``, above), and all of them take the **default** library pin
-(``library_independent`` is left at ``False``, so the pin runs before the policy
-branch). See ``docs/backend_architecture.md`` §16.1.
+**One route on this block drives the host's desktop rather than its disk.**
+``POST /models/{model_id}/open-location`` shows a model's folder in the file
+manager of the machine PixlStash runs on, which is the same host-shell authority
+as ``POST /pictures/{id}/open-location`` and carries the same red-line tier
+(``LOOPBACK_OWNER_ONLY``, §16.3.1): loopback only, and ``allow_remote_host_ops``
+cannot loosen it. It is a *sixth* verb next to the five below, not one of them —
+it changes nothing at all, which is why it needs no confirmation.
+
+Authorization is declared, never inline: every route here but the download and
+the open is ``OWNER_ONLY`` in ``pixlstash/authz/registry.py`` (the download is
+``LOCAL_OWNER_ONLY`` and the open is ``LOOPBACK_OWNER_ONLY``, both above), and
+all of them take the **default** library pin (``library_independent`` is left at
+``False``, so the pin runs before the policy branch). See
+``docs/backend_architecture.md`` §16.1.
 """
 
 from __future__ import annotations
@@ -84,6 +93,7 @@ from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_shelf_service import (
     CURATABLE_FIELDS,
+    MAX_MODELS_PER_EDIT,
     DEFAULT_DIRECTION,
     DEFAULT_SORT,
     ENTITY_TYPES,
@@ -106,6 +116,7 @@ from pixlstash.utils.adapter_header import (
     FILE_ENGINE,
     FILE_UNKNOWN,
 )
+from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.known_base_models import completions, fold
 from pixlstash.utils.path_utils import path_is_within
 
@@ -184,13 +195,6 @@ class ModelAttachmentRequest(ModelAttachment):
 # data (one adapter used by a handful of characters or sets) and far below a
 # list long enough to hold the write path.
 MAX_ATTACHMENTS_PER_MODEL = 200
-
-# Ceiling on one verb's selection. A shelf of 1,806 rows can be selected whole,
-# so this is set above the largest real selection rather than below it: the cost
-# is one hub UPDATE or DELETE over an id list, not a lookup per id, and 5,000
-# ids is still a single short transaction. It exists so a malformed client
-# cannot post an unbounded list into the SQL builder, not to ration the verb.
-MAX_MODELS_PER_EDIT = 5000
 
 
 class ModelResponse(BaseModel):
@@ -477,6 +481,16 @@ class ModelForgetResponse(BaseModel):
             "seconds old, and failing the whole call because one file came "
             "back would be the wrong answer to good news."
         )
+    )
+
+
+class ModelOpenLocationResponse(BaseModel):
+    """Body of ``POST /models/{model_id}/open-location``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: Literal["ok"] = Field(
+        description="The opener was launched on the server's own desktop."
     )
 
 
@@ -1123,5 +1137,54 @@ def create_router(server) -> APIRouter:
             forgotten=forgotten,
             refused=[ForgetRefusal(**item) for item in refused],
         )
+
+    @router.post(
+        "/models/{model_id}/open-location",
+        summary="Open a model's folder in the host file manager",
+        description=(
+            "Opens the folder holding a `present` copy of the model in the "
+            "file manager of the machine PixlStash runs on — the same gesture "
+            "as `POST /pictures/{id}/open-location`, and the same red line: it "
+            "drives the server's own shell, so it is `LOOPBACK_OWNER_ONLY` "
+            "(§16.3.1) and no configuration flag loosens it.\n\n"
+            "The folder rather than the file, because that is what every "
+            "platform can be asked for in one call. The copy is chosen exactly "
+            "as `GET /adapters/{sha256}/file` chooses one — the first "
+            "`present` copy that is really on disk, through the same "
+            "`_present_copy` — so a model whose only copies are `missing` or "
+            "on an unplugged drive is a 409: there is a shelf row, and nothing "
+            "on this disk to show for it. Unlike that route this one takes an "
+            "id rather than a hash, so it answers for a checkpoint and for an "
+            "unhashed file too."
+        ),
+        tags=["model_shelf"],
+        response_model=ModelOpenLocationResponse,
+    )
+    def open_model_location(model_id: int, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        if (
+            server.hub.fetchone("SELECT id FROM model WHERE id = ?", (model_id,))
+            is None
+        ):
+            raise HTTPException(status_code=404, detail="No such model.")
+
+        path = _present_copy(fetch_locations(server.hub, model_id).get(model_id, []))
+        if path is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This model is on the shelf but no copy of it is readable "
+                    "on this machine right now."
+                ),
+            )
+        if not open_in_file_manager(os.path.dirname(path)):
+            # Named rather than swallowed: the usual cause is a headless or
+            # containerised server, which has no file manager at all, and the
+            # caller's only other clue would be a click that did nothing.
+            raise HTTPException(
+                status_code=500,
+                detail="Could not open that folder on the server's desktop.",
+            )
+        return ModelOpenLocationResponse(status="ok")
 
     return router

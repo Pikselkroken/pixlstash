@@ -354,11 +354,11 @@ The core image display engine. Responsibilities:
 
 ##### Who owns a card's thumbnail URL
 
-**The server does, and the grid may only cache its answer.** `POST /pictures/thumbnails` returns a URL whose `?v=` token is `ImageUtils.thumbnail_cache_token` — the one thing that moves when a bitmap is regenerated but the picture is not replaced: the upgrade NULL-reset in `thumbnail_generation_task.py`, a reference-folder source swap, an in-place rotate.
+**The server does, and the grid may only cache its answer.** `POST /pictures/thumbnails` returns a URL whose `?v=` version is `ImageUtils.thumbnail_cache_version` — the one thing that moves when a bitmap is regenerated but the picture is not replaced: the upgrade NULL-reset in `thumbnail_generation_task.py`, a reference-folder source swap, an in-place rotate.
 
-`fetchThumbnailsBatch` still pre-fills `/pictures/thumbnails/<id>.webp?v=<imported_at epoch>` synchronously, so a tile paints without waiting for the round trip. That is a **placeholder with a placeholder's lifetime**: when the POST answers, every card it names takes the server's URL, overwriting the placeholder. The rule that broke this was `missingThumbIds`, computed *after* the pre-fill had already set `thumbnail` — so a card with an `imported_at` (i.e. every real card) was filtered out of it and kept a token derived from its import date, which never changes again. The effect was general rather than feature-specific: **no regenerated thumbnail ever repainted in the grid.** `ImageGridThumbnailToken.test.js` holds the line.
+`fetchThumbnailsBatch` still pre-fills `/pictures/thumbnails/<id>.webp?v=<imported_at epoch>` synchronously, so a tile paints without waiting for the round trip. That is a **placeholder with a placeholder's lifetime**: when the POST answers, every card it names takes the server's URL, overwriting the placeholder. The rule that broke this was `missingThumbIds`, computed *after* the pre-fill had already set `thumbnail` — so a card with an `imported_at` (i.e. every real card) was filtered out of it and kept a version derived from its import date, which never changes again. The effect was general rather than feature-specific: **no regenerated thumbnail ever repainted in the grid.** `ImageGridThumbnailVersion.test.js` holds the line.
 
-Two things the fix must not undo, both asserted: a card the server reports **no** URL for keeps what it is painting (a still-processing picture is not blanked, and a card that never had one stays null and goes down the `scheduleThumbnailRetry` path); and `appendShareToken` is applied to whichever URL wins. Never stamp a client-side `&t=Date.now()` buster — that defeats HTTP caching for every thumbnail in the library, which is the reason the token is a server contract in the first place.
+Two things the fix must not undo, both asserted: a card the server reports **no** URL for keeps what it is painting (a still-processing picture is not blanked, and a card that never had one stays null and goes down the `scheduleThumbnailRetry` path); and `appendShareToken` is applied to whichever URL wins. Never stamp a client-side `&t=Date.now()` buster — that defeats HTTP caching for every thumbnail in the library, which is the reason the version is a server contract in the first place.
 
 ##### The four grid fetch modes, and the character face search
 
@@ -458,7 +458,7 @@ Full-screen image lightbox. Responsibilities:
 - Stack expansion inline within the overlay.
 - Runs ComfyUI workflows on the current image.
 - Runs plugins on the current image.
-- **Rotate in place** (two toolbar buttons, `[` and `]`). One press is one 90° step, applied immediately: no dialog, no direction picker, no confirmation — the safety net is the receipt's Undo, because the step is instant, lossless and reversible. `POST /pictures/rotate` rewrites the file's EXIF orientation tag and leaves the bitmap alone, so the gates in `utils/rotate.js` are load-bearing: JPEG and PNG only (WebP's orientation tag is ignored by Chromium and Firefox, which would show a rotated thumbnail beside an unrotated full view), never a reference-folder file, and owner-only sessions only. A refused picture is **greyed with the reason**, never silently switched to making a copy — the tooltip is what points at Filters > Rotate, which still does. **The cache-buster is `pixel_sha` PLUS `orientation`** (`mediaVersion`), because a rotate moves neither the pixels nor the dimensions: the sampled content hash stays put, the browser applies the orientation tag itself, and a sha-only `?v=` would leave the lightbox painting the bytes it had already decoded. Same decision, same shape, as `ImageUtils.thumbnail_cache_token` server-side; orientation 1 contributes nothing, so an unrotated picture keeps the URL it has always had. Both fields are therefore server-wins in `fetchOverlayMetadata`'s otherwise local-wins merge. Afterwards the faces and detections are re-read (their boxes live in a coordinate space the turn just redefined) and `overlay-change` with `fields.pixels` tells `ImageGrid` to re-read the card's thumbnail token — which it can only do through `POST /pictures/thumbnails`, since `/pictures/{id}/metadata` carries no thumbnail URL.
+- **Rotate in place** (two toolbar buttons, `[` and `]`). One press is one 90° step, applied immediately: no dialog, no direction picker, no confirmation — the safety net is the receipt's Undo, because the step is instant, lossless and reversible. `POST /pictures/rotate` rewrites the file's EXIF orientation tag and leaves the bitmap alone, so the gates in `utils/rotate.js` are load-bearing: JPEG and PNG only (WebP's orientation tag is ignored by Chromium and Firefox, which would show a rotated thumbnail beside an unrotated full view), never a reference-folder file, and owner-only sessions only. A refused picture is **greyed with the reason**, never silently switched to making a copy — the tooltip is what points at Filters > Rotate, which still does. **The cache-buster is `pixel_sha` PLUS `orientation`** (`mediaVersion`), because a rotate moves neither the pixels nor the dimensions: the sampled content hash stays put, the browser applies the orientation tag itself, and a sha-only `?v=` would leave the lightbox painting the bytes it had already decoded. Same decision, same shape, as `ImageUtils.thumbnail_cache_version` server-side; orientation 1 contributes nothing, so an unrotated picture keeps the URL it has always had. Both fields are therefore server-wins in `fetchOverlayMetadata`'s otherwise local-wins merge. Afterwards the faces and detections are re-read (their boxes live in a coordinate space the turn just redefined) and `overlay-change` with `fields.pixels` tells `ImageGrid` to re-read the card's thumbnail version — which it can only do through `POST /pictures/thumbnails`, since `/pictures/{id}/metadata` carries no thumbnail URL.
 - Sidebar panel: metadata, score, dates, file info, penalised-tag indicator.
 - Embeds `AddToEntityControl` (set/project in the chrome; one `face`-mode instance per detected face in the Faces panel), `StarRatingOverlay`, `ProgressOverlay`, `ComfyUiRunner`, and its own `CharacterEditor` for the create-person-from-a-face flow (#645). That editor is overlay-hosted because the flow's state (target face, the trigger to refocus) is overlay-local and must not outlive the lightbox. **Escape while that dialog is open is owned by a capture-phase document handler** (`onCreatePersonKeydownCapture`): `AppDialog` stops the event on its own subtree, so a focused field is already safe, but an Escape targeting `<body>` bubbles document → window into `handleKeydown` and would close the whole lightbox behind the dialog, and a bubble-phase guard cannot fix it because `CharacterEditor`'s own document listener has already flipped the flag by then. Same pattern as `ImageGridContextMenu`.
 - Receives `allImages` array from `ImageGrid` for filmstrip navigation.
@@ -1735,11 +1735,13 @@ which is a filed gap rather than a pattern to copy.
 **The toolbar changes the VIEW, and almost nothing else (#904).** The resolved
 design consolidates it: one accented, labelled `+ Add ▾` menu holding the three
 ways a model gets onto the shelf (a folder, a loose file, an ai-toolkit import),
-the stack-detection sweep beside it as an icon, then the view controls on the
-right. Add and the sweep are the only two things there that are not view
-controls, and they sit together apart from them because neither has a selection
-to hang on — Add makes a row that does not exist yet and the sweep proposes over
-the whole shelf — and both open something before they write anything. **Every
+the stack-detection sweep beside it as an icon, the `Model folders` registry
+button beside that, then the view controls on the right. Those three are the
+only things there that are not view controls, and they sit together apart from
+them because each passes the same test: **it opens something, it writes nothing
+on the press, and it has no selection to hang on** — Add makes a row that does
+not exist yet, the sweep proposes over the whole shelf, and `Model folders`
+edits the registry the shelf reads rather than anything in it. **Every
 other verb lives on the row's context menu or in the selection pill**, so a
 mutation is never one stray click from a view switch.
 
@@ -2157,15 +2159,27 @@ collapse a folder of the same name.
 **Everything that changes a file lives on the row or in the selection bar,
 never in the toolbar** (#896). The toolbar is where the view is switched, so a
 mutating control beside `Sort` and `Show` would be one stray click from a
-different question. The four toolbar buttons are audited against that rule and
-all four hold: `Show` and `Sort` write only view state; `Model folders` and
-`Import from ai-toolkit` open a dialog and write nothing on the press, and the
-import is confirmed against a listing of the runs it found. `Group training
-runs` is the same shape — it opens the dry run, and the applying half is behind
-the dialog's own confirmation. Import and detection stay in the toolbar because
-neither has a selection to act on: their subject is a source folder full of
-files the shelf does not list yet, so there is no row and no selection to hang
-them off.
+different question. The audit is over a **named set, not a judgement**, and the
+set is counted in **focusable controls**, because a tab stop is a stray-press
+target whatever it is grouped with visually. The shelf puts **seven** in its own
+bar: `+ Add ▾`, `Stack training runs`, `Model folders`, `Group`, the `Sort`
+direction toggle, the `Sort` menu, and `Show`. All seven hold. `Group`, both
+halves of `Sort`, and `Show` write only view state. The other three each open
+something and write nothing on the press:
+`+ Add ▾` opens a menu, and its `Import from ai-toolkit` item is confirmed
+against a listing of the runs it found; `Stack training runs` opens the dry run,
+with the applying half behind the dialog's own confirmation; `Model folders`
+opens the registry dialog. Those three stay in the toolbar because none has a
+selection to act on — their subject is a source folder full of files the shelf
+does not list yet, or the list of such folders itself, so there is no row and no
+selection to hang them off.
+
+The **app-wide tail is outside this set and outside the rule**: `UndoControl`
+writes on the press by design, and it, `Settings` and the stats toggle are not
+the shelf's controls at all — they are the canonical tail every view carries,
+ruled off by a separator (see the toolbar section above). Adding a control to
+the shelf's own bar means adding it to the seven and re-running this audit;
+adding one to the tail is a different document.
 
 **The bar states the count AND what the selection weighs**, `40 models selected
 · 12.4 GB`, in the `·` separator the grid's own `SelectionBar` uses. The size is
@@ -2336,9 +2350,54 @@ and at the pointer with them.
   selected leaves the selection alone, so a menu opened on any of forty selected
   rows acts on all forty. Without that, select-then-right-click — the commonest
   gesture in a bulk edit — would silently drop the other 39.
-- **`Open in file manager` and `Delete from disk` are the design's and are NOT
-  built.** Neither has a route behind it and both are host-capability
-  operations, so they are tracked in #933 rather than rendered dead.
+- **`Delete from disk` is built (#933) and is the one verb in the danger
+  treatment**, in the pill and in the menu. Its LABEL follows the Shift key —
+  `Move to Trash` / `Move to Recycle Bin`, or `Permanently delete` — because
+  that is the file-manager gesture the reader already knows from Explorer, and
+  the same gesture is on the `Delete` key. What the label says and what the verb
+  does come from two different places on purpose: the label reads a tracked
+  `shiftHeld`, which can be a moment stale after a blur, while the operation
+  reads `event.shiftKey` off the press itself, so a stale label can never turn a
+  trash into an unlink. The confirmation names the operation either way, and it
+  is the gate. `deletableModels` mirrors the route's gate — `user` and `managed`
+  folders only, nothing `unreachable`, no built-in engine, judged across a
+  stack's members — so the verb is never offered where it could only come back
+  refused, and it is disabled while the folder registry is unknown, which is the
+  safe direction and the one Move already fails in.
+- **The confirmation counts MODELS and posts exactly what it counted.** A stack
+  is one row standing for a whole run, so `confirmDelete` narrows to the
+  deletable rows, expands them to member ids, and sends *those* — a prompt
+  counting rows would have offered "Move this model to the Trash?" over six
+  checkpoints. The `Delete` key has no disabled state, so when it finds nothing
+  deletable it says why in a notice rather than answering the press with
+  silence. The receipt's trash word comes from the delete response
+  (`trash_name`, the SERVER's platform) rather than from the browser: where the
+  bytes went is the difference between recoverable and not. Only the pre-action
+  label falls back to the browser's own guess, which is cosmetic.
+- **`Open in file manager` is built (#933), and it is the one verb here that
+  acts on the machine rather than on the library.** `POST
+  /models/{model_id}/open-location` shows the row's folder in the file manager
+  of the host PixlStash runs on, which is a host-shell capability and therefore
+  loopback-only at the gate (`docs/backend_architecture.md` §16.3.1) — a shelf
+  opened from a phone on the same LAN cannot drive that desktop, and no setting
+  loosens it. Three consequences for this surface: it is **single-selection
+  only** (forty rows would be forty windows, so it renders in the row context
+  menu and never in the `⋯` menu, which is always drawn with `single: false`);
+  it is **disabled without a `present` copy**, which is the recorded half of the
+  route's gate, so a `missing` row or an unplugged drive says why instead of
+  spending a request — the other half is `os.path.isfile` and only the server
+  can answer it, so a row whose file went since the list was drawn still comes
+  back 409; and each failure gets **its own notice sentence** (403 "you are not
+  sitting at that machine", 409 "rescan the folder", anything else "that machine
+  has no desktop"), because nothing visible happens on this screen when it
+  succeeds either — silence would read as success, and the wrong reason sends
+  the reader to fix the wrong thing.
+  The id posted is the row's own, which for a collapsed stack is the cover's:
+  one press opens one window, on the file that was right-clicked. The shelf's
+  own Stack verb refuses to group across folders, so a run it built shares one
+  — but the route behind `POST /model-stacks` takes an arbitrary id list and
+  enforces nothing of the sort, which is why this is documented as the cover's
+  folder rather than the run's.
 
 **Assign reuses the grid's picker rather than a shelf-local one.** Two
 instances, `type="character"` and `type="set"`, so the search, the tri-state and
@@ -2667,10 +2726,12 @@ front of you. Both stores are refreshed afterwards, for the reason the import
 refreshes both: the shelf gained a row and the destination folder's file count
 and `shelf_bytes` moved with it, so the drive bands are stale too.
 
-**The toolbar button is hidden, not disabled, when no `source` folder is
-registered** — unlike the selection bar's verbs, which are about a selection the
-reader just made and therefore owe an explanation in a tooltip. This is about a
-folder they have not set up, which the folders dialog is the place to say.
+**The `Import from ai-toolkit` item is hidden, not disabled, when no `source`
+folder is registered** — unlike the selection bar's verbs, which are about a
+selection the reader just made and therefore owe an explanation in a tooltip.
+This is about a folder they have not set up, which the folders dialog is the
+place to say. Since #904 it is an item inside `+ Add ▾` behind a
+`v-if="hasSourceFolder"`, not a toolbar button of its own.
 
 **Receipts are notices, not `useActionReceipt`.** That composable is built on
 `useOperationStore`, which is the vault-only operation log with undo keycaps —
@@ -2712,11 +2773,35 @@ its own overrides (the container-query fold, the icon-trigger accent) and
 #### Registering the folders the shelf reads
 
 `ModelFoldersDialog.vue` (`components/panels/`) is the registry surface,
-opened from a `bar-btn--boxed` beside `Show` and from the empty state's own
-button. The empty state is the moment the folder list matters, so the fix must
-not be two navigations away in Settings. `FolderBrowser.vue` is reused whole as
-the host-path picker, and `registeredPaths` is what stops the API's duplicate
-409 rather than reporting it.
+opened from three doors: the toolbar's `bar-btn--boxed` `Model folders` button
+beside the stack sweep, the `+ Add ▾` menu's `Add folder…` item, and the empty
+state's own button. The empty state is the moment the folder list matters, so
+the fix must not be two navigations away in Settings — and the toolbar button is
+what keeps it reachable once the empty state has unmounted, which is exactly
+when rescan, relocate and forget start to matter. Because more than one control
+opens it, `ModelShelf.vue` holds a `folderInvoker` and `openFolders(invoker)`
+takes the control to return focus to. **Every door names one**, and names the
+control that will still be there rather than the element pressed: the
+`Add folder…` item names the **Add button behind it**, because the item itself
+unmounts with the menu. The fallback is the always-mounted toolbar button, and
+it exists for exactly one case — the empty-state button unmounting underneath
+its own dialog when the first scan finds something. That case is asserted, along
+with the two ordinary ones, against a real `document.activeElement`; drop the
+`isConnected` check and the suite goes red. The earlier `event.currentTarget`
+version of all this was dead code: no call site ever passed an event.
+
+Neither this button nor the stack sweep takes **`bar-btn--open`**. `App.css`
+declares that class for "the toolbar button while its MENU is open", and both
+open an `AppDialog`, which sets `:scrim="true"` — so the highlight is painted
+under the scrim for exactly as long as it applies, and neither button has the
+chevron the rule rotates. `Group`, `Sort` and `Show` keep it because they really
+are menus. Both carry `aria-haspopup="dialog"` and neither carries
+`aria-expanded`: focus moves into the dialog rather than into anything the
+button owns.
+
+`FolderBrowser.vue` is reused whole as the host-path picker, and
+`registeredPaths` is what stops the API's duplicate 409 rather than reporting
+it.
 
 Four states are designed rather than left to fail on click:
 
@@ -2779,9 +2864,10 @@ the row's fields are captured *before* the request that destroys them.
 
 Rows are a plain `<ul role="list">` of real `<button>`s, deliberately **not**
 `role="listbox"` / `role="option"`: nothing here is selected, and interactive
-controls inside an `option` are unreachable to a screen reader. Both openers
-restore focus to the control that was pressed, falling back to the toolbar
-button when the empty-state button has unmounted underneath the dialog.
+controls inside an `option` are unreachable to a screen reader. All **three**
+openers restore focus to the control that was pressed — see the folder-registry
+section above for how, and for the one case (the empty-state button unmounting
+underneath its own dialog) that the fallback exists to catch.
 
 ---
 

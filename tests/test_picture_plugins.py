@@ -1,4 +1,5 @@
 import os
+import sys
 import tempfile
 import numpy as np
 
@@ -447,3 +448,185 @@ def test_encoded_plugin_output_is_returned_untouched():
             b"jpegbytes",
             ".jpg",
         )
+
+
+# ---------------------------------------------------------------------------
+# Registry loading rules (issue #968). No Server, and no dependency on the
+# shipped built-ins: both directories are temporary, so these cost a few
+# milliseconds and cannot be broken by a change to a real built-in.
+# ---------------------------------------------------------------------------
+
+_CONCRETE_PLUGIN = """
+from pixlstash.image_plugins.base import ImagePlugin
+
+
+class {cls}(ImagePlugin):
+    name = "{name}"
+    display_name = "{name}"
+
+    def parameter_schema(self):
+        return []
+
+    def run(self, images, parameters=None, progress_callback=None,
+            error_callback=None, captions=None):
+        return list(images)
+"""
+
+
+def _write(folder: str, filename: str, source: str) -> str:
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, filename)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(source)
+    return path
+
+
+def _manager(temp_dir: str):
+    """A manager over two temporary directories, both possibly empty."""
+    from pixlstash.image_plugins.registry import ImagePluginManager
+
+    return ImagePluginManager(
+        built_in_dir=os.path.join(temp_dir, "built-in"),
+        user_dir=os.path.join(temp_dir, "user"),
+    )
+
+
+def test_registry_prefers_the_concrete_class_over_an_abstract_intermediate():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        _write(
+            os.path.join(temp_dir, "user"),
+            "layered.py",
+            '''
+from pixlstash.image_plugins.base import ImagePlugin
+
+
+class Intermediate(ImagePlugin):
+    """Defined first, and abstract: `run` is left to subclasses."""
+
+    name = "intermediate"
+
+    def parameter_schema(self):
+        return []
+
+
+class Real(Intermediate):
+    name = "layered"
+    display_name = "Layered"
+
+    def run(self, images, parameters=None, progress_callback=None,
+            error_callback=None, captions=None):
+        return list(images)
+''',
+        )
+        manager = _manager(temp_dir)
+        manager.reload()
+
+        assert type(manager.get_plugin("layered")).__name__ == "Real"
+        assert manager.get_plugin("intermediate") is None
+        assert manager.list_errors() == []
+
+
+def test_a_file_whose_only_plugin_class_is_abstract_names_the_missing_method():
+    """The abstract skip must not cost the diagnostic for a forgotten method."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        path = _write(
+            os.path.join(temp_dir, "user"),
+            "forgetful.py",
+            """
+from pixlstash.image_plugins.base import ImagePlugin
+
+
+class Forgetful(ImagePlugin):
+    name = "forgetful"
+
+    def parameter_schema(self):
+        return []
+""",
+        )
+        manager = _manager(temp_dir)
+        manager.reload()
+
+        assert manager.get_plugin("forgetful") is None
+        errors = manager.list_errors()
+        assert len(errors) == 1
+        assert errors[0]["file"] == path
+        assert "Forgetful" in errors[0]["message"]
+        assert "run" in errors[0]["message"]
+
+
+def test_registry_ignores_a_plugin_class_the_file_only_imported():
+    """A user file importing another plugin for reference must not ship it."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        helper_dir = os.path.join(temp_dir, "helpers")
+        # Named `filmgrain` after the built-in below, so shipping the imported
+        # class would replace that built-in — the compounding failure #968
+        # describes, since a user plugin also wins a name collision.
+        _write(
+            helper_dir,
+            "borrowed.py",
+            _CONCRETE_PLUGIN.format(cls="Borrowed", name="filmgrain"),
+        )
+        _write(
+            os.path.join(temp_dir, "built-in"),
+            "filmgrain.py",
+            _CONCRETE_PLUGIN.format(cls="FilmGrain", name="filmgrain"),
+        )
+        _write(
+            os.path.join(temp_dir, "user"),
+            "mine.py",
+            "from borrowed import Borrowed  # noqa: F401\n"
+            + _CONCRETE_PLUGIN.format(cls="Mine", name="mine"),
+        )
+
+        sys.path.insert(0, helper_dir)
+        try:
+            manager = _manager(temp_dir)
+            manager.reload()
+        finally:
+            # The plugin module holds its own reference to the imported class,
+            # so neither of these can un-import it out from under the manager.
+            sys.path.remove(helper_dir)
+            sys.modules.pop("borrowed", None)
+
+        assert type(manager.get_plugin("mine")).__name__ == "Mine"
+        assert type(manager.get_plugin("filmgrain")).__name__ == "FilmGrain"
+        assert manager.list_errors() == []
+
+
+def test_a_user_plugin_shadowing_a_built_in_is_reported_against_the_user_file():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        _write(
+            os.path.join(temp_dir, "built-in"),
+            "filmgrain.py",
+            _CONCRETE_PLUGIN.format(cls="FilmGrain", name="filmgrain"),
+        )
+        user_path = _write(
+            os.path.join(temp_dir, "user"),
+            "my_grain.py",
+            _CONCRETE_PLUGIN.format(cls="MyGrain", name="filmgrain"),
+        )
+        manager = _manager(temp_dir)
+        manager.reload()
+
+        # User still wins, deliberately — but it is now visible, and it is the
+        # user file that is named rather than the built-in it displaced.
+        assert type(manager.get_plugin("filmgrain")).__name__ == "MyGrain"
+        errors = manager.list_errors()
+        assert len(errors) == 1
+        assert errors[0]["file"] == user_path
+        assert "filmgrain" in errors[0]["message"]
+        assert "built-in" in errors[0]["message"]
+
+
+def test_two_user_plugins_with_one_name_keep_the_first_and_are_not_errors():
+    """Only a shadowed *built-in* is recorded; a user-vs-user clash still logs."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        user_dir = os.path.join(temp_dir, "user")
+        _write(user_dir, "a_first.py", _CONCRETE_PLUGIN.format(cls="A", name="twin"))
+        _write(user_dir, "b_second.py", _CONCRETE_PLUGIN.format(cls="B", name="twin"))
+        manager = _manager(temp_dir)
+        manager.reload()
+
+        # Sorted order: a_first.py claims the name, b_second.py is the duplicate.
+        assert type(manager.get_plugin("twin")).__name__ == "A"
+        assert manager.list_errors() == []

@@ -37,7 +37,7 @@ from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_i
 logger = get_logger(__name__)
 
 
-# Thumbnails are served under content-addressed URLs (the ?v=WxH token changes
+# Thumbnails are served under content-addressed URLs (the ?v=WxH version changes
 # whenever the bitmap is regenerated), so browsers may cache them briefly but must
 # revalidate afterwards — that keeps reference-folder source swaps (same URL, new
 # bytes) from serving stale forever, which the previous header-less heuristic
@@ -471,7 +471,7 @@ def register_routes(router, server):
                     "square_crop_y",
                     "square_crop_side",
                     "imported_at",
-                    # Feeds `thumbnail_cache_token` below. `select_fields` is an
+                    # Feeds `thumbnail_cache_version` below. `select_fields` is an
                     # allowlist, so anything absent is DEFERRED — and these rows
                     # outlive their session, which turns a deferred read into
                     # `DetachedInstanceError` for every picture in the batch.
@@ -572,7 +572,7 @@ def register_routes(router, server):
                 # old key was imported_at, which never changed on regen -> the
                 # browser kept painting the pre-upgrade square bitmap into the
                 # justified layout's AR cell -> squashed thumbnails.
-                v = ImageUtils.thumbnail_cache_token(
+                v = ImageUtils.thumbnail_cache_version(
                     getattr(pic, "thumbnail_width", None),
                     getattr(pic, "thumbnail_height", None),
                     getattr(pic, "orientation", None),

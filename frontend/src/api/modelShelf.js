@@ -155,3 +155,42 @@ export async function setAdapterAttachments(sha256, attachments) {
 export async function forgetModels(ids) {
   return unwrap(apiClient.post("/models/forget", { ids }));
 }
+
+/**
+ * Delete models from disk, and their shelf rows with them.
+ *
+ * The one shelf call that destroys the owner's bytes, so its caller confirms
+ * first. Every registered copy of each model goes, or none of it does: the
+ * server refuses a model whose copy sits somewhere it will not unlink from (its
+ * own engine folders, the InsightFace packs, the shared HuggingFace cache) or
+ * on a drive that is not plugged in, and reports the refusal rather than
+ * failing the call.
+ *
+ * @param {Array<number>} ids - hub `model.id` values. A stack passes its
+ *   members: a run is deleted whole or not at all.
+ * @param {Object} [options]
+ * @param {boolean} [options.permanent=false] - false moves the files to the
+ *   machine's trash, which is the undo. True unlinks them, and nothing gets
+ *   them back; the shelf sends it only for Shift+Delete.
+ * @returns {Promise<{deleted: Array<number>, files_removed: number,
+ *   permanent: boolean, refused: Array<{id: number, reason: string}>}>}
+ */
+export async function deleteModels(ids, { permanent = false } = {}) {
+  return unwrap(apiClient.post("/model-files/delete", { ids, permanent }));
+}
+
+/**
+ * Ask the server host to show a model's folder in its desktop file manager.
+ *
+ * The one shelf call that acts on the machine rather than on the library, so
+ * it is loopback-only at the gate: a shelf opened over the LAN cannot drive
+ * the server's desktop, and neither can a headless one — that comes back 500
+ * rather than pretending a window opened somewhere.
+ *
+ * @param {number} id - hub `model.id`. A collapsed stack passes its cover, so
+ *   the cover's folder is the one that opens.
+ * @returns {Promise<{status: string}>}
+ */
+export async function openModelLocation(id) {
+  return unwrap(apiClient.post(`/models/${id}/open-location`));
+}

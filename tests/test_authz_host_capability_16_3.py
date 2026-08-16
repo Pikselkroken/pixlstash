@@ -48,6 +48,7 @@ from pixlstash.authz.policy import (
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.route_inventory import api_endpoint_set
 from tests.authz_guard import no_spa_fallback  # noqa: F401
+from tests.network_vectors import LAN_IPV4, PRIVATE_10_IPV4
 
 API = "/api/v1"
 
@@ -56,12 +57,17 @@ API = "/api/v1"
 # absent-route probe below asserts 404/405 and is unaffected (non-2xx only).
 pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
-# The 5 red-line routes on the stricter loopback-only tier. Four spawn a host GUI
-# process (os.startfile / open / xdg-open); server-config/open was a
+# The 6 red-line routes on the stricter loopback-only tier. FOUR of them spawn a
+# host GUI process (os.startfile / open / xdg-open); server/restart re-execs the
+# process and spawns nothing, which the comment here counted as a GUI spawn from
+# 2026-07-21 until #933 came to add a real one. server-config/open was a
 # byte-identical sibling that shipped owner_only with no locality check (CSO
-# Condition 1, 2026-07-21) and is reclassified here.
+# Condition 1) and is reclassified here; the model shelf's `Open in file manager`
+# (#933) is the fourth spawn and the first to reach it through the shared
+# pixlstash/utils/host_open.py, which reads the opener's exit status where the
+# three inline copies discard it.
 #
-# The fifth is the e2e test hook. It spawns nothing, but it synthesises arbitrary
+# The sixth is the e2e test hook. It spawns nothing, but it synthesises arbitrary
 # WebSocket grid events broadcast to every connected client — a capability over
 # OTHER clients' state rather than over the caller's own data — and it is mounted
 # only by the e2e backend, which binds 127.0.0.1 and is driven from the same
@@ -71,6 +77,7 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/server/restart"),
     ("POST", "/api/v1/reference-folders/{folder_id}/open"),
     ("POST", "/api/v1/pictures/{id}/open-location"),
+    ("POST", "/api/v1/models/{model_id}/open-location"),
     ("POST", "/api/v1/server-config/open"),
     ("POST", "/api/v1/test-hooks/ws-event"),
 }
@@ -87,8 +94,8 @@ def test_is_local_ip_not_widened_to_tailscale():
     middleware ALL-token block, the HTTPS-skip carve-out). Tailscale CGNAT is NOT
     private, so it must remain False on the shared predicate."""
     assert is_local_ip("127.0.0.1") is True
-    assert is_local_ip("10.0.0.5") is True
-    assert is_local_ip("192.168.1.9") is True
+    assert is_local_ip(PRIVATE_10_IPV4) is True
+    assert is_local_ip(LAN_IPV4) is True
     assert is_local_ip("100.64.0.5") is False  # Tailscale CGNAT — NOT widened here
     assert is_local_ip("8.8.8.8") is False
 
@@ -104,7 +111,7 @@ def test_is_tailscale_ip_covers_cgnat_and_ula():
     assert is_tailscale_ip("100.63.255.255") is False
     assert is_tailscale_ip("100.128.0.1") is False
     assert is_tailscale_ip("8.8.8.8") is False
-    assert is_tailscale_ip("10.0.0.1") is False
+    assert is_tailscale_ip(PRIVATE_10_IPV4) is False
 
 
 def test_is_local_or_tailscale_ip_is_the_host_ops_predicate():
@@ -112,8 +119,8 @@ def test_is_local_or_tailscale_ip_is_the_host_ops_predicate():
     the union the §16.3 gate uses (and only the gate)."""
     for ip in (
         "127.0.0.1",
-        "10.0.0.5",
-        "192.168.1.9",
+        PRIVATE_10_IPV4,
+        LAN_IPV4,
         "100.64.0.5",
         "fd7a:115c:a1e0::1",
     ):
@@ -126,8 +133,8 @@ def test_is_loopback_ip_rejects_lan_and_tailscale():
     loopback — the flag-immune tier can never be reached from them."""
     assert is_loopback_ip("127.0.0.1") is True
     assert is_loopback_ip("::1") is True
-    assert is_loopback_ip("10.0.0.5") is False
-    assert is_loopback_ip("192.168.1.9") is False
+    assert is_loopback_ip(PRIVATE_10_IPV4) is False
+    assert is_loopback_ip(LAN_IPV4) is False
     assert is_loopback_ip("100.64.0.5") is False
     assert is_loopback_ip("8.8.8.8") is False
 
@@ -156,10 +163,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_28_local_5_loopback():
-    """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 33 routes carry a
-    locality tier = 28 local + 5 loopback.
+def test_host_capability_tier_split_is_29_local_6_loopback():
+    """The loopback tier is the 4 file-manager spawns, the process restart and
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 35
+    routes carry a locality tier = 29 local + 6 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -244,6 +251,27 @@ def test_host_capability_tier_split_is_28_local_5_loopback():
     exists for, so the tier costs it nothing; a genuinely remote generator needs
     ``allow_remote_host_ops``, which is the safe direction to fail in.
 
+    34 = 29 + 5 with ``POST /model-files/delete``, the shelf's delete verb
+    (#933). It is the **unlink half of ``POST /model-moves`` standing alone**:
+    it removes the owner's model files — to the OS trash by default, permanently
+    on request — and then drops their hub rows. It takes no host path, and the
+    same containment the mover uses for its source decides every path it
+    touches; what puts it here is the destruction itself, which is the strongest
+    thing the shelf does to a disk and is not made weaker by the ids being ours
+    rather than the caller's.
+
+    35 = 29 + 6 with ``POST /models/{model_id}/open-location``, the shelf's
+    ``Open in file manager`` (#933) and the **first addition to the loopback
+    tier since the e2e test hook**. It is the same host-GUI spawn as the three
+    file-manager routes before it — ``server/restart``, the fourth member, drives
+    the host shell without spawning a GUI — reached through the shared
+    ``pixlstash/utils/host_open.py`` rather than inline, so it needs no new
+    argument for the tier: the authority is the host's own shell. It is here for
+    the *spawn* and not for an input — there is no body, the id is a hub
+    ``model.id``, and the path is the scanner's own folder joined to its relpath
+    and contained, exactly as ``GET /adapters/{sha256}/file`` contains the same
+    join. The local count is unchanged.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -256,8 +284,8 @@ def test_host_capability_tier_split_is_28_local_5_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 28, sorted(local)
+    assert len(loopback) == 6, sorted(loopback)
+    assert len(local) == 29, sorted(local)
 
 
 # ===========================================================================
@@ -345,7 +373,7 @@ def test_local_owner_only_allows_loopback_lan_and_tailscale():
         with _enforcing(server):
             # Loopback (in-process peer, no XFF).
             assert not _is_locality_403(owner.get(_BROWSE)), "loopback must pass"
-            for ip in ("10.0.0.5", "192.168.1.9", "100.64.0.5"):
+            for ip in (PRIVATE_10_IPV4, LAN_IPV4, "100.64.0.5"):
                 r = owner.get(_BROWSE, headers=_xff(ip))
                 assert not _is_locality_403(r), (
                     f"{ip} must count as local for host-ops; got {r.status_code}: {r.text}"
@@ -629,7 +657,7 @@ def test_loopback_owner_only_rfc1918_403_even_with_flag_on():
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
         with _enforcing(server), _remote_host_ops(server, True):
-            r = owner.post(_OPEN_LOCATION, headers=_xff("192.168.1.9"))
+            r = owner.post(_OPEN_LOCATION, headers=_xff(LAN_IPV4))
             assert _is_loopback_403(r), (
                 f"RFC1918 must be 403'd on a LOOPBACK_OWNER_ONLY route even with "
                 f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
@@ -650,6 +678,39 @@ def test_loopback_owner_only_public_403():
             r = owner.post(_OPEN_LOCATION, headers=_xff("8.8.8.8"))
             assert _is_loopback_403(r), (
                 f"public owner must be 403'd on the red line; got {r.status_code}: {r.text}"
+            )
+
+
+_SHELF_OPEN = f"{API}/models/999999/open-location"  # the #933 red-line route
+
+
+def test_the_shelf_open_location_is_on_the_red_line_too():
+    """#933: the model shelf's `Open in file manager` spawns the same host GUI
+    process as its four predecessors, so it gets the same carve-out proof —
+    RFC1918, Tailscale and public all 403 EVEN with ``allow_remote_host_ops``
+    on, and a loopback owner passes the gate.
+
+    The positive half runs on an id no shelf holds, so the handler answers 404
+    and nothing is spawned: what is under test is the gate in front of it, and
+    a test that reached the spawn would open a file manager window on whichever
+    machine ran the suite."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            for ip in (LAN_IPV4, PRIVATE_10_IPV4, "100.64.0.5", "8.8.8.8"):
+                r = owner.post(_SHELF_OPEN, headers=_xff(ip))
+                assert _is_loopback_403(r), (
+                    f"{ip} must be 403'd on the shelf's open-location even with "
+                    f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
+                )
+            r = owner.post(_SHELF_OPEN)
+            assert not _is_loopback_403(r), (
+                f"loopback owner must reach the shelf's open-location; "
+                f"got {r.status_code}: {r.text}"
+            )
+            assert r.status_code == 404, (
+                f"expected the handler's no-such-model 404 past the gate, "
+                f"got {r.status_code}: {r.text}"
             )
 
 
@@ -674,7 +735,7 @@ def test_server_config_open_loopback_owner_only_carve_out():
         server, owner = env["server"], env["owner"]
         with _enforcing(server), _remote_host_ops(server, True):
             # NEGATIVE carve-out: none of these may pass even with the flag ON.
-            for ip in ("192.168.1.9", "100.64.0.5", "8.8.8.8"):
+            for ip in (LAN_IPV4, "100.64.0.5", "8.8.8.8"):
                 r = owner.post(_CONFIG_OPEN, headers=_xff(ip))
                 assert _is_loopback_403(r), (
                     f"{ip} must be 403'd on server-config/open even with "
@@ -713,7 +774,7 @@ def test_reverse_proxy_real_lan_client_allowed():
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
         with _enforcing(server):
-            r = owner.get(_BROWSE, headers=_xff("192.168.1.50"))
+            r = owner.get(_BROWSE, headers=_xff(LAN_IPV4))
             assert not _is_locality_403(r), (
                 f"a LAN real client must be admitted; got {r.status_code}: {r.text}"
             )
@@ -824,7 +885,7 @@ def test_test_hooks_non_loopback_owner_is_403_even_with_flag_on():
     with _test_hooks_owner_env() as env:
         server, owner = env["server"], env["owner"]
         with _enforcing(server), _remote_host_ops(server, True):
-            for ip in ("192.168.1.9", "10.0.0.5", "100.64.0.5", "8.8.8.8"):
+            for ip in (LAN_IPV4, PRIVATE_10_IPV4, "100.64.0.5", "8.8.8.8"):
                 r = owner.post(_WS_HOOK, json=_WS_HOOK_BODY, headers=_xff(ip))
                 assert _is_loopback_403(r), (
                     f"{ip} must be 403'd on the test hook even with "

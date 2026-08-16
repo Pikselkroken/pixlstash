@@ -989,6 +989,78 @@ export function movableCopies(rows, foldersById = null) {
 }
 
 /**
+ * The folder kinds whose contents are the owner's to destroy.
+ *
+ * Mirrors `DELETABLE_FOLDER_KINDS` in `pixlstash/routes/model_files.py`. `user`
+ * is a folder they registered; `managed` is the store PixlStash keeps for files
+ * it was *given*, which is where `Add file` and an import land — a shelf that
+ * could not delete from it could not undo either of them. Every other kind is
+ * `foreign`: PixlStash's own engines, the InsightFace packs and the HuggingFace
+ * cache, which are listed so the owner can see what they cost on disk and not
+ * so the shelf can unlink them.
+ */
+export const DELETABLE_FOLDER_KINDS = new Set(["user", "managed"]);
+
+/**
+ * What the machine in front of the reader calls its trash.
+ *
+ * A label, never a decision: what actually happens is `permanent`, which the
+ * server echoes back. The browser's platform is a good-enough proxy for the
+ * server's here because the delete route is `LOCAL_OWNER_ONLY` — it is refused
+ * outright unless the caller is on the same machine or the same network — so
+ * the two differ only in a mixed-OS LAN, where the cost is one wrong noun.
+ *
+ * @param {Object} [nav=navigator] - injectable for tests.
+ * @returns {string} `Recycle Bin` on Windows, `Trash` everywhere else.
+ */
+export function trashName(
+  nav = typeof navigator !== "undefined" ? navigator : null,
+) {
+  const platform = nav?.userAgentData?.platform || nav?.userAgent || "";
+  return /win/i.test(platform) ? "Recycle Bin" : "Trash";
+}
+
+/**
+ * The selected models a delete could actually act on.
+ *
+ * Every gate the route enforces, checked here so the verb is never offered
+ * where it could only come back refused — and per MODEL rather than per copy,
+ * because the server deletes a model whole or not at all: unlinking the
+ * reachable half of a model that also lives in the HuggingFace cache would
+ * leave the row the owner wanted gone still on the shelf.
+ *
+ * A stack is judged across its members for the same reason `selectedModelIds`
+ * expands them: a run is deleted whole, or the cover would go and leave five
+ * steps behind.
+ *
+ * With no folder map (the registry has not loaded, or could not be read)
+ * nothing is deletable, which is the safe direction to fail in and the same one
+ * Move already fails in.
+ *
+ * @param {Array<Object>} rows - shelf rows, each with `locations`.
+ * @param {Map<number, Object>|null} foldersById - `model_folder.id` to the
+ *   folder row.
+ * @returns {Array<Object>} the subset of `rows` a delete would act on.
+ */
+export function deletableModels(rows, foldersById = null) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    const parts = row?.members?.length ? row.members : [row];
+    return parts.every((part) => {
+      // An engine is declared again on every start, so deleting one removes a
+      // file that comes straight back — after the feature broke.
+      if (part?.file_kind === "engine") return false;
+      return (part?.locations || []).every((loc) => {
+        // "We could not look", not "it is gone": an unplugged drive must never
+        // be read as a deletion.
+        if (loc?.state === "unreachable") return false;
+        const folder = foldersById?.get(Number(loc.folder_id));
+        return Boolean(folder) && DELETABLE_FOLDER_KINDS.has(folder.kind);
+      });
+    });
+  });
+}
+
+/**
  * Fold each stack's members into the one row that stands for them.
  *
  * A training run is many `model` rows and the list query returns all of them,

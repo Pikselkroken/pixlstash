@@ -27,12 +27,14 @@
          header already says it and a second announcer double-speaks. -->
     <p class="visually-hidden" role="status">{{ sortAnnouncement }}</p>
 
-    <!-- The toolbar changes the VIEW. The two things on it that are not view
+    <!-- The toolbar changes the VIEW. The three things on it that are not view
          controls are the ones with no selection to hang on — Add, which makes a
-         row that does not exist yet, and the stack sweep, which proposes over
-         the whole shelf — so they sit together on the left, apart from the view
-         controls, and both open something before they write anything. Every
-         other verb lives on the row or in the selection pill (#904). -->
+         row that does not exist yet; the stack sweep, which proposes over the
+         whole shelf; and Model folders, which edits the registry the shelf
+         reads — so they sit together on the left, apart from the view controls.
+         The test the left group applies: it opens something, it writes nothing
+         on the press, and it has no selection to hang on. Every other verb
+         lives on the row or in the selection pill (#904). -->
     <div class="shelf-toolbar">
       <span class="shelf-title">Models</span>
       <span class="shelf-sub">{{ countLabel }}</span>
@@ -73,7 +75,7 @@
             class="shelf-mi"
             type="button"
             role="menuitem"
-            @click="openFolders()"
+            @click="openFolders(addBtnRef)"
           >
             <v-icon size="16">mdi-folder-plus-outline</v-icon>
             <span>Add folder…</span>
@@ -114,13 +116,43 @@
       <button
         ref="stacksBtnRef"
         class="bar-btn bar-btn--boxed"
-        :class="{ 'bar-btn--open': stacksOpen }"
         type="button"
         title="Stack training runs — review proposed stacks"
         aria-label="Stack training runs"
+        aria-haspopup="dialog"
         @click="stacksOpen = true"
       >
         <v-icon size="19">mdi-layers-plus</v-icon>
+      </button>
+
+      <!-- The registry the shelf reads, and the only door to it once the empty
+           state is gone: Add ▾ spells this "Add folder…", which is the wrong
+           promise for rescan, relocate and forget.
+
+           No count badge: `bar-filter-badge` counts a deviation from a default
+           the reader set, and a folder count never returns to zero (the managed
+           store always exists), so a permanent number beside Show's identical
+           pill would mean something else entirely.
+
+           No `bar-btn--open`, and the sweep above lost its copy in the same
+           change: `App.css` declares that class for "the toolbar button while
+           its MENU is open", and both of these open an `AppDialog`, which sets
+           `:scrim="true"`. The highlight is painted under the scrim for exactly
+           as long as it applies, and neither button has the chevron the rule
+           rotates. Group/Sort/Show keep it because they really are menus.
+           `aria-haspopup="dialog"` on both, and `aria-expanded` on neither:
+           focus moves into the dialog rather than into anything the button
+           owns. -->
+      <button
+        ref="foldersBtnRef"
+        class="bar-btn bar-btn--boxed"
+        type="button"
+        title="Model folders — add, rescan, move or forget a folder"
+        aria-label="Model folders"
+        aria-haspopup="dialog"
+        @click="openFolders(foldersBtnRef)"
+      >
+        <v-icon size="19">mdi-folder-multiple-outline</v-icon>
       </button>
 
       <span class="shelf-spacer"></span>
@@ -359,9 +391,11 @@
           machine. Add the folder where you keep them.
         </p>
         <button
+          ref="emptyFoldersBtnRef"
           class="tbm-action tbm-action--primary"
           type="button"
-          @click="openFolders()"
+          aria-haspopup="dialog"
+          @click="openFolders(emptyFoldersBtnRef)"
         >
           Add a model folder
         </button>
@@ -884,9 +918,11 @@
         @set-kind="editVerb = 'kind'"
         @stack="confirmStack"
         @move="openMove(store.selectedRows)"
+        @open-location="openLocation"
         @set-icon="pickIcon"
         @clear-icons="confirmClearIcons"
         @forget="confirmForget"
+        @delete="confirmDelete"
       />
     </div>
 
@@ -962,6 +998,7 @@ import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
+import { openModelLocation } from "../../api/modelShelf";
 import { createStack } from "../../api/modelStacks";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -981,6 +1018,8 @@ import {
   bandProjection,
   bandUsage,
   capabilityLabel,
+  deletableModels,
+  trashName,
   withEmptyFolders,
   withFolderSignals,
   formatModelSize,
@@ -1011,10 +1050,15 @@ const sortMenuOpen = ref(false);
 const foldersOpen = ref(false);
 const addMenuOpen = ref(false);
 const groupMenuOpen = ref(false);
-// One button behind every dialog the toolbar's left half opens, so focus has
-// one place to come back to however the reader got there. The menu item that
-// opened it is gone by then — it unmounts with the menu.
+// The toolbar buttons behind the dialogs its left half opens, so focus has a
+// place to come back to however the reader got there. A menu item cannot be
+// that place — it unmounts with the menu.
 const addBtnRef = ref(null);
+const foldersBtnRef = ref(null);
+// The empty state's own door. Unlike the two above it is NOT always mounted —
+// the first scan that finds a model replaces the empty state with the list —
+// which is the case `closeFolders`' `isConnected` check exists for.
+const emptyFoldersBtnRef = ref(null);
 const selBarRef = ref(null);
 /** Read once, dismissed for this visit; a refetch says it again. */
 const offlineDismissed = ref(false);
@@ -1047,6 +1091,106 @@ async function confirmForget() {
     danger: true,
   });
   if (ok) await store.forgetSelected();
+}
+
+/**
+ * The third confirmation, and the only one standing in front of real bytes.
+ *
+ * It names the operation rather than the gesture, because the gesture is a
+ * modifier the reader may not have meant to be holding: a trash says where the
+ * files are going and a permanent delete says nothing gets them back.
+ *
+ * **The count is the exact list of models the call will send.** Two things make
+ * it easy to get wrong in the destructive direction, and both are handled here
+ * rather than left to the server: a selection of forty holding two
+ * HuggingFace-cache rows deletes thirty-eight, and a selected STACK is one row
+ * standing for six files. So the subset is taken first and then expanded to
+ * member ids, and those ids are what is posted.
+ *
+ * `permanent` arrives from the event that triggered this and is passed straight
+ * through: nothing here re-reads the keyboard, so the prompt the reader agreed
+ * to is the call that runs.
+ *
+ * @param {boolean} permanent - Shift was down: unlink rather than trash.
+ */
+async function confirmDelete(permanent) {
+  const rows = deletableModels(store.selectedRows, foldersById.value);
+  // MODELS, not rows: a stack is one row and six checkpoints, and it is deleted
+  // whole exactly as it is moved whole. Counting rows would have offered
+  // "Move this model to the Trash?" over tens of gigabytes — and these are the
+  // ids the call sends, so what the prompt counts and what goes are one list.
+  const ids = rows.flatMap((row) => row.memberIds ?? [row.id]);
+  if (!ids.length) {
+    // The keyboard can reach this with nothing deletable selected — the pill's
+    // button is disabled there, but `Delete` has no disabled state. Silence
+    // would read as a broken key.
+    if (store.selectedRows.length) {
+      useNoticeStore().push({
+        level: "info",
+        text:
+          "Nothing here can be deleted. PixlStash only removes files from your " +
+          "own model folders, and never from a drive that is not plugged in.",
+      });
+    }
+    return;
+  }
+  const many = ids.length !== 1;
+  const subject = many ? `${ids.length} models` : "this model";
+  const trash = trashName();
+  const ok = await confirm({
+    title: permanent
+      ? `Permanently delete ${many ? `${ids.length} models?` : "this model?"}`
+      : `Move ${many ? `${ids.length} models` : "this model"} to the ${trash}?`,
+    message: permanent
+      ? `The files for ${subject} are deleted permanently from this machine, along with everything recorded about them.`
+      : `The files for ${subject} go to your ${trash}, where you can put them back. The shelf stops listing them.`,
+    warning: permanent
+      ? "There is no undo for this."
+      : `A very large file may be too big for the ${trash} and be deleted outright.`,
+    confirmLabel: permanent ? "Delete permanently" : `Move to ${trash}`,
+    danger: true,
+  });
+  if (ok) await store.deleteSelected({ permanent, ids });
+}
+
+/**
+ * Show the selected row's folder in the file manager of the SERVER's desktop.
+ *
+ * No confirmation, because it changes nothing — the one verb on the shelf that
+ * only looks. The id posted is the ROW's, which for a collapsed stack is the
+ * cover's: one press opens one window, and the cover is the file the reader
+ * right-clicked. A stack the shelf built shares a folder (its own gate refuses
+ * to group across folders), but a stack is not required to, so this is the
+ * cover's folder rather than "the run's" — those are the same directory in
+ * every case the shelf can create and not by a rule the server enforces.
+ *
+ * **Three different failures, three different sentences.** Nothing visible
+ * happens on this screen when it works, so a wrong reason is as bad as no
+ * reason: 403 is a shelf opened from another machine (the route is
+ * loopback-only), 409 is a row whose file has gone since the list was drawn —
+ * which the disabled state cannot catch, because it knows the recorded state
+ * and not whether the file is still there — and anything else is a server with
+ * no desktop to open anything on.
+ */
+async function openLocation() {
+  const row = store.selectedRows[0];
+  if (!row) return;
+  try {
+    await openModelLocation(row.id);
+  } catch (err) {
+    const status = err?.response?.status;
+    useNoticeStore().push({
+      level: "warning",
+      text:
+        status === 403
+          ? "A file manager opens on the machine running PixlStash, so this only works when you are sitting at it."
+          : status === 409
+            ? "That file is not where the shelf last saw it. Rescan its folder to catch up."
+            : "Couldn't open that folder — the machine running PixlStash has no desktop file manager.",
+      key: "shelf-open-location",
+    });
+    console.warn(`Failed to open the location of model ${row.id}`, err);
+  }
 }
 
 // ── Move (shelf plan F4) ─────────────────────────────────────────────────────
@@ -1393,7 +1537,12 @@ function onBandDrop(band, event) {
 }
 
 /**
- * Escape clears the selection, from anywhere — including outside the shelf.
+ * Does the shelf own this press, or does something in front of it?
+ *
+ * The guard both window-level keys ask first — Escape, which clears the
+ * selection from anywhere including outside the shelf, and Delete, which is in
+ * front of a file deletion and must never fire against a surface that is merely
+ * drawn over the rows.
  *
  * On the WINDOW rather than on the shelf root, because a keydown only reaches
  * an element that contains the focus: bound to the root it worked from a row
@@ -1406,8 +1555,9 @@ function onBandDrop(band, event) {
  * Everything that can own the key ahead of the shelf gets it handed back
  * rather than taken from it, all one rule — Escape means "undo the thing in
  * front of you", and clearing the selection underneath would be a second,
- * unasked-for effect. What that means in practice, and why each one is checked
- * the way it is:
+ * unasked-for effect. The same list is what keeps Delete from reaching the
+ * shelf while a dialog, a menu or the review overlay is up. What that means in
+ * practice, and why each one is checked the way it is:
  *   * one of the shelf's OWN dialogs is open. By ref, not by target: those are
  *     `AppDialog`s inside this subtree and a press with nothing focused targets
  *     `<body>`, which no ancestor test can see. `docs/frontend_architecture.md`
@@ -1430,8 +1580,7 @@ function onBandDrop(band, event) {
  * Bubble phase, not capture: every owner above is meant to resolve the key
  * FIRST, and a capture-phase listener would take it from them.
  */
-function onShelfEscape(event) {
-  if (event.key !== "Escape") return;
+function shelfOwnsTheKey(event) {
   if (
     moveOpen.value ||
     importOpen.value ||
@@ -1440,23 +1589,49 @@ function onShelfEscape(event) {
     addFileOpen.value ||
     editVerb.value
   ) {
-    return;
+    return false;
   }
   if (
     reviewSessionsStore.overlayOpen ||
     document.querySelector(".v-overlay--active:not(.v-tooltip), .image-overlay")
   ) {
-    return;
+    return false;
   }
-  if (sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible) return;
-  if (event.target?.closest?.(".ate, [role='dialog']")) return;
-  if (isTypingTarget(event.target)) return;
-  if (!store.selectedRows.length) return;
-  store.clearSelection();
+  if (sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible) return false;
+  if (event.target?.closest?.(".ate, [role='dialog']")) return false;
+  if (isTypingTarget(event.target)) return false;
+  return Boolean(store.selectedRows.length);
 }
 
-onMounted(() => window.addEventListener("keydown", onShelfEscape));
-onUnmounted(() => window.removeEventListener("keydown", onShelfEscape));
+/**
+ * Escape clears, Delete deletes.
+ *
+ * One handler and one set of guards, because the question both keys ask first
+ * is the same one: does the shelf own this press, or does something in front of
+ * it? Splitting them would be two copies of the list above, and the copy that
+ * drifted would be the one in front of a file deletion.
+ *
+ * **Delete is the file-manager gesture and is spelled the way Explorer spells
+ * it**: on its own it moves to the trash, with Shift it deletes permanently.
+ * `event.shiftKey` is read off the press itself and handed to the same
+ * confirmation the pill uses, so the key opens a prompt and never a deletion —
+ * a stray Del with forty rows selected costs one Escape.
+ */
+function onShelfKeydown(event) {
+  if (event.key !== "Escape" && event.key !== "Delete") return;
+  if (!shelfOwnsTheKey(event)) return;
+  if (event.key === "Escape") {
+    store.clearSelection();
+    return;
+  }
+  // The row list is a listbox, and Delete means nothing else in it. Stopped so
+  // it cannot also reach a browser shortcut on the way out.
+  event.preventDefault();
+  confirmDelete(event.shiftKey);
+}
+
+onMounted(() => window.addEventListener("keydown", onShelfKeydown));
+onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
 
 // ── The icon verb ───────────────────────────────────────────────────────────
 
@@ -1681,9 +1856,15 @@ async function onFilePicked(path) {
 // making it reactive would deep-track an element tree for nothing.
 const folderInvoker = shallowRef(null);
 
-function openFolders(event) {
-  folderInvoker.value =
-    event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+/**
+ * @param {HTMLElement} invoker Control to hand focus back to on close. Every
+ *   door names one, and names the durable control rather than the pressed
+ *   element: the `Add folder…` item is gone by the time the dialog closes, so
+ *   it names the Add button it hangs off. The earlier version read
+ *   `event.currentTarget` and was dead — no call site ever passed an event.
+ */
+function openFolders(invoker) {
+  folderInvoker.value = invoker;
   foldersOpen.value = true;
 }
 
@@ -1693,8 +1874,9 @@ async function closeFolders() {
   folderInvoker.value = null;
   await nextTick();
   // The empty-state button unmounts the moment the first folder is scanned in,
-  // so fall back to the toolbar control rather than dropping focus to <body>.
-  (returnTo?.isConnected ? returnTo : addBtnRef.value)?.focus();
+  // so fall back to the toolbar's folder button — the one door that is always
+  // mounted — rather than dropping focus to <body>.
+  (returnTo?.isConnected ? returnTo : foldersBtnRef.value)?.focus();
 }
 
 // `missing` is a fact (the folder was readable, the file was not in it);
