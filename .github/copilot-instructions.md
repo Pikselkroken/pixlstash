@@ -459,6 +459,46 @@ answer because the stand-ins above are named.
 fails the build on a new private-address literal under `tests/`, `docs/`,
 `pixlstash/`, `frontend/e2e/` or `README.md`, so this does not drift back.
 
+### The owner's address is published on purpose, in seventeen places
+
+**One real email address appears in this repository, it is the owner's own, and
+every occurrence of it is deliberate.** It is the author of a GPL project
+identifying themselves in it. A published authorship or contact declaration is
+not a leaked credential, and none of these is a finding:
+
+| Where | Why it is there |
+|---|---|
+| `pixlstash/image_plugins/built-in/*.py`, `pixlstash/tagger_plugins/*.py` (10 files) | the plugin `author` field, which exists to be read by whoever installs the plugin |
+| `pyproject.toml`, `electron/package.json` | package authorship |
+| `SECURITY.md`, `PRIVACY.md`, `CODE_OF_CONDUCT.md`, `website/privacy.html` | the contact a reporter is told to use |
+| `tests/test_security_supported_versions.py` | a gated test asserting `SECURITY.md`'s contact text |
+
+**Do not remove or rewrite any of them**, and note the last row in particular:
+editing the contact out of `SECURITY.md` reds the gate as well as deleting the
+address somebody is supposed to report a vulnerability to.
+
+**Why this is written down.** Push scans read *added lines*, and merging
+`develop` into a branch re-presents every one of those declarations as an added
+line — so a branch that has never opened any of those files gets blocked on ten
+or more of them the moment it merges its base. That has now happened twice, once
+to #963 over an address literal and once to the ai-toolkit samples branch over
+the plugin headers. The answer both times: **check the cited lines are these
+lines** — confirm they are already on `develop` and that your branch does not
+touch those files, with `git diff origin/develop...HEAD` and
+`git log -S <literal> origin/develop -- <file>` — and if they are, say so
+plainly and let a person release it. A scan reports several things at once, so
+clear each cited line rather than inferring the whole report is a false positive
+from your branch's file list.
+
+Three things this does **not** license. It is not a general allowlist: a
+finding outside the table above is a finding. It does not relax the fixture and
+example rules in the table further up — an address that is not the owner's own
+still uses `me@example.com` or a name under `.test` / `.invalid` /
+`.localhost`. And it is not a reason to write the owner's address into a *new*
+place: the seventeen above are the declarations that publish it, and a
+comment, test fixture or document that repeats it elsewhere is new disclosure,
+not existing disclosure.
+
 ## Tests: reuse the environment, don't rebuild it
 
 The expensive thing in this suite is **not the test, it is the environment
