@@ -184,7 +184,7 @@ class DescriptionWorkflow:
             chunk = batch_items[idx : idx + batch_size]
             chunk_paths = [picture_path for _, picture_path in chunk]
             captions = self._engine.florence_service.generate_captions_batch(
-                chunk_paths
+                chunk_paths, stop_event=self._describe_cancel
             )
             for picture_id, picture_path in chunk:
                 results[picture_id] = captions.get(picture_path)

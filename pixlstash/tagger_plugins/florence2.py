@@ -411,7 +411,7 @@ class Florence2Service:
                 )
                 if self._reload_on_cpu(cause=e):
                     return self.generate_captions_batch(
-                        image_paths, _retry_on_cpu=False
+                        image_paths, _retry_on_cpu=False, stop_event=stop_event
                     )
 
             logger.error("Florence-2 batch captioning failed: %s", e)
@@ -1034,7 +1034,7 @@ class Florence2Plugin(TaggerPlugin):
                 logger.warning("Florence-2 generate descriptions stop-event reached, ending early.")
                 return results
             chunk = batch_items[idx : idx + batch_size]
-            captions = self.service.generate_captions_batch(chunk)
+            captions = self.service.generate_captions_batch(chunk, stop_event=stop_event)
             for path_str in chunk:
                 results[path_str] = captions.get(path_str)
 
