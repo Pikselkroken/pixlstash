@@ -883,16 +883,26 @@ describe("the column widths", () => {
   it("clamps a width to the bounds rather than taking what it is given", () => {
     const store = useModelShelfStore();
     store.setColumnWidth("size", 4000);
-    expect(store.view.columnWidths.size).toBe(200);
+    expect(store.view.columnWidths.size).toBe(400);
     store.setColumnWidth("size", -20);
-    expect(store.view.columnWidths.size).toBe(48);
+    expect(store.view.columnWidths.size).toBe(56);
+  });
+
+  it("floors each column on its own content, not on one shared figure", () => {
+    // `Kind` holds a word like `Checkpoint` and `Size` holds five characters,
+    // so one floor for both put the wordy columns into permanent ellipsis.
+    // Every floor is at or under that column's default, or a stored default
+    // would be clamped UP on the way back in.
+    const store = useModelShelfStore();
+    for (const key of ["kind", "base", "size"]) store.setColumnWidth(key, 0);
+    expect(store.view.columnWidths).toEqual({ kind: 64, base: 72, size: 56 });
   });
 
   it("ignores a column it does not have and a width that is not one", () => {
     // Every one of these coerces to 0 through `Number()` and would come back
-    // as the 48px FLOOR rather than being refused — `null` in particular is a
+    // as the column's FLOOR rather than being refused — `null` in particular is a
     // value JSON can carry, so a stored blob would silently hand back a
-    // 48px column where the read-back loop is meant to fall through to the
+    // floored column where the read-back loop is meant to fall through to the
     // default.
     const store = useModelShelfStore();
     store.setColumnWidth("name", 120);
@@ -933,7 +943,7 @@ describe("the column widths", () => {
     expect(restored.view.columnWidths).toEqual({
       kind: 64,
       base: 150,
-      size: 200,
+      size: 400,
     });
   });
 

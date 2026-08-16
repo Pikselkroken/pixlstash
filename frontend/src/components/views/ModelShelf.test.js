@@ -1086,12 +1086,34 @@ describe("resizing the columns", () => {
     ).toBe(124);
   });
 
+  it("stops widening where the Name track would go under its floor", async () => {
+    // The ceiling a drag actually meets is the panel, not the store's bound:
+    // every pixel a fixed column takes comes out of Name, and past 200px of it
+    // the shelf would scroll sideways with the rows sliding under a strip
+    // whose background stops at the scrollport. jsdom lays nothing out, so the
+    // measurement is the one thing that has to be stated here.
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    Object.defineProperty(
+      wrapper.find(".shelf-head-col--label").element,
+      "offsetWidth",
+      { configurable: true, value: 260 },
+    );
+
+    await drag(wrapper, gripOf(wrapper, "base"), 400, 0);
+    expect(store.view.columnWidths.base).toBe(144);
+
+    // And a panel with nothing left to give still lets the column back down.
+    await drag(wrapper, gripOf(wrapper, "base"), 0, 40);
+    expect(store.view.columnWidths.base).toBe(104);
+  });
+
   it("holds a column at its floor rather than letting it vanish", async () => {
     // A column dragged to nothing takes its own grip off the screen with it,
     // and there is no way back.
     const wrapper = await mountShelf([adapter()]);
     await drag(wrapper, gripOf(wrapper, "size"), 0, 400);
-    expect(useModelShelfStore().view.columnWidths.size).toBe(48);
+    expect(useModelShelfStore().view.columnWidths.size).toBe(56);
   });
 
   it("stops tracking once the pointer is released", async () => {
@@ -1148,13 +1170,16 @@ describe("resizing the columns", () => {
     // pointer has, because the grip is the column's left edge.
     await grip.trigger("keydown", { key: "ArrowLeft" });
     expect(store.view.columnWidths.kind).toBe(72);
+    // 64 rather than 56: two steps down from 72 is 56, and `Kind`'s own floor
+    // holds it at 64.
     await grip.trigger("keydown", { key: "ArrowRight" });
     await grip.trigger("keydown", { key: "ArrowRight" });
-    expect(store.view.columnWidths.kind).toBe(56);
-    expect(gripOf(wrapper, "kind").attributes("aria-valuenow")).toBe("56");
+    expect(store.view.columnWidths.kind).toBe(64);
+    expect(gripOf(wrapper, "kind").attributes("aria-valuenow")).toBe("64");
     expect(gripOf(wrapper, "kind").attributes("aria-valuetext")).toBe(
-      "56 pixels",
+      "64 pixels",
     );
+    expect(gripOf(wrapper, "kind").attributes("aria-valuemin")).toBe("64");
   });
 
   it("takes Home and End to the two ends", async () => {
@@ -1164,9 +1189,9 @@ describe("resizing the columns", () => {
     // Home is the separator as far left as it goes, which is the column at its
     // widest.
     await grip.trigger("keydown", { key: "Home" });
-    expect(store.view.columnWidths.base).toBe(200);
+    expect(store.view.columnWidths.base).toBe(400);
     await grip.trigger("keydown", { key: "End" });
-    expect(store.view.columnWidths.base).toBe(48);
+    expect(store.view.columnWidths.base).toBe(72);
   });
 
   it("puts a column back, which is the only way out of a mis-drag", async () => {

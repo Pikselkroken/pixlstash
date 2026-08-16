@@ -1749,8 +1749,14 @@ is the string that gets pasted into a ComfyUI node, so it is drawn rather than
 parked in a tooltip.
 
 **One visible column strip for the view, and hidden `columnheader`s per grid.**
-`.shelf-head` is sticky at the top of the body scroller and the group headings
-stick under it at `--shelf-head-h`. It is deliberately **not** the grid's header
+`.shelf-head` sits **above** the scrollport (`.shelf-scroll`) as its sibling,
+not sticky inside it, and the group headings stick at that scrollport's own
+`top: 0`. A scroll container's scrollbar runs the container's full height, so a
+strip inside one has the bar climbing past it to the top of the panel, pointing
+at rows that are not there. Both boxes carry `scrollbar-gutter: stable` — the
+strip is `overflow: hidden`, which is enough to make it honour the gutter — so
+the columns cannot shift sideways relative to the rows when the list is too
+short to scroll. It is deliberately **not** the grid's header
 row: a `columnheader` heads the grid it is in and nothing else, so a visible one
 would have to be repeated per group, which is eight identical bands of chrome
 down a grouped list. So the strip is a `role="group"` of controls —
@@ -1797,17 +1803,28 @@ down a grouped list. So the strip is a `role="group"` of controls —
   `dblclick` is built on. A `pointermove` arriving with `buttons === 0` ends the
   drag, so a refused or lost capture cannot leave one live forever.
 
-  Widths are clamped to **48–200px**, and 200 is chosen so three columns at the
-  ceiling *cannot* overflow the panel sideways (~690px of chrome, which fits a
-  1024px window with the stats rail open). Past that the row scrolls
-  horizontally and the strip's background stops at the scrollport, so rows slide
-  through a transparent header. They are written into the same versioned view
+  **The floor is per column and the ceiling is measured, not guessed.**
+  `MIN_COLUMN_WIDTHS` (kind 64, base 72, size 56) is a map beside
+  `DEFAULT_COLUMN_WIDTHS` because what "too narrow" means differs per column —
+  `Kind` holds a word like `Checkpoint` and `Size` holds five characters — and
+  every floor is at or under that column's default, or a stored default would
+  be clamped *up* on read-back. The ceiling in the store is 400 and is only a
+  sanity bound on a stored blob: the limit a drag actually meets is
+  `widenable()` in the component, which reads the Name track's `offsetWidth`
+  and refuses to take it below `MIN_NAME_WIDTH` (200px). That is the same
+  guarantee the old flat 200px ceiling was making — three columns cannot
+  overflow the panel sideways and slide rows under a strip whose background
+  stops at the scrollport — but made against the panel in front of the reader
+  rather than against a guess at the narrowest one, which on a wide shelf had
+  pinned Name at about half the width. An unmeasured track (0, so not laid out
+  — or jsdom) means unlimited, because a grip that silently refuses to move is
+  the worse failure. Widths are written into the same versioned view
   blob **once per gesture, not per frame** — `rememberView` rebuilds the whole
   blob synchronously, so `setColumnWidth(key, px, persist)` takes `false` during
   a drag and is called once on pointerup — and read back per column through
   `clampColumnWidth`, which takes a **finite number only**: `Number()` coercion
-  would turn a stored `null` into the 48px floor instead of falling through to
-  the default.
+  would turn a stored `null` into that column's floor instead of falling
+  through to the default.
 
   `DEFAULT_COLUMN_WIDTHS` in the store is the *only* declaration of the three
   figures; `.shelf` deliberately carries no CSS fallback copy, which would be a
