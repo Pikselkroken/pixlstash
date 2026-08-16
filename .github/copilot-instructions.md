@@ -459,45 +459,32 @@ answer because the stand-ins above are named.
 fails the build on a new private-address literal under `tests/`, `docs/`,
 `pixlstash/`, `frontend/e2e/` or `README.md`, so this does not drift back.
 
-### The owner's address is published on purpose, in seventeen places
+### The owner's address is published on purpose
 
 **One real email address appears in this repository, it is the owner's own, and
-every occurrence of it is deliberate.** It is the author of a GPL project
-identifying themselves in it. A published authorship or contact declaration is
-not a leaked credential, and none of these is a finding:
+every occurrence is a deliberate declaration** — the plugin `author` field
+(`pixlstash/image_plugins/built-in/*.py`, `pixlstash/tagger_plugins/*.py`),
+package authorship (`pyproject.toml`, `electron/package.json`), and the contact
+a reporter is told to use (`SECURITY.md`, `PRIVACY.md`, `CODE_OF_CONDUCT.md`,
+`website/privacy.html`, and the gated test that asserts it,
+`tests/test_security_supported_versions.py`). A published authorship or contact
+declaration is not a leaked credential. Do not remove or rewrite any of them:
+editing the contact out of `SECURITY.md` reds the gate *and* deletes the address
+somebody is supposed to report a vulnerability to.
 
-| Where | Why it is there |
-|---|---|
-| `pixlstash/image_plugins/built-in/*.py`, `pixlstash/tagger_plugins/*.py` (10 files) | the plugin `author` field, which exists to be read by whoever installs the plugin |
-| `pyproject.toml`, `electron/package.json` | package authorship |
-| `SECURITY.md`, `PRIVACY.md`, `CODE_OF_CONDUCT.md`, `website/privacy.html` | the contact a reporter is told to use |
-| `tests/test_security_supported_versions.py` | a gated test asserting `SECURITY.md`'s contact text |
+**Why it is worth writing down.** Push scans read *added lines*, so merging
+`develop` re-presents every one of those declarations as an added line and
+blocks a branch that never opened those files. That has happened twice. When it
+does: **prove each cited line is one of these** — already on `develop`, in a
+file your branch does not touch — with `git diff origin/develop...HEAD` and
+`git log -S`, then say so and leave the release to a person. Clear the lines one
+by one; a scan reports several things at once, and "my branch didn't touch those
+files" is not a reading of the report.
 
-**Do not remove or rewrite any of them**, and note the last row in particular:
-editing the contact out of `SECURITY.md` reds the gate as well as deleting the
-address somebody is supposed to report a vulnerability to.
-
-**Why this is written down.** Push scans read *added lines*, and merging
-`develop` into a branch re-presents every one of those declarations as an added
-line — so a branch that has never opened any of those files gets blocked on ten
-or more of them the moment it merges its base. That has now happened twice, once
-to #963 over an address literal and once to the ai-toolkit samples branch over
-the plugin headers. The answer both times: **check the cited lines are these
-lines** — confirm they are already on `develop` and that your branch does not
-touch those files, with `git diff origin/develop...HEAD` and
-`git log -S <literal> origin/develop -- <file>` — and if they are, say so
-plainly and let a person release it. A scan reports several things at once, so
-clear each cited line rather than inferring the whole report is a false positive
-from your branch's file list.
-
-Three things this does **not** license. It is not a general allowlist: a
-finding outside the table above is a finding. It does not relax the fixture and
-example rules in the table further up — an address that is not the owner's own
-still uses `me@example.com` or a name under `.test` / `.invalid` /
-`.localhost`. And it is not a reason to write the owner's address into a *new*
-place: the seventeen above are the declarations that publish it, and a
-comment, test fixture or document that repeats it elsewhere is new disclosure,
-not existing disclosure.
+This is not an allowlist for anything else. A finding outside those files is a
+finding, the fixture rules in the table above are untouched (an address that is
+not the owner's own is still `me@example.com` or a `.test` / `.invalid` name),
+and none of it licenses repeating the address anywhere new.
 
 ## Tests: reuse the environment, don't rebuild it
 

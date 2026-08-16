@@ -457,10 +457,13 @@ def carry_samples(
                 raise
     except OSError as exc:
         if os.path.isdir(destination_dir):
-            # **They did arrive.** ``move_directory`` copies, renames into place
-            # and removes the source *last*, so an rmtree that fails — a locked
-            # file on Windows, an EACCES on the source root, an NFS ``.nfs*``
-            # handle — raises after the previews are already at the destination.
+            # **They did arrive**, and only the move path can reach this: on the
+            # copy path below, every failure runs ``discard_partial_tree`` on a
+            # name carrying ``PARTIAL_SUFFIX``, so ``destination_dir`` cannot
+            # exist here. ``move_directory`` copies, renames into place and
+            # removes the source *last*, so an rmtree that fails — a locked file
+            # on Windows, an EACCES on the source root, an NFS ``.nfs*`` handle —
+            # raises after the previews are already at the destination.
             # Reporting that as "not carried" sends the owner hunting for
             # previews that are exactly where they should be, and their obvious
             # next move is a re-run that the destination-exists check above then

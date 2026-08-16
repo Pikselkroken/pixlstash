@@ -4671,8 +4671,16 @@ def test_delete_moves_the_file_to_the_trash_and_takes_the_row_with_it(
     ), "the location rows outlived the model they point at"
 
 
+def _mark_trained(shelf_env, model_id):
+    """Say this row came from an import, which is what licenses the removal."""
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET provenance = 'trained' WHERE id = ?", (model_id,)
+        )
+
+
 @pytest.mark.parametrize("permanent", [False, True], ids=["trash", "permanent"])
-def test_delete_takes_the_models_training_previews_with_it(
+def test_delete_takes_an_imported_models_training_previews_with_it(
     shelf_env, real_files, fake_trash, permanent
 ):
     """The lifecycle the import opens and a move carries has to close here.
@@ -4684,6 +4692,7 @@ def test_delete_takes_the_models_training_previews_with_it(
     remove it by different calls.
     """
     alice = shelf_env.model_ids["alice.safetensors"]
+    _mark_trained(shelf_env, alice)
     samples = real_files / "alice_samples"
     samples.mkdir()
     (samples / "1712345678901__000000500_0.jpg").write_bytes(b"\xff\xd8\xff")
@@ -4700,6 +4709,66 @@ def test_delete_takes_the_models_training_previews_with_it(
     assert (bystander / "keep.jpg").exists()
 
 
+@pytest.mark.parametrize("permanent", [False, True], ids=["trash", "permanent"])
+def test_delete_never_touches_a_directory_pixlstash_did_not_write(
+    shelf_env, real_files, fake_trash, permanent
+):
+    """**The one that matters.** The directory name is derived by string
+    manipulation and recorded nowhere, so "there is a folder called
+    `<stem>_samples` beside the file" is a guess about who made it.
+
+    An owner who scanned `alice.safetensors` off their own disk and keeps
+    favourite generations in `alice_samples/` beside it is doing the natural
+    thing — and on `permanent=true` this route would `rmtree` it with no trash
+    and no undo. `provenance` is the evidence: `trained` is the one value the
+    scanner never writes. Without that gate this is the most destructive thing
+    on the shelf, and the importer refuses the mirror image of it (it will not
+    merge into a directory "they may have put there themselves") — so the two
+    halves of one PR would have contradicted each other.
+    """
+    alice = shelf_env.model_ids["alice.safetensors"]
+    assert (
+        shelf_env.server.hub.fetchone(
+            "SELECT provenance FROM model WHERE id = ?", (alice,)
+        )["provenance"]
+        != "trained"
+    ), "the fixture no longer exercises a model PixlStash did not import"
+    mine = real_files / "alice_samples"
+    mine.mkdir()
+    (mine / "my-favourite-render.jpg").write_bytes(b"\xff\xd8\xff")
+
+    r = _delete(shelf_env, [alice], permanent=permanent)
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == [alice]
+
+    assert not (real_files / "alice.safetensors").exists(), "the file was not deleted"
+    assert (mine / "my-favourite-render.jpg").exists(), (
+        "a directory the owner made was destroyed with the model beside it"
+    )
+
+
+def test_a_symlinked_previews_directory_is_left_alone(
+    shelf_env, real_files, fake_trash, tmp_path
+):
+    """`os.path.isdir` follows the link, so without an explicit check what
+    happens is decided by which branch runs — `rmtree` refuses a symlinked root,
+    `send2trash` moves the link. Neither is promised by either function, and an
+    `ignore_errors=True` added later would turn the first into a deletion
+    somewhere else entirely."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    _mark_trained(shelf_env, alice)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "precious.jpg").write_bytes(b"\xff\xd8\xff")
+    (real_files / "alice_samples").symlink_to(elsewhere, target_is_directory=True)
+
+    r = _delete(shelf_env, [alice], permanent=True)
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == [alice]
+    assert (elsewhere / "precious.jpg").exists(), "the removal followed the link out"
+    assert (real_files / "alice_samples").is_symlink(), "the link itself was removed"
+
+
 def test_previews_that_will_not_delete_do_not_fail_the_deletion(
     shelf_env, real_files, fake_trash, monkeypatch
 ):
@@ -4709,6 +4778,7 @@ def test_previews_that_will_not_delete_do_not_fail_the_deletion(
     model on the shelf naming a file that is already gone.
     """
     alice = shelf_env.model_ids["alice.safetensors"]
+    _mark_trained(shelf_env, alice)
     samples = real_files / "alice_samples"
     samples.mkdir()
     (samples / "a.jpg").write_bytes(b"\xff\xd8\xff")

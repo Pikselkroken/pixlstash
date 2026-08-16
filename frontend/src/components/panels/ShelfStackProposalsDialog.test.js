@@ -45,7 +45,7 @@ const globalOpts = {
 function proposal(overrides = {}) {
   return {
     tier: "step_group",
-    key: "1:jimmycarr",
+    key: "1:jimmyvehicle",
     name: "JimmyVehicle",
     folder_id: 1,
     total_size: 3000,

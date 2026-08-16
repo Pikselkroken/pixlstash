@@ -95,6 +95,7 @@ from pixlstash.services.model_mover import (
     require_space,
     samples_relpath,
 )
+from pixlstash.services.run_importer import PROVENANCE_TRAINED
 from pixlstash.services.model_shelf_service import (
     MAX_MODELS_PER_EDIT,
     purge_deleted_models,
@@ -297,12 +298,15 @@ def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[dict]], list[di
     """
     marks = ", ".join("?" for _ in ids)
     with hub.transaction() as conn:
-        kinds = {
-            int(row[0]): row[1]
-            for row in conn.execute(
-                f"SELECT id, file_kind FROM model WHERE id IN ({marks})", tuple(ids)
-            ).fetchall()
-        }
+        rows = conn.execute(
+            f"SELECT id, file_kind, provenance FROM model WHERE id IN ({marks})",
+            tuple(ids),
+        ).fetchall()
+        kinds = {int(row[0]): row[1] for row in rows}
+        # `trained` is the one provenance the scanner never writes, so it is the
+        # evidence that this row's `<stem>_samples/` was written by an import
+        # and is ours to remove. See `_remove_samples`.
+        provenances = {int(row[0]): row[2] for row in rows}
         copies: dict[int, list[dict]] = {}
         for row in conn.execute(
             "SELECT mf.model_id, mf.model_folder_id, mf.relpath, mf.state, "
@@ -341,6 +345,7 @@ def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[dict]], list[di
                             if row["state"] == STATE_PRESENT
                             else None
                         ),
+                        "provenance": provenances.get(model_id),
                     }
                     for row in rows
                 ]
@@ -376,17 +381,29 @@ def _remove(path: str, *, permanent: bool) -> None:
         )
 
 
-def _remove_samples(model_path: str, *, permanent: bool) -> None:
-    """Take the file's training previews with it, or leave them and say so.
+def _remove_samples(model_path: str, *, permanent: bool, provenance: str) -> None:
+    """Take the file's training previews with it — **only if PixlStash wrote them**.
 
     An imported checkpoint's previews sit beside it in ``<stem>_samples/``
-    (``services/run_importer.py``). **The lifecycle has to close here or it does
-    not close at all**: the import creates that directory, a move carries it, and
-    a delete that skipped it would leave a directory no route lists, no rescan
-    registers and nothing can reach — and, worse, one that then refuses the
-    owner's *entire* re-import of that run, because ``_resolve_targets`` refuses
-    a batch whose samples directory already exists. The remedy would only be
-    available outside the app.
+    (``services/run_importer.py``), and the lifecycle the import opens and a move
+    carries has to close here: a delete that skipped it would leave a directory
+    no route lists and no rescan registers, and one that then refuses the owner's
+    *entire* re-import of that run, with the remedy only available outside the
+    app.
+
+    **``provenance`` is what makes that safe, and without it this would be the
+    worst thing on the shelf.** The directory name is derived by string
+    manipulation, not recorded anywhere, so "a directory called ``<stem>_samples``
+    next to the file" is a guess about who created it — and it is a guess the
+    importer refuses to make in the opposite direction, refusing a whole batch
+    rather than merge into one *"they may have put there themselves"*
+    (``run_importer._samples_target``). An owner who scanned ``alice.safetensors``
+    off their own disk and keeps favourite generations in ``alice_samples/``
+    beside it is doing the natural thing, and this route would rmtree it with no
+    trash and no undo. ``provenance == 'trained'`` is the one value the scanner
+    never writes (``run_importer.PROVENANCE_TRAINED``): it means *this* row was
+    created by an import, so the directory beside it is ours to remove. Anything
+    else and the previews stay, which is the same answer the importer gives.
 
     **Non-fatal, unlike the file itself.** The weights are what the caller asked
     to delete and their row is dropped on the strength of that; a previews
@@ -394,8 +411,24 @@ def _remove_samples(model_path: str, *, permanent: bool) -> None:
     turn a completed deletion into a reported failure. It is removed *after* the
     file for the same reason — the file is the thing being deleted.
     """
+    if provenance != PROVENANCE_TRAINED:
+        return
     directory = samples_relpath(model_path)
     if not os.path.isdir(directory):
+        return
+    if os.path.islink(directory):
+        # ``isdir`` follows the link, so without this the removal is decided by
+        # which branch runs: ``rmtree`` happens to refuse a symlinked root and
+        # ``send2trash`` happens to move the link and spare its target. Neither
+        # is a property either function promises, and a later
+        # ``ignore_errors=True`` would silently turn the first into a deletion
+        # somewhere else entirely. Refused here, where it is stated and tested.
+        logger.warning(
+            "Not removing the training previews of %s: %s is a symbolic link, "
+            "and what it points at is not this folder's to delete.",
+            os.path.basename(model_path),
+            directory,
+        )
         return
     try:
         if permanent:
@@ -651,7 +684,11 @@ def create_router(server) -> APIRouter:
         summary="Delete models from disk",
         description=(
             "Removes every registered copy of the named models and then their "
-            "shelf rows. `permanent=false` (the default) moves the files to "
+            "shelf rows. A model **imported from a training run** also loses "
+            "the `<stem>_samples/` directory of previews the import wrote "
+            "beside it; a directory beside a model PixlStash did not import is "
+            "left alone, because it is not ours to have made. "
+            "`permanent=false` (the default) moves the files to "
             f"this machine's {TRASH_NAME.lower()}, which is the undo; "
             "`permanent=true` unlinks them and there is none. Only the folders "
             "whose contents are yours are touched — the ones you registered and "
@@ -687,14 +724,23 @@ def create_router(server) -> APIRouter:
             emptied: dict[int, list[tuple[int, str]]] = {}
             files_removed = 0
             for model_id, copies in deletable.items():
-                paths = [copy["path"] for copy in copies if copy["path"]]
+                paths = [
+                    (copy["path"], copy["provenance"])
+                    for copy in copies
+                    if copy["path"]
+                ]
                 done = 0
                 try:
-                    for path in paths:
+                    for path, provenance in paths:
                         _remove(path, permanent=payload.permanent)
                         done += 1
-                        # After the file, and never allowed to fail it.
-                        _remove_samples(path, permanent=payload.permanent)
+                        # After the file, never allowed to fail it, and only for
+                        # a row an import created.
+                        _remove_samples(
+                            path,
+                            permanent=payload.permanent,
+                            provenance=provenance,
+                        )
                 except (TrashPermissionError, OSError) as exc:
                     # `done` files of this model are already gone. Its rows stay
                     # so the shelf keeps naming the copies that did not go, and
@@ -715,7 +761,7 @@ def create_router(server) -> APIRouter:
                         "Could not delete %s (%s). Model %s keeps its rows; %d "
                         "of its %d copies were already removed, and a rescan of "
                         "that folder will mark those missing.",
-                        paths[done],
+                        paths[done][0],
                         exc,
                         model_id,
                         done,
