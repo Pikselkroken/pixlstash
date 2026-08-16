@@ -18,7 +18,7 @@
 5. [Routes / HTTP API](#5-routes--http-api)
 6. [Database Models](#6-database-models)
 7. [Task System](#7-task-system)
-8. [Image Plugins](#8-image-plugins) — incl. [8.1 Installing plugins from the CLI](#81-installing-plugins-from-the-cli-issue-958)
+8. [Image Plugins](#8-image-plugins) — incl. [8.1 Installing and checking plugins from the CLI](#81-installing-and-checking-plugins-from-the-cli-issue-958)
 9. [Tagger Plugins](#9-tagger-plugins)
 10. [Services Layer](#10-services-layer)
 11. [Utility Modules](#11-utility-modules)
@@ -312,8 +312,9 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | [pixlstash/pixl_logging.py](../pixlstash/pixl_logging.py) | Uvicorn log config + coloured formatter. |
 | [pixlstash/stacking.py](../pixlstash/stacking.py) | Picture stacking (duplicates / variants). |
 | [pixlstash/image_loading_dataset_prepper.py](../pixlstash/image_loading_dataset_prepper.py) | Dataset preparation utilities for offline training scripts. |
-| [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (list/create/attach/detach/relocate/backup/prepare-legacy-identity/rename) and `plugins` (install/list/remove). Only the `libraries` group opens the hub — see §8.1. |
-| [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it. See §8.1. |
+| [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (list/create/attach/detach/relocate/backup/prepare-legacy-identity/rename) and `plugins` (install/test/list/remove). Only the `libraries` group opens the hub — see §8.1. |
+| [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins install/list/remove`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it. See §8.1. |
+| [pixlstash/plugin_check.py](../pixlstash/plugin_check.py) | Backs `pixlstash-cli plugins test`. The one plugin verb that *does* import, through the server's own loader, and the only place the parameter schema is checked against what the UI renders. See §8.1. |
 
 ---
 
@@ -902,7 +903,7 @@ User-supplied image plugins are loaded from `user_data_dir("pixlstash")/image-pl
 
 [docs/writing-image-filter-plugins.md](writing-image-filter-plugins.md) is the contract, and its §10 tabulates every divergence from the tagger system. Three of those are quiet rather than loud, and all three are the image side being the looser of the two: a **user plugin replaces a built-in of the same name** (taggers reject it), **only the first `ImagePlugin` subclass in a module is registered** so a file defining two concrete plugins ships one (taggers register every class the module *defines*), and the **parameter schema is a different schema** — a dropdown is `type: "string"` plus `enum`, with no `select` branch in `PluginParametersUI.vue` at all. The other two halves of the class-selection divergence were closed in #968: `_find_plugin_class` now excludes classes the module merely imported (as `TaggerPluginManager._register_module_plugins` does; its extra `__module__` prefix clause covers the package shape, which this loader does not accept), so a plugin that imports a built-in for reference can no longer be shipped in place of the class its author wrote. An abstract class is demoted to a *fallback* rather than skipped: an intermediate base above the real class no longer wins, while a file whose only plugin class is abstract still produces `Can't instantiate abstract class X with abstract method run`, which names the class and the missing method — the reason not to copy the tagger's outright skip here. The shadowing itself is still user-wins, but it is now recorded: a `PluginLoadError` on the manager's own error list, and — since that list is served nowhere (above) — a log line, which is the only place a user will see it. Both name the **user** file as the one taking over, where the log used to name the built-in as "the duplicate" and so point away from the cause. `ImagePlugin.parameter_schema`'s docstring and the shipped template both described the `select`/`options` form that does not render; both were corrected when the guide was written.
 
-### 8.1 Installing plugins from the CLI (issue #958)
+### 8.1 Installing and checking plugins from the CLI (issue #958)
 
 `pixlstash-cli plugins install|list|remove` ([pixlstash/plugin_install.py](../pixlstash/plugin_install.py))
 puts a plugin in the right directory instead of asking the user to. The
@@ -973,6 +974,101 @@ dot segments before sending, so an unchecked ref (`../../../someone/evil/zip/mai
 walks out of `PLUGINS_REPO` entirely and installs code this CLI then runs
 unsandboxed in the server process. `_REF_RE` plus an explicit `..` component
 check is what keeps "a named plugin from one repository" true.
+
+**`plugins test` is the exception to "nothing is imported", and the reason the
+rest of the group can stay static** ([pixlstash/plugin_check.py](../pixlstash/plugin_check.py),
+issue Pikselkroken/pixlstash-plugins#4). Discovery runs once, at start-up, so
+without it the loop for finding a typo in a plugin is edit → restart → boot →
+read the error row under Settings › Auto-tagging. Here the user has named a
+plugin and asked for it to be run, so importing it is the request rather than a
+side effect of classifying it.
+
+**It is a development aid and must never be presented as a security check**, and
+that is a wording constraint on the code as much as on the docs. Running the
+plugin *is* the mechanism, so the command has no way to tell a user whether a
+plugin is safe — it has already executed the module body by the time it prints
+anything, unsandboxed, with the caller's permissions, which is why the caveat is
+printed *before* the load rather than after it. Everything it reports is about
+the plugin's contract, never its intent. A report a user reads as a safety
+verdict is worse than no report, and would also be the second time a
+"reassuring" plugin surface got the trust boundary wrong (the `plugins list`
+listing already has to say out loud that it imports nothing and therefore cannot
+see an import-time failure). Observing what a plugin *reaches for* — an audit
+hook over `socket.connect` / `subprocess.Popen` / writes — is tracked separately
+and is disclosure, not containment; real containment is OS-level and out of
+scope here.
+
+- **The load is `TaggerPluginManager.load_plugin_from_path`, the server's own
+  loader** — extracted from the body of `_load_user_plugins`, which now calls
+  it, rather than reimplemented. Module namespacing, the package's
+  `submodule_search_locations`, the `sys.modules` registration *before*
+  `exec_module` (so `from . import helper` resolves) and the containment of a
+  failing import are therefore the same by construction, not by resemblance. A
+  second implementation that got the package case wrong would fail plugins that
+  work in the server, which is worse than no check at all.
+- **Sharing the loader is not sharing discovery, and the gap is where the
+  silent failures live.** `_load_user_plugins` filters the directory listing
+  *above* the extracted method (`.`/`_`-prefixed entries are skipped without a
+  message) and the registry refuses a duplicate name *after* it — and the
+  checker's manager deliberately scans no directory, so neither fires. Both are
+  therefore restated in `plugin_check`: `_ineligible` on the entry name, and
+  `_installed_names`, which reads the installed captioners' names statically
+  through `plugin_install.list_installed()` (no import, nobody else's plugin
+  code run) and excludes the target itself so checking an already-installed
+  plugin does not report it colliding with its own copy. Without these a plugin
+  passes here and never loads there, which is the exact failure the command
+  exists to remove.
+- **What it adds is the schema shape**, which nothing else checks. The registry
+  exercises `plugin_schema()` at registration so a raising plugin cannot take
+  out the boot, but a schema that *renders* wrong raises nowhere, and the three
+  ways of getting it wrong land in different places: an unknown `type` falls
+  through `TaggerParametersUI.vue`'s `v-else` to a text box, a `select` with no
+  `options`/`enum` key fails that branch's `Array.isArray` guard and becomes a
+  text box too, while `options: []` **satisfies** the guard and renders a real
+  dropdown with nothing in it. A missing `default` or `name` is worse —
+  `default_params()` and `fill_defaults()` read both unguarded, on every library
+  open — as is a name a first-party plugin already holds, which loses that
+  collision silently. **Missing `label` and neither capability flag being set
+  are warnings, not failures**: the UI renders `field.label || field.name` and a
+  flagless plugin registers exactly as written, so refusing them would make this
+  less useful than the restart it replaces, and `plugins install` already only
+  warns about the second.
+- **`plugin_check.SCHEMA_TYPES` is a hand-copy of a `v-else-if` chain in a Vue
+  component**, which this repository does not otherwise allow (cf. `_SUBDIRS`
+  pinned to the registries). `test_schema_types_match_the_component_that_renders_them`
+  parses `TaggerParametersUI.vue` and pins the two together; it is what makes
+  the list `bool` (an undocumented alias for `boolean`) and `enum` (an alias for
+  a select's `options`) appear in, since the checker mirrors what renders rather
+  than what the guide recommends writing.
+- **`--image` runs the plugin the way the workflows do** — `setup(device)` if it
+  exists, then `init(params)`, then `generate_descriptions` (or `tag_images`)
+  with the schema's defaults — and checks the result is a dict keyed by the paths
+  it was given, because the workflow looks its results up by path and silently
+  drops anything else. It stops when `needs_download()` is True rather than
+  starting a multi-gigabyte fetch from a check command. **That is a courtesy and
+  not a guarantee, and no wording may promise otherwise:** `needs_download()` is
+  the plugin's own answer about its own files, and a plugin that downloads
+  inside `init()` — which is where `from_pretrained_local_first` does it, and so
+  where an author copying the shipped captioners will do it — is already past
+  that gate.
+- **Only captioning plugins.** Image filters have a different base class and a
+  different parameter schema (`string` + `enum`, no `select`), so `plugins test`
+  says so and stops rather than reporting "No TaggerPlugin subclass found",
+  which is true and useless to the person who pointed it at the other kind.
+
+`tests/test_plugin_install.py` drives this off the shipped
+`tagger_plugins/plugin_template.py`: the pass case guards the starter we hand
+contributors, and every failure case is one mistake spliced into a copy of it,
+each anchored on a string that must appear exactly once so a mutation that
+matched a docstring instead of the code cannot read as coverage. **The `--image`
+test splices sentinels into its copy rather than running the template as
+shipped**, because as shipped the template cannot fail it: it seeds
+`self._device = "cpu"` in `__init__` and falls back to `max_tokens or 128`, so
+the caption a working run produces is character-for-character the caption you
+get with `setup()`, `init()` and the merged defaults *all* skipped. That
+assertion was dead on arrival and was found by deleting each of the three from
+`plugin_check` in turn; with the sentinels in place all three deletions fail the
+test and the unmutated file passes.
 
 **There is deliberately no manifest.** An optional `pixlstash-plugin.toml` was
 considered and dropped: static detection already answers what the thing is and
@@ -1063,7 +1159,10 @@ are load-bearing:
   the same two shapes; nothing about discovery changes.
 - **Start-up scan only.** There is no reload endpoint: re-instantiating a plugin whose model
   is resident would orphan the model and make `is_loaded()` lie. Adding a plugin requires a
-  restart, which the guide and the Auto-tagging settings section both say. The directory is
+  restart, which the guide and the Auto-tagging settings section both say. **The author's
+  way out is `pixlstash-cli plugins test`** (§8.1), which calls the one-plugin entry point
+  `load_plugin_from_path` that the scan below now loops over — same loader, in a process
+  that is not the server. The directory is
   not created at boot; **`GET /taggers/plugin-diagnostics`** returns its path so the UI can
   tell the user where to make it. That is a route of its own, on the §16.3 locality tier,
   and not a field on `GET /taggers`: the list route was `ANY_TOKEN` at the time, so a field there handed
