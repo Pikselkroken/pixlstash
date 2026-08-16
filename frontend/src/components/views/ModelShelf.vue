@@ -768,8 +768,14 @@
                        the file is actually called, which the name above it may
                        well not be, and it is the string the reader pastes into
                        a ComfyUI node — so it is monospaced and it is always
-                       there rather than living in a tooltip. -->
-                  <span class="shelf-row-file">
+                       there rather than living in a tooltip. What IS in the
+                       tooltip is the folder: the header names it only under
+                       `groupBy: 'folder'`, so on every other axis this line is
+                       the one place left that can say where the file is. -->
+                  <span
+                    class="shelf-row-file"
+                    :title="copyPathsTitle(row.locations) || undefined"
+                  >
                     {{ row.filename
                     }}<template v-if="LOC_NOTE[row.locState]">
                       · {{ LOC_NOTE[row.locState] }}</template
@@ -845,7 +851,11 @@
                     <span class="shelf-row-name">{{
                       memberLabel(member)
                     }}</span>
-                    <span class="shelf-row-file">{{ member.filename }}</span>
+                    <span
+                      class="shelf-row-file"
+                      :title="copyPathsTitle(member.locations) || undefined"
+                      >{{ member.filename }}</span
+                    >
                   </span>
                   <!-- A step of a run has no kind or base of its own — those
                        are the run's, one row up — but a grid row still owes a
@@ -982,6 +992,7 @@ import {
   bandProjection,
   bandUsage,
   capabilityLabel,
+  copyPathsTitle,
   deletableModels,
   trashName,
   withEmptyFolders,

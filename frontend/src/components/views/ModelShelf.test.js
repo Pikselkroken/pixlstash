@@ -576,6 +576,74 @@ describe("location state", () => {
     const rows = wrapper.findAll(".shelf-row");
     expect(rows[2].find(".shelf-row-loc").exists()).toBe(false);
   });
+
+  it("says where the file is on an axis that draws no folder header", async () => {
+    // Only `groupBy: 'folder'` puts the folder on screen. Every other axis —
+    // and `none`, the default this mounts with — left the reader with no way
+    // to tell a copy on the spare disk from one in the ComfyUI tree.
+    const wrapper = await mountShelf([
+      adapter({
+        locations: [
+          { state: "present", folder_path: "/home/me/models", relpath: "a.st" },
+          { state: "present", folder_path: "/media/me/spare", relpath: "a.st" },
+        ],
+      }),
+    ]);
+    expect(wrapper.find(".shelf-row-file").attributes("title")).toBe(
+      "/home/me/models/a.st\n/media/me/spare/a.st",
+    );
+  });
+
+  it("names THIS copy on a folder-grouped row, not the other folder's", async () => {
+    // The draw stands for one copy — that is why it already reports that
+    // copy's state rather than the merged one. A tooltip reading the merged
+    // array put a path where the file IS on the row that says it is gone.
+    const wrapper = await mountShelf([
+      adapter({
+        locations: [
+          { state: "present", folder_path: "/home/me/models", relpath: "a.st" },
+          { state: "missing", folder_path: "/media/me/spare", relpath: "a.st" },
+        ],
+      }),
+    ]);
+    useModelShelfStore().setView({ groupBy: "folder" });
+    await wrapper.vm.$nextTick();
+    const titles = wrapper
+      .findAll(".shelf-row-file")
+      .map((el) => el.attributes("title"));
+    expect(titles).toEqual([
+      "/home/me/models/a.st",
+      "/media/me/spare/a.st · not where it was",
+    ]);
+  });
+
+  it("says where each step of an expanded run is", async () => {
+    // A member is a shelf row drawn by a second binding, and a run's steps can
+    // sit in different folders from each other.
+    const wrapper = await mountShelf([
+      adapter({ id: 1, stack_id: 7, stack_position: 0 }),
+      adapter({
+        id: 2,
+        stack_id: 7,
+        stack_position: 1,
+        sha256: "b".repeat(64),
+        locations: [
+          { state: "present", folder_path: "/media/me/spare", relpath: "b.st" },
+        ],
+      }),
+    ]);
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
+    expect(
+      wrapper.find(".shelf-row--member .shelf-row-file").attributes("title"),
+    ).toBe("/media/me/spare/b.st");
+  });
+
+  it("offers no tooltip at all when every copy has been forgotten", async () => {
+    // An empty `title` is a tooltip that flashes and says nothing. The file
+    // line already carries the words for this state.
+    const wrapper = await mountShelf([adapter({ locations: [] })]);
+    expect(wrapper.find(".shelf-row-file").attributes("title")).toBeUndefined();
+  });
 });
 
 describe("empty states", () => {

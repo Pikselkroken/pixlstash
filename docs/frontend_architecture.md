@@ -2010,6 +2010,57 @@ groups with `tier`, `icon`, `chip`, `drive`, `offline` and `nested`.
   accessible name and a hue has none either, so the header's `aria-label` states
   the tier, the drive and the offline state alongside the path and the count.
 
+#### Where the file is, on every axis
+
+A folder header is drawn only under `groupBy: 'folder'`. Group by base model, by
+feature, or not at all — the default — and the shelf stopped saying where
+anything was, which is the first question of anyone keeping the same adapter on
+two disks. `copyPathsTitle()` (pure, in `utils/modelShelf.js`) joins each
+`locations[]` entry into one full path and the **file line carries them as its
+tooltip**, one per line, on covers and on expanded stack members alike.
+
+- **Every copy, not the first.** A model registered in two folders is one row,
+  and naming one of its homes would read as naming its only one.
+- **Except under `folder`, where a draw stands for ONE copy** and the store
+  hands it exactly that one. `groups` narrows the drawn row's `locations` beside
+  the `locState` override it already made, and for the same reason: a row under
+  the `/media/…` header reading "file is not where it was" whose tooltip's first
+  line is a path under `/home/…`, where the file is present, is that override
+  undone one attribute at a time. Narrowing is safe because nothing else reads a
+  *drawn* row's locations — `selectedRows` and every verb read `visibleRows`,
+  which still carries all of them. That axis still gains the *subdirectory*
+  under the header, which no header states.
+- **Each line says what is at it.** A bare path is a claim that the file is
+  there, and three of the four states are the claim that it is not, so
+  `COPY_STATE_NOTE` appends "not where it was" / "out of reach" / "not
+  downloaded yet". `present` appends nothing, because that is what a path
+  already says. Rendering all four alike is the one place the section below
+  would be contradicted.
+- **No copies, no tooltip** rather than an empty one: the file line already says
+  "every registered copy forgotten" in words. A copy missing either half of its
+  path is skipped rather than half-named — both are NOT NULL on the wire, so
+  that is a broken row, and `a.st` alone answers "where is this file" with the
+  one thing that is not a location.
+- **The separator comes from the registered folder, and takes the relpath with
+  it.** The two halves come from different places — `model_folder.path` as
+  registered, `relpath` as the scanner wrote it — so a backslashed folder
+  rewrites the relpath's slashes and a POSIX one leaves them alone, where a
+  backslash is a legal filename character rather than a separator.
+
+A tooltip and not a column: the path is long, it is the same on most rows, and
+the shelf's columns are for what a reader *scans*. The words that must be
+scannable are already on the line (`LOC_NOTE`).
+
+**It is hover-only, and that is a floor rather than the finished answer.** A
+`title` on a non-focusable span reaches neither the keyboard nor touch, and the
+row is a single roving tab stop with nothing inside it to focus. The accessible
+shape already exists in this codebase (`HelpTip.vue`, `ScrapheapSection.vue` —
+`v-tooltip` with `open-on-focus`), and moving the file line onto it, or naming
+the folder in the row's accessible name, is the follow-up. It is not free: it
+adds a tab stop per row to a list whose keyboard model is deliberately one stop
+per row (§ the roving grid), which is a `ui-ux-expert` decision rather than a
+rendering one.
+
 #### The two kinds of absence (#898)
 
 `locationState()` reduces a row's copies to one word, and the shelf renders

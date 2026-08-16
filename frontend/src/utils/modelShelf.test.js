@@ -18,6 +18,7 @@ import {
   baseModelKey,
   capabilityLabel,
   collapseStacks,
+  copyPathsTitle,
   withEmptyFolders,
   cleanAssetName,
   deriveModelName,
@@ -191,6 +192,81 @@ describe("formatModelSize", () => {
   it("says nothing rather than zero when the size is unknown", () => {
     expect(formatModelSize(null)).toBe("");
     expect(formatModelSize(undefined)).toBe("");
+  });
+});
+
+describe("copyPathsTitle", () => {
+  it("names every folder a copy sits in, one line each", () => {
+    // The whole point: under `groupBy: 'base_model'` no header names a folder,
+    // so a model on two disks has to say both here or say neither anywhere.
+    expect(
+      copyPathsTitle([
+        {
+          folder_path: "/home/me/models/lora",
+          relpath: "sdxl/foo.safetensors",
+        },
+        { folder_path: "/media/me/spare/", relpath: "foo.safetensors" },
+      ]),
+    ).toBe(
+      "/home/me/models/lora/sdxl/foo.safetensors\n" +
+        "/media/me/spare/foo.safetensors",
+    );
+  });
+
+  it("keeps a Windows path a Windows path, both halves of it", () => {
+    // The two halves come from different places — the folder as registered, the
+    // relpath as the scanner wrote it — so a forward-slashed relpath under a
+    // backslashed folder is the case that comes back half-slashed.
+    expect(
+      copyPathsTitle([
+        {
+          folder_path: "C:\\Users\\me\\models",
+          relpath: "sdxl/foo.safetensors",
+        },
+      ]),
+    ).toBe("C:\\Users\\me\\models\\sdxl\\foo.safetensors");
+    // A POSIX folder leaves the relpath alone: a backslash there is a legal
+    // character in a filename, not a separator to rewrite.
+    expect(
+      copyPathsTitle([{ folder_path: "/home/me/models", relpath: "a\\b.st" }]),
+    ).toBe("/home/me/models/a\\b.st");
+  });
+
+  it("says what is at each path, so an absent copy is not drawn as a present one", () => {
+    // The row spends a rail, a glyph and a word telling the three absences
+    // apart (#898). Rendering four states as four identical lines is the one
+    // place they would read the same.
+    expect(
+      copyPathsTitle([
+        { folder_path: "/home/me/models", relpath: "a.st", state: "present" },
+        { folder_path: "/media/me/spare", relpath: "a.st", state: "missing" },
+        { folder_path: "/mnt/ext", relpath: "a.st", state: "unreachable" },
+      ]),
+    ).toBe(
+      "/home/me/models/a.st\n" +
+        "/media/me/spare/a.st · not where it was\n" +
+        "/mnt/ext/a.st · out of reach",
+    );
+  });
+
+  it("skips a copy missing either half rather than half-naming it", () => {
+    // Both are NOT NULL on the wire, so this is a broken row — and `a.st` on
+    // its own answers "where is this file" with the one thing that is not a
+    // location.
+    expect(
+      copyPathsTitle([
+        { relpath: "a.st" },
+        { folder_path: "/home/me/models" },
+        { folder_path: "/home/me/models", relpath: "b.st" },
+      ]),
+    ).toBe("/home/me/models/b.st");
+  });
+
+  it("says nothing when every copy has been forgotten", () => {
+    // The caller binds no tooltip at all rather than an empty one, and the
+    // file line already carries the words for this state.
+    expect(copyPathsTitle([])).toBe("");
+    expect(copyPathsTitle(undefined)).toBe("");
   });
 });
 
