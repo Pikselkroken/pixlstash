@@ -15,15 +15,16 @@
       Every adapter and checkpoint PixlStash has found on this machine. Group
       and Sort choose the order and whether the list is cut into groups; Show
       chooses which kinds are listed and which base models. Above the list, the
-      Name, Base, Size and date headings sort it too, and every column but Name
-      begins with a handle that resizes it: Left and Right move the edge, Home
-      and End take it to its widest and narrowest, Enter puts it back. The bar
-      ends in the app-wide controls: Settings and the stats sidebar toggle.
-      Nothing on this screen can be undone. A ring around a model's mark says
-      who it is assigned to. A name in italics has not been given one. A row
-      that stands for a training run says how many files it holds; Right and
-      Left open and close it. Right-click a row for everything that can be done
-      to it. Escape clears the selection.
+      Name, Base and Size headings sort it too, as does the date column's, which
+      is named for the date it shows. Every column but Name begins with a handle
+      that resizes it: Left and Right move the edge, Home and End take it to its
+      widest and narrowest, Enter puts it back. The bar ends in the app-wide
+      controls: Settings and the stats sidebar toggle. Nothing on this screen
+      can be undone. A ring around a model's mark says who it is assigned to. A
+      name in italics has not been given one. A row that stands for a training
+      run says how many files it holds; Right and Left open and close it.
+      Right-click a row for everything that can be done to it. Escape clears the
+      selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -494,7 +495,7 @@
               :aria-valuenow="store.view.columnWidths[col.key]"
               :aria-valuetext="`${store.view.columnWidths[col.key]} pixels`"
               :aria-valuemin="MIN_COLUMN_WIDTHS[col.key]"
-              :aria-valuemax="MAX_COLUMN_WIDTH"
+              :aria-valuemax="widenable(col.key, MAX_COLUMN_WIDTH)"
               tabindex="0"
               :title="`Drag to resize the ${col.label} column, double-click to reset it`"
               @pointerdown="startResize(col.key, $event)"
@@ -2964,12 +2965,22 @@ function onResizeMove(event) {
  * one `offsetWidth` read on a pointer move, which is a layout the browser has
  * already done by the time the event is dispatched.
  *
- * Never returns LESS than the column's current width: an already-narrow panel
- * must still let a column be dragged back down.
+ * It is a CEILING and nothing else, so a request to narrow passes through
+ * untouched. The ceiling itself never falls below the column's current width,
+ * which is what lets an already-cramped panel go on shrinking a column it can
+ * no longer widen.
  *
  * A track measuring 0 is not a track with no room, it is one nothing has laid
  * out — the strip is not on screen, or this is jsdom. Unmeasured means
  * unlimited, because the alternative is a grip that silently refuses to move.
+ *
+ * Also the grip's `aria-valuemax`, so the announced maximum is the one the
+ * gesture will actually enforce rather than the store's absolute bound. That
+ * binding is as fresh as the last render, which covers every width change and
+ * every sort; a window resized with nothing else touched leaves it overstated
+ * until the next one. Deliberately not fixed with a resize listener — it would
+ * re-render the whole list on every resize frame to keep one attribute exact,
+ * and the value it replaces was overstated ALL of the time.
  */
 function widenable(key, px) {
   const measured = rootEl.value?.querySelector(

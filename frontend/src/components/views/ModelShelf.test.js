@@ -1111,7 +1111,15 @@ describe("resizing the columns", () => {
     await drag(wrapper, gripOf(wrapper, "base"), 400, 0);
     expect(store.view.columnWidths.base).toBe(144);
 
-    // And a panel with nothing left to give still lets the column back down.
+    // The separator ANNOUNCES that limit rather than the store's absolute
+    // ceiling: a reader told the maximum is 400 and stopped at 144 has been
+    // told the wrong thing about the control in their hand. 204 because the
+    // stubbed track never shrinks — it is the live measurement that is being
+    // asserted here, not the arithmetic.
+    expect(gripOf(wrapper, "base").attributes("aria-valuemax")).toBe("204");
+
+    // And a panel with nothing left to give still lets the column back down:
+    // the measurement is a ceiling, so a request to narrow passes untouched.
     await drag(wrapper, gripOf(wrapper, "base"), 0, 40);
     expect(store.view.columnWidths.base).toBe(104);
   });
