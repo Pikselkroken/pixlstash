@@ -220,13 +220,21 @@ async function setHideToTray(value) {
   }
 }
 
+// Installing can be refused (a `pixlstash` the user wrote themselves is in the
+// way, or the home directory is not writable), so the switch is set from what
+// the main process reports afterwards rather than from what was asked for. A
+// switch left on over a command that does not exist is the failure worth
+// avoiding here.
 async function setShellCommand(value) {
   if (!desktop?.setDesktopPrefs) return;
   shellCommand.value = value;
   try {
-    await desktop.setDesktopPrefs({ shellCommand: value });
+    const prefs = await desktop.setDesktopPrefs({ shellCommand: value });
+    shellCommand.value =
+      typeof prefs?.shellCommand === "boolean" ? prefs.shellCommand : null;
   } catch (e) {
     error.value = e?.message || String(e);
+    await refreshDesktopPrefs();
   }
 }
 
@@ -549,6 +557,9 @@ watch(
           />
         </SettingsRow>
       </SettingsTwoCol>
+      <!-- The other copy of this lives in the compute pane, which the backend
+           pane never renders, so a failure here had nowhere to be shown. -->
+      <div v-if="error" class="settings-error">{{ error }}</div>
     </SettingsSection>
 
     <!-- Pinned to the bottom of the Backend pane. -->

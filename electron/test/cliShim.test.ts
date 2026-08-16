@@ -7,6 +7,7 @@ import {
   cliCommandHint,
   launcherPath,
   parseCliArgs,
+  shimBlocked,
   shimInstalled,
   shimPath,
   shimScript,
@@ -106,6 +107,30 @@ describe('syncShim — installing and removing the shell command', () => {
 
     assert.equal(syncShim(false, '/opt/PixlStash/pixlstash', path), false);
     assert.equal(existsSync(path), false);
+  });
+
+  it("turning it ON never overwrites a pixlstash the user wrote themselves", () => {
+    // This writes outside the app's own storage, so an occupied path is a
+    // refusal, not an overwrite. Reported as "not installed" so the Settings
+    // switch cannot sit on over a command that is not ours.
+    const path = join(scratch(), 'pixlstash');
+    const theirs = '#!/bin/sh\necho my own script\n';
+    writeFileSync(path, theirs);
+
+    assert.equal(syncShim(true, '/opt/PixlStash/pixlstash', path), false);
+    assert.equal(readFileSync(path, 'utf8'), theirs);
+    assert.equal(shimBlocked(path), true);
+  });
+
+  it('a path holding our own shim is not "blocked" — that is just a rewrite', () => {
+    const path = join(scratch(), 'pixlstash');
+    syncShim(true, '/old/PixlStash.AppImage', path);
+    assert.equal(shimBlocked(path), false);
+    assert.equal(syncShim(true, '/new/PixlStash.AppImage', path), true);
+  });
+
+  it('an empty path is not blocked', () => {
+    assert.equal(shimBlocked(join(scratch(), 'nothing-here')), false);
   });
 
   it("turning it off leaves a pixlstash the user wrote themselves alone", () => {

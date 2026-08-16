@@ -85,20 +85,42 @@ export function shimInstalled(path: string = shimPath()): boolean {
 }
 
 /**
+ * Whether something that is not ours already occupies the shim path.
+ *
+ * A `pixlstash` the user put on their own PATH is theirs, and this writes
+ * outside the app's own storage, so an occupied path is a refusal rather than
+ * an overwrite. Reported separately from {@link syncShim}'s boolean so the
+ * caller can say *why* enabling did nothing.
+ */
+export function shimBlocked(path: string = shimPath()): boolean {
+  try {
+    return !readFileSync(path, 'utf8').includes(MARKER);
+  } catch {
+    // Missing (the normal case) or unreadable: nothing of the user's is being
+    // displaced either way, so this is not the blocked condition.
+    return false;
+  }
+}
+
+/**
  * Bring `~/.local/bin/pixlstash` in line with *enabled*.
  *
  * Rewritten on every launch rather than once at install time, so moving or
  * renaming the AppImage repairs the shim instead of leaving a script that execs
  * a file that is no longer there.
  *
- * Removal only ever deletes a file carrying our marker: a user who already had
- * their own `pixlstash` on PATH keeps it, and we never installed over it.
- * Returns whether the shim is present afterwards.
+ * A file that is not ours is never touched, in either direction: enabling
+ * refuses rather than overwriting it, and disabling leaves it alone. Returns
+ * whether *our* shim is present afterwards.
  */
 export function syncShim(enabled: boolean, launcher: string, path: string = shimPath()): boolean {
   try {
     if (!enabled) {
       if (readFileSync(path, 'utf8').includes(MARKER)) rmSync(path);
+      return false;
+    }
+    if (shimBlocked(path)) {
+      console.warn(`[cli-shim] ${path} was not created by PixlStash; leaving it alone`);
       return false;
     }
     mkdirSync(dirname(path), { recursive: true });

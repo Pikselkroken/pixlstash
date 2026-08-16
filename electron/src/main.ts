@@ -42,7 +42,15 @@ import {
   setBackendsRoot,
 } from './config';
 import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
-import { cliCommandHint, launcherPath, parseCliArgs, shimInstalled, syncShim } from './cliShim';
+import {
+  cliCommandHint,
+  launcherPath,
+  parseCliArgs,
+  shimBlocked,
+  shimInstalled,
+  shimPath,
+  syncShim,
+} from './cliShim';
 
 const execFileP = promisify(execFile);
 
@@ -425,6 +433,21 @@ function shimSupported(): boolean {
 }
 
 /**
+ * The command that reaches this CLI, or undefined when we cannot name one.
+ *
+ * Only a packaged install has a launcher a shell can run: unpackaged,
+ * `process.execPath` is the bare Electron binary, and `'<electron>' cli …` does
+ * not start the app (a dev run needs `electron . cli …`). Declaring that would
+ * put a command that cannot work in front of the user, so dev runs say nothing
+ * and let the backend fall back to its own inference, which already knows what
+ * a source checkout should type.
+ */
+function declaredCliCommand(): string | undefined {
+  if (!app.isPackaged) return undefined;
+  return cliCommandHint(shimSupported() && shimInstalled(), launcherPath());
+}
+
+/**
  * Rewrite (or remove) the shell shim and tell the backend which command works.
  *
  * Run at every startup and on every toggle, because the shim's target moves
@@ -434,9 +457,12 @@ function shimSupported(): boolean {
  * toggle only reaches the Settings hint after the backend next restarts.
  */
 function applyShellCommand(): void {
-  const launcher = launcherPath();
-  const installed = shimSupported() ? syncShim(shellCommand, launcher) : false;
-  process.env.PIXLSTASH_CLI_COMMAND = cliCommandHint(installed, launcher);
+  if (shimSupported()) syncShim(shellCommand, launcherPath());
+  const declared = declaredCliCommand();
+  // Deleted rather than left stale, so a dev run can never inherit a hint from
+  // whatever set the variable before us.
+  if (declared) process.env.PIXLSTASH_CLI_COMMAND = declared;
+  else delete process.env.PIXLSTASH_CLI_COMMAND;
 }
 
 /** The desktop's hub database, which sits beside its own server config. */
@@ -1057,12 +1083,19 @@ function registerIpc(): void {
   });
 
   // Desktop-shell preferences (e.g. hide-to-tray-on-close).
-  // shellCommand is null where there is nothing to install (Windows has no
-  // per-user bin dir on PATH; an unpackaged dev run has no durable launcher to
-  // point at), which is how Settings knows to leave the row out entirely.
+  //
+  // shellCommand reports whether the command is *actually there*, not what the
+  // preference says, and is null where there is nothing to install (Windows has
+  // no per-user bin dir on PATH; an unpackaged dev run has no durable launcher
+  // to point at) so Settings leaves the row out entirely. Enabling can be
+  // refused — by a `pixlstash` the user wrote themselves, or an unwritable home
+  // — and a switch stuck on over a command that does not exist would be worse
+  // than one that snaps back with a reason.
+  const shellCommandState = () => (shimSupported() ? shimInstalled() : null);
+
   ipcMain.handle('desktop:getPrefs', () => ({
     hideToTrayOnClose,
-    shellCommand: shimSupported() ? shellCommand : null,
+    shellCommand: shellCommandState(),
   }));
   ipcMain.handle(
     'desktop:setPrefs',
@@ -1075,8 +1108,16 @@ function registerIpc(): void {
         shellCommand = prefs.shellCommand;
         saveDesktopPrefs();
         applyShellCommand();
+        if (shellCommand && !shimInstalled()) {
+          throw new Error(
+            shimBlocked()
+              ? `${shimPath()} already exists and was not created by PixlStash. ` +
+                'Rename or remove it, then try again.'
+              : `Could not write ${shimPath()}.`,
+          );
+        }
       }
-      return { hideToTrayOnClose, shellCommand: shimSupported() ? shellCommand : null };
+      return { hideToTrayOnClose, shellCommand: shellCommandState() };
     },
   );
 
@@ -1169,6 +1210,7 @@ function runCli(args: string[]): void {
   // otherwise starts anyway and writes driver-probe noise ("MESA-LOADER: failed
   // to open dri...") to the terminal *after* the CLI's own output.
   app.disableHardwareAcceleration();
+  const declared = declaredCliCommand();
   // Same interpreter choice the backend makes, so a dev run drives the repo's
   // .venv and the CLI branch is exercisable without building the bundled env.
   const child = spawn(
@@ -1178,8 +1220,9 @@ function runCli(args: string[]): void {
       stdio: 'inherit',
       // So the CLI's own usage lines, errors and "add one with:" hints name the
       // command the user actually typed instead of the `pixlstash-cli` console
-      // script, which no desktop install puts on PATH.
-      env: { ...process.env, PIXLSTASH_CLI_COMMAND: cliCommandHint(shimInstalled(), launcherPath()) },
+      // script, which no desktop install puts on PATH. Undefined in a dev run,
+      // where we have no runnable command to name (see declaredCliCommand).
+      env: declared ? { ...process.env, PIXLSTASH_CLI_COMMAND: declared } : process.env,
     },
   );
   // 3 is the CLI's own "hub unavailable" code; a runtime we cannot even launch

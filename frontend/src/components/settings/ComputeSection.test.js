@@ -226,4 +226,51 @@ describe("Desktop › Shell command", () => {
       shellCommand: true,
     });
   });
+
+  it("snaps back with a reason when the install is refused", async () => {
+    // A `pixlstash` the user wrote themselves is never overwritten, so enabling
+    // can fail. A switch left sitting on over a command that does not exist is
+    // the failure worth avoiding.
+    const { wrapper, desktop } = await mountBackend({
+      hideToTrayOnClose: true,
+      shellCommand: false,
+    });
+    desktop.setDesktopPrefs.mockRejectedValue(
+      new Error("~/.local/bin/pixlstash already exists"),
+    );
+
+    await shellRow(wrapper)
+      .findComponent({ name: "v-switch" })
+      .vm.$emit("update:modelValue", true);
+    await flushPromises();
+
+    expect(
+      shellRow(wrapper).findComponent({ name: "v-switch" }).vm.$attrs[
+        "model-value"
+      ],
+    ).toBe(false);
+    expect(wrapper.text()).toContain("already exists");
+  });
+
+  it("follows the state the main process reports, not the one requested", async () => {
+    const { wrapper, desktop } = await mountBackend({
+      hideToTrayOnClose: true,
+      shellCommand: false,
+    });
+    desktop.setDesktopPrefs.mockResolvedValue({
+      hideToTrayOnClose: true,
+      shellCommand: true,
+    });
+
+    await shellRow(wrapper)
+      .findComponent({ name: "v-switch" })
+      .vm.$emit("update:modelValue", true);
+    await flushPromises();
+
+    expect(
+      shellRow(wrapper).findComponent({ name: "v-switch" }).vm.$attrs[
+        "model-value"
+      ],
+    ).toBe(true);
+  });
 });
