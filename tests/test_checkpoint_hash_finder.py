@@ -259,6 +259,30 @@ class TestFinder:
 
         assert task.params["checkpoint_ids"] == [wanted]
 
+    def test_a_folder_pixlstash_declared_is_never_handed_out(self, hub, tmp_path):
+        """A declared root is described by an index, not walked, so its
+        `relpath` is whatever the index calls one entry — for the HuggingFace
+        cache that is `models--org--name`, a DIRECTORY. Those rows are the
+        owner's to reclassify now (`builtin_caches`), so one corrected to
+        `checkpoint` would match on `file_kind` and send the worker to open a
+        directory, fail, and defer it on every start."""
+        cache = tmp_path / "hf"
+        (cache / "models--krea--Krea-2-Raw").mkdir(parents=True)
+        wanted = register(hub, write_model(tmp_path / "mine.safetensors"))
+        register(hub, cache / "models--krea--Krea-2-Raw")
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_folder SET owner = 'pixlstash' WHERE path = ?",
+                (str(cache),),
+            )
+
+        task = MissingCheckpointHashFinder(hub).find_task()
+
+        assert task.params["checkpoint_ids"] == [wanted]
+        # And it is not counted as work still owed, or the shelf would report a
+        # queue that can never drain.
+        assert MissingCheckpointHashFinder(hub).progress() == (1, 1)
+
     def test_the_path_it_hands_out_is_the_folder_plus_the_relpath(self, hub, tmp_path):
         path = write_model(tmp_path / "sdxl.safetensors")
         register(hub, path)

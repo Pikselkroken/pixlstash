@@ -526,6 +526,18 @@ def update_models(hub, ids: list[int], changes: dict) -> list[int]:
             conn.execute(
                 f"UPDATE model SET {columns} WHERE id IN ({placeholders})", params
             )
+            # Correcting what a file IS drops the capabilities we guessed it
+            # served. Those rows are only ever written by a declaration — the
+            # scanner writes none — so this reaches exactly the found
+            # HuggingFace repos, where the capability came from a name or a
+            # `config.json` and the owner has just said it was wrong. Left
+            # standing, the Feature axis would keep filing the row under the
+            # guess while the Kind column beside it read the correction.
+            if "file_kind" in changes:
+                conn.execute(
+                    f"DELETE FROM model_capability WHERE model_id IN ({placeholders})",
+                    tuple(ids),
+                )
     return sorted(existing)
 
 

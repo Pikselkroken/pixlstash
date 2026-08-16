@@ -30,6 +30,17 @@ measured **0.01 s against 116 GB and 26 repos**.
 scanned out of a folder the owner assembled — and not a claim that PixlStash
 chose the model. It did not choose most of them. ``external`` would say the row
 came from a scan, which is the thing that never happens to these folders.
+
+**``file_kind`` is where "we chose it" IS the claim, so it is only made for the
+repos we chose.** The HuggingFace cache is shared with every other tool on the
+machine, and ``engine`` means "PixlStash downloaded this for itself" — which is
+what every shelf verb refuses to touch. Written over the whole cache it locked
+the owner out of their own models: their checkpoint could not be renamed or
+reclassified, and the refusal told them PixlStash had downloaded it. Only
+:data:`~pixlstash.services.model_features.OUR_REPOS` gets ``engine``; the rest
+are the owner's, and carry ``owner_curatable`` so the declaration states them
+once and then stops overwriting what the owner corrects. The InsightFace packs
+are not split this way because PixlStash fetches every one of them.
 """
 
 from __future__ import annotations
@@ -43,7 +54,16 @@ from pixlstash.services.builtin_models import (
     DeclaredEntry,
     declare_folder,
 )
-from pixlstash.services.model_features import features_for_repo
+from pixlstash.services.model_features import (
+    FEATURE_CHECKPOINT,
+    OUR_REPOS,
+    features_for_repo,
+)
+from pixlstash.utils.adapter_header import (
+    FILE_CHECKPOINT,
+    FILE_ENGINE,
+    FILE_UNKNOWN,
+)
 from pixlstash.utils.insightface_model_utils import (
     DEFAULT_INSIGHTFACE_ROOT,
     KNOWN_MODEL_PACKS,
@@ -322,6 +342,21 @@ def declare_huggingface_cache(hub, folder_path: str) -> Optional[int]:
         # the embedder's CLIP each serve two and a reader deciding what is safe
         # to delete has to see both.
         capabilities = features_for_repo(repo)
+        # **This cache is shared, and most of it is not ours.** `OUR_REPOS` is
+        # the list PixlStash's own code fetches; everything else beside it was
+        # put there by the owner or by another tool, and calling those rows
+        # `engine` made the shelf claim we downloaded them. That claim is what
+        # every verb refuses on — so correcting the Kind of a checkpoint the
+        # owner downloaded themselves came back "1 of these are engines
+        # PixlStash downloaded for itself … listed so you can see them, not
+        # curated", about a file PixlStash has never loaded.
+        #
+        # `file_kind` for those is what the classifier read off the repo, which
+        # for a full diffusers pipeline is a genuine answer and otherwise is
+        # `unknown` — the same word the unclaimed leftovers in the built-in
+        # folder carry, chosen there for this exact reason: an `engine` row is
+        # the one state on the shelf nothing can act on.
+        ours = str(getattr(repo, "repo_id", "") or "") in OUR_REPOS
         entries.append(
             DeclaredEntry(
                 # The repo's own directory name (`models--org--name`), which is
@@ -333,6 +368,16 @@ def declare_huggingface_cache(hub, folder_path: str) -> Optional[int]:
                 size=int(repo.size_on_disk),
                 present=True,
                 capabilities=capabilities,
+                file_kind=(
+                    FILE_ENGINE
+                    if ours
+                    else (
+                        FILE_CHECKPOINT
+                        if capabilities[0] == FEATURE_CHECKPOINT
+                        else FILE_UNKNOWN
+                    )
+                ),
+                owner_curatable=not ours,
             )
         )
     return declare_folder(hub, folder_path, entries, movable=MOVABLE_FIXED)

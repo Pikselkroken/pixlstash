@@ -188,6 +188,7 @@ class DeclaredEntry:
     present: bool
     capabilities: tuple[str, ...] = field(default_factory=tuple)
     file_kind: str = FILE_ENGINE
+    owner_curatable: bool = False
 
     @property
     def declared_capabilities(self) -> tuple[str, ...]:
@@ -195,6 +196,21 @@ class DeclaredEntry:
         if self.capabilities:
             return self.capabilities
         return (self.role,) if self.role else ()
+
+    @property
+    def restated_role(self) -> Optional[str]:
+        """The ``kind`` a re-declaration asserts, or None to leave it alone."""
+        return None if self.owner_curatable else self.role
+
+    @property
+    def restated_display_name(self) -> Optional[str]:
+        """The name a re-declaration asserts, or None to leave it alone.
+
+        The first declaration still names the row — ``models--krea--Krea-2-Raw``
+        is a cache directory, not a name anyone wants to read — but a Rename is
+        the owner's and the next start-up must not take it back.
+        """
+        return None if self.owner_curatable else self.display_name
 
     @property
     def restated_file_kind(self) -> Optional[str]:
@@ -208,7 +224,13 @@ class DeclaredEntry:
         real adapter. Restating ``unknown`` onto that row on the next start would
         drop the adapter out of ``/adapters`` for its own folder too, over a
         second copy the owner happened to leave here.
+
+        A row the owner may curate is the same answer for the plainer reason:
+        the correction they just made is the whole point, and restating our
+        guess over it every start would make the edit look like it never landed.
         """
+        if self.owner_curatable:
+            return None
         return self.file_kind if self.file_kind == FILE_ENGINE else None
 
 
@@ -712,6 +734,7 @@ def declare_folder(
                 "WHERE model_folder_id = ? AND relpath = ?",
                 (folder_id, entry.relpath),
             ).fetchone()
+            first_declaration = existing is None
             if existing is None:
                 cursor = conn.execute(
                     "INSERT INTO model (file_kind, kind, display_name, filename, "
@@ -745,6 +768,13 @@ def declare_folder(
                 # class here they are allowed to curate — and `restated_file_kind`
                 # covers the sharper case above, where the row is no longer the
                 # leftover's alone.
+                #
+                # The `restated_*` properties are the same rule for a row we
+                # merely FOUND: a repo in the shared HuggingFace cache that
+                # PixlStash did not choose is the owner's model, and what this
+                # module knows about it is a classification, not a fact. It
+                # names the row on the way in and then stops asserting, or the
+                # owner's correction would be reverted by the next start-up.
                 conn.execute(
                     "UPDATE model SET file_kind = COALESCE(?, file_kind), "
                     "kind = COALESCE(?, kind), "
@@ -752,8 +782,8 @@ def declare_folder(
                     "file_size = COALESCE(?, file_size) WHERE id = ?",
                     (
                         entry.restated_file_kind,
-                        entry.role,
-                        entry.display_name,
+                        entry.restated_role,
+                        entry.restated_display_name,
                         size,
                         model_id,
                     ),
@@ -779,6 +809,14 @@ def declare_folder(
             # Ordered by `rowid` so the comparison sees the stored ORDER too:
             # primary-first is what `model.kind` agrees with and what the shelf
             # renders, so a reordered set is a real difference, not a no-op.
+            #
+            # A found repo's capabilities are stated once and then left alone,
+            # for `restated_file_kind`'s reason: correcting the file kind is
+            # what clears them (`update_models`), and a declaration that put
+            # them straight back would leave the Feature axis filing the row
+            # under the guess the owner had just overruled.
+            if entry.owner_curatable and not first_declaration:
+                continue
             declared = list(entry.declared_capabilities)
             stored = [
                 row[0]

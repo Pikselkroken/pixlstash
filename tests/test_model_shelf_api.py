@@ -3656,6 +3656,54 @@ def test_every_editing_verb_refuses_an_engine(shelf_env):
     )
 
 
+def test_a_model_in_a_shared_cache_that_we_did_not_choose_is_the_owners_to_correct(
+    shelf_env,
+):
+    """The refusal above is right about an engine and was wrong about everything
+    else in the HuggingFace cache, which is shared with every other tool on the
+    machine. Setting the Kind of a checkpoint the OWNER downloaded came back "1
+    of these are engines PixlStash downloaded for itself", about a file
+    PixlStash has never loaded. `builtin_caches` no longer calls those rows
+    engines, so the guard no longer reaches them."""
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (id, path, kind, owner, movable, created_at) "
+            "VALUES (9, '/hf', 'foreign', 'pixlstash', 'fixed', "
+            "'2026-08-11T00:00:00Z')"
+        )
+        model_id = int(
+            conn.execute(
+                "INSERT INTO model (file_kind, display_name, filename, provenance, "
+                "file_size, created_at) VALUES ('unknown', 'krea/Krea-2-Raw', "
+                "'models--krea--Krea-2-Raw', 'builtin', 99, '2026-08-11T00:00:00Z')"
+            ).lastrowid
+        )
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+            "seen_at) VALUES (?, 9, 'models--krea--Krea-2-Raw', 'present', "
+            "'2026-08-11T00:00:00Z')",
+            (model_id,),
+        )
+        conn.execute(
+            "INSERT INTO model_capability (model_id, capability) VALUES (?, 'other')",
+            (model_id,),
+        )
+
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [model_id], "file_kind": "checkpoint"}
+    )
+    assert r.status_code == 200, r.text
+    assert _model_row(shelf_env, model_id)["file_kind"] == "checkpoint"
+    # And the guess it overrules goes with it, or the shelf's Feature axis would
+    # keep filing the row under `Other` while its Kind column read `Checkpoint`.
+    assert (
+        shelf_env.server.hub.fetchall(
+            "SELECT capability FROM model_capability WHERE model_id = ?", (model_id,)
+        )
+        == []
+    )
+
+
 def test_forget_reports_an_engine_rather_than_deleting_it(shelf_env):
     """Reported like every other refusal rather than raised, and refused inside
     the same transaction as the state gate — forgetting one would delete a row
