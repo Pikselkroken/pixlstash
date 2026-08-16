@@ -1003,6 +1003,24 @@ Two properties carry over from §8.1 and one is new:
   splitting the sentence. `author` and `license` (issue #961) are read as class
   literals through the existing `_string_attribute`, and shown only where the
   plugin declares them — every plugin published so far predates the header.
+- **`install <name>` takes the name the listing printed, which is the plugin's
+  *declared* name, not the repository's directory slug.** The two differ in the
+  published repository — `plugins/captioning/moondream2_captioner` declares
+  `moondream2` — and matching only on the directory left `plugins available`
+  advertising `moondream2` while `plugins install moondream2` refused it. The
+  declared name is the identity everywhere else too: it is what the plugin
+  installs under, what `plugins list` shows and what `plugins remove` takes. So
+  `_fetch_from_repository` matches the declared name first and the directory
+  name second (that one still works, and was the only one accepted before), and
+  its `Available:` refusal lists declared names, falling back to the directory
+  name only for a folder too broken to read one out of. **Both passes run over
+  the whole set**, not per folder in `sorted()` order: otherwise a declared name
+  would beat only the directory names that happen to sort after it, and which
+  plugin `install` fetched would depend on the kind directory it sat in. **Two
+  folders answering to one name are refused, naming both** — the shape
+  `resolve_removal` already uses for an ambiguous name. Picking one silently
+  would let a string inside downloaded code, which the listing does not show,
+  decide what gets installed.
 
 **`plugins test` is the exception to "nothing is imported", and the reason the
 rest of the group can stay static** ([pixlstash/plugin_check.py](../pixlstash/plugin_check.py),
