@@ -29,6 +29,10 @@ reopen their links.
   image filters, from the PixlStash-plugins repository, a zip, a folder or a
   single `.py`. A plugin's `requirements.txt` is only installed with
   `--with-deps`.
+- Add `pixlstash-cli plugins available` to list what the plugins repository
+  publishes — name, title, summary and, where declared, author and licence, with
+  `*` marking one you already have. Add a word to search. Until now the only way
+  to learn a plugin's name was to guess one wrong and read the error.
 - Add `pixlstash-cli plugins test <plugin>`, so writing a captioning plugin no
   longer costs a server restart per typo. It loads the file the way the server
   does, registers every plugin class it defines, and checks the parameter schema

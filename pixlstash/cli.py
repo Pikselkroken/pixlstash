@@ -300,8 +300,8 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
     install_parser.add_argument(
         "source",
         help=(
-            "A plugin name from the plugins repository, or a path to a .zip, "
-            "a folder, or a single .py file."
+            "A plugin name from the plugins repository (`plugins available` "
+            "lists them), or a path to a .zip, a folder, or a single .py file."
         ),
     )
     install_parser.add_argument(
@@ -382,6 +382,35 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
         ),
     )
     test_parser.set_defaults(handler=_cmd_plugins_test)
+
+    available_parser = commands.add_parser(
+        "available",
+        help="Show the plugins published in the plugins repository.",
+        description=(
+            "List what the plugins repository publishes, so you can find a "
+            "plugin's name before installing it. Give a word to search: it "
+            "matches the name, title, summary, author and licence, so anything "
+            "you can see in the listing you can also search for. `*` marks a "
+            "plugin you already have installed. This downloads the same "
+            "archive `plugins install <name>` does; nothing is imported or run."
+        ),
+    )
+    available_parser.add_argument(
+        "query",
+        nargs="?",
+        default="",
+        metavar="WORD",
+        help="Only show plugins matching this word (case-insensitive).",
+    )
+    available_parser.add_argument(
+        "--ref",
+        default=plugin_install.DEFAULT_REF,
+        help=(
+            "Branch, tag or commit in the plugins repository "
+            f"(default: {plugin_install.DEFAULT_REF})."
+        ),
+    )
+    available_parser.set_defaults(handler=_cmd_plugins_available)
 
     list_parser = commands.add_parser(
         "list",
@@ -758,6 +787,49 @@ def _print_parameters(parameters: object) -> None:
         )
 
 
+def _cmd_plugins_available(args: argparse.Namespace) -> int:
+    """Print the published catalogue, optionally filtered by a search word."""
+    entries = plugin_install.catalogue(args.ref)
+    matched = [entry for entry in entries if plugin_install.matches(entry, args.query)]
+
+    if not matched:
+        # The two empty results mean different things, and telling them apart is
+        # the difference between "try another word" and "something is wrong".
+        if args.query and entries:
+            print(f"No published plugin matches {args.query!r}.")
+            print(f"Drop the word to see all {len(entries)}.")
+        else:
+            print(f"{plugin_install.PLUGINS_REPO} publishes no plugins at this ref.")
+        return EXIT_OK
+
+    seen_installed = False
+    for kind in (plugin_install.CAPTIONING, plugin_install.IMAGE):
+        of_kind = [entry for entry in matched if entry.kind == kind]
+        if not of_kind:
+            continue
+        print(f"\n{plugin_install.KIND_LABELS[kind]}")
+        width = max(len(entry.name) for entry in of_kind)
+        for entry in of_kind:
+            marker = "  "
+            if entry.installed:
+                marker, seen_installed = "* ", True
+            print(f"  {marker}{entry.name:<{width}}  {entry.display_name}")
+            detail = entry.problem or entry.summary
+            if detail:
+                print(f"      {' ' * width}{detail}")
+            # Only shown once declared: every published plugin predates the
+            # header, so printing "author: -" on all of them would be noise.
+            credit = "  ".join(part for part in (entry.author, entry.license) if part)
+            if credit:
+                print(f"      {' ' * width}{credit}")
+
+    print()
+    if seen_installed:
+        print("* already installed")
+    print(f"Install one with:  {invoked_as()} plugins install <name>")
+    return EXIT_OK
+
+
 def _cmd_plugins_list(_args: argparse.Namespace) -> int:
     """Print both plugin directories, grouped by kind, with a marker legend."""
     listing = plugin_install.list_installed()
@@ -767,7 +839,8 @@ def _cmd_plugins_list(_args: argparse.Namespace) -> int:
             print(
                 f"  {plugin_install.KIND_LABELS[kind]}: {plugin_install.user_dir(kind)}"
             )
-        print(f"Add one with:  {invoked_as()} plugins install hello_world_stamp")
+        print(f"See what is published:  {invoked_as()} plugins available")
+        print(f"Add one with:           {invoked_as()} plugins install <name>")
         return EXIT_OK
 
     notes = {

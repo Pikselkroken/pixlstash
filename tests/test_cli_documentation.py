@@ -52,8 +52,9 @@ def test_the_walk_reaches_every_command():
     walked = {path for path, _parser in _all_parsers()}
     assert "pixlstash-cli libraries backup" in walked
     assert "pixlstash-server" in walked
-    # 2 roots + 2 groups + 8 library verbs + 3 plugin verbs, at least.
-    assert len(walked) >= 15, walked
+    assert "pixlstash-cli plugins available" in walked
+    # 2 roots + 2 groups + 8 library verbs + 5 plugin verbs, at least.
+    assert len(walked) >= 17, walked
 
 
 def test_entry_points_are_named_as_they_are_installed():
