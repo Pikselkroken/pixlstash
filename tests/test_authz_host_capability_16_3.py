@@ -157,10 +157,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_29_local_5_loopback():
+def test_host_capability_tier_split_is_31_local_5_loopback():
     """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 34 routes carry a
-    locality tier = 29 local + 5 loopback.
+    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 36 routes carry a
+    locality tier = 31 local + 5 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -254,6 +254,20 @@ def test_host_capability_tier_split_is_29_local_5_loopback():
     thing the shelf does to a disk and is not made weaker by the ids being ours
     rather than the caller's.
 
+    36 = 31 + 5 with the two ``GET /models/{model_id}/samples`` routes, which
+    read a training run's previews back off the shelf after the import copied
+    them into ``<stem>_samples/`` beside the checkpoint. The byte route is
+    ``GET /adapters/{sha256}/file`` again — raw bytes out of a registered model
+    folder — and the listing walks one directory inside that folder, reporting
+    names of files PixlStash never registered, which is ``rescan``'s authority
+    narrowed to a directory. **The plan for that change asked for
+    ``owner_only``**, on the grounds that both are addressed by a ``model.id``
+    with no host path crossing the wire; that is the argument the
+    ``/adapters/{sha256}/file`` entry above records as *not* the argument, since
+    the tier follows the authority exercised rather than what the route accepts.
+    The listing is kept beside the byte route rather than one tier below it, so
+    a caller who may not fetch a preview is not handed a list of them.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -267,7 +281,7 @@ def test_host_capability_tier_split_is_29_local_5_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 29, sorted(local)
+    assert len(local) == 31, sorted(local)
 
 
 # ===========================================================================
@@ -612,6 +626,8 @@ def test_every_untemplated_locality_get_is_on_the_read_blocked_belt():
         "/api/v1/adapters/{sha256}/file",
         "/api/v1/model-folders/{folder_id}/runs",
         "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
+        "/api/v1/models/{model_id}/samples",
+        "/api/v1/models/{model_id}/samples/{filename}",
     ], templated_gap
 
 

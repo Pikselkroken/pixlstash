@@ -56,6 +56,19 @@ export function moveReceipt(results, cancelled = false) {
     );
   }
   if (failed) notes.push(`${files(failed)} could not be moved and stayed put.`);
+  // A file whose `<stem>_samples/` previews did not travel with it is still
+  // `moved` — losing a preview must not cost the weights, so the server does
+  // not fail the file for it. The status tallies above therefore cannot see it,
+  // and a receipt built from them alone would call the loss a clean move. The
+  // import receipt names the same thing (`importReceipt`), and this is its half.
+  const withoutSamples = tally(
+    (r) => MOVED_STATUSES.has(r.status) && Boolean(r.detail),
+  );
+  if (withoutSamples) {
+    notes.push(
+      `${files(withoutSamples)} moved without ${withoutSamples === 1 ? "its" : "their"} training previews.`,
+    );
+  }
   // Named rather than folded into "not moved": the queue never reached these,
   // so nothing was attempted on them and nothing is half-done.
   if (stopped) {

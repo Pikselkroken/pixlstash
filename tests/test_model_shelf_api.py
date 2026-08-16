@@ -51,7 +51,10 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.adapter_attachment import AdapterAttachment
 from pixlstash.routes import model_files as model_files_routes
 from pixlstash.routes import model_folders as model_folders_routes
-from pixlstash.routes.model_imports import sample_path_within
+from pixlstash.routes.model_imports import (
+    model_sample_path_within,
+    sample_path_within,
+)
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.server import Server
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
@@ -1886,6 +1889,12 @@ _IMPORT_ROUTES = (
             }
         },
     ),
+    # The imported previews, read back off the shelf. On the same locality tier
+    # as the rest of this block: the byte route serves raw bytes out of a
+    # registered model folder, which is `GET /adapters/{sha256}/file`'s class,
+    # and the listing walks one directory inside that folder.
+    ("GET", f"{API}/models/1/samples", {}),
+    ("GET", f"{API}/models/1/samples/a.png", {}),
 )
 
 
@@ -1949,6 +1958,14 @@ def test_every_import_route_is_declared_local_owner_only():
             "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
         ),
         ("POST", "/api/v1/model-imports"),
+        # NOT owner_only, which is what the plan for the samples change asked
+        # for on the grounds that a model.id crosses the wire and a host path
+        # does not. That is the argument the matrix records as *not* the
+        # argument: GET /adapters/{sha256}/file takes no host path either and is
+        # on this tier, because the tier follows the authority exercised —
+        # reading bytes out of a folder the owner registered.
+        ("GET", "/api/v1/models/{model_id}/samples"),
+        ("GET", "/api/v1/models/{model_id}/samples/{filename}"),
     ):
         declared = ROUTE_POLICIES.get((method, path))
         assert declared is not None, f"({method}, {path}) has no ROUTE_POLICIES entry"
@@ -2195,6 +2212,169 @@ def test_importing_a_run_registers_it_as_one_stack(shelf_env, import_folders):
     assert cover["provenance"] == "trained"
     assert cover["stack_position"] == 0
     assert cover["member_count"] == 2
+
+
+# ── The imported samples, read back off the shelf ───────────────────────────
+#
+# The run's previews travel with its weights, so the same images are reachable
+# twice: from the output root before the import (the routes above) and from the
+# destination folder afterwards (these). The containment story is the same one,
+# with the run replaced by a `model_file` row.
+
+
+def _import_clementine(env, folders, *, steps=None):
+    """Import the fixture run and return `{filename: model_id}`."""
+    body = {
+        "source_folder_id": folders.source_id,
+        "run_name": "Clementine",
+        "destination_folder_id": folders.destination_id,
+    }
+    if steps is not None:
+        body["steps"] = steps
+    r = env.owner.post(f"{API}/model-imports", json=body)
+    assert r.status_code == 200, r.text
+    return {f["filename"]: f["model_id"] for f in r.json()["files"]}, r.json()["files"]
+
+
+def _run_samples(folders, *pairs):
+    """Write `(step, index)` previews into the fixture run's `samples/`."""
+    samples = folders.run_dir / "samples"
+    samples.mkdir(exist_ok=True)
+    for step, index in pairs:
+        (samples / f"1712345678901__{step:09d}_{index}.jpg").write_bytes(
+            b"\xff\xd8\xff" + f"{step}-{index}".encode()
+        )
+
+
+def test_an_imported_runs_samples_are_listed_and_served_off_the_shelf(
+    shelf_env, import_folders
+):
+    """The positive control for both routes, and the bare final's cover rule at
+    the same time: it carries no step of its own, so it takes the highest step's
+    previews rather than showing nothing."""
+    _run_samples(import_folders, (500, 0), (500, 1))
+    ids, files = _import_clementine(shelf_env, import_folders)
+
+    final = ids["Clementine.safetensors"]
+    stepped = ids["Clementine_000000500.safetensors"]
+    assert {f["filename"]: f["sample_count"] for f in files} == {
+        "Clementine.safetensors": 2,
+        "Clementine_000000500.safetensors": 2,
+    }
+
+    listed = shelf_env.owner.get(f"{API}/models/{final}/samples")
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["samples"] == [
+        "1712345678901__000000500_0.jpg",
+        "1712345678901__000000500_1.jpg",
+    ], "the stack cover listed no previews — the blank-cover failure"
+    assert (
+        shelf_env.owner.get(f"{API}/models/{stepped}/samples").json()["samples"]
+        == listed.json()["samples"]
+    )
+
+    served = shelf_env.owner.get(
+        f"{API}/models/{final}/samples/1712345678901__000000500_1.jpg"
+    )
+    assert served.status_code == 200, served.text
+    assert served.headers["content-type"] == "image/jpeg"
+    assert served.content == b"\xff\xd8\xff500-1"
+
+
+def test_a_model_that_was_never_imported_from_a_run_lists_no_samples(shelf_env):
+    """An empty list, not a 404: the model exists and simply has no previews."""
+    model_id = shelf_env.model_ids["alice.safetensors"]
+    r = shelf_env.owner.get(f"{API}/models/{model_id}/samples")
+    assert r.status_code == 200, r.text
+    assert r.json()["samples"] == []
+    assert shelf_env.owner.get(
+        f"{API}/models/{model_id}/samples/a.jpg"
+    ).status_code == (404)
+
+
+def test_an_unknown_model_id_is_a_404_on_both_sample_routes(shelf_env):
+    """An unmatched path is *also* a 404, so this assertion is worthless unless
+    the routes are known to exist. `assert_real_route` is that proof, and
+    without it the test would pass verbatim against a renamed or deleted
+    route — the 403-shaped trap in its 404 form."""
+    for path in ("samples", "samples/a.jpg"):
+        url = f"{API}/models/9999999/{path}"
+        assert_real_route(shelf_env.server.api, "GET", url)
+        r = shelf_env.owner.get(url)
+        assert r.status_code == 404, f"{path}: {r.status_code} {r.text}"
+
+
+def test_a_non_image_in_a_models_samples_is_never_served_or_listed(
+    shelf_env, import_folders
+):
+    """Same allowlist as the run route, for the same reason: the directory is on
+    the owner's disk and anything can be dropped into it, and `mimetypes` would
+    label this text/html and serve it from our own origin."""
+    _run_samples(import_folders, (500, 0))
+    ids, _ = _import_clementine(shelf_env, import_folders, steps=[None])
+    model_id = ids["Clementine.safetensors"]
+    (import_folders.destination_dir / "Clementine_samples" / "note.html").write_text(
+        "<script>alert(1)</script>"
+    )
+
+    listed = shelf_env.owner.get(f"{API}/models/{model_id}/samples")
+    assert "note.html" not in listed.json()["samples"], (
+        "the listing advertised a name the byte route refuses"
+    )
+    served = shelf_env.owner.get(f"{API}/models/{model_id}/samples/note.html")
+    assert served.status_code == 400, served.text
+    assert b"script" not in served.content
+
+
+def test_the_model_sample_join_refuses_a_name_that_climbs_out(tmp_path):
+    """The containment, asserted where it can be made to fail.
+
+    Not over HTTP, for the reason the run-sample twin of this test records at
+    length: Starlette percent-decodes before matching, so `{filename}` cannot
+    carry a `/` and a traversal never reaches the handler on POSIX. The guard is
+    still real on Windows, where a backslash is both an ordinary URL character
+    and a path separator, and where four CI shards run.
+    """
+    folder = tmp_path / "loras"
+    (folder / "Clementine_samples").mkdir(parents=True)
+    (folder / "Clementine_samples" / "ok.jpg").write_bytes(b"\xff\xd8\xff")
+    (folder / "Clementine.safetensors").write_bytes(b"weights")
+
+    # Positive control: over-blocking is its own regression.
+    assert model_sample_path_within(
+        str(folder), "Clementine.safetensors", "ok.jpg"
+    ) == str(folder / "Clementine_samples" / "ok.jpg")
+
+    for escape in (
+        "../Clementine.safetensors",
+        "..",
+        "../../etc/passwd",
+        "/etc/passwd",
+    ):
+        with pytest.raises(ValueError):
+            model_sample_path_within(str(folder), "Clementine.safetensors", escape)
+
+
+def test_a_symlinked_model_samples_directory_is_not_its_own_safe_base(tmp_path):
+    """The hinge the run-sample route had to learn twice.
+
+    `resolve_path_within` realpaths the base it is handed, so containing the
+    filename against the derived directory alone would make a symlinked
+    `<stem>_samples` its own safe base — an arbitrary-image reader for any
+    allowlisted extension. Registered model folders are less exposed than a
+    `source` folder, whose contents are third-party tool output, but the
+    directory name here is derived rather than chosen and the owner's disk is
+    still the owner's disk.
+    """
+    folder = tmp_path / "loras"
+    folder.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.jpg").write_bytes(b"\xff\xd8\xffsecret")
+    (folder / "Clementine_samples").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError):
+        model_sample_path_within(str(folder), "Clementine.safetensors", "private.jpg")
 
 
 def test_a_run_name_that_escapes_the_output_root_is_refused(shelf_env, import_folders):

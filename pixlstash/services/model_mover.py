@@ -166,7 +166,8 @@ class MovePlan:
     destination_path: str
     moves: list[PlannedMove]
     bytes_to_copy: int
-    """Total size of the cross-device moves only; a rename copies nothing."""
+    """Total size of the cross-device moves only, samples directories included;
+    a rename copies nothing."""
     skipped: list["MoveOutcome"] = field(default_factory=list)
     """Items already in the destination folder: nothing to do, but still
     *reported*. Dropping them silently left a caller unable to reconcile the
@@ -347,6 +348,124 @@ def move_directory(source_path: str, destination_path: str) -> None:
     shutil.rmtree(source_path)
 
 
+# A trained checkpoint's previews sit beside it, in a directory named from its
+# own stem: ``JimmyBuss_0001500.safetensors`` -> ``JimmyBuss_0001500_samples/``.
+# On disk in the folder rather than in a hub store, so a person opening that
+# folder sees what each file looked like, and so nothing has to be migrated when
+# they move the file somewhere PixlStash is not looking.
+SAMPLES_DIR_SUFFIX = "_samples"
+
+
+def samples_relpath(model_relpath: str) -> str:
+    """Where one model file's training previews sit, derived from its own name.
+
+    Takes a relpath or a full path and answers in kind, keeping any directory
+    part: a whole-folder relocation moves ``runA/model.safetensors``, and its
+    previews are ``runA/model_samples/``, not a directory at the root.
+    """
+    return os.path.splitext(model_relpath)[0] + SAMPLES_DIR_SUFFIX
+
+
+def samples_size(model_path: str) -> int:
+    """Bytes of a model file's samples directory, or 0 when it has none.
+
+    Counted into the space check because a run measured 1.9 GB of which
+    ``samples/`` was 15 MB: small against the weights, and not nothing when the
+    destination is nearly full.
+    """
+    directory = samples_relpath(model_path)
+    if not os.path.isdir(directory):
+        return 0
+    total = 0
+    for root, _dirs, files in os.walk(directory):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError as exc:
+                logger.warning(
+                    "Could not size %s while counting the samples of %s: %s. "
+                    "The space check is short by that file.",
+                    os.path.join(root, name),
+                    model_path,
+                    exc,
+                )
+    return total
+
+
+def carry_samples(
+    source_path: str, destination_path: str, *, delete_source: bool = True
+) -> Optional[str]:
+    """Take a model file's previews with it, or say why they did not go.
+
+    **Non-fatal by construction, and that is the ruling**: losing a preview must
+    not cost the weights. The caller has already committed the row that names
+    the file at its new home, so a failure here is reported in the outcome's
+    ``detail`` and the file stays moved.
+
+    Ordered by the caller — after the row commits and before the source is
+    unlinked — so ``delete_after_import`` can never outrun the copy.
+
+    Args:
+        source_path: The model file at its old location. Its samples directory
+            is derived from it and may not exist, which is the common case.
+        destination_path: The model file at its new location, already contained
+            against the destination folder. The samples directory is derived
+            from it and must not exist.
+        delete_source: True moves the directory, matching a move; False copies
+            it, matching a copy-in, where the original file stays too.
+
+    Returns:
+        None when there was nothing to carry or it was carried, or a short
+        message for the outcome's ``detail`` when it was not.
+    """
+    source_dir = samples_relpath(source_path)
+    if not os.path.isdir(source_dir):
+        return None
+    destination_dir = samples_relpath(destination_path)
+    if os.path.lexists(destination_dir):
+        # Refused rather than merged or replaced, for the reason the importer
+        # refuses the same name: there is no undo for shelf operations. It is
+        # also what makes the two platforms agree — ``os.rename`` over an
+        # **empty** existing directory silently replaces it on POSIX and raises
+        # on Windows, so without this check the owner's empty directory is
+        # destroyed on four CI shards' worth of Linux and preserved on the other
+        # four. Checking first makes it preserved everywhere.
+        logger.warning(
+            "Not carrying the samples of %s: %s is already there. The model "
+            "moved; its previews stayed behind rather than being written over.",
+            os.path.basename(source_path),
+            destination_dir,
+        )
+        return (
+            f"Samples were not carried: {os.path.basename(destination_dir)} "
+            "already exists at the destination."
+        )
+    try:
+        if delete_source:
+            move_directory(source_dir, destination_dir)
+        else:
+            partial = destination_dir + PARTIAL_SUFFIX
+            try:
+                shutil.copytree(source_dir, partial)
+                os.rename(partial, destination_dir)
+            except BaseException:
+                discard_partial_tree(partial)
+                raise
+    except OSError as exc:
+        logger.error(
+            "Could not carry the samples of %s from %s to %s: %s. The model "
+            "itself is registered at its new location; only the previews stayed "
+            "behind.",
+            os.path.basename(source_path),
+            source_dir,
+            destination_dir,
+            exc,
+            exc_info=True,
+        )
+        return f"Samples were not carried from {os.path.basename(source_dir)}: {exc}"
+    return None
+
+
 def require_space(destination_path: str, bytes_to_copy: int) -> None:
     """Check free space **before the first byte**, for the whole batch.
 
@@ -491,7 +610,14 @@ class ModelMover:
             claimed.add(move.destination_relpath)
             moves.append(move)
 
-        bytes_to_copy = sum(move.size for move in moves if not move.same_device)
+        # The samples directory travels with the file, so its bytes are part of
+        # what has to fit. Same-device moves are renames and copy nothing, here
+        # as for the file itself.
+        bytes_to_copy = sum(
+            move.size + samples_size(move.source_path)
+            for move in moves
+            if not move.same_device
+        )
         require_space(destination_path, bytes_to_copy)
         logger.info(
             "Planned a move of %d file(s) into %s: %d byte(s) to copy, %d "
@@ -817,7 +943,13 @@ class ModelMover:
             )
             os.rename(move.destination_path, move.source_path)
             raise
-        return MoveOutcome(move.source_folder_id, move.source_relpath, STATUS_MOVED)
+        # After the row is committed, exactly as the copy path does it: a
+        # failure here costs previews, never the file. Nothing is unlinked on
+        # this path — the rename *was* the move — so this is simply last.
+        detail = carry_samples(move.source_path, move.destination_path)
+        return MoveOutcome(
+            move.source_folder_id, move.source_relpath, STATUS_MOVED, detail
+        )
 
     def _copy_verify_repoint_unlink(
         self, move: PlannedMove, plan: MovePlan, *, delete_source: bool
@@ -867,12 +999,21 @@ class ModelMover:
             )
             discard_partial(move.destination_path)
             raise
+        # The samples sit inside the existing window rather than widening it:
+        # after the durable commit, before the unlink the commit authorises. A
+        # crash here still leaves the file at both paths with the row naming the
+        # destination, which is what the table at the top of this module says.
+        detail = carry_samples(
+            move.source_path, move.destination_path, delete_source=delete_source
+        )
         if not delete_source:
             return MoveOutcome(
-                move.source_folder_id, move.source_relpath, STATUS_COPIED
+                move.source_folder_id, move.source_relpath, STATUS_COPIED, detail
             )
         unlink_source(move.source_path)
-        return MoveOutcome(move.source_folder_id, move.source_relpath, STATUS_MOVED)
+        return MoveOutcome(
+            move.source_folder_id, move.source_relpath, STATUS_MOVED, detail
+        )
 
     def _repoint(
         self, move: PlannedMove, plan: MovePlan, *, delete_source: bool = True
