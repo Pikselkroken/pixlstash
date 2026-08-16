@@ -188,8 +188,8 @@ class ModelFolderResponse(BaseModel):
     deletable: bool = Field(
         default=False,
         description=(
-            "Whether `DELETE /model-files` will unlink a file PixlStash does "
-            "not claim from this folder: a folder you registered, the managed "
+            "Whether `POST /model-files/delete` will unlink a file PixlStash "
+            "does not claim from this folder: a folder you registered, the managed "
             "store, and the folder PixlStash downloads its engines into, whose "
             "leftovers are yours (#927). False for the HuggingFace cache, a "
             "symlink store shared with every other tool on the machine, and for "

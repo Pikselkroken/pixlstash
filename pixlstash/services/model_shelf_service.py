@@ -594,8 +594,13 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
         # roots — a repo dropped by `huggingface-cli delete-cache`, a deleted
         # InsightFace pack — and nothing fetches those back, so refusing them
         # left the owner a row drawn as a fault that no verb on the shelf could
-        # clear. `present` and `unreachable` are still refused one branch up, by
-        # `alive`, so this only ever widens Forget to a row whose bytes are gone.
+        # clear.
+        #
+        # An engine whose copy is `present` or `unreachable` stays refused by
+        # this set rather than falling through to `alive`, which is checked after
+        # it: the reason it reports is `is_a_builtin_engine`, and that is the
+        # more useful of the two answers for a file that is ours. So this only
+        # ever widens Forget to an engine whose every copy is gone.
         builtin = {
             int(row[0])
             for row in conn.execute(

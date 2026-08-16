@@ -75,8 +75,10 @@ MANAGED_DIRNAME = "models"
 # which is where `Add file` and an import land, so a shelf that could not delete
 # from it could not undo either of them.
 #
-# Not the whole rule on its own: every other kind is `foreign`, and one of those
-# folders is PixlStash's own download store. See `deletes_unclaimed_files`.
+# Not the whole rule on its own. `foreign` — one of the two kinds not listed
+# here, beside the `source` roots the scanner never catalogues in place — covers
+# PixlStash's own download store as well as the caches. See
+# `deletes_unclaimed_files`.
 DELETABLE_FOLDER_KINDS = ("user", MANAGED_KIND)
 
 
