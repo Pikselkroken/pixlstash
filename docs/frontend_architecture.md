@@ -2374,9 +2374,30 @@ and at the pointer with them.
   (`trash_name`, the SERVER's platform) rather than from the browser: where the
   bytes went is the difference between recoverable and not. Only the pre-action
   label falls back to the browser's own guess, which is cosmetic.
-- **`Open in file manager` is the design's and is NOT built.** It has no route
-  behind it and is a host-capability operation, so it stays tracked rather than
-  rendered dead.
+- **`Open in file manager` is built (#933), and it is the one verb here that
+  acts on the machine rather than on the library.** `POST
+  /models/{model_id}/open-location` shows the row's folder in the file manager
+  of the host PixlStash runs on, which is a host-shell capability and therefore
+  loopback-only at the gate (`docs/backend_architecture.md` §16.3.1) — a shelf
+  opened from a phone on the same LAN cannot drive that desktop, and no setting
+  loosens it. Three consequences for this surface: it is **single-selection
+  only** (forty rows would be forty windows, so it renders in the row context
+  menu and never in the `⋯` menu, which is always drawn with `single: false`);
+  it is **disabled without a `present` copy**, which is the recorded half of the
+  route's gate, so a `missing` row or an unplugged drive says why instead of
+  spending a request — the other half is `os.path.isfile` and only the server
+  can answer it, so a row whose file went since the list was drawn still comes
+  back 409; and each failure gets **its own notice sentence** (403 "you are not
+  sitting at that machine", 409 "rescan the folder", anything else "that machine
+  has no desktop"), because nothing visible happens on this screen when it
+  succeeds either — silence would read as success, and the wrong reason sends
+  the reader to fix the wrong thing.
+  The id posted is the row's own, which for a collapsed stack is the cover's:
+  one press opens one window, on the file that was right-clicked. The shelf's
+  own Stack verb refuses to group across folders, so a run it built shares one
+  — but the route behind `POST /model-stacks` takes an arbitrary id list and
+  enforces nothing of the sort, which is why this is documented as the cover's
+  folder rather than the run's.
 
 **Assign reuses the grid's picker rather than a shelf-local one.** Two
 instances, `type="character"` and `type="set"`, so the search, the tri-state and

@@ -366,6 +366,18 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # constraints would reject) and that is a data check, not a scope one.
     ("PATCH", "/api/v1/models"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/models/forget"): RoutePolicy(_OWNER),
+    # The shelf's sixth verb, and the one route on this block that spawns a
+    # process on the host's desktop. Same authority — and same red-line tier —
+    # as POST /pictures/{id}/open-location: what it can do is bounded by what
+    # the file manager can do, which is everything the owner's session can, so
+    # a LAN or Tailscale caller must never reach it and no flag may say
+    # otherwise. It takes no host path (a hub `model.id`, joined to the folder
+    # the scanner recorded and contained), which is why the tier is about the
+    # spawn rather than the input.
+    ("POST", "/api/v1/models/{model_id}/open-location"): RoutePolicy(
+        _LOOPBACK,
+        justification="§16.3.1 RED LINE: opens a model's folder in the host file manager (open_in_file_manager → os.startfile/open/xdg-open — the same host-GUI spawn as pictures/open-location and reference-folders/open); loopback-only, allow_remote_host_ops can NOT loosen it",
+    ),
     # The base-model field's completion list. OWNER_ONLY on the same default
     # pin as the rest of the shelf, and NOT ANY_TOKEN: it returns per-object
     # data — the distinct `base_model` strings recorded on this machine's model

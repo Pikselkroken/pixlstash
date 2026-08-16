@@ -918,6 +918,7 @@
         @set-kind="editVerb = 'kind'"
         @stack="confirmStack"
         @move="openMove(store.selectedRows)"
+        @open-location="openLocation"
         @set-icon="pickIcon"
         @clear-icons="confirmClearIcons"
         @forget="confirmForget"
@@ -997,6 +998,7 @@ import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
+import { openModelLocation } from "../../api/modelShelf";
 import { createStack } from "../../api/modelStacks";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -1149,6 +1151,46 @@ async function confirmDelete(permanent) {
     danger: true,
   });
   if (ok) await store.deleteSelected({ permanent, ids });
+}
+
+/**
+ * Show the selected row's folder in the file manager of the SERVER's desktop.
+ *
+ * No confirmation, because it changes nothing — the one verb on the shelf that
+ * only looks. The id posted is the ROW's, which for a collapsed stack is the
+ * cover's: one press opens one window, and the cover is the file the reader
+ * right-clicked. A stack the shelf built shares a folder (its own gate refuses
+ * to group across folders), but a stack is not required to, so this is the
+ * cover's folder rather than "the run's" — those are the same directory in
+ * every case the shelf can create and not by a rule the server enforces.
+ *
+ * **Three different failures, three different sentences.** Nothing visible
+ * happens on this screen when it works, so a wrong reason is as bad as no
+ * reason: 403 is a shelf opened from another machine (the route is
+ * loopback-only), 409 is a row whose file has gone since the list was drawn —
+ * which the disabled state cannot catch, because it knows the recorded state
+ * and not whether the file is still there — and anything else is a server with
+ * no desktop to open anything on.
+ */
+async function openLocation() {
+  const row = store.selectedRows[0];
+  if (!row) return;
+  try {
+    await openModelLocation(row.id);
+  } catch (err) {
+    const status = err?.response?.status;
+    useNoticeStore().push({
+      level: "warning",
+      text:
+        status === 403
+          ? "A file manager opens on the machine running PixlStash, so this only works when you are sitting at it."
+          : status === 409
+            ? "That file is not where the shelf last saw it. Rescan its folder to catch up."
+            : "Couldn't open that folder — the machine running PixlStash has no desktop file manager.",
+      key: "shelf-open-location",
+    });
+    console.warn(`Failed to open the location of model ${row.id}`, err);
+  }
 }
 
 // ── Move (shelf plan F4) ─────────────────────────────────────────────────────
