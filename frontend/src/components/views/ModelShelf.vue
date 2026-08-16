@@ -54,10 +54,10 @@
            on one segment against mdi line art on the other unbalances a control
            that has to read as symmetric.
 
-           Selected state is three layers — wash, weight, and a 2px underline —
-           because the underline alone measures 2.93:1 light / 2.72:1 dark
-           against this chrome, under WCAG 1.4.11's 3:1. It is reinforcement,
-           never the only signal. -->
+           The selected segment FILLS, the way the shipped `.tbm-seg` control
+           does. Not a wash plus a bolder label: a bolder label is a wider
+           label, so the pair resized on every switch and shoved the whole left
+           group sideways. -->
       <div class="shelf-viewswitch" role="tablist" aria-label="Model view">
         <button
           id="shelf-tab-shelf"
@@ -3268,47 +3268,63 @@ watch(
    `.bar-split-toggle`/`.bar-split-menu` already do it. NO container border —
    `--v-theme-border` against this chrome measures 1.28:1 light / 1.35:1 dark,
    which is a box with no job. Adjacency at gap 0 is what groups them. */
-/* A track behind the pair, so it reads as ONE control rather than as two
-   buttons that happen to be adjacent. The hairline is `--v-theme-divider`, the
-   same line the shelf rows and the selection pill use; the fill is the standing
-   `--hover-wash`, a wash the bar already speaks, which keeps the unselected
-   segment legible rather than introducing a second opaque surface colour that
-   would have to be kept in step with the toolbar's. */
+/* The shipped segmented control's vocabulary (`.tbm-seg`, `App.css`): a track
+   in `--v-theme-input-background` with a `--v-theme-border` hairline, holding
+   equal segments. The track fill is only 1.17:1 light / 1.13:1 dark against the
+   toolbar, so the HAIRLINE is what separates it — which is why the shipped
+   control carries one and why a track without it reads as nothing.
+
+   Welded rather than gapped, and pill rather than `--radius-md`: the outer
+   corners are fully round and the seam between the two is a straight line, so
+   the pair reads as one object with a division in it rather than as two
+   controls that happen to touch. */
 .shelf-viewswitch {
   display: inline-flex;
   gap: 0;
-  padding: 2px;
-  border: 1px solid rgb(var(--v-theme-divider));
-  border-radius: var(--radius-sm);
-  background: var(--hover-wash);
+  padding: var(--space-1);
+  background: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-pill);
 }
 
 .shelf-viewseg {
   border-radius: 0;
-  color: rgba(var(--v-theme-toolbar-text), 0.7);
+  color: rgba(var(--v-theme-on-panel), 0.7);
 }
 
-.shelf-viewseg:first-child,
+/* Round outwards, straight between. */
+.shelf-viewseg:first-child {
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+
 .shelf-viewseg:last-child {
-  border-radius: calc(var(--radius-sm) - 1px);
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
 }
 
-/* Three layers, and the underline is the LEAST of them. `--active-bar` measures
-   2.93:1 light / 2.72:1 dark against the toolbar — under WCAG 1.4.11's 3:1 — so
-   it is reinforcement only; the wash and the weight carry the state, and
-   `aria-selected` carries it to a screen reader. Deliberately NOT
-   `.bar-btn--active`, whose `primary` label measures 2.72:1 on dark chrome. */
-.shelf-viewseg--on {
-  background: var(--active-wash);
-  color: var(--active-text);
-  font-weight: var(--weight-semibold);
-  box-shadow: inset 0 -2px 0 var(--active-bar);
-}
-
-/* Inside a filled track the unselected segment must not carry a wash of its
-   own, or the pair reads as two selected things. */
 .shelf-viewseg:not(.shelf-viewseg--on):hover {
-  background: rgba(var(--v-theme-toolbar-text), 0.08);
+  color: rgb(var(--v-theme-on-panel));
+  background: var(--hover-wash);
+}
+
+/* The selected segment FILLS, exactly as `.tbm-seg-btn--on` does, and carries
+   no weight change. A bolder label is a wider label, so the pair resized on
+   every switch and the whole left group jumped — the fill says the same thing
+   and costs no layout. `on-primary` on `primary` measures 4.86:1 in both
+   themes, so the label clears the text floor on the fill. */
+.shelf-viewseg--on {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.shelf-viewseg--on:hover {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+
+/* Raised so the focus ring is not clipped by the welded sibling. */
+.shelf-viewseg:focus-visible {
+  position: relative;
+  z-index: var(--z-raised);
 }
 
 /* The gap the count sits in is the bar's cluster gap, not a hair. */

@@ -8,6 +8,8 @@
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { setActivePinia, createPinia } from "pinia";
 
 const listAdapters = vi.fn();
@@ -3640,5 +3642,61 @@ describe("the two views of the shelf", () => {
     });
     expect(nav.push).toHaveBeenCalledWith({ name: "models-runs" });
     wrapper.unmount();
+  });
+});
+
+describe("the view switcher does not resize when you switch", () => {
+  // Twice now the tabs have shoved the whole left group of the toolbar sideways
+  // on every switch, because the selected state changed something that costs
+  // layout — first `font-weight`, which makes the label wider. The selected
+  // segment may change COLOUR all it likes; it may not change its box.
+  // Read from the project root rather than via `import.meta.url`: this suite
+  // runs in the jsdom environment, where `import.meta.url` is an http: URL and
+  // `fileURLToPath` refuses it.
+  const source = readFileSync(
+    resolve(process.cwd(), "src/components/views/ModelShelf.vue"),
+    "utf8",
+  );
+  const styles = source.slice(source.lastIndexOf("<style"));
+  const bodyOf = (selector) =>
+    styles
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("}")
+      .filter((rule) => {
+        const [sel] = rule.split("{");
+        return sel
+          .split(",")
+          .some((s) => s.replace(/\s+/g, " ").trim() === selector);
+      })
+      .map((rule) => rule.split("{")[1] || "");
+
+  const LAYOUT = [
+    /(^|\s|;)font-weight\s*:/,
+    /(^|\s|;)font-size\s*:/,
+    /(^|\s|;)padding[^:]*:/,
+    /(^|\s|;)margin[^:]*:/,
+    /(^|\s|;)border-width\s*:/,
+    /(^|\s|;)letter-spacing\s*:/,
+  ];
+
+  it("has a selected rule at all, so this is not asserting nothing", () => {
+    expect(bodyOf(".shelf-viewseg--on").length).toBeGreaterThan(0);
+  });
+
+  it("changes no property that costs layout when a segment is selected", () => {
+    for (const body of bodyOf(".shelf-viewseg--on")) {
+      for (const banned of LAYOUT) {
+        expect(body, `.shelf-viewseg--on must not set ${banned}`).not.toMatch(
+          banned,
+        );
+      }
+    }
+  });
+
+  it("keeps both segments on one type ramp step", () => {
+    // A per-segment font-size would resize the pair for the same reason.
+    for (const body of bodyOf(".shelf-viewseg")) {
+      expect(body).not.toMatch(/(^|\s|;)font-weight\s*:/);
+    }
   });
 });
