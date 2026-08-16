@@ -4316,7 +4316,7 @@ def test_a_local_owner_downloads_from_loopback_lan_and_tailscale(shelf_env, tmp_
     write_adapter(folder / "alice.safetensors")
     _seeded_folder_at(shelf_env.server, str(folder))
 
-    for headers in ({}, _xff("192.168.1.9"), _xff("100.64.0.5")):
+    for headers in ({}, _xff(LAN_IPV4), _xff("100.64.0.5")):
         r = shelf_env.owner.get(_file_url(ADAPTER_WITH_BASE), headers=headers)
         assert r.status_code == 200, (
             f"{headers or 'loopback'} was refused: {r.status_code} {r.text}"
