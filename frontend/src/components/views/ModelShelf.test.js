@@ -719,6 +719,18 @@ describe("the shelf's own accessible name", () => {
     expect(root.attributes("aria-describedby")).toBe("shelf-help");
     expect(wrapper.find("#shelf-help").exists()).toBe(true);
   });
+
+  it("describes the tail that is actually there", async () => {
+    // The description is the only account of the bar a screen-reader user
+    // gets, so it is the one place a removed control can go on existing for
+    // them alone. It named Undo and Redo until the shelf stopped mounting
+    // them.
+    const wrapper = await mountShelf([adapter()]);
+    const help = wrapper.find("#shelf-help").text();
+    expect(help).toContain("Settings and the stats sidebar toggle");
+    expect(help).toMatch(/nothing on this screen can be undone/i);
+    expect(help).not.toMatch(/undo and redo/i);
+  });
 });
 
 // ── F2: group headers and the Sort split-button ────────────────────────────
