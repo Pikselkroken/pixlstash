@@ -928,7 +928,8 @@ describe("DuplicateQueue — the shell chrome", () => {
     wrapper.unmount();
   });
 
-  // The decision record's canonical tail, identical in every view:
+  // The decision record's canonical tail, identical in every view that writes
+  // the operation log (the model shelf does not, and mounts no undo):
   // [separator] [UndoControl] [TbGlobalActions]. No ⋯ anywhere in this bar
   // (amendment #2): every foldable here compresses or hides in its own group.
   it("orders the tail separator → UndoControl → TbGlobalActions, no burger", async () => {

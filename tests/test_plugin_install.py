@@ -1,21 +1,29 @@
-"""`pixlstash-cli plugins` — install, list and remove.
+"""`pixlstash-cli plugins` — install, test, list and remove.
 
 No `Server` here on purpose: every one of these tests is a file copy and an
 `ast.parse`, so the whole module runs in well under a second and never needs a
 vault, a hub or a model.
+
+`plugins test` is the one verb that *imports* the plugin, so its tests execute
+a plugin's module body — the shipped `plugin_template.py`, which loads without
+a model, and copies of it with one mistake spliced in.
 """
 
 from __future__ import annotations
 
 import io
 import os
+import re
+import sys
 import zipfile
 from pathlib import Path
 
 import pytest
 
-from pixlstash import cli, plugin_install
+from pixlstash import cli, plugin_install, tagger_plugins
 from pixlstash.plugin_install import CAPTIONING, IMAGE, PluginError
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 IMAGE_PLUGIN = """
 from typing import Any
@@ -662,6 +670,351 @@ def test_remove_asks_which_kind_when_both_hold_the_name(plugin_root, capsys):
     )
     assert not (plugin_root / "image-plugins" / "user" / "twin.py").exists()
     assert (plugin_root / "tagger-plugins" / "user" / "twin.py").exists()
+
+
+# ----------------------------------------------------------------------
+# plugins test
+# ----------------------------------------------------------------------
+
+#: The starter a contributor copies. Every check below is a real mistake made
+#: to it, so the fixtures cannot drift away from what people actually write —
+#: and the pass case guards the shipped template itself.
+TEMPLATE = Path(tagger_plugins.__file__).parent / "plugin_template.py"
+
+
+def _template(*mutations: tuple[str, str]) -> str:
+    """Return the shipped template with each ``(old, new)`` spliced in.
+
+    The count assertion is the point: a mutation that silently matched
+    nothing — or matched a docstring instead of the code — would leave the
+    test passing against an unbroken plugin and read as coverage.
+    """
+    source = TEMPLATE.read_text(encoding="utf-8")
+    for old, new in mutations:
+        assert source.count(old) == 1, f"{old!r} appears {source.count(old)} times"
+        source = source.replace(old, new)
+    return source
+
+
+def _check(source, *extra: str) -> int:
+    return cli.main(["plugins", "test", str(source), *extra])
+
+
+@pytest.fixture(autouse=True)
+def _drop_dynamic_modules():
+    """Drop the namespaced modules a `plugins test` run executed."""
+    yield
+    for name in [n for n in sys.modules if n.startswith("pixlstash_user_tagger_")]:
+        del sys.modules[name]
+
+
+def test_the_shipped_template_passes(capsys):
+    """The starter we hand people has to clear the checker we hand them."""
+    assert _check(TEMPLATE) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert 'Registered "my_captioner"' in out
+    assert "max_tokens: integer = 128" in out
+
+
+def test_it_says_it_is_not_a_security_check_before_running_anything(capsys):
+    """Running the plugin *is* the mechanism, so the caveat cannot come after.
+
+    By the time anything else is printed the plugin's module body has already
+    executed, unsandboxed. A pass here is a contract check; a user reading it
+    as "this plugin is safe to install" is the failure this line exists for.
+    """
+    assert _check(TEMPLATE) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert "not a security check" in out
+    assert "unsandboxed" in out
+    assert out.index("not a security check") < out.index("Registered")
+
+
+@pytest.mark.parametrize(
+    "mutation, expected",
+    [
+        (('"type": "textarea"', '"type": "text"'), "has type 'text'"),
+        (('"default": 128,', ""), "has no 'default'"),
+        (('"type": "integer"', '"type": "select"'), "select with no 'options'"),
+        (
+            ('"type": "integer"', '"type": "select", "options": []'),
+            "empty; it renders as a dropdown with nothing to choose",
+        ),
+        (
+            ('name = "my_captioner"', 'name = "florence2"'),
+            "first-party plugin is already called",
+        ),
+        (
+            ("class MyCaptioner(TaggerPlugin):", "class MyCaptioner:"),
+            "No TaggerPlugin subclass found",
+        ),
+        (
+            ("import TaggerPlugin\n", "import TaggerPlugn\n"),
+            "TaggerPlugn",
+        ),
+    ],
+)
+def test_a_mistake_in_a_copy_of_the_template_is_caught(
+    tmp_path, capsys, mutation, expected
+):
+    source = _write(tmp_path / "mine.py", _template(mutation))
+
+    assert _check(source) == cli.EXIT_REFUSED
+    assert expected in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "mutation, expected",
+    [
+        (('"label": "Max tokens",', ""), "has no 'label'"),
+        (
+            ("    supports_descriptions = True", "    supports_descriptions = False"),
+            "neither supports_tags nor supports_descriptions",
+        ),
+    ],
+)
+def test_a_cosmetic_fault_is_reported_without_failing_the_command(
+    tmp_path, capsys, mutation, expected
+):
+    """These plugins load and work, so refusing them would be the worse bug.
+
+    A missing `label` renders the parameter's `name` (`field.label ||
+    field.name`), and a plugin with no capability flag registers exactly as
+    written — it is simply never reached. `plugins install` warns about the
+    second and installs it; this agrees with that rather than inventing a
+    stricter contract for the same plugin.
+    """
+    source = _write(tmp_path / "mine.py", _template(mutation))
+
+    assert _check(source) == cli.EXIT_OK
+
+    err = capsys.readouterr().err
+    assert expected in err
+    assert "warning:" in err
+    assert "problem:" not in err
+
+
+def test_a_folder_plugin_loads_with_its_own_helpers(tmp_path, capsys):
+    """Proves this goes through the server's loader: a bare exec_module fails."""
+    package = tmp_path / "bundled"
+    _write(package / "helper.py", "TOKENS = 128\n")
+    _write(
+        package / "__init__.py",
+        _template(
+            (
+                "from pixlstash.tagger_plugins.base import TaggerPlugin",
+                "from pixlstash.tagger_plugins.base import TaggerPlugin\n"
+                "from . import helper\n"
+                "assert helper.TOKENS == 128",
+            )
+        ),
+    )
+
+    assert _check(package) == cli.EXIT_OK
+    assert 'Registered "my_captioner"' in capsys.readouterr().out
+
+
+def test_a_folder_without_an_init_is_refused(tmp_path, capsys):
+    """The server skips such a folder without a message."""
+    (tmp_path / "bundled").mkdir()
+
+    assert _check(tmp_path / "bundled") == cli.EXIT_REFUSED
+    assert "no __init__.py" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["_mine.py", ".mine.py"])
+def test_a_name_discovery_skips_is_refused_however_well_it_loads(
+    tmp_path, capsys, name
+):
+    """The scan filters the directory listing above the loader they share.
+
+    So this file imports and registers perfectly here and is never looked at
+    by the server — silently, which is the failure the command exists for.
+    """
+    source = _write(tmp_path / name, _template())
+
+    assert _check(source) == cli.EXIT_REFUSED
+    assert (
+        "the server skips any entry whose name starts with" in capsys.readouterr().err
+    )
+
+
+def test_a_name_an_installed_plugin_already_holds_is_a_problem(
+    tmp_path, plugin_root, capsys
+):
+    """One of the two silently loses; the checker cannot see it from the load.
+
+    This manager scans no directory on purpose, so the server's own duplicate
+    refusal can never fire here — the installed names are read statically
+    instead, without importing anybody's plugin.
+    """
+    _write(plugin_root / "tagger-plugins" / "user" / "my_captioner.py", CAPTIONER)
+    source = _write(tmp_path / "mine.py", _template())
+
+    assert _check(source) == cli.EXIT_REFUSED
+    assert "an installed plugin is already called" in capsys.readouterr().err
+
+
+def test_a_plugin_does_not_collide_with_its_own_installed_copy(plugin_root, capsys):
+    """Checking a plugin where it is installed is the obvious thing to try."""
+    installed = _write(
+        plugin_root / "tagger-plugins" / "user" / "my_captioner.py", _template()
+    )
+
+    assert _check(installed) == cli.EXIT_OK
+    assert "already called" not in capsys.readouterr().err
+
+
+def test_an_image_filter_is_told_it_is_the_wrong_kind(tmp_path, capsys):
+    """ "No TaggerPlugin subclass found" is true and useless on its own."""
+    source = _write(tmp_path / "my_filter.py", IMAGE_PLUGIN)
+
+    assert _check(source) == cli.EXIT_REFUSED
+    assert "image filter, not a captioning plugin" in capsys.readouterr().err
+
+
+def test_image_runs_the_plugin_over_a_picture(tmp_path, capsys):
+    """End to end: defaults merged, setup() given a device, init() before the call.
+
+    The template is instrumented rather than run as shipped, because as shipped
+    it cannot fail this. It seeds ``self._device = "cpu"`` in ``__init__`` and
+    falls back to ``max_tokens or 128``, so a caption reading
+    ``(128 tokens, cpu)`` is exactly what you get when ``setup()``, ``init()``
+    and the merged defaults are all skipped — every assertion here passed with
+    each of those three deleted from plugin_check until the sentinels below
+    were spliced in.
+    """
+    source = _write(
+        tmp_path / "mine.py",
+        _template(
+            ('self._device = "cpu"', 'self._device = "setup-not-called"'),
+            ("self._model = object()", 'self._model = "init-called"'),
+            ('"default": 128,', '"default": 64,'),
+            (
+                'f"{prompt} ({max_tokens} tokens, {self._device})"',
+                'f"{prompt} ({max_tokens} tokens, {self._device}, {self._model})"',
+            ),
+        ),
+    )
+    image = _write(tmp_path / "sample.jpg", "not really a jpeg")
+
+    assert _check(source, "--image", str(image)) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert str(image) in out
+    # 64 proves the schema's default was merged rather than the plugin's own
+    # `or 128` fallback; init-called proves init() ran; the device proves
+    # setup() was handed one.
+    assert "(64 tokens, cuda, init-called)" in out or (
+        "(64 tokens, cpu, init-called)" in out
+    )
+
+
+def test_a_result_not_keyed_by_the_paths_it_was_given_is_caught(tmp_path, capsys):
+    """The workflow looks its results up by path and would drop these."""
+    source = _write(
+        tmp_path / "mine.py",
+        _template(('results[path] = f"', 'results["elsewhere"] = f"')),
+    )
+    image = _write(tmp_path / "sample.jpg", "not really a jpeg")
+
+    assert _check(source, "--image", str(image)) == cli.EXIT_REFUSED
+    assert "not the path it was given" in capsys.readouterr().err
+
+
+def test_image_loads_no_model_for_a_plugin_nothing_will_ever_call(tmp_path, capsys):
+    """No capability flag means no method to call, so there is nothing to load.
+
+    `init()` is made to raise, so the run reports `init() raised` and fails the
+    command if it is reached at all — which it was, before the capability check
+    moved above the download-and-init pair.
+    """
+    source = _write(
+        tmp_path / "mine.py",
+        _template(
+            ("    supports_descriptions = True", "    supports_descriptions = False"),
+            (
+                "self._model = object()",
+                'raise AssertionError("init() must not run for a flagless plugin")',
+            ),
+        ),
+    )
+    image = _write(tmp_path / "sample.jpg", "not really a jpeg")
+
+    assert _check(source, "--image", str(image)) == cli.EXIT_OK
+
+    err = capsys.readouterr().err
+    assert "init() raised" not in err
+    assert "neither supports_tags nor supports_descriptions" in err
+
+
+def test_a_torch_that_will_not_answer_does_not_take_the_command_down(monkeypatch):
+    """The plugin's own init() gives a better error than a traceback from here.
+
+    An installed-but-unloadable torch raises `OSError` rather than
+    `ImportError` — a missing CUDA shared library is the usual way — so the
+    narrower catch let it escape and end the command before the plugin could
+    report its own missing dependency.
+    """
+    from pixlstash import plugin_check
+
+    class Unloadable:
+        @property
+        def cuda(self):
+            raise OSError("libcuda.so.1: cannot open shared object file")
+
+    monkeypatch.setitem(sys.modules, "torch", Unloadable())
+
+    assert plugin_check._device() == "cpu"
+
+
+def test_image_stops_when_the_plugin_says_its_model_is_missing(tmp_path, capsys):
+    """A check command has no business starting a multi-gigabyte fetch.
+
+    This is the courtesy, not a guarantee: `needs_download()` is the plugin's
+    own answer, and a plugin that downloads inside `init()` — which is where
+    `from_pretrained_local_first` does it — is past this gate already.
+    """
+    source = _write(
+        tmp_path / "mine.py", _template(("        return False", "        return True"))
+    )
+    image = _write(tmp_path / "sample.jpg", "not really a jpeg")
+
+    assert _check(source, "--image", str(image)) == cli.EXIT_REFUSED
+
+    captured = capsys.readouterr()
+    assert "Stopping rather than fetching them" in captured.err
+    assert "Ran over" not in captured.out
+
+
+def test_schema_types_match_the_component_that_renders_them():
+    """Guardrail: `SCHEMA_TYPES` is a hand-copy of a `v-else-if` chain in Vue.
+
+    The whole value of the schema check is that it agrees with what actually
+    renders, and nothing else in this repository would notice the two drifting
+    — a type added to the component would be reported here as unrenderable,
+    and one removed from it would sail through. Pinned the way
+    `_SUBDIRS` is pinned to the registries.
+
+    `string` is not in the component by name: it is the `v-else`, which is
+    exactly why an unlisted type is a text box rather than an error.
+    """
+    from pixlstash.plugin_check import SCHEMA_TYPES
+
+    component = (
+        REPO_ROOT
+        / "frontend"
+        / "src"
+        / "components"
+        / "widgets"
+        / "TaggerParametersUI.vue"
+    ).read_text(encoding="utf-8")
+    rendered = set(re.findall(r"field\.type === ['\"]([^'\"]+)['\"]", component))
+
+    assert rendered, "the comparison in TaggerParametersUI.vue changed shape"
+    assert set(SCHEMA_TYPES) == rendered | {"string"}
 
 
 # ----------------------------------------------------------------------

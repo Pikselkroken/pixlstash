@@ -48,6 +48,19 @@
   installs a plugin's `requirements.txt` unless you pass `--with-deps`.
   `plugins remove` deletes an installed plugin, wherever it came from, and can
   only ever reach a file directly inside the two plugin directories.
+- Add `pixlstash-cli plugins test <plugin>`, for writing a captioning plugin
+  without paying a server restart per typo. It loads the file the way the server
+  does at start-up, registers every plugin class it defines, and checks that the
+  parameter schema is one the settings screen can actually render — an unknown
+  `type` or a `select` with no options renders as a text box today and reports
+  nothing. `--image` also runs the plugin over one picture with your defaults and
+  prints what came back, stopping instead of running when the plugin reports its
+  model is missing (a plugin that downloads inside `init()` still will — that is
+  the plugin's own code, and nothing here can prevent it). It is a development aid
+  and **not a security scanner**: unlike the other plugin verbs it imports the
+  plugin, so the plugin's code runs unsandboxed with your permissions, and a
+  pass says nothing about whether that plugin is safe to install. Only test one
+  you would have installed anyway.
 - An image filter plugin now registers the first concrete `ImagePlugin` subclass
   the file itself defines. A class the file only imports is no longer registered
   in place of the one you wrote (which, since a user plugin wins a name
