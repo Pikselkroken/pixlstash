@@ -45,6 +45,15 @@
 - The documented Windows plugin directory was missing a path component. It is
   `%LOCALAPPDATA%\pixlstash\pixlstash\image-plugins\user\`, which is why hand-copying
   a plugin to the path the README gave appeared to do nothing.
+- The model shelf can now delete models from disk, so getting rid of a 6 GB
+  checkpoint no longer means a trip to the file manager and a rescan. It is in
+  the selection pill, the row's right-click menu and on the `Delete` key, and it
+  works the way your file manager does: on its own it moves the files to your
+  Trash (Recycle Bin on Windows), and with Shift held it deletes them
+  permanently. Only your own model folders and PixlStash's own store are
+  touched — the engines it downloaded for itself, the InsightFace packs and the
+  HuggingFace cache it shares with your other tools are refused, and so is
+  anything with a copy on a drive that is not plugged in.
 
 # [1.9.0]
 

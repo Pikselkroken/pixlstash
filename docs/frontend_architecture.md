@@ -2336,9 +2336,23 @@ and at the pointer with them.
   selected leaves the selection alone, so a menu opened on any of forty selected
   rows acts on all forty. Without that, select-then-right-click — the commonest
   gesture in a bulk edit — would silently drop the other 39.
-- **`Open in file manager` and `Delete from disk` are the design's and are NOT
-  built.** Neither has a route behind it and both are host-capability
-  operations, so they are tracked in #933 rather than rendered dead.
+- **`Delete from disk` is built (#933) and is the one verb in the danger
+  treatment**, in the pill and in the menu. Its LABEL follows the Shift key —
+  `Move to Trash` / `Move to Recycle Bin`, or `Permanently delete` — because
+  that is the file-manager gesture the reader already knows from Explorer, and
+  the same gesture is on the `Delete` key. What the label says and what the verb
+  does come from two different places on purpose: the label reads a tracked
+  `shiftHeld`, which can be a moment stale after a blur, while the operation
+  reads `event.shiftKey` off the press itself, so a stale label can never turn a
+  trash into an unlink. The confirmation names the operation either way, and it
+  is the gate. `deletableModels` mirrors the route's gate — `user` and `managed`
+  folders only, nothing `unreachable`, no built-in engine, judged across a
+  stack's members — so the verb is never offered where it could only come back
+  refused, and it is disabled while the folder registry is unknown, which is the
+  safe direction and the one Move already fails in.
+- **`Open in file manager` is the design's and is NOT built.** It has no route
+  behind it and is a host-capability operation, so it stays tracked rather than
+  rendered dead.
 
 **Assign reuses the grid's picker rather than a shelf-local one.** Two
 instances, `type="character"` and `type="set"`, so the search, the tri-state and
