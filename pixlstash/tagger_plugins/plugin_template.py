@@ -59,6 +59,7 @@ See ``docs/writing-tagger-plugins.md`` for the full contract.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from pixlstash.tagger_plugins.base import TaggerPlugin
@@ -184,7 +185,7 @@ class MyCaptioner(TaggerPlugin):
         self,
         image_paths: list[str],
         parameters: dict[str, Any],
-        stop_event=None,
+        stop_event: threading.Thread|None=None,
     ) -> dict[str, str | None]:
         """Caption a batch of images.
 

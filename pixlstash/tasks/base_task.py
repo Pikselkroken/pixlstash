@@ -57,13 +57,20 @@ class BaseTask(ABC):
         self.started_at: Optional[datetime] = None
         self.completed_at: Optional[datetime] = None
         self._done_event = threading.Event()
+        self._cancel_event = threading.Event()
 
     def run(self) -> Any:
-        self.started_at = datetime.utcnow()
-        self.status = TaskStatus.RUNNING
         try:
+            if self._cancel_event.is_set():
+                self.status = TaskStatus.CANCELLED
+                return None
+
+            self.started_at = datetime.utcnow()
+            self.status = TaskStatus.RUNNING
             self.result = self._run_task()
-            self.status = TaskStatus.COMPLETED
+            self.status = TaskStatus.COMPLETED \
+                          if not self._cancel_event.is_set() else \
+                          TaskStatus.CANCELLED
             return self.result
         except Exception as exc:
             self.error = str(exc)
@@ -96,6 +103,8 @@ class BaseTask(ABC):
         return None
 
     def on_cancel(self) -> None:
+        if self.status not in (TaskStatus.CANCELLED, TaskStatus.COMPLETED, TaskStatus.FAILED):
+            self._cancel_event.set()
         return None
 
     @abstractmethod
