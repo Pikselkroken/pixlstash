@@ -11,10 +11,13 @@ There is no login here and no stored credential; Docker deployments reach it
 with ``docker exec``.
 
 The library verbs destroy nothing: ``detach`` deregisters a library and never
-touches its files, and there is deliberately no ``--delete`` flag. ``plugins
-remove`` does delete, because a CLI that installs plugins and cannot uninstall
-them is not worth shipping; what it guarantees instead is that the path it
-deletes is always inside one of the two plugin directories.
+touches its files, and there is deliberately no ``--delete`` flag. ``restore``
+is the one that looks like an exception and is not — it writes only to a folder
+it has proved empty, and *moves* the configuration it replaces into a dated
+folder beside itself, printing the command that reopens it. ``plugins remove``
+does delete, because a CLI that installs plugins and cannot uninstall them is
+not worth shipping; what it guarantees instead is that the path it deletes is
+always inside one of the two plugin directories.
 """
 
 from __future__ import annotations
@@ -213,10 +216,10 @@ def build_parser() -> argparse.ArgumentParser:
             "archive contains your credentials, so it is written owner-readable "
             "only; pictures in reference folders are outside the library and are "
             "not included. An existing destination file is never overwritten. "
-            "There is no restore verb: you unpack the archive yourself. It is "
-            "a zstd-compressed tar (a plain tar with --no-compress) holding "
-            "manifest.json, vault.db, hub.db and — unless --metadata-only was "
-            "given — the library's own files under images/."
+            "Read it back with `restore`, or by hand: it is a zstd-compressed "
+            "tar (a plain tar with --no-compress) holding manifest.json, "
+            "vault.db, hub.db and — unless --metadata-only was given — the "
+            "library's own files under images/."
         ),
     )
     backup_parser.add_argument("library", help=LIBRARY_ARG_HELP)
@@ -234,6 +237,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write a plain .tar. Faster for large image sets, which barely compress.",
     )
     backup_parser.set_defaults(handler=_cmd_backup)
+
+    restore_parser = subparsers.add_parser(
+        "restore",
+        help="Restore a backup into a new folder and make it the library that opens.",
+        description=(
+            "Unpacks a `backup` archive into a folder that must not already "
+            "hold anything, then makes it the library PixlStash opens. The "
+            "archive's hub replaces this installation's, which is what brings "
+            "back the password and the API tokens that library was using. "
+            "Nothing is overwritten and nothing is deleted: the current "
+            "server-config.json and hub.db are MOVED into a dated "
+            "pre-restore-* folder beside themselves, and the command prints "
+            "the launch command for each. The library you are using now is "
+            "not touched. PixlStash must not be running."
+        ),
+    )
+    restore_parser.add_argument("archive", help="Backup archive written by `backup`.")
+    restore_parser.add_argument(
+        "folder",
+        help=("Folder for the restored library. Must be empty, or not exist yet."),
+    )
+    restore_parser.add_argument(
+        "--yes", action="store_true", help="Do not ask for confirmation."
+    )
+    # Needs the hub's *path*, never its contents: a hub too corrupt to open is
+    # exactly when someone restores, so `main`'s open must not gate this.
+    restore_parser.set_defaults(handler=_cmd_restore, needs_hub=False)
 
     migrate_parser = subparsers.add_parser(
         "prepare-legacy-identity",
@@ -612,6 +642,131 @@ def _cmd_backup(registry: LibraryRegistry, args: argparse.Namespace) -> int:
         "you. Keep it somewhere private."
     )
     return EXIT_OK
+
+
+def _cmd_restore(args: argparse.Namespace) -> int:
+    """Stage a backup, describe exactly what it will do, then publish it."""
+    # Local import for the same reason as _cmd_backup: tar, zstd and the hub
+    # schema are dead weight for `list` and `attach`.
+    from pixlstash.services import library_restore_service as restore
+
+    hub_path = args.hub or default_hub_path()
+    scratch = None
+    try:
+        scratch = restore.restore_scratch(args.folder)
+        plan = restore.plan_restore(args.archive, args.folder, hub_path, scratch)
+        file_count = len(
+            [
+                name
+                for _, _, files in os.walk(os.path.join(scratch, "library"))
+                for name in files
+            ]
+        )
+
+        print(f"Archive:  {plan.archive}")
+        print(f'Library:  "{plan.library_name}" ({plan.picture_count} picture(s))')
+        print(f"Taken:    {plan.created_at}, from {plan.source_path}")
+        print(f"Restore to: {plan.library_folder}")
+        print()
+        print("This will:")
+        print(f"  - write the restored library to {plan.library_folder}")
+        print(
+            f"  - move {restore.SERVER_CONFIG_FILENAME} and hub.db from "
+            f"{plan.config_dir} "
+            f"into {plan.preserved_dir}"
+        )
+        print(
+            "  - make the restored library the one PixlStash opens, and replace "
+            "your current password and API tokens with the archive's"
+        )
+        if plan.other_libraries:
+            print(
+                f"  - bring back {plan.other_libraries} other library "
+                "registration(s) from the archive; any whose folder is not on "
+                "this machine will show as (not found)"
+            )
+        print()
+        print("Your current library folder is NOT touched, and nothing is deleted.")
+        # The credentials come out of the archive, so restoring one you did not
+        # make is handing its author the owner account on this machine — which
+        # reaches the host-capability routes, not just the restored pictures.
+        # Worth saying plainly: the rest of this output reads reassuring.
+        print(
+            "Restore only an archive you made yourself. Its password and tokens "
+            "become this installation's, so restoring someone else's archive "
+            "gives whoever made it owner access to this machine."
+        )
+        if plan.metadata_only:
+            print(
+                "warning: this is a metadata-only archive. It restores the "
+                "catalogue, not the pictures.",
+                file=sys.stderr,
+            )
+        if plan.reference_folders:
+            print(
+                f"warning: this library referenced {len(plan.reference_folders)} "
+                "external folder(s), which were never in the archive. Re-point "
+                "or remove them in Settings after restoring.",
+                file=sys.stderr,
+            )
+
+        if not args.yes and not _confirm("Restore it?"):
+            print("Cancelled. Nothing was written.")
+            return EXIT_REFUSED
+
+        result = restore.perform_restore(plan, scratch, file_count)
+    except restore.RestoreError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+    finally:
+        restore.remove_scratch(scratch)
+
+    _print_restore_report(result)
+    return EXIT_OK
+
+
+def _quote_path(path: str) -> str:
+    """Make *path* safe to paste into a shell prompt.
+
+    Double quotes rather than ``shlex.quote``: these commands are printed on
+    Windows too, where the single quotes shlex emits are literal characters to
+    cmd.exe. Double quotes work in both, and a library folder named "Holiday
+    photos" is the ordinary case, not the exotic one.
+    """
+    if path and not any(char.isspace() or char in "\"'\\$`" for char in path):
+        return path
+    return '"' + path.replace('"', '\\"') + '"'
+
+
+def _print_restore_report(result) -> None:
+    """Say what landed where, and how to launch either installation."""
+    from pixlstash.services import library_restore_service as restore
+
+    plan = result.plan
+    print()
+    print(
+        f'Restored "{plan.library_name}" to {plan.library_folder} '
+        f"({result.file_count} file(s))."
+    )
+    print(
+        "Sign in with the password that library used when the backup was "
+        "taken; its API tokens work again too."
+    )
+    restored_config = os.path.join(plan.config_dir, restore.SERVER_CONFIG_FILENAME)
+    print()
+    print("Launch the RESTORED library (this is what starts by default now):")
+    print(f"  pixlstash-server --server-config {_quote_path(restored_config)}")
+    if not result.had_previous_config:
+        print("\nThere was no previous configuration to preserve.")
+        return
+    print()
+    print("Launch your PREVIOUS library, exactly as it was before this restore:")
+    print(f"  pixlstash-server --server-config {_quote_path(plan.preserved_config)}")
+    print()
+    print(
+        f"The previous {restore.SERVER_CONFIG_FILENAME} and hub.db are in {plan.preserved_dir}."
+    )
+    print(f"Move them back into {plan.config_dir} to undo this restore completely.")
 
 
 def _cmd_prepare_legacy_identity(
