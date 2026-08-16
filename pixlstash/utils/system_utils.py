@@ -253,3 +253,44 @@ def default_max_vram_gb() -> float:
         # nvidia-smi absent/failing is normal on CPU-only hosts; the documented
         # 6GB default IS the answer, so logging it would be routine noise.
         return 6.0
+
+
+# The same 10 % as ``model_mover._SPACE_HEADROOM``, and deliberately the same
+# number: both answer "will this large copy fit", and two different margins for
+# one question is how they drift apart.
+SPACE_HEADROOM = 1.1
+
+
+def space_shortfall(path: str, needed_bytes: int) -> Optional[tuple[int, int]]:
+    """Return ``(required, free)`` when *path* lacks room, or ``None`` when it fits.
+
+    A sanity check, not a guarantee: free space can change under us, and a
+    caller working from an estimate is only ever approximately right. It exists
+    to catch the case worth catching — a 200 GB library aimed at a disk with
+    2 GB left — before an hour of copying ends in ENOSPC half-written.
+
+    An unreadable path is reported as a shortfall of ``(needed, 0)`` rather than
+    passed silently: not being able to measure is a reason to ask, given the
+    alternative is discovering it at the end.
+
+    Args:
+        path: A folder on the filesystem that will receive the bytes.
+        needed_bytes: The estimate, before headroom.
+
+    Returns:
+        ``None`` when there is room, else the required and free byte counts.
+    """
+    if needed_bytes <= 0:
+        return None
+    required = int(needed_bytes * SPACE_HEADROOM)
+    try:
+        free = shutil.disk_usage(path).free
+    except OSError as exc:
+        logger.warning(
+            "Could not read free space on %s (%s); reporting it as a shortfall "
+            "so the caller asks rather than assuming it fits.",
+            path,
+            exc,
+        )
+        return (required, 0)
+    return None if free >= required else (required, int(free))
