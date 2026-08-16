@@ -635,6 +635,10 @@
               <span role="columnheader">Kind</span>
               <span role="columnheader">Base</span>
               <span role="columnheader">Size</span>
+              <!-- Named for the axis it is drawn in, because that axis changes
+                   with the sort: a reader who hears `Size` then `Date added`
+                   knows which of the two dates the column holds. -->
+              <span role="columnheader">{{ dateColumnLabel }}</span>
             </li>
             <!-- A row with one spanning cell, because a grid takes nothing but
                  rows: not selectable, because there is nothing here to select.
@@ -859,6 +863,17 @@
                 <span role="gridcell" class="shelf-col shelf-col--size">{{
                   row.file_size ? formatModelSize(row.file_size) : ""
                 }}</span>
+                <!-- The DAY, not the stamp: a column is scanned, and the clock
+                     is what stops it being scannable. The full stamp is in the
+                     title, which also names which of the two dates this is —
+                     the column follows the sort, so the same cell holds
+                     `Date added` on one shelf and `File date` on the next. -->
+                <span
+                  role="gridcell"
+                  class="shelf-col shelf-col--date"
+                  :title="dateTitle(row)"
+                  >{{ dateCell(row) }}</span
+                >
               </li>
 
               <!-- The run's other steps, rendered as ROWS rather than through
@@ -904,6 +919,16 @@
                   <span role="gridcell" class="shelf-col shelf-col--size">{{
                     member.file_size ? formatModelSize(member.file_size) : ""
                   }}</span>
+                  <!-- A step's OWN date, unlike its kind and base: when a run
+                       was saved is the one thing that differs from step to
+                       step, and answering it with the run's would print the
+                       same stamp down the whole strip. -->
+                  <span
+                    role="gridcell"
+                    class="shelf-col shelf-col--date"
+                    :title="dateTitle(member, true)"
+                    >{{ dateCell(member, true) }}</span
+                  >
                 </li>
               </template>
             </template>
@@ -1014,7 +1039,9 @@ import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { errorDetail } from "../../utils/apiError";
+import { formatUserDate, formatUserDay } from "../../utils/utils";
 import { isTypingTarget } from "../../utils/dom.js";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
@@ -1026,11 +1053,13 @@ import {
   bandUsage,
   capabilityLabel,
   copyPathsTitle,
+  dateColumnKey,
   deletableModels,
   trashName,
   withEmptyFolders,
   withFolderSignals,
   formatModelSize,
+  modelDate,
   GROUP_BY_LABELS,
   movableCopies,
   SORT_LABELS,
@@ -1052,6 +1081,10 @@ const moves = useModelMovesStore();
 // owns the key before it clears anything. See `onShelfEscape`.
 const reviewSessionsStore = useReviewSessionsStore();
 const sidebarStore = useSidebarStore();
+// The date column is stamped in the reader's own format, through the same
+// `formatUserDate(iso, dateFormat)` pattern every other timestamp in the app
+// uses.
+const userPrefs = useUserPrefsStore();
 const rootEl = ref(null);
 const showMenuOpen = ref(false);
 const sortMenuOpen = ref(false);
@@ -2302,7 +2335,35 @@ function ringStyle(row) {
  * `aria-colspan` cannot drift apart. A grid where one row has a different cell
  * count is a grid a reader is lied to about.
  */
-const COLUMN_COUNT = 5;
+const COLUMN_COUNT = 6;
+
+/** Which of the two date axes the column is drawn in, named on screen. */
+const dateColumnLabel = computed(
+  () => SORT_LABELS[dateColumnKey(store.view.sortKey)].label,
+);
+
+/**
+ * The day a row shows in the date column, or nothing when it cannot answer.
+ *
+ * An empty cell rather than a dash, exactly as the size column does it: the two
+ * are the row's figures, and a placeholder in a figure column is noise the eye
+ * has to step over on every scan.
+ *
+ * @param {Object} row - a shelf row, or a stack member with `own` set.
+ * @param {boolean} [own=false] - read the member's own date, not its run's.
+ */
+function dateCell(row, own = false) {
+  const iso = modelDate(row, store.view.sortKey, own);
+  return iso ? formatUserDay(iso, userPrefs.dateFormat) : "";
+}
+
+/** The same date in full, named by its axis, for the cell's tooltip. */
+function dateTitle(row, own = false) {
+  const iso = modelDate(row, store.view.sortKey, own);
+  return iso
+    ? `${dateColumnLabel.value}: ${formatUserDate(iso, userPrefs.dateFormat)}`
+    : undefined;
+}
 
 /**
  * What an empty folder group says, per reason.
@@ -2678,6 +2739,13 @@ watch(
   --shelf-col-kind: 64px;
   --shelf-col-base: 84px;
   --shelf-col-size: 74px;
+  /* Sized for `ymd-jp`, the widest of the eight day formats (`2026年08月16日`:
+     three full-width glyphs and eight tabular digits at `--text-xs`). The cell
+     holds the DAY — the clock is in the title — and `locale` hands back
+     whatever the reader's browser writes, so this is the figure that keeps the
+     common formats clear of the ellipsis rather than a proof against every
+     one. */
+  --shelf-col-date: 96px;
   /* Picking rows is the gesture on this panel, and the browser's text selection
      rode along with it: Shift+click extends a text range from the last click and
      a fast double click word-selects, so a multi-select arrived with the list
@@ -3510,6 +3578,15 @@ watch(
 .shelf-col--size {
   width: var(--shelf-col-size);
   text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tabular but LEFT-aligned, unlike the size beside it: every day in a column is
+   the same width in the same format, so the digits line up either way, and Size
+   stays the one right-aligned track — which is what keeps a magnitude readable
+   as a magnitude rather than as one more figure in a row of them. */
+.shelf-col--date {
+  width: var(--shelf-col-date);
   font-variant-numeric: tabular-nums;
 }
 

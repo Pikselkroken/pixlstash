@@ -111,6 +111,8 @@ import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { formatUserDate } from "../../utils/utils";
 
 const globalOpts = {
   global: {
@@ -216,9 +218,12 @@ describe("a row with nothing in its header", () => {
     expect(row.find(".shelf-row-name").text()).toContain("Foxglove Char");
     // Every column renders something: the kind is derived from `file_kind` and
     // is the guaranteed anchor when all else is null, and an absent base model
-    // says so in words rather than leaving a cell that reads as a gap.
+    // says so in words rather than leaving a cell that reads as a gap. The date
+    // is the exception and deliberately so: it is a FIGURE, like the size
+    // beside it, and a figure nobody recorded is left blank rather than
+    // dashed — this fixture carries no `added_at`.
     const cells = row.findAll(".shelf-col").map((s) => textOf(s));
-    expect(cells).toEqual(["LoRA", "not set", "342.1 MB"]);
+    expect(cells).toEqual(["LoRA", "not set", "342.1 MB", ""]);
   });
 
   it("marks the derived name by type, not by fading it", async () => {
@@ -2234,7 +2239,129 @@ describe("a run's disclosure", () => {
     expect(heads).toHaveLength(2);
     expect(
       heads[0].findAll('[role="columnheader"]').map((cell) => cell.text()),
-    ).toEqual(["Model", "Name", "Kind", "Base", "Size"]);
+    ).toEqual(["Model", "Name", "Kind", "Base", "Size", "Date added"]);
+  });
+});
+
+describe("the date column", () => {
+  // The naive-UTC stamp the backend serves, built from LOCAL noon: the shelf
+  // renders a naive stamp in the reader's local time, so a hardcoded literal
+  // would name a different day on a runner far enough east or west. Every date
+  // in this block is built this way, and names the day it is written as on
+  // every clock.
+  const naive = (year, month, day) =>
+    new Date(year, month - 1, day, 12, 0).toISOString().slice(0, 19);
+  const ADDED = naive(2026, 7, 30);
+
+  it("stamps the day in the reader's own date format", async () => {
+    // The DAY, not the stamp: a column is scanned, and the clock is a third of
+    // the width of the default format. The full stamp stays reachable in the
+    // title. Proven under two settings, because a format that is ignored looks
+    // exactly like one that happens to match.
+    const prefs = useUserPrefsStore();
+    prefs.dateFormat = "eu";
+    let wrapper = await mountShelf([adapter({ added_at: ADDED })]);
+    let cell = wrapper.find(".shelf-col--date");
+    expect(cell.text()).toBe("30/07/2026");
+    expect(cell.attributes("title")).toBe(
+      `Date added: ${formatUserDate(ADDED, "eu")}`,
+    );
+
+    prefs.dateFormat = "iso";
+    wrapper = await mountShelf([adapter({ added_at: ADDED })]);
+    expect(wrapper.find(".shelf-col--date").text()).toBe("2026-07-30");
+  });
+
+  it("follows the sort onto the file-date axis", async () => {
+    // A column that always showed `added_at` would read as unordered the
+    // moment the shelf was sorted on the other date. `newest_file_mtime` is
+    // `st_mtime_ns`, so the ns→ms divide is what this proves.
+    const prefs = useUserPrefsStore();
+    prefs.dateFormat = "iso";
+    const wrapper = await mountShelf([
+      adapter({
+        added_at: ADDED,
+        newest_file_mtime: new Date(2024, 0, 9, 12, 0).getTime() * 1e6,
+      }),
+    ]);
+    expect(wrapper.find(".shelf-col--date").text()).toBe("2026-07-30");
+
+    useModelShelfStore().setView({ sortKey: "file_mtime" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-col--date").text()).toBe("2024-01-09");
+    // And the header says which of the two dates a reader is hearing.
+    const heads = wrapper.findAll('[role="row"].visually-hidden');
+    expect(heads[0].findAll('[role="columnheader"]').at(-1).text()).toBe(
+      "File date",
+    );
+  });
+
+  it("gives a stack the run's date and each step its own", async () => {
+    // A stack's date is its newest member's, never its cover's — the same rule
+    // the sort orders on. The steps under it differ from each other, which is
+    // the one field on a member row that is not simply the run's.
+    const prefs = useUserPrefsStore();
+    prefs.dateFormat = "iso";
+    const wrapper = await mountShelf([
+      adapter({
+        id: 1,
+        stack_id: 7,
+        stack_position: 0,
+        added_at: naive(2026, 1, 1),
+        newest_member_at: naive(2026, 3, 4),
+      }),
+      // `newest_member_at` is a JOIN in the list query, so every member row
+      // carries the stack's — which is exactly why a member has to be read for
+      // its own date rather than for the first one it can answer with.
+      adapter({
+        id: 2,
+        sha256: "b".repeat(64),
+        stack_id: 7,
+        stack_position: 1,
+        added_at: naive(2026, 2, 2),
+        newest_member_at: naive(2026, 3, 4),
+      }),
+    ]);
+    expect(wrapper.find(".shelf-col--date").text()).toBe("2026-03-04");
+
+    await wrapper.find(".shelf-stack-badge").trigger("click");
+    const member = wrapper.find(".shelf-row--member");
+    expect(member.find(".shelf-col--date").text()).toBe("2026-02-02");
+  });
+
+  it("gives cover and step their own file dates on the file-date axis", async () => {
+    // `newest_file_mtime` is grouped per MODEL, not per stack, so on this axis
+    // there is nothing for the cover to inherit and nothing for a member to be
+    // shielded from: each answers for itself, which is what the sort orders
+    // each of them on. Pinned because the two aggregates are shaped
+    // differently — if `newest_file_mtime` ever became a stack aggregate like
+    // its sibling, every step would start printing the run's date and only
+    // this assertion would notice.
+    const prefs = useUserPrefsStore();
+    prefs.dateFormat = "iso";
+    const wrapper = await mountShelf([
+      adapter({
+        id: 1,
+        stack_id: 7,
+        stack_position: 0,
+        newest_file_mtime: new Date(2025, 4, 6, 12, 0).getTime() * 1e6,
+      }),
+      adapter({
+        id: 2,
+        sha256: "b".repeat(64),
+        stack_id: 7,
+        stack_position: 1,
+        newest_file_mtime: new Date(2025, 6, 8, 12, 0).getTime() * 1e6,
+      }),
+    ]);
+    useModelShelfStore().setView({ sortKey: "file_mtime" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-col--date").text()).toBe("2025-05-06");
+
+    await wrapper.find(".shelf-stack-badge").trigger("click");
+    expect(
+      wrapper.find(".shelf-row--member").find(".shelf-col--date").text(),
+    ).toBe("2025-07-08");
   });
 });
 

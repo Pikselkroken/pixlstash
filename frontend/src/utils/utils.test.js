@@ -3,6 +3,7 @@ import {
   debounce,
   toggleScore,
   formatUserDate,
+  formatUserDay,
   getStackThreshold,
   arraysEqualByString,
   isRangeOverlap,
@@ -66,6 +67,48 @@ describe('formatUserDate', () => {
     for (const fmt of formats) {
       expect(formatUserDate('2024-01-20T09:05:00Z', fmt)).toBeTruthy()
     }
+  })
+})
+
+describe('formatUserDay', () => {
+  // An instant built from LOCAL noon, so the day asserted is the day every
+  // runner's clock is on rather than the one before it east of the date line.
+  const NOON = new Date(2024, 0, 20, 12, 0).toISOString()
+
+  it('writes the day each format writes, and no clock', () => {
+    // Fixed expected strings, never a comparison against `formatUserDate`'s own
+    // output: the point of this function is that it is BUILT from the parts
+    // rather than cut out of a formatted stamp, and a test that trimmed the
+    // stamp the same way would agree with any trimming bug.
+    expect(formatUserDay(NOON, 'iso')).toBe('2024-01-20')
+    expect(formatUserDay(NOON, 'us')).toBe('01/20/2024')
+    expect(formatUserDay(NOON, 'british')).toBe('20/01/2024')
+    expect(formatUserDay(NOON, 'eu')).toBe('20/01/2024')
+    expect(formatUserDay(NOON, 'ymd-slash')).toBe('2024/01/20')
+    expect(formatUserDay(NOON, 'ymd-dot')).toBe('2024.01.20')
+    expect(formatUserDay(NOON, 'ymd-jp')).toBe('2024年01月20日')
+    expect(formatUserDay(NOON, undefined)).toBe('2024-01-20')
+  })
+
+  it('carries no clock in the locale format either', () => {
+    // `locale` delegates to the BROWSER's locale, so there is no string to pin
+    // — but there is a property, and it is the one a trimmed stamp broke: some
+    // locales put the clock first (vi-VN) and some separate it with a comma
+    // that is not U+002C (ar-EG). No `h:mm` anywhere is the whole claim.
+    const day = formatUserDay(NOON, 'locale')
+    expect(day).toBeTruthy()
+    expect(day).not.toMatch(/\d{1,2}:\d{2}/)
+    // And it is still a real day rather than a fragment of one: the year,
+    // month and day all survive.
+    expect(day).toMatch(/2024/)
+    expect(day).toMatch(/01/)
+    expect(day).toMatch(/20/)
+  })
+
+  it('matches formatUserDate on the falsy and unparseable paths', () => {
+    expect(formatUserDay('', 'iso')).toBe('')
+    expect(formatUserDay(null, 'iso')).toBe('')
+    expect(formatUserDay('not-a-date', 'iso')).toBe('not-a-date')
   })
 })
 

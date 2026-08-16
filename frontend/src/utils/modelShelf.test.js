@@ -19,6 +19,8 @@ import {
   capabilityLabel,
   collapseStacks,
   copyPathsTitle,
+  dateColumnKey,
+  modelDate,
   withEmptyFolders,
   cleanAssetName,
   deriveModelName,
@@ -1525,5 +1527,39 @@ describe("trashName", () => {
     expect(trashName({ userAgent: "Mozilla/5.0 (Macintosh)" })).toBe("Trash");
     // No navigator at all (a worker, an old jsdom) still names something.
     expect(trashName(null)).toBe("Trash");
+  });
+});
+
+describe("the date column's value", () => {
+  const ISO = "2026-07-30T12:00:00"; // naive UTC, the house convention
+
+  it("reads a file date as st_mtime_ns and says nothing when there is none", () => {
+    expect(
+      modelDate(
+        { newest_file_mtime: Date.UTC(2024, 0, 9, 8, 0) * 1e6 },
+        "file_mtime",
+      ),
+    ).toBe("2024-01-09T08:00:00.000Z");
+    // A row with no present copy cannot answer, and an empty cell is what says
+    // so — the same thing the size column does with a size nobody recorded.
+    expect(modelDate({ added_at: ISO }, "file_mtime")).toBe("");
+    // A value out of `Date`'s range comes back empty rather than throwing:
+    // `toISOString` throws on one, and this runs inside render, so one corrupt
+    // mtime would take the whole shelf down rather than one cell.
+    expect(modelDate({ newest_file_mtime: 1e30 }, "file_mtime")).toBe("");
+    expect(modelDate({ newest_file_mtime: "not a number" }, "file_mtime")).toBe(
+      "",
+    );
+  });
+
+  it("falls back to Date added on every key that is not a date", () => {
+    expect(dateColumnKey("size")).toBe("added_at");
+    expect(dateColumnKey("file_mtime")).toBe("file_mtime");
+    expect(modelDate({ added_at: ISO }, "size")).toBe(ISO);
+    // A stack's date is its newest member's, never its cover's — and a member
+    // read for its own is read for its own.
+    const member = { added_at: ISO, newest_member_at: "2026-09-01T00:00:00" };
+    expect(modelDate(member, "added_at")).toBe("2026-09-01T00:00:00");
+    expect(modelDate(member, "added_at", true)).toBe(ISO);
   });
 });
