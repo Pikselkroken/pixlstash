@@ -173,6 +173,45 @@ export function capabilityLabel(capability) {
 }
 
 /**
+ * What each non-adapter `file_kind` is called on screen.
+ *
+ * Named as roles rather than as file types, because the reader deciding what to
+ * keep is asking what the file DOES beside a checkpoint. `checkpoint` repeats
+ * the word `CAPABILITY_LABELS` uses, deliberately: a scanned checkpoint records
+ * no capability and a DECLARED one records `checkpoint`, and the two are one
+ * heading on the feature axis rather than a group of one beside a bucket of
+ * eighty.
+ *
+ * `adapter` and `engine` are absent, and that is what {@link fileKindLabel}
+ * returning "" means: an adapter is named by its algorithm and an engine by the
+ * features it declares, both of which say more than the word "Adapter".
+ *
+ * Not exported, for `ADAPTER_KIND_LABELS`' reason one table down: `file_kind`
+ * is owner-correctable over `PATCH /models` and carries no CHECK, so a caller
+ * indexing this raw with a row storing `constructor` gets `Object`'s
+ * constructor FUNCTION — truthy, so a `|| ""` fallback never fires, and it
+ * lands in a group label where `localeCompare` throws and takes the whole
+ * `groups` computed with it. `fileKindLabel` is the only way in.
+ */
+const FILE_KIND_LABELS = {
+  checkpoint: "Checkpoint",
+  vae: "VAE",
+  text_encoder: "Text encoder",
+  unknown: "Unclassified",
+};
+
+/**
+ * Name one `file_kind` for display.
+ *
+ * @param {string} fileKind - a stored `model.file_kind`.
+ * @returns {string} e.g. `Checkpoint`, or `""` for a kind named some other way.
+ */
+export function fileKindLabel(fileKind) {
+  const key = String(fileKind || "");
+  return Object.hasOwn(FILE_KIND_LABELS, key) ? FILE_KIND_LABELS[key] : "";
+}
+
+/**
  * Look a free-text value up in a label table, falling through to itself.
  *
  * `Object.hasOwn` rather than a plain index, because both tables are keyed by

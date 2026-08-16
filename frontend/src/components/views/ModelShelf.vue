@@ -1027,6 +1027,7 @@ import {
   capabilityLabel,
   copyPathsTitle,
   deletableModels,
+  fileKindLabel,
   trashName,
   withEmptyFolders,
   withFolderSignals,
@@ -2587,17 +2588,16 @@ function toggleDirection() {
  * `row.kind` holds and the column still reads as one thing at a glance.
  */
 function kindLabel(row) {
-  if (row.file_kind === "checkpoint") return "Checkpoint";
-  if (row.file_kind === "unknown") return "Unclassified";
-  // Named as roles rather than as file types, because the reader deciding what
-  // to keep is asking what the file DOES beside a checkpoint.
-  if (row.file_kind === "vae") return "VAE";
-  if (row.file_kind === "text_encoder") return "Text encoder";
+  // One table with the `feature` group axis, which names its headings from the
+  // same one — the cell reading `Checkpoint` under a header saying something
+  // else is the contradiction that table exists to prevent.
+  const named = fileKindLabel(row.file_kind);
+  if (named) return named;
   const capabilities = Array.isArray(row.capabilities) ? row.capabilities : [];
   if (capabilities.length) return capabilities.map(capabilityLabel).join(", ");
-  // One vocabulary with the `feature` group axis, though not always the same
-  // heading: that axis files `unknown`, and anything that is not an adapter,
-  // under "No feature recorded". The CELL still names what the row is.
+  // The axis still files `unknown` under "No feature recorded" where the cell
+  // says "Unclassified": a shrug is not a heading. The CELL always names what
+  // the row is.
   return adapterKindLabel(row.kind) || "Adapter";
 }
 

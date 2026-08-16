@@ -22,6 +22,7 @@ import {
   capabilityIcon,
   capabilityLabel,
   compareGroups,
+  fileKindLabel,
   locationState,
   trashName,
   modelName,
@@ -527,8 +528,8 @@ function groupsOf(row, axis) {
       // has always read `LoRA`, so filing it under "No feature recorded" left
       // the axis saying one thing and the cell beside it another — and it
       // swallowed most of the shelf into one bucket, which is the one shape a
-      // grouping axis must not take. A checkpoint or an unclassified file has
-      // no algorithm either, and still says nothing.
+      // grouping axis must not take. A checkpoint has no algorithm either, and
+      // is headed by its FILE KIND two branches down for the same reason.
       //
       // `unknown` is excluded because it is not an algorithm: it is
       // `detect_adapter_kind`'s explicit refusal (`KIND_UNKNOWN`) for an
@@ -551,6 +552,40 @@ function groupsOf(row, axis) {
             key: `kind:${key}`,
             label: adapterKindLabel(key),
             labelKind: "name",
+          },
+        ];
+      }
+      // The same argument one file kind over. A checkpoint, a VAE and a text
+      // encoder never declare a capability — nothing scans one and writes
+      // `model_capability` — so all three sat under "No feature recorded" while
+      // the cell beside them read `Checkpoint`. The sting is sharper here than
+      // for adapters: a DECLARED checkpoint (an HF-cache repo, which enters as
+      // `file_kind=engine`) DOES record the capability, so the axis drew a
+      // `Checkpoint` header holding the one packaged model and left all eighty
+      // scanned checkpoints out of it.
+      //
+      // Unprefixed, and that is the point — the opposite of the branch above.
+      // `kind:` keeps an ALGORITHM out of the capability keyspace because a
+      // collision there would merge two unrelated headings; here the collision
+      // IS the fix, because `checkpoint` the file kind and `checkpoint` the
+      // capability are one heading and the declared row keys on the latter. A
+      // fifth file kind takes the same unprefixed key, and takes it knowingly:
+      // the keyspace it shares is `CAPABILITY_LABELS`, which is short and
+      // reviewable, not free text.
+      //
+      // `unknown` is excluded for the reason the algorithm above is: an
+      // unclassified file is the classifier's shrug, and a heading called
+      // "Unclassified" beside "No feature recorded" is two shrugs presented as
+      // one feature and one not.
+      if (row.file_kind !== "unknown" && fileKindLabel(row.file_kind)) {
+        return [
+          {
+            key: String(row.file_kind),
+            label: fileKindLabel(row.file_kind),
+            labelKind: "name",
+            // "" for the support kinds, which no capability marks — the header
+            // falls back to the axis glyph rather than borrowing a wrong one.
+            icon: capabilityIcon(row.file_kind),
           },
         ];
       }

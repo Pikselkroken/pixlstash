@@ -392,9 +392,7 @@ describe("the support block", () => {
     // block is two requests, and a reader deciding what to keep sees one list.
     const store = useModelShelfStore();
     listSupport
-      .mockResolvedValueOnce([
-        adapter({ id: 1, file_kind: "vae", kind: null }),
-      ])
+      .mockResolvedValueOnce([adapter({ id: 1, file_kind: "vae", kind: null })])
       .mockResolvedValueOnce([
         adapter({ id: 2, file_kind: "text_encoder", kind: null }),
       ]);
@@ -1457,19 +1455,15 @@ describe("capabilities", () => {
   });
 
   it("groups on the algorithm only for an ADAPTER, whatever else carries a kind", async () => {
-    // The `file_kind` guard. A checkpoint's `kind` is null, so the truthiness
-    // check alone catches it and it cannot pin this; the row that can is one
-    // carrying a kind while not being an adapter. An engine keeps its ROLE in
-    // `model.kind`, so the shape is the engine's — though today's declarations
-    // always emit that role as a capability too (`declared_capabilities`), so
-    // this exact row is synthetic. It is the guard that is being pinned, not a
-    // state the hub currently writes: without it, anything that grows a `kind`
-    // starts heading feature groups.
+    // The `file_kind` guard. The row that pins it is one carrying a kind while
+    // not being an adapter. An engine keeps its ROLE in `model.kind`, so the
+    // shape is the engine's — though today's declarations always emit that role
+    // as a capability too (`declared_capabilities`), so this exact row is
+    // synthetic. It is the guard that is being pinned, not a state the hub
+    // currently writes: without it, anything that grows a `kind` starts heading
+    // feature groups.
     listEngines.mockResolvedValue([
       engine({ id: 4, kind: "tagger", capabilities: [] }),
-    ]);
-    listCheckpoints.mockResolvedValue([
-      adapter({ id: 5, file_kind: "checkpoint", kind: null, capabilities: [] }),
     ]);
     listAdapters.mockResolvedValue([]);
     const store = useModelShelfStore();
@@ -1478,7 +1472,78 @@ describe("capabilities", () => {
 
     expect(store.groups).toHaveLength(1);
     expect(store.groups[0].label).toBe("No feature recorded");
-    expect(store.groups[0].rows).toHaveLength(2);
+    expect(store.groups[0].rows).toHaveLength(1);
+  });
+
+  it("files a scanned checkpoint under Checkpoint, beside the declared ones", async () => {
+    // The reported bug: 80 rows whose Kind cell reads `Checkpoint` sat under
+    // "No feature recorded" while a `Checkpoint` header two rows up held the
+    // single packaged model that declares the capability. Nothing writes
+    // `model_capability` for a scanned file, so the file kind has to be what
+    // heads the group — and it has to be the SAME key the capability uses, or
+    // the shelf draws two groups spelled the same.
+    listCheckpoints.mockResolvedValue([
+      adapter({ id: 5, file_kind: "checkpoint", kind: null, capabilities: [] }),
+    ]);
+    // Shaped as the declaration writes it: an HF-cache repo enters as
+    // `file_kind='engine'` (`DeclaredEntry.file_kind`) and carries the
+    // capability, so the merge has to survive the two rows disagreeing about
+    // their file kind — which is the whole shape of the reported bug.
+    listEngines.mockResolvedValue([
+      engine({
+        id: 6,
+        sha256: "d".repeat(64),
+        kind: "checkpoint",
+        display_name: "Qwen/Qwen-Image",
+        capabilities: ["checkpoint"],
+      }),
+    ]);
+    listAdapters.mockResolvedValue([]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "feature" });
+
+    expect(store.groups).toHaveLength(1);
+    expect(store.groups[0].key).toBe("checkpoint");
+    expect(store.groups[0].label).toBe("Checkpoint");
+    expect(store.groups[0].icon).toBe("mdi-package-variant-closed");
+    expect(store.groups[0].rows.map((r) => r.id)).toEqual([5, 6]);
+  });
+
+  it("files the support kinds under their own names too", async () => {
+    // Same bug, same fix, one file kind over: a VAE and a text encoder declare
+    // no capability either, and their Kind cells have always named them.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 9, file_kind: "vae", kind: null, capabilities: [] }),
+      adapter({
+        id: 10,
+        sha256: "e".repeat(64),
+        file_kind: "text_encoder",
+        kind: null,
+        capabilities: [],
+      }),
+      // Unclassified stays a shrug: "Unclassified" beside "No feature recorded"
+      // would be two shrugs presented as one feature and one not.
+      adapter({
+        id: 11,
+        sha256: "f".repeat(64),
+        file_kind: "unknown",
+        kind: null,
+        capabilities: [],
+      }),
+    ]);
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    store.setView({ groupBy: "feature" });
+
+    expect(store.groups.map((g) => g.label)).toEqual([
+      "Text encoder",
+      "VAE",
+      "No feature recorded",
+    ]);
+    // No capability marks either one, so the header keeps the axis's own glyph
+    // rather than borrowing a wrong one.
+    expect(store.groups[0].icon).toBe("");
   });
 
   it("says nothing for an adapter whose kind is blank, rather than heading a group with it", async () => {
