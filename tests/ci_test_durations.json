@@ -4,7 +4,8 @@
   "recorded_from": [
     "GitHub Actions CI run 31312307563 (develop @ a66d8b999f4ef0bca8e725eb61d89ffdf90bedaf), backend gate shards",
     "local run for tests/test_security_supported_versions.py (newly gated; the rest of the map is unchanged)",
-    "local run for tests/test_cli_documentation.py (newly gated; the rest of the map is unchanged)"
+    "local run for tests/test_cli_documentation.py (newly gated; the rest of the map is unchanged)",
+    "local run for tests/test_library_restore_cli.py (newly gated; the rest of the map is unchanged)"
   ],
   "test_count": 2488,
   "total_seconds": 6518.81,
@@ -1354,6 +1355,11 @@
     "tests/test_library_generation_coordinator.py::test_outer_http_lease_lives_through_the_final_body_frame": 0.0,
     "tests/test_library_generation_coordinator.py::test_route_mode_resolution_prefers_api_route_over_spa_catch_all": 0.0,
     "tests/test_library_generation_coordinator.py::test_writer_wait_is_bounded_and_restores_ready_for_coherent_runtime": 0.01,
+    "tests/test_library_restore_cli.py::test_declining_the_prompt_changes_nothing": 0.02,
+    "tests/test_library_restore_cli.py::test_restore_refuses_a_destination_with_contents": 0.02,
+    "tests/test_library_restore_cli.py::test_restore_refuses_an_archive_it_did_not_write": 0.01,
+    "tests/test_library_restore_cli.py::test_restore_refuses_while_the_hub_is_locked": 0.52,
+    "tests/test_library_restore_cli.py::test_restore_round_trip_publishes_library_and_preserves_the_old_pair": 0.04,
     "tests/test_library_settings.py::TestCatchingUpADormantLibrary::test_a_missing_salt_is_skipped_rather_than_hashed_unkeyed": 2.92,
     "tests/test_library_settings.py::TestCatchingUpADormantLibrary::test_a_weights_change_while_closed_invalidates_on_open": 2.39,
     "tests/test_library_settings.py::TestCatchingUpADormantLibrary::test_no_change_leaves_scores_alone": 2.62,
