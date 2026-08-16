@@ -606,6 +606,12 @@ class WellFormed(ImagePlugin):
         errors = manager.list_errors()
         assert len(errors) == 1
         assert errors[0]["file"] == path
+        # The message has to name the contract that was broken. The bare
+        # `dict(...)` ValueError this used to raise said "dictionary update
+        # sequence element #0 has length 1; 2 is required", which points at
+        # nothing the plugin author wrote.
+        assert "Unwrapped.models" in errors[0]["message"]
+        assert "list" in errors[0]["message"]
         # The neighbour is still listed, which is the whole point: one bad
         # header costs its own plugin, not the endpoint.
         assert [schema["name"] for schema in manager.list_plugins()] == ["wellformed"]

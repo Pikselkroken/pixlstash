@@ -95,7 +95,21 @@ class ImagePlugin(ABC):
             A dict with keys ``name``, ``display_name``, ``description``,
             ``author``, ``license``, ``models``, ``supports_images``,
             ``supports_videos``, and ``parameters``.
+
+        Raises:
+            TypeError: If ``models`` is not a list of dicts. The registry
+                probes this at load, so the plugin is refused with the message
+                below rather than the shape reaching a caller.
         """
+        models = self.models or []
+        if not isinstance(models, list) or not all(
+            isinstance(model, dict) for model in models
+        ):
+            raise TypeError(
+                f"{type(self).__name__}.models must be a list of "
+                "{'name': ..., 'license': ...} dicts — one entry per model, "
+                "a list even when there is only one"
+            )
         return {
             "name": self.name,
             "display_name": self.display_name or self.name,
@@ -103,7 +117,7 @@ class ImagePlugin(ABC):
             "author": self.author or "",
             "license": self.license or "",
             # Copied so a caller cannot mutate the class attribute it came from.
-            "models": [dict(model) for model in self.models or []],
+            "models": [dict(model) for model in models],
             "supports_images": bool(self.supports_images),
             "supports_videos": bool(self.supports_videos),
             "parameters": self.parameter_schema(),
