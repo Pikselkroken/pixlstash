@@ -63,15 +63,6 @@ const settingsTab = ref("appearance");
 const navItems = computed(() =>
   [
     {
-      // First in the rail, and the only entry that changes *what* the app is
-      // showing rather than how it looks or behaves. Grouping it with the
-      // appearance and behaviour panes below would bury it.
-      id: "libraries",
-      icon: "bookshelf",
-      label: "Libraries",
-      show: !isReadOnly.value,
-    },
-    {
       id: "appearance",
       icon: "palette-outline",
       label: "Appearance",
@@ -93,6 +84,16 @@ const navItems = computed(() =>
       id: "workflows",
       icon: "sitemap-outline",
       label: "Workflows",
+      show: !isReadOnly.value,
+    },
+    {
+      // Ordered next to Scrapheap and Snapshots — the open library's bin and
+      // its backups — so the container sits with the panes that describe it.
+      // Adjacency is the only cue: the rail is one flat list, deliberately, so
+      // nothing here may style an item by its position.
+      id: "libraries",
+      icon: "bookshelf",
+      label: "Libraries",
       show: !isReadOnly.value,
     },
     {
@@ -191,16 +192,6 @@ watch(
            siblings), and v-show cannot toggle a multi-root component. The
            wrapper guarantees one element to show/hide. -->
       <div
-        v-if="!isReadOnly"
-        v-show="settingsTab === 'libraries'"
-        id="settings-pane-libraries"
-        class="settings-pane"
-        role="region"
-        aria-labelledby="settings-nav-libraries"
-      >
-        <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
-      </div>
-      <div
         v-show="settingsTab === 'appearance'"
         id="settings-pane-appearance"
         class="settings-pane"
@@ -261,6 +252,16 @@ watch(
       </div>
       <div
         v-if="!isReadOnly"
+        v-show="settingsTab === 'libraries'"
+        id="settings-pane-libraries"
+        class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-libraries"
+      >
+        <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
+      </div>
+      <div
+        v-if="!isReadOnly"
         v-show="settingsTab === 'scrapheap'"
         id="settings-pane-scrapheap"
         class="settings-pane"
@@ -282,7 +283,10 @@ watch(
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'privacy'"
+        id="settings-pane-privacy"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-privacy"
       >
         <PrivacySection :open="dialogOpen && settingsTab === 'privacy'" />
       </div>
@@ -366,20 +370,6 @@ watch(
   color: rgb(var(--v-theme-on-surface));
   font-weight: var(--weight-semibold);
   background: var(--active-wash);
-}
-
-.settings-nav-item:first-child {
-  margin-bottom: var(--space-3);
-}
-
-.settings-nav-item:first-child::after {
-  content: "";
-  position: absolute;
-  right: var(--space-4);
-  bottom: calc(var(--space-3) * -1);
-  left: var(--space-4);
-  height: 1px;
-  background: rgb(var(--v-theme-divider));
 }
 
 .settings-nav-item__bar {

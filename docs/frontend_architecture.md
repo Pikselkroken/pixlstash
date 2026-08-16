@@ -529,18 +529,31 @@ Right-side statistics panel. Responsibilities:
 
 ### Settings Dialog and Sub-sections
 
-#### `UserSettingsDialog.vue` (363 lines)
-Thin multi-tab settings shell. It now owns only the tab chrome and routing — every tab's content was extracted into its own section component, so the dialog itself holds no inline tab markup. Tabs:
+#### `UserSettingsDialog.vue` (438 lines)
+Thin multi-tab settings shell. It now owns only the tab chrome and routing — every tab's content was extracted into its own section component, so the dialog itself holds no inline tab markup. Rail order, top to bottom (label → component; the label differs from the id where noted):
 - **Appearance** → `<AppearanceSection>`
-- **Behaviour** → `<BehaviourSection>` (`!isReadOnly`)
-- **Smart Score** → `<SmartScoreSection>` (`!isReadOnly`)
+- **Models** (id `behaviour`) → `<BehaviourSection>` (`!isReadOnly`)
+- **Smart Score & Filters** (id `smart-score`) → `<SmartScoreSection>` (`!isReadOnly`)
 - **Workflows** → `<WorkflowsSection>` (`!isReadOnly`)
+- **Libraries** → `<LibrariesSection>` (`!isReadOnly`)
+- **Scrapheap** → `<ScrapheapSection>` (`!isReadOnly`)
 - **Snapshots** → `<SnapshotsSection>` (`!isReadOnly`)
+- **Privacy** → `<PrivacySection>` (`!isReadOnly`)
+- **Compute** → `<ComputeSection view="compute">` (desktop only, `isDesktop && !isReadOnly`)
 - **Backend** → `<ComputeSection>` (desktop only, `isDesktop && !isReadOnly`)
 - **Account Settings** → `<AccountSection>` (`!isReadOnly`)
 
-**Libraries.** The first rail item is owner-only and carries `aria-current` plus
-an explicitly labelled region. `LibrariesSection` reads the shared registry
+**Libraries.** An ordinary rail item ordered next to Scrapheap and Snapshots —
+the open library's bin and its backups — rather than set apart at the top by a
+divider, which read as a section of its own. The rail is one flat list with no
+rendered grouping: adjacency is the only cue, and nothing may style an item by
+its position. The divider was `.settings-nav-item:first-child::after`, which
+targeted whatever came first, so it landed under Appearance in any session that
+hides Libraries. It is owner-only and carries `aria-current` plus an explicitly
+labelled region; every rail item's `aria-controls` resolves to such a region,
+asserted in `UserSettingsDialog.test.js`.
+
+`LibrariesSection` reads the shared registry
 store, shows host paths and deployment-specific CLI commands only when the
 server supplied them, and always offers the public documentation link as the
 remote-safe fallback. The switch confirmation is the global
