@@ -465,9 +465,13 @@ header, toolbar, and stats header to one horizontal band and you respect that ba
 everywhere. The band height is `--bar-height` (48px) in the browser; the desktop
 Electron shell compresses the top strip (title bar `--titlebar-h` 34px, sidebar
 header 36px) so the custom title bar and controls fit — see the overrides in
-`style.css`. (Heads-up: the per-component action-bar heights still drift — 34 / 40 /
-48 / 56px across `ImageGrid`, `ImageOverlay`, and the selection bar. Unifying them
-onto `--bar-height` is an open reconciliation item; it moves pixels, so it needs
+`style.css`. (Heads-up: the per-component action-bar heights still drift — 34 / 36 /
+40 / 48 / 56px across `ImageGrid`, `ImageOverlay`, and the selection bar. The **three
+view toolbars are the one settled group**: the grid, Duplicates and model-shelf bars
+all sit at 36px, pinned to each other by a guardrail rather than to this token
+(`toolbar-responsive-decisions.md` Amendment #5) — so no view toolbar honours
+`--bar-height` today, deliberately. Unifying the rest onto `--bar-height` is an open
+reconciliation item; it moves pixels, so it needs
 UI/UX sign-off — see §13.)
 
 ### 5.1 The row grid (how a list row shares a left edge)
@@ -863,8 +867,11 @@ bar** — is one pattern. It reuses the grid; only the bar changes.
   and **always behind a confirm** — deletion is irreversible and must never be a
   single mis-click. Secondary actions are quiet (text/`cancel-button`).
 - **One band.** Action bars share `--bar-height` so they line up with the shell's
-  top strip (§5). The current per-component heights (34 / 40 / 48 / 56px) are drift
-  to migrate onto this token; because it moves pixels it is UI/UX-gated.
+  top strip (§5). The current per-component heights (34 / 36 / 40 / 48 / 56px) are
+  drift to migrate onto this token; because it moves pixels it is UI/UX-gated. The
+  36px group is the exception that is already settled: the three **view toolbars**
+  agree with each other at 36px and are guarded there, so they migrate together or
+  not at all.
 - **Empty & the Trash view.** Trash is the picture grid reused with the restore/purge
   bar. Its empty state uses the existing `EmptyTrash.png` art (§9) with a
   `--text-2xl` Tiny5 headline and a `--text-sm` line of guidance.

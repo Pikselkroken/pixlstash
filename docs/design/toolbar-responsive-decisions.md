@@ -19,8 +19,9 @@ container queries today**):
 - Right: size slider + label → Auto-stack button (conditional, accent) →
   separator → **UndoControl** → TbGlobalActions
 
-**Model shelf toolbar** (`ModelShelf.vue`, `.shelf-toolbar`, container
-`shelfbar toolbar`) — added 2026-08-15, after this record was written:
+**Model shelf toolbar** (`ModelShelf.vue`, `.shelf-toolbar`, 36px band since
+Amendment #5, container `shelfbar toolbar`) — added 2026-08-15, after this
+record was written:
 
 - Left: title → count → Add (accent) → stack sweep → Model folders
 - Right: Group → Sort split-button → Show → separator → TbGlobalActions
@@ -342,3 +343,94 @@ rule exists so a demo can see a feature it may not use — the feature is real,
 the session is not entitled to it. Here the feature does not exist on this
 screen at all, and a permanently inert undo two icons from verbs that say
 "There is no undo for this" teaches the opposite of what is true.
+
+## Amendment #5 (2026-08-16): one band, one tail anchor (fine pointers)
+
+**The finding:** Decision 1 unified what the three bars *hold*, and nothing
+unified what they *are*. Switching to `/models` moved the whole content area
+down 12px and back, because `.shelf-toolbar` shipped at `--bar-height` (48px)
+while the grid and Duplicates bars are 36px. The strip was also unpainted, so
+`.shelf`'s `background` showed through it — a different hue and value from the
+`toolbar` token in both themes — which made the shelf bar read as page rather
+than chrome. And its uniform `--space-5` inset put Settings and Stats 8px
+further left than in the other two views, so the one pair of controls that
+means the same thing everywhere jumped diagonally on every view switch. Three
+independent differences, all of them read at once as "this is a different app",
+which is exactly the reading a view switch must not produce.
+
+**The change:** `.shelf-toolbar` takes the grid bar's box recipe whole —
+`height: 36px` + `box-sizing: border-box` + zero vertical padding — paints
+`rgb(var(--v-theme-toolbar))` with `rgb(var(--v-theme-toolbar-text))` ink, and
+adopts the queue's split inset, `padding: 0 var(--space-3) 0 var(--space-5)`.
+The right token is the one that matters and is now identical in all three:
+the app-wide tail is a stable anchor only if it lands at the same distance from
+the edge in every view. The left stays at the view's own content gutter, which
+on the shelf is `--space-5` (`.shelf-group-btn` and the rows), the same
+reasoning the queue's inset already carried. `.shelf-title` drops from
+`--text-xl` to `--text-md`, the queue's `.qtitle`: 22px is a view heading, it
+does not sit in a 36px band, and the two bars that lead with an identity now
+lead with it at one size. `.shelf-sub` re-bases its ink on `toolbar-text` at
+the queue's `.qsub` alpha (0.6, not the 0.7 it carried on `on-background`) — at
+the old alpha the change would have invented a third strength for one role in a
+record whose whole premise is that these bars agree.
+
+`.shelf-viewseg` drops to `height: 30px` in the same pass. It is the only
+control on any of the three bars wrapped in a bordered track, so at `.bar-btn`'s
+32px the switch measured 34 against every neighbour's 32. The old 48px band hid
+that as mere misalignment; a 36px band (35px of content box) also left it 0.5px
+of slack, so a focused segment's 3px `--focus-ring` painted onto the first list
+row. 30 + 2×1px border is 32, which is what every other control in every bar
+already is.
+
+**Not `--bar-height`.** 36px is the shipped majority and the one the grid bar
+defines; migrating the whole app's 34/40/48/56 onto the 48px token is the
+separate UI/UX-gated item in `visual-language.md` §5, and a bar that jumped
+there alone would be drift in the other direction. What this amendment fixes is
+the *disagreement between views*, not the token question.
+
+**Kept different, deliberately:** the grid bar paints `rgba(…, 0.95)` rather
+than `rgb(…)`. It is the only one of the three that is absolutely positioned
+over scrolling content; the other two are flex children of their shells. The
+guardrail accepts either form of the same token.
+
+**The guardrail grew a third bar.** `Toolbar.test.js` now reads the CSS block of
+all three selectors and asserts the shared recipe, the equal right inset, that
+each declares exactly one `background` and that it paints `--v-theme-toolbar`,
+and that `.shelf-title`/`.shelf-sub` carry the same size and ink as the queue's
+`.qtitle`/`.qsub`. jsdom computes no layout, so the coupling is what gets
+pinned, not the rendered pixels. The "exactly one" is the load-bearing part: an
+earlier draft asserted only that *a* `background` matched the token, which an
+adversarial pass showed still passed with `background: transparent` appended on
+the next line — that is, on a reproduction of the very defect being fixed.
+
+### Still open after this amendment
+
+Two things this record should not be read as having settled.
+
+**Coarse pointers are NOT unified, and the gap widened.** `Toolbar.vue` carries
+a `@media (hover: none) and (pointer: coarse)` block taking `.selection-bar-
+overlay` to 56px with `--space-2` insets and its controls to 46px targets.
+Neither the queue nor the shelf has an equivalent, so on touch the three bars
+measure 56 / 36 / 36px with 4 / 8 / 8px right insets — every claim above holds
+for fine pointers only. The shelf was already wrong here (48px band, 32px
+targets: the coarse `.bar-btn { min-height: 46px }` rule is inside
+`Toolbar.vue`'s `<style scoped>` and so has never reached any bar but the
+grid's, the exact trap `App.css` documents at the `.bar-*` family), and 32px
+targets are under the 44px WCAG 2.5.5 floor on all three. The fix is the one
+`App.css` already made for the rest of the family — lift the coarse `.bar-*`
+rules out of the scoped block, then give the other two bars the band — but it
+moves pixels on touch hardware nobody has verified this on, so it is its own
+change with its own device pass, not a rider on this one. **The guardrail
+cannot see it**: `blockOf` takes the first matching block, so a media-query
+override is structurally invisible to it.
+
+**`.bar-btn--open` is a weak affordance and this made it marginally weaker on
+the shelf.** The open trigger paints `panel` fill inside a `border` outline;
+against `toolbar` that measures 1.01:1 (light) and 1.17:1 (dark) for the fill,
+1.28:1 for the outline — under the 3:1 non-text floor (WCAG 1.4.11). The shelf
+previously sat on `background`, where the same pairings measure 1.05 / 1.30 /
+1.42:1: still failing, slightly less so. This is not a shelf problem — it is how
+the open state reads on the grid and queue bars already, and the shelf has now
+converged onto it rather than away. Fixing `.bar-btn--open` app-wide (an accent
+border, the treatment `.bar-btn--icon.bar-btn--open` already uses) is a
+lead-designer item across all three bars.

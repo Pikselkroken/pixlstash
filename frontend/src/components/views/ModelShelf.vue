@@ -3513,20 +3513,54 @@ watch(
      bar's width independent of its contents. */
   container-type: inline-size;
   container-name: shelfbar toolbar;
-  height: var(--bar-height);
-  padding: 0 var(--space-5);
+  /* The shell's top band, copied from the GRID toolbar
+     (`.selection-bar-overlay` in Toolbar.vue), which is the point of truth for
+     the box recipe: `height: 36px` + `box-sizing: border-box` (the 1px bottom
+     border sits INSIDE the 36) + zero vertical padding, `align-items: center`
+     doing the vertical work. This bar shipped at `--bar-height` (48px), so
+     switching to /models moved the whole content area down 12px and back —
+     which reads as a different app, not a different context. NOT
+     `--bar-height`: unifying the shipped 34/36/40/48/56 onto that token is the
+     separate, UI/UX-gated item in visual-language.md §5, and a bar that jumped
+     there alone would be drift in the other direction. Guardrail:
+     Toolbar.test.js asserts all three bars carry the same recipe. */
+  height: 36px;
+  box-sizing: border-box;
+  /* Split inset, same as the queue's and for the same reason. RIGHT is
+     --space-3, the grid bar's inset: the app-wide tail ([separator]
+     [TbGlobalActions]) is a stable anchor only if Settings and Stats land at
+     the identical distance from the edge in every view — a uniform --space-5
+     here put them 8px further left than the grid's, so the pair jumped
+     sideways on every view switch. LEFT stays --space-5, the shelf's own
+     content gutter (`.shelf-group-btn` and the rows inset by --space-5), so
+     the title sits flush over the list. */
+  padding: 0 var(--space-3) 0 var(--space-5);
+  /* Paint the chrome surface the other two bars paint. Unpainted, this strip
+     showed `.shelf`'s `background` through it, which is a different hue and
+     value from `toolbar` in both themes — the bar read as page, not chrome.
+     `toolbar-text` is what `.bar-btn` already uses, so the title and the count
+     now inherit the same ink as the buttons beside them. */
+  background: rgb(var(--v-theme-toolbar));
+  color: rgb(var(--v-theme-toolbar-text));
   border-bottom: 1px solid rgb(var(--v-theme-divider));
   flex-shrink: 0;
 }
 
+/* --text-md, the queue's `.qtitle`, not --text-xl: 22px is a view heading and
+   does not sit in a 36px band. The two bars that lead with an identity now
+   lead with it at one size. */
 .shelf-title {
-  font-size: var(--text-xl);
+  font-size: var(--text-md);
   font-weight: var(--weight-semibold);
 }
 
+/* 0.6, the queue's `.qsub` alpha exactly. It was 0.7 on `on-background`, and
+   re-basing it on `toolbar-text` at the old alpha would have invented a third
+   strength for the one role in a change whose premise is that these bars
+   agree. */
 .shelf-sub {
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-background), 0.7);
+  color: rgba(var(--v-theme-toolbar-text), 0.6);
   font-variant-numeric: tabular-nums;
 }
 
@@ -3641,8 +3675,15 @@ watch(
   border-radius: var(--radius-pill);
 }
 
+/* 30px, not `.bar-btn`'s 32: this is the one control on any of the three bars
+   that wraps its buttons in a bordered track, so 32px segments made the switch
+   34px against every neighbour's 32. In the old 48px band that only misaligned
+   it; in the 36px band it also left 0.5px between the switch and the band edge,
+   so a focused segment's 3px ring painted over the first list row. 30 + 2×1px
+   border = 32, the height every other control in every bar already is. */
 .shelf-viewseg {
   border-radius: 0;
+  height: 30px;
   color: rgba(var(--v-theme-on-panel), 0.7);
 }
 
