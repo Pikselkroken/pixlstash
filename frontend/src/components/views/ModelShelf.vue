@@ -165,7 +165,11 @@
            proposes over every row. Icon-only beside Add rather than among the
            view controls, because it is a verb and they are not — and it opens a
            dry run, so nothing is written by the press itself. -->
+      <!-- The sweep proposes stacks over the shelf's `model_file` ROWS, so on
+           the training-runs tab it acts on a list the reader is not looking at.
+           Hidden there for the same reason Group, Sort and Show are. -->
       <button
+        v-if="isShelfTab"
         ref="stacksBtnRef"
         class="bar-btn bar-btn--boxed"
         type="button"
@@ -227,91 +231,99 @@
              their glyphs are abstract and their state is the reason the list
              looks the way it does. Filter keeps the universal funnel and says
              the rest with a count. -->
-        <v-menu
-          v-model="groupMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
-        >
-          <template #activator="{ props: menuProps }">
-            <button
-              v-bind="menuProps"
-              class="bar-btn bar-btn--boxed"
-              :class="{ 'bar-btn--open': groupMenuOpen }"
-              type="button"
-              aria-haspopup="dialog"
-              :aria-expanded="groupMenuOpen"
-              :title="groupButtonTitle"
-            >
-              <v-icon size="19">{{ activeGroup.icon }}</v-icon>
-              <span class="bar-btn-value">{{ activeGroup.label }}</span>
-              <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-            </button>
-          </template>
-          <ShelfSortPanel section="group" />
-        </v-menu>
+        <!-- Group, Sort and Show steer the ROW LIST. On the training-runs tab
+             that list is not on screen, so they are hidden rather than
+             disabled: a disabled control owes an explanation, and these are not
+             about a selection the reader just made — they are about a list that
+             is not in front of them. -->
+        <template v-if="isShelfTab">
+          <v-menu
+            v-model="groupMenuOpen"
+            :close-on-content-click="false"
+            location="bottom end"
+            origin="top end"
+            :offset="8"
+            transition="scale-transition"
+          >
+            <template #activator="{ props: menuProps }">
+              <button
+                v-bind="menuProps"
+                class="bar-btn bar-btn--boxed"
+                :class="{ 'bar-btn--open': groupMenuOpen }"
+                type="button"
+                aria-haspopup="dialog"
+                :aria-expanded="groupMenuOpen"
+                :title="groupButtonTitle"
+              >
+                <v-icon size="19">{{ activeGroup.icon }}</v-icon>
+                <span class="bar-btn-value">{{ activeGroup.label }}</span>
+                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
+              </button>
+            </template>
+            <ShelfSortPanel section="group" />
+          </v-menu>
 
-        <v-menu
-          v-model="sortMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
-        >
-          <!-- The shipped split-button: a direction toggle welded to a menu
+          <v-menu
+            v-model="sortMenuOpen"
+            :close-on-content-click="false"
+            location="bottom end"
+            origin="top end"
+            :offset="8"
+            transition="scale-transition"
+          >
+            <!-- The shipped split-button: a direction toggle welded to a menu
              trigger. `role="group"` names the pair; the two halves keep their
              own accessible names, and v-menu returns focus to the trigger on
              Escape, on an outside click and on a selection. -->
-          <template #activator="{ props: menuProps }">
-            <div
-              class="bar-split-button"
-              :class="{ 'bar-split-button--open': sortMenuOpen }"
-              role="group"
-              aria-label="Sort"
-            >
-              <!-- The accessible name IS the current state and flips on press,
-                 which is what a keyboard user hears when focus returns. -->
-              <button
-                class="bar-btn bar-split-toggle"
-                type="button"
-                :title="directionLabel"
-                :aria-label="directionLabel"
-                @click.stop="toggleDirection"
+            <template #activator="{ props: menuProps }">
+              <div
+                class="bar-split-button"
+                :class="{ 'bar-split-button--open': sortMenuOpen }"
+                role="group"
+                aria-label="Sort"
               >
-                <v-icon size="19">{{ directionIcon }}</v-icon>
-              </button>
-              <!-- `aria-haspopup="dialog"`, not `menu`: the panel is a div of
+                <!-- The accessible name IS the current state and flips on press,
+                 which is what a keyboard user hears when focus returns. -->
+                <button
+                  class="bar-btn bar-split-toggle"
+                  type="button"
+                  :title="directionLabel"
+                  :aria-label="directionLabel"
+                  @click.stop="toggleDirection"
+                >
+                  <v-icon size="19">{{ directionIcon }}</v-icon>
+                </button>
+                <!-- `aria-haspopup="dialog"`, not `menu`: the panel is a div of
                  grouped toggles, and claiming a menu would promise roving
                  arrow keys nothing implements. Matches SearchResultBar. -->
-              <button
-                v-bind="menuProps"
-                class="bar-btn bar-split-menu"
-                type="button"
-                aria-haspopup="dialog"
-                :aria-expanded="sortMenuOpen"
-                :title="sortButtonTitle"
-              >
-                <v-icon size="19">{{ activeSort.icon }}</v-icon>
-                <span class="bar-btn-value">{{ activeSort.label }}</span>
-                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-              </button>
-            </div>
-          </template>
-          <ShelfSortPanel section="sort" />
-        </v-menu>
+                <button
+                  v-bind="menuProps"
+                  class="bar-btn bar-split-menu"
+                  type="button"
+                  aria-haspopup="dialog"
+                  :aria-expanded="sortMenuOpen"
+                  :title="sortButtonTitle"
+                >
+                  <v-icon size="19">{{ activeSort.icon }}</v-icon>
+                  <span class="bar-btn-value">{{ activeSort.label }}</span>
+                  <v-icon size="18" class="bar-btn-chevron"
+                    >mdi-menu-down</v-icon
+                  >
+                </button>
+              </div>
+            </template>
+            <ShelfSortPanel section="sort" />
+          </v-menu>
 
-        <v-menu
-          v-model="showMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
-        >
-          <!-- The boxed bar button, its badge and the panel shell are the
+          <v-menu
+            v-model="showMenuOpen"
+            :close-on-content-click="false"
+            location="bottom end"
+            origin="top end"
+            :offset="8"
+            transition="scale-transition"
+          >
+            <!-- The boxed bar button, its badge and the panel shell are the
              toolbar's shipped filter pattern; v-menu is also what returns
              focus to this button on Escape and on an outside click, so none
              of that is hand-rolled.
@@ -319,28 +331,29 @@
              The badge counts ACTIVE FILTERS, never results: it is the answer to
              "why is this list short", and the result counts are already on the
              group headers. -->
-          <template #activator="{ props: menuProps }">
-            <button
-              v-bind="menuProps"
-              class="bar-btn bar-btn--boxed"
-              :class="{
-                'bar-btn--active': store.activeCount > 0 && !showMenuOpen,
-                'bar-btn--open': showMenuOpen,
-              }"
-              type="button"
-              :title="showButtonTitle"
-            >
-              <span class="bar-icon-badge-wrap">
-                <v-icon size="19">mdi-filter-outline</v-icon>
-                <span v-if="store.activeCount > 0" class="bar-filter-badge">{{
-                  store.activeCount
-                }}</span>
-              </span>
-              <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-            </button>
-          </template>
-          <ShelfShowPanel />
-        </v-menu>
+            <template #activator="{ props: menuProps }">
+              <button
+                v-bind="menuProps"
+                class="bar-btn bar-btn--boxed"
+                :class="{
+                  'bar-btn--active': store.activeCount > 0 && !showMenuOpen,
+                  'bar-btn--open': showMenuOpen,
+                }"
+                type="button"
+                :title="showButtonTitle"
+              >
+                <span class="bar-icon-badge-wrap">
+                  <v-icon size="19">mdi-filter-outline</v-icon>
+                  <span v-if="store.activeCount > 0" class="bar-filter-badge">{{
+                    store.activeCount
+                  }}</span>
+                </span>
+                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
+              </button>
+            </template>
+            <ShelfShowPanel />
+          </v-menu>
+        </template>
 
         <!-- The tail, minus undo: [separator] [TbGlobalActions]
              (docs/design/toolbar-responsive-decisions.md). The shelf records
@@ -3281,7 +3294,6 @@ watch(
 .shelf-viewswitch {
   display: inline-flex;
   gap: 0;
-  padding: var(--space-1);
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-pill);
@@ -3293,6 +3305,9 @@ watch(
 }
 
 /* Round outwards, straight between. */
+/* No padding on the track, so a filled segment reaches the border rather than
+   floating inside a ring of track colour — which is what read as a wide inset
+   around the pair. The caps nest exactly because both are `--radius-pill`. */
 .shelf-viewseg:first-child {
   border-radius: var(--radius-pill) 0 0 var(--radius-pill);
 }

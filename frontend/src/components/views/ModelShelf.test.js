@@ -3635,6 +3635,56 @@ describe("the two views of the shelf", () => {
     wrapper.unmount();
   });
 
+  it("hides the row-list controls on the runs tab", async () => {
+    // Group, Sort, Show and the stack sweep all act on the shelf's rows. On the
+    // runs tab that list is not on screen, so they are gone rather than
+    // disabled — a disabled control owes an explanation, and these are not
+    // about a selection the reader just made.
+    const wrapper = await mountShelf([adapter()]);
+    const labels = () =>
+      wrapper
+        .findAll(".shelf-toolbar button")
+        .map((b) =>
+          [b.attributes("aria-label"), b.attributes("title"), b.text()]
+            .filter(Boolean)
+            .join(" "),
+        );
+    expect(labels().some((l) => l.includes("Stack training runs"))).toBe(true);
+    expect(labels().some((l) => l.includes("Group"))).toBe(true);
+
+    nav.route.name = "models-runs";
+    await wrapper.vm.$nextTick();
+
+    expect(labels().some((l) => l.includes("Stack training runs"))).toBe(false);
+    expect(labels().some((l) => l.includes("Group"))).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("keeps Add and Model folders on both tabs", async () => {
+    // These open something, write nothing on the press, and have no selection
+    // to hang on, so they are view-independent — and keeping them fixed is what
+    // stops the left group reflowing on every switch.
+    const wrapper = await mountShelf([adapter()]);
+    const has = (needle) =>
+      wrapper
+        .findAll(".shelf-toolbar button")
+        .some((b) =>
+          [b.attributes("aria-label"), b.attributes("title"), b.text()]
+            .filter(Boolean)
+            .join(" ")
+            .includes(needle),
+        );
+    expect(has("Add models to the shelf")).toBe(true);
+    expect(has("Model folders")).toBe(true);
+
+    nav.route.name = "models-runs";
+    await wrapper.vm.$nextTick();
+
+    expect(has("Add models to the shelf")).toBe(true);
+    expect(has("Model folders")).toBe(true);
+    wrapper.unmount();
+  });
+
   it("moves between the tabs on Left and Right", async () => {
     const wrapper = await mountShelf([adapter()]);
     await wrapper.find("#shelf-tab-shelf").trigger("keydown", {

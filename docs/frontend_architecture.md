@@ -1573,6 +1573,15 @@ only signal. Deliberately NOT `.bar-btn--active`, whose `primary` label measures
 **2.72:1** on dark toolbar chrome; that is a pre-existing defect on every
 consumer of that class and wants its own issue.
 
+**The toolbar's left group is the shell; the row-list controls swap.** `Add`,
+`Model folders`, the separator and `TbGlobalActions` are on both tabs — they
+open something, write nothing on the press and have no selection to hang on, so
+they are view-independent, and keeping them fixed is also what stops the left
+group reflowing on every switch. Group, Sort, Show **and the stack sweep** are
+gated to the shelf tab: all four act on the `model_file` rows, which are not on
+screen on the runs tab. Hidden rather than disabled — a disabled control owes an
+explanation, and these are not about a selection the reader just made.
+
 **Switching keeps the shelf's selection and takes away its keys.** `selectedIds`
 lives in `useModelShelfStore`, so it survives the panel swap and the rows come
 back exactly as they were left — losing forty deliberately-clicked rows because
