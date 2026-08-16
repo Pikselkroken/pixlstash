@@ -95,12 +95,12 @@ from pixlstash.services.model_mover import (
     require_space,
     samples_relpath,
 )
-from pixlstash.services.run_importer import PROVENANCE_TRAINED
 from pixlstash.services.model_shelf_service import (
     MAX_MODELS_PER_EDIT,
     purge_deleted_models,
 )
 from pixlstash.utils.adapter_header import FILE_ENGINE
+from pixlstash.utils.aitoolkit_run import is_sample_filename
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.system_utils import TRASH_NAME
 
@@ -298,15 +298,12 @@ def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[dict]], list[di
     """
     marks = ", ".join("?" for _ in ids)
     with hub.transaction() as conn:
-        rows = conn.execute(
-            f"SELECT id, file_kind, provenance FROM model WHERE id IN ({marks})",
-            tuple(ids),
-        ).fetchall()
-        kinds = {int(row[0]): row[1] for row in rows}
-        # `trained` is the one provenance the scanner never writes, so it is the
-        # evidence that this row's `<stem>_samples/` was written by an import
-        # and is ours to remove. See `_remove_samples`.
-        provenances = {int(row[0]): row[2] for row in rows}
+        kinds = {
+            int(row[0]): row[1]
+            for row in conn.execute(
+                f"SELECT id, file_kind FROM model WHERE id IN ({marks})", tuple(ids)
+            ).fetchall()
+        }
         copies: dict[int, list[dict]] = {}
         for row in conn.execute(
             "SELECT mf.model_id, mf.model_folder_id, mf.relpath, mf.state, "
@@ -345,7 +342,6 @@ def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[dict]], list[di
                             if row["state"] == STATE_PRESENT
                             else None
                         ),
-                        "provenance": provenances.get(model_id),
                     }
                     for row in rows
                 ]
@@ -381,8 +377,44 @@ def _remove(path: str, *, permanent: bool) -> None:
         )
 
 
-def _remove_samples(model_path: str, *, permanent: bool, provenance: str) -> None:
-    """Take the file's training previews with it — **only if PixlStash wrote them**.
+def _holds_only_samples(directory: str) -> bool:
+    """Whether every entry is a preview the trainer wrote, and nothing else.
+
+    **The question the removal turns on, asked of the directory rather than of
+    the database.** ``<stem>_samples`` is derived by string manipulation and
+    recorded nowhere, so its path alone is a guess about who created it. What
+    settles the guess is the contents: ai-toolkit names every preview
+    ``<timestamp>__<step>_<index>.<ext>``, so a directory holding only those is
+    a directory of previews whoever put it there, and a single file that is not
+    one — an owner's favourite render, a note, a subdirectory — means it is
+    theirs and the model does not take it.
+
+    Symlinks count as "not a sample" (``follow_symlinks=False``): a link is a
+    reference to something outside this directory, and what it points at is not
+    this folder's to delete.
+
+    An empty directory passes. There is nothing in it to lose, and leaving
+    empties behind is how the re-import refusal gets triggered for no reason.
+    """
+    try:
+        entries = list(os.scandir(directory))
+    except OSError as exc:
+        logger.warning(
+            "Could not read %s to decide whether it holds only previews: %s. "
+            "Leaving it in place, which is the answer that cannot destroy "
+            "anything.",
+            directory,
+            exc,
+        )
+        return False
+    return all(
+        entry.is_file(follow_symlinks=False) and is_sample_filename(entry.name)
+        for entry in entries
+    )
+
+
+def _remove_samples(model_path: str, *, permanent: bool) -> None:
+    """Take the file's training previews with it — **if that is all they are**.
 
     An imported checkpoint's previews sit beside it in ``<stem>_samples/``
     (``services/run_importer.py``), and the lifecycle the import opens and a move
@@ -391,19 +423,16 @@ def _remove_samples(model_path: str, *, permanent: bool, provenance: str) -> Non
     *entire* re-import of that run, with the remedy only available outside the
     app.
 
-    **``provenance`` is what makes that safe, and without it this would be the
-    worst thing on the shelf.** The directory name is derived by string
-    manipulation, not recorded anywhere, so "a directory called ``<stem>_samples``
-    next to the file" is a guess about who created it — and it is a guess the
-    importer refuses to make in the opposite direction, refusing a whole batch
-    rather than merge into one *"they may have put there themselves"*
-    (``run_importer._samples_target``). An owner who scanned ``alice.safetensors``
-    off their own disk and keeps favourite generations in ``alice_samples/``
-    beside it is doing the natural thing, and this route would rmtree it with no
-    trash and no undo. ``provenance == 'trained'`` is the one value the scanner
-    never writes (``run_importer.PROVENANCE_TRAINED``): it means *this* row was
-    created by an import, so the directory beside it is ours to remove. Anything
-    else and the previews stay, which is the same answer the importer gives.
+    **What licenses the removal is the directory's contents**, checked by
+    :func:`_holds_only_samples`. The model itself is a thing the caller named —
+    they selected that row and a ``model_file`` records exactly which file it is
+    — but this directory is only ever *inferred* from the model's name, so
+    removing it on the strength of the name alone would destroy an owner's own
+    folder of renders on a Shift+Delete they meant for a ``.safetensors``. A
+    directory of nothing but ``<timestamp>__<step>_<index>`` images is the
+    model's previews whoever wrote them; one holding anything else is theirs and
+    stays, which is the same answer the importer gives when it refuses to merge
+    into a directory that is already there.
 
     **Non-fatal, unlike the file itself.** The weights are what the caller asked
     to delete and their row is dropped on the strength of that; a previews
@@ -411,8 +440,6 @@ def _remove_samples(model_path: str, *, permanent: bool, provenance: str) -> Non
     turn a completed deletion into a reported failure. It is removed *after* the
     file for the same reason — the file is the thing being deleted.
     """
-    if provenance != PROVENANCE_TRAINED:
-        return
     directory = samples_relpath(model_path)
     if not os.path.isdir(directory):
         return
@@ -428,6 +455,14 @@ def _remove_samples(model_path: str, *, permanent: bool, provenance: str) -> Non
             "and what it points at is not this folder's to delete.",
             os.path.basename(model_path),
             directory,
+        )
+        return
+    if not _holds_only_samples(directory):
+        logger.info(
+            "Left %s in place: it holds something other than this run's "
+            "previews, so it is not %s's to remove.",
+            directory,
+            os.path.basename(model_path),
         )
         return
     try:
@@ -724,23 +759,14 @@ def create_router(server) -> APIRouter:
             emptied: dict[int, list[tuple[int, str]]] = {}
             files_removed = 0
             for model_id, copies in deletable.items():
-                paths = [
-                    (copy["path"], copy["provenance"])
-                    for copy in copies
-                    if copy["path"]
-                ]
+                paths = [copy["path"] for copy in copies if copy["path"]]
                 done = 0
                 try:
-                    for path, provenance in paths:
+                    for path in paths:
                         _remove(path, permanent=payload.permanent)
                         done += 1
-                        # After the file, never allowed to fail it, and only for
-                        # a row an import created.
-                        _remove_samples(
-                            path,
-                            permanent=payload.permanent,
-                            provenance=provenance,
-                        )
+                        # After the file, and never allowed to fail it.
+                        _remove_samples(path, permanent=payload.permanent)
                 except (TrashPermissionError, OSError) as exc:
                     # `done` files of this model are already gone. Its rows stay
                     # so the shelf keeps naming the copies that did not go, and
@@ -761,7 +787,7 @@ def create_router(server) -> APIRouter:
                         "Could not delete %s (%s). Model %s keeps its rows; %d "
                         "of its %d copies were already removed, and a rescan of "
                         "that folder will mark those missing.",
-                        paths[done][0],
+                        paths[done],
                         exc,
                         model_id,
                         done,

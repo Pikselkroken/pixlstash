@@ -2227,7 +2227,14 @@ import takes the whole run rather than only the weights
   nothing when the destination is nearly full.
 - **Read back over `GET /models/{model_id}/samples`** and its byte sibling
   (§16.3, `local_owner_only`). Addressed by `model.id` rather than by sha256,
-  because a checkpoint nobody has hashed has no sha256 to be addressed by.
+  because a checkpoint nobody has hashed has no sha256 to be addressed by. Both
+  key on `is_sample_filename` rather than on "an image in a directory whose name
+  matched", so neither can be used to read the owner's own pictures back out of
+  a directory that merely sits at the derived name — the same test the delete
+  verb uses, and the reason all three verbs agree on what a sample is.
+- **Deleted with the model when the directory holds only previews** (see the
+  `Delete` section). The name is inferred, not recorded, so the contents are
+  what decide whether it is the model's.
 
 Deliberately not here: the shelf's Sample view, the sample/icon toggle and the
 promote-a-sample verb (the "Visual identity" ruling's card, which this makes
@@ -2266,17 +2273,36 @@ longer wants was a file manager and then a rescan.
   here by `kind` rather than by `movable` because the managed store is
   `root_only` — the *folder* moves as a unit — while the files in it are
   individually the owner's.
-- **A copy's training previews go with it.** An imported checkpoint carries a
-  `<stem>_samples/` directory beside it, and the delete closes the lifecycle the
-  import opens and a move carries. Skipping it leaves a directory no route lists
-  and no rescan registers — and, sharper, one that then refuses the owner's
-  *whole* re-import of that run, because the importer refuses a batch whose
-  samples directory already exists and the only remedy would be a file manager.
+- **A directory of nothing but previews goes with the model; anything else
+  stays.** An imported checkpoint carries a `<stem>_samples/` directory beside
+  it, and the delete closes the lifecycle the import opens and a move carries:
+  skipping it leaves a directory no route lists and no rescan registers, and one
+  that then refuses the owner's *whole* re-import of that run, with the only
+  remedy outside the app. But **the model is a thing the caller named and this
+  directory is only inferred from its filename**, so removing it on the name
+  alone would destroy an owner's own folder of renders on a Shift+Delete they
+  meant for a `.safetensors`. What licenses it is the contents: ai-toolkit names
+  every preview `<timestamp>__<step>_<index>`, so a directory holding only those
+  is the model's whoever wrote them, and one file that is not — a favourite
+  render, a note, a subdirectory, a symlink — means it is the owner's and stays.
+  That is the same test `GET /models/{id}/samples` uses to decide what to list,
+  so all three verbs agree on what a sample is.
+
+  Deliberately **not** keyed on `model.provenance`. That is a fact about
+  *content* — one value shared by every copy of a model — while the risk is per
+  *copy*: a trained model with a second copy a rescan registered elsewhere would
+  have taken that folder with it, and an import onto an existing sha256 leaves
+  the row `external` (`_register`'s `ON CONFLICT` deliberately does not overwrite
+  provenance) while still writing the previews, so the gate would have been wrong
+  in both directions. Both were found by adversarial review of a draft that used
+  it.
+
   Unlike the file it is **non-fatal**: the weights are what was asked for, so
   previews that will not go are a warning and some occupied disk rather than a
   failed deletion, and they are removed *after* the file for the same reason.
-  Both gestures remove it, by the call each of them uses — `send2trash` for the
-  trash, `shutil.rmtree` for a permanent delete.
+  Both gestures remove it, by the call each uses — `send2trash` for the trash,
+  `shutil.rmtree` for a permanent delete — and a symlinked directory is refused
+  explicitly rather than left to whichever of those two happens to decline it.
 - **A model is deleted whole or not at all.** Every copy goes, so a model with
   one copy in a user folder and another in the cache is refused rather than
   half-deleted: unlinking the reachable half would leave the row the owner

@@ -643,8 +643,11 @@ class ModelMover:
             moves.append(move)
 
         # The samples directory travels with the file, so its bytes are part of
-        # what has to fit. Same-device moves are renames and copy nothing, here
-        # as for the file itself.
+        # what has to fit. Excluded for a same-device move for the same reason
+        # the file is: it is a rename. **Not** exact for a same-device *copy-in*
+        # (``delete_source=False``), which does copy both and is counted as
+        # zero — a pre-existing gap this inherits rather than closes, and one no
+        # route reaches today because nothing passes ``delete_source=False``.
         bytes_to_copy = sum(
             move.size + samples_size(move.source_path)
             for move in moves

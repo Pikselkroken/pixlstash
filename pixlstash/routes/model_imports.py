@@ -47,7 +47,11 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_folder_scanner import STATE_PRESENT
 from pixlstash.services.model_mover import SHELF_IO_LOCK, MoveRefused, samples_relpath
 from pixlstash.services.run_importer import RunImporter
-from pixlstash.utils.aitoolkit_run import SAMPLES_DIRNAME, read_output_root
+from pixlstash.utils.aitoolkit_run import (
+    SAMPLES_DIRNAME,
+    is_sample_filename,
+    read_output_root,
+)
 from pixlstash.utils.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
@@ -523,12 +527,14 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=409, detail="Could not read this model's samples."
             ) from exc
+        # `is_sample_filename`, not merely an image extension: it is the same
+        # test the delete verb uses to decide the directory is the model's, so
+        # all three verbs agree on what a sample is. Without it this route
+        # serves any image the owner happened to leave in a directory whose
+        # name matched, and the response would be describing something other
+        # than the run's previews.
         return ModelSamplesResponse(
-            samples=sorted(
-                name
-                for name in names
-                if os.path.splitext(name)[1].lower() in SAMPLE_MEDIA_TYPES
-            )
+            samples=sorted(name for name in names if is_sample_filename(name))
         )
 
     @router.get(
@@ -566,12 +572,14 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=400, detail="No such sample.") from exc
 
         media_type = SAMPLE_MEDIA_TYPES.get(os.path.splitext(sample_path)[1].lower())
-        if media_type is None:
+        if media_type is None or not is_sample_filename(os.path.basename(sample_path)):
+            # Two tests, and the second is why this route cannot be used to read
+            # the owner's own pictures out of a directory whose name happened to
+            # match: it serves what the listing lists and nothing else.
             logger.warning(
-                "Refusing to serve %s: %r is not one of the image formats a "
-                "model's samples directory holds.",
+                "Refusing to serve %s: it is not one of the previews a training "
+                "run writes.",
                 sample_path,
-                os.path.splitext(sample_path)[1],
             )
             raise HTTPException(status_code=400, detail="No such sample.")
         if not os.path.isfile(sample_path):
