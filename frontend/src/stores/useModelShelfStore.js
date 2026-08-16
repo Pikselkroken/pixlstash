@@ -179,21 +179,28 @@ export function editReceipt(count, changes) {
  * is the normal outcome of a selection made a minute ago, and a receipt that
  * reported only the 3 would read as a silent partial failure.
  *
- * The two refusal reasons stay apart. "Still has a copy" is the gate doing its
- * job and the file is fine; "already gone" means the row had been forgotten
- * before this call reached it, which is not the same news and must not be
- * reported as though the file were still on the disk.
+ * The refusal reasons stay apart. "Still has a copy" is the gate doing its job
+ * and the file is fine; "already gone" means the row had been forgotten before
+ * this call reached it; "PixlStash's own" is a row nothing the owner does will
+ * clear. Reporting any of the other two as "still has a copy" sends the reader
+ * looking on the disk for a file that is not there.
  *
  * @param {number} gone - rows the call destroyed.
  * @param {number} kept - rows refused because a copy is still present or
  *   unreachable.
  * @param {number} [vanished=0] - rows that no longer existed to forget.
+ * @param {number} [engines=0] - rows refused as PixlStash's own.
  */
-export function forgetReceipt(gone, kept, vanished = 0) {
+export function forgetReceipt(gone, kept, vanished = 0, engines = 0) {
   const notes = [];
   if (kept) {
     notes.push(
       `${modelCount(kept)} still ${kept === 1 ? "has a copy" : "have copies"} and ${kept === 1 ? "was" : "were"} kept.`,
+    );
+  }
+  if (engines) {
+    notes.push(
+      `${modelCount(engines)} ${engines === 1 ? "is one" : "are ones"} PixlStash downloaded for itself and would fetch again.`,
     );
   }
   if (vanished) {
@@ -1362,18 +1369,20 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       await fetchRows();
       const refused = body?.refused ?? [];
       const gone = body?.forgotten?.length ?? 0;
-      // The two refusal reasons are different news and must not be conflated:
+      // The refusal reasons are different news and must not be conflated:
       // `still_has_a_copy` means the file turned up, `no_such_model` means the
-      // row was already gone (another tab forgot it, or this list is stale).
+      // row was already gone (another tab forgot it, or this list is stale),
+      // `is_a_builtin_engine` means it is ours and the owner has nothing to do.
       // Anything the server may add later counts as "kept", which is the
       // conservative reading — not forgotten, and possibly still there.
-      const vanished = refused.filter(
-        (r) => r.reason === "no_such_model",
-      ).length;
-      const kept = refused.length - vanished;
+      const count = (reason) =>
+        refused.filter((r) => r.reason === reason).length;
+      const vanished = count("no_such_model");
+      const engines = count("is_a_builtin_engine");
+      const kept = refused.length - vanished - engines;
       notices.push({
         level: gone ? "success" : "info",
-        text: forgetReceipt(gone, kept, vanished),
+        text: forgetReceipt(gone, kept, vanished, engines),
       });
       return true;
     } catch (err) {

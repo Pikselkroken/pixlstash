@@ -54,7 +54,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import BUILTIN_OWNER
-from pixlstash.services.managed_model_store import MANAGED_KIND, relocatable_identity
+from pixlstash.services.managed_model_store import (
+    MANAGED_KIND,
+    deletes_unclaimed_files,
+    relocatable_identity,
+)
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.model_folder_scan_task import ModelFolderScanTask
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
@@ -179,6 +183,19 @@ class ModelFolderResponse(BaseModel):
             "HuggingFace cache's neighbours say, and the two roots PixlStash "
             "records a location for are told apart from each other by path, not "
             "by any column. Offer Move on exactly the rows that carry this."
+        ),
+    )
+    deletable: bool = Field(
+        default=False,
+        description=(
+            "Whether `DELETE /model-files` will unlink a file PixlStash does "
+            "not claim from this folder: a folder you registered, the managed "
+            "store, and the folder PixlStash downloads its engines into, whose "
+            "leftovers are yours (#927). False for the HuggingFace cache, a "
+            "symlink store shared with every other tool on the machine, and for "
+            "the InsightFace packs. Told apart by path for the same reason "
+            "`relocatable` is. An **engine** is refused wherever it lives, so "
+            "this is the folder half of the answer and `file_kind` is the other."
         ),
     )
     host_path: Optional[str] = None
@@ -430,6 +447,7 @@ def create_router(server) -> APIRouter:
             owner=row["owner"],
             movable=row["movable"],
             relocatable=relocatable_identity(row) is not None,
+            deletable=deletes_unclaimed_files(row["kind"], row["path"]),
             host_path=row["host_path"],
             delete_after_import=(
                 None if delete_after_import is None else bool(delete_after_import)

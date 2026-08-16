@@ -55,6 +55,7 @@ from pixlstash.routes import model_shelf as model_shelf_routes
 from pixlstash.routes.model_imports import sample_path_within
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.server import Server
+from pixlstash.services import builtin_models
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.services.model_mover import SHELF_IO_LOCK
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
@@ -3450,9 +3451,12 @@ def test_every_editing_verb_refuses_an_engine(shelf_env):
 def test_forget_reports_an_engine_rather_than_deleting_it(shelf_env):
     """Reported like every other refusal rather than raised, and refused inside
     the same transaction as the state gate — forgetting one would delete a row
-    that the next start-up declares straight back."""
+    that the next start-up declares straight back.
+
+    `not_downloaded` is the state that says so: declared, and nothing has needed
+    it yet."""
     engine = _declare_engine(shelf_env)
-    _set_states(shelf_env, engine, "missing")
+    _set_states(shelf_env, engine, "not_downloaded")
 
     r = shelf_env.owner.post(f"{API}/models/forget", json={"ids": [engine]})
     assert r.status_code == 200, r.text
@@ -3461,6 +3465,25 @@ def test_forget_reports_an_engine_rather_than_deleting_it(shelf_env):
         "refused": [{"id": engine, "reason": "is_a_builtin_engine"}],
     }
     assert _model_row(shelf_env, engine)["display_name"] == "PixlStash anomaly tagger"
+
+
+def test_forget_clears_an_engine_row_nothing_declares_any_more(shelf_env):
+    """The other half of that gate, and the reason it cannot be `file_kind`
+    alone. `declare_folder` writes `missing` onto a row exactly when its
+    declaration stopped naming it — a repo dropped by `huggingface-cli
+    delete-cache`, a deleted InsightFace pack — and nothing fetches those back.
+    Refusing them left a row the shelf draws as a fault that no verb could
+    clear."""
+    engine = _declare_engine(shelf_env, display_name="Tongyi-MAI/Z-Image-Turbo")
+    _set_states(shelf_env, engine, "missing")
+
+    r = shelf_env.owner.post(f"{API}/models/forget", json={"ids": [engine]})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"forgotten": [engine], "refused": []}
+    assert (
+        shelf_env.server.hub.fetchone("SELECT id FROM model WHERE id = ?", (engine,))
+        is None
+    )
 
 
 def test_the_folder_pixlstash_owns_cannot_be_forgotten_or_rescanned(shelf_env):
@@ -4555,6 +4578,74 @@ def test_delete_refuses_a_copy_in_a_folder_that_is_not_the_owners(
     assert r.json()["refused"] == [{"id": alice, "reason": "not_a_user_folder"}]
     assert (real_files / "alice.safetensors").exists(), "the owner's copy went anyway"
     assert (cache / "shared.safetensors").exists(), "a file in the cache was unlinked"
+    assert list(fake_trash.iterdir()) == []
+
+
+def test_delete_takes_a_leftover_out_of_the_folder_we_download_into(
+    shelf_env, fake_trash, tmp_path, monkeypatch
+):
+    """The other side of that line, and the reason #927 declared these rows.
+
+    PixlStash's download folder is `foreign` exactly as the HuggingFace cache
+    is, so the kind cannot separate them and the path does. What protects the
+    ENGINES in it is being engines; a file we merely found beside them is the
+    owner's, and Forget will not touch it while it is still on the disk."""
+    root = tmp_path / "data"
+    downloads = root / "downloaded_models"
+    downloads.mkdir(parents=True)
+    write_adapter(downloads / "best.pt")
+    monkeypatch.setattr(builtin_models, "_pixlstash_data_dir", lambda: str(root))
+
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (id, path, kind, owner, movable, created_at) "
+            "VALUES (8, ?, 'foreign', 'pixlstash', 'root_only', "
+            "'2026-08-16T00:00:00Z')",
+            (str(downloads),),
+        )
+        cursor = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance, file_size, "
+            "created_at) VALUES ('unknown', 'best.pt', 'builtin', 99, "
+            "'2026-08-16T00:00:00Z')"
+        )
+        leftover = int(cursor.lastrowid)
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+            "seen_at) VALUES (?, 8, 'best.pt', 'present', '2026-08-16T00:00:00Z')",
+            (leftover,),
+        )
+
+    r = _delete(shelf_env, [leftover])
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == [leftover]
+    assert not (downloads / "best.pt").exists()
+    assert (fake_trash / "best.pt").exists()
+    assert (
+        shelf_env.server.hub.fetchone("SELECT id FROM model WHERE id = ?", (leftover,))
+        is None
+    )
+
+
+def test_delete_still_refuses_an_engine_in_that_same_folder(
+    shelf_env, fake_trash, tmp_path, monkeypatch
+):
+    """The leftover above and the tagger beside it sit in one folder, so the
+    folder cannot be what decides this: an engine is refused for being ours, and
+    deleting one would remove a file PixlStash re-downloads."""
+    root = tmp_path / "data"
+    downloads = root / "downloaded_models"
+    downloads.mkdir(parents=True)
+    write_adapter(downloads / "tagger.safetensors")
+    monkeypatch.setattr(builtin_models, "_pixlstash_data_dir", lambda: str(root))
+
+    engine = _declare_engine(shelf_env)
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("UPDATE model_folder SET path = ? WHERE id = 9", (str(downloads),))
+
+    r = _delete(shelf_env, [engine])
+    assert r.status_code == 200, r.text
+    assert r.json()["refused"] == [{"id": engine, "reason": "is_a_builtin_engine"}]
+    assert (downloads / "tagger.safetensors").exists()
     assert list(fake_trash.iterdir()) == []
 
 

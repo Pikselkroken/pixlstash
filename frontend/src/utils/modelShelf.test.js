@@ -1436,10 +1436,13 @@ describe("assignmentRing", () => {
 });
 
 describe("deletableModels", () => {
+  // `deletable` is the server's answer, not a kind the client re-judges: folders
+  // 3 and 4 are both `foreign` and only their paths tell them apart.
   const folders = new Map([
-    [1, { id: 1, kind: "user" }],
-    [2, { id: 2, kind: "managed", owner: "pixlstash" }],
-    [3, { id: 3, kind: "foreign", owner: "huggingface" }],
+    [1, { id: 1, kind: "user", deletable: true }],
+    [2, { id: 2, kind: "managed", owner: "pixlstash", deletable: true }],
+    [3, { id: 3, kind: "foreign", owner: "huggingface", deletable: false }],
+    [4, { id: 4, kind: "foreign", owner: "pixlstash", deletable: true }],
   ]);
 
   const at = (folderId, state = "present") => ({
@@ -1485,6 +1488,16 @@ describe("deletableModels", () => {
     // — after whatever needed it had broken.
     const engine = { ...at(1), file_kind: "engine" };
     expect(deletableModels([engine], folders)).toEqual([]);
+  });
+
+  it("takes a leftover in the folder PixlStash downloads its engines into", () => {
+    // The point of declaring them (#927): a `best.pt` beside the engines is the
+    // owner's, and Forget cannot reach a file that is still there. The engines
+    // in that same folder are still refused, by `file_kind` above.
+    expect(deletableModels([at(4)], folders)).toHaveLength(1);
+    expect(
+      deletableModels([{ ...at(4), file_kind: "engine" }], folders),
+    ).toEqual([]);
   });
 
   it("judges a stack across its members, never on its cover", () => {

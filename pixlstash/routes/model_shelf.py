@@ -463,7 +463,9 @@ class ForgetRefusal(BaseModel):
             "`no_such_model` (the id names no row), `still_has_a_copy` (a "
             "location is `present` or `unreachable`), or `is_a_builtin_engine` "
             "(PixlStash downloaded it for itself and re-declares it on every "
-            "start, so forgetting it would achieve nothing)."
+            "start, so forgetting it would achieve nothing). An engine whose "
+            "every copy is `missing` is forgettable: the declaration has "
+            "stopped naming it, so nothing brings it back."
         )
     )
 

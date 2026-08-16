@@ -365,11 +365,17 @@ describe("the selection bar", () => {
 });
 
 describe("the delete verb", () => {
-  /** Register folder 1, which every `row()` above puts its copy in. */
-  function registerFolder(kind = "user") {
+  /**
+   * Register folder 1, which every `row()` above puts its copy in.
+   *
+   * `deletable` is the server's, and not derivable from `kind`: PixlStash's own
+   * download folder is `foreign` and deletable, the HuggingFace cache is
+   * `foreign` and not.
+   */
+  function registerFolder(kind = "user", deletable = kind === "user") {
     const folders = useModelFoldersStore();
     folders.folders = [
-      { id: 1, path: "/m", kind, movable: "per_item", owner: null },
+      { id: 1, path: "/m", kind, movable: "per_item", owner: null, deletable },
     ];
     return folders;
   }

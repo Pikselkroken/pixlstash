@@ -2988,7 +2988,16 @@ describe("Delete", () => {
   // The file-manager gesture, spelled the way Explorer spells it: Del trashes,
   // Shift+Del deletes permanently. Handled on the WINDOW beside Escape, so
   // every assertion needs a real event path out of the shelf.
-  const FOLDER = { id: 1, path: "/m", kind: "user", movable: "per_item" };
+  // `deletable` as the server sends it: what the client may offer Delete on is
+  // the server's answer, because `kind` alone cannot tell PixlStash's own
+  // download folder from the HuggingFace cache.
+  const FOLDER = {
+    id: 1,
+    path: "/m",
+    kind: "user",
+    movable: "per_item",
+    deletable: true,
+  };
 
   const inFolder = (id) =>
     adapter({

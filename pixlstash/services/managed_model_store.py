@@ -70,9 +70,46 @@ MANAGED_MOVABLE = "root_only"
 MANAGED_DIRNAME = "models"
 
 
+# The folder kinds whose contents are the owner's to destroy. `user` is a folder
+# they registered; `managed` is the store PixlStash keeps for files it was given,
+# which is where `Add file` and an import land, so a shelf that could not delete
+# from it could not undo either of them.
+#
+# Not the whole rule on its own: every other kind is `foreign`, and one of those
+# folders is PixlStash's own download store. See `deletes_unclaimed_files`.
+DELETABLE_FOLDER_KINDS = ("user", MANAGED_KIND)
+
+
 def managed_store_path(config_dir: str) -> str:
     """Where the managed store goes for a given config directory."""
     return os.path.join(config_dir, MANAGED_DIRNAME)
+
+
+def deletes_unclaimed_files(folder_kind: str, folder_path: str) -> bool:
+    """Whether the shelf may unlink a file it does not CLAIM out of this folder.
+
+    Recognised by path for the same reason :func:`relocatable_identity` is:
+    ``declare_folder`` writes the same three columns for every root PixlStash
+    declares, so the columns cannot tell the download folder apart from the
+    InsightFace packs or the HuggingFace cache.
+
+    Three folders say yes. A ``user`` folder and the managed store are the
+    owner's outright. The third is the folder PixlStash downloads its engines
+    into: the ENGINES there are ours and refused by their own gate wherever they
+    live, but a file we merely *found* beside them is not, and it is declared
+    (#927) exactly so a 339 MB ``best.pt`` is visible rather than invisible.
+    Visible and unremovable is the wrong half of that — Forget wants every copy
+    gone before it will act, so there would be nothing left but a file manager.
+
+    The other two declared roots say no. The InsightFace packs are re-fetched,
+    and the HuggingFace cache is a symlink store shared with every other tool on
+    the machine.
+
+    Args:
+        folder_kind: ``model_folder.kind``.
+        folder_path: ``model_folder.path``, as registered.
+    """
+    return folder_kind in DELETABLE_FOLDER_KINDS or is_builtin_model_dir(folder_path)
 
 
 def relocatable_identity(folder) -> Optional[tuple[str, str, str]]:

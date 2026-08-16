@@ -68,7 +68,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from send2trash import TrashPermissionError, send2trash
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.managed_model_store import MANAGED_KIND
+from pixlstash.services.managed_model_store import MANAGED_KIND, deletes_unclaimed_files
 from pixlstash.services.model_folder_scanner import (
     MODEL_SUFFIX,
     STATE_PRESENT,
@@ -96,19 +96,14 @@ logger = get_logger(__name__)
 
 SOURCE_FOLDER_KIND = "source"
 
-# The folder kinds whose contents are the owner's to destroy. `user` is a folder
-# they registered; `managed` is the store PixlStash keeps for files it was given,
-# which is where `Add file` and an import land, so a shelf that could not delete
-# from it could not undo either of them.
-#
-# Every other kind is `foreign` — PixlStash's own engines, the InsightFace packs,
-# the HuggingFace cache — and those are registered so the owner can SEE what they
-# cost on disk, not so the shelf can unlink them. The cache in particular is a
-# symlink store shared with every other tool on the machine. This is the same
-# line `model_mover._plan_one` draws for a move, drawn by `kind` rather than by
-# `movable` because the managed store is `root_only` (the FOLDER moves as a unit)
-# while the files in it are individually the owner's.
-DELETABLE_FOLDER_KINDS = ("user", MANAGED_KIND)
+# Which folders the shelf may unlink from is `deletes_unclaimed_files`, in
+# `managed_model_store` — that is where "which declared root is which" is already
+# decided, and by path, because the columns cannot tell PixlStash's download
+# folder from the HuggingFace cache. `GET /model-folders` reports the same answer
+# as `deletable`, so the client never offers a delete this route would refuse.
+# It is the same line `model_mover._plan_one` draws for a move, drawn by `kind`
+# rather than by `movable` because the managed store is `root_only` (the FOLDER
+# moves as a unit) while the files in it are individually the owner's.
 
 # `STATE_UNREACHABLE` — a copy the scan could not look at, on a drive that is not
 # plugged in — is the one state that must never be treated as a deletion: the
@@ -179,8 +174,9 @@ class DeleteRefusal(BaseModel):
         description=(
             "`no_such_model` (the id names no row), `is_a_builtin_engine` "
             "(PixlStash downloaded it for itself), `not_a_user_folder` (a copy "
-            "sits somewhere PixlStash will not unlink from — its own engine "
-            "folders, the InsightFace packs, the shared HuggingFace cache), "
+            "sits somewhere PixlStash will not unlink from: the InsightFace "
+            "packs or the shared HuggingFace cache. Not its own download "
+            "folder, whose unclaimed leftovers are yours), "
             "`unreachable_copy` (a copy is on a drive that is not plugged in, "
             "which is not a deletion), `escapes_its_folder` (the row names a "
             "path outside the folder it is registered in, which is a broken "
@@ -312,7 +308,10 @@ def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[dict]], list[di
             # Declared again on every start, so deleting one removes a file
             # PixlStash re-downloads the moment something needs it.
             refused.append({"id": model_id, "reason": "is_a_builtin_engine"})
-        elif any(row["folder_kind"] not in DELETABLE_FOLDER_KINDS for row in rows):
+        elif any(
+            not deletes_unclaimed_files(row["folder_kind"], row["folder_path"])
+            for row in rows
+        ):
             refused.append({"id": model_id, "reason": "not_a_user_folder"})
         elif any(row["state"] == STATE_UNREACHABLE for row in rows):
             refused.append({"id": model_id, "reason": "unreachable_copy"})
