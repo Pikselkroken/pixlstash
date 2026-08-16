@@ -130,6 +130,23 @@ export function sortDirectionLabel(key, direction) {
   return direction === "asc" ? words[0] : words[1];
 }
 
+/**
+ * Which end a key starts at when the reader first sorts on it.
+ *
+ * Carrying the previous key's direction over is what a plain toggle would do,
+ * and it is wrong at the moment it matters most: arriving at Name from "Date
+ * added, newest first" would hand back Z to A, which nobody asked for and
+ * reads as a broken sort. A name starts at A, a size starts at the big files —
+ * the reason anyone sorts a shelf by size is to find what is eating the disk —
+ * and a date starts at the newest, which is the shelf's own default.
+ *
+ * @param {string} key - a `SORT_LABELS` key.
+ * @returns {"asc"|"desc"}
+ */
+export function defaultSortDirection(key) {
+  return key === "name" || key === "base_model" ? "asc" : "desc";
+}
+
 /** What each grouping axis is called, and the glyph that stands for it. */
 export const GROUP_BY_LABELS = {
   none: { label: "None", icon: "mdi-format-list-bulleted" },
