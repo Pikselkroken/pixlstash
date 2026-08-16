@@ -53,7 +53,7 @@ class _OomTask(BaseTask):
         return "done"
 
 
-def test_is_vram_oom_reads_the_message_when_the_type_is_not_torchs():
+def test_is_vram_oom_reads_the_message_when_the_type_is_not_from_torch():
     assert is_vram_oom(_FakeOom())
     assert not is_vram_oom(RuntimeError("model file is corrupt"))
     assert not is_vram_oom(FileNotFoundError("no such file"))
@@ -181,7 +181,10 @@ def test_the_runner_closes_the_notice_when_a_retry_succeeds(monkeypatch):
     # Two frames: the retry, then the recovery. Without the second one the
     # user's last word on work that succeeded is "Retrying".
     assert [data["recovered"] for _, data in events] == [False, True]
-    assert [data["attempt"] for _, data in events] == [1, 1]
+    # Attempt 1 OOMed, attempt 2 did the work — so the closing frame names 2.
+    # Repeating the last *failed* attempt here would have the card claim the
+    # work finished on the attempt that did not finish it.
+    assert [data["attempt"] for _, data in events] == [1, 2]
 
 
 def test_a_non_oom_death_after_an_oom_still_closes_the_notice(monkeypatch):
@@ -195,9 +198,12 @@ def test_a_non_oom_death_after_an_oom_still_closes_the_notice(monkeypatch):
     events = _run_through_the_worker(_ThenBrokenTask(fail_times=0), monkeypatch)
 
     # The card is open because of the first attempt, so something has to close
-    # it even though the exception that ended the task is not an OOM.
+    # it even though the exception that ended the task is not an OOM. It closes
+    # naming attempt 2 — the one that died — and short of the 3 the task was
+    # entitled to, which is what tells the SPA not to promise a later retry.
     assert [data["gave_up"] for _, data in events] == [False, True]
-    assert [data["attempt"] for _, data in events] == [1, 1]
+    assert [data["attempt"] for _, data in events] == [1, 2]
+    assert events[-1][1]["max_attempts"] == 3
 
 
 def test_the_wire_payload_carries_the_attempt_count():

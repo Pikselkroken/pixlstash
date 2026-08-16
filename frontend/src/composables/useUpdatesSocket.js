@@ -55,14 +55,20 @@ export const VRAM_OOM_NOTICE_KEY = "vram-oom";
 // separate warnings. This has to outlive `TaskRunner.VRAM_OOM_RETRY_PAUSE_S`.
 const VRAM_OOM_RETRY_NOTICE_MS = 15000;
 
+// Why the card names another program: the app's own models are sized against
+// the configured budget, so the usual reason there is suddenly no room is
+// something else on the card — a ComfyUI run, a game, another app's model. That
+// is also the one thing the person reading the toast can act on.
+const VRAM_CULPRIT = "another program is probably holding the card";
+
 /**
- * The card shown while a GPU task is fighting for VRAM, in its three states.
+ * The card shown while a GPU task is fighting for VRAM, in its four states.
  *
  * @param {object} payload - the `vram_oom` event.
- * @param {number} payload.attempt - attempts used so far (1-based).
+ * @param {number} payload.attempt - the attempt this frame is about (1-based).
  * @param {number} payload.max_attempts - attempts the task gets in total.
- * @param {boolean} payload.gave_up - true once the last attempt has failed.
- * @param {boolean} payload.recovered - true when a later attempt succeeded.
+ * @param {boolean} payload.gave_up - the retry sequence ended without the work.
+ * @param {boolean} payload.recovered - a later attempt succeeded.
  * @returns {{level: string, text: string, timeout: number|undefined}}
  */
 export function vramOomNotice({
@@ -76,20 +82,23 @@ export function vramOomNotice({
   if (recovered) {
     return {
       level: "success",
-      text: `GPU memory freed up — the work finished after ${used} of ${total} attempts.`,
+      text: `GPU memory freed up — the work finished on attempt ${used} of ${total}.`,
       timeout: undefined,
     };
   }
   if (gave_up) {
-    return {
-      level: "warning",
-      text: `Ran out of GPU memory after ${used} of ${total} attempts. Nothing was changed — this work will be tried again later.`,
-      timeout: undefined,
-    };
+    // Only an exhausted sequence can promise the two things below. A sequence
+    // that ended early — the task died of something else, or the app is
+    // shutting down — says what happened and promises nothing.
+    const text =
+      used >= total
+        ? `Ran out of GPU memory after ${total} attempts — ${VRAM_CULPRIT}. Nothing was changed; this work will be tried again later.`
+        : `Ran out of GPU memory, and the work stopped on attempt ${used} of ${total}.`;
+    return { level: "warning", text, timeout: undefined };
   }
   return {
     level: "warning",
-    text: `Ran out of GPU memory. Retrying — attempt ${used} of ${total} used.`,
+    text: `Ran out of GPU memory — ${VRAM_CULPRIT}. Retrying — attempt ${used} of ${total} used.`,
     timeout: VRAM_OOM_RETRY_NOTICE_MS,
   };
 }

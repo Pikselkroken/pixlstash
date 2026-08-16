@@ -49,8 +49,11 @@ class BaseTask(ABC):
         created_at: Task creation time.
         started_at: Task execution start time.
         completed_at: Task completion time.
-        vram_oom_attempts: How many attempts a GPU out-of-memory failure cost
-            this task. ``0`` when it never hit one.
+        attempts_used: How many attempts actually ran, 1-based. ``1`` for the
+            ordinary task that never hit a GPU out-of-memory error.
+        vram_oom_attempts: How many of those attempts ended in a GPU
+            out-of-memory error. ``0`` when it never hit one, which is what
+            decides whether the user has a notice open about this task.
     """
 
     #: Total attempts a task gets when it fails with a GPU out-of-memory error.
@@ -68,6 +71,7 @@ class BaseTask(ABC):
         self.created_at = datetime.utcnow()
         self.started_at: Optional[datetime] = None
         self.completed_at: Optional[datetime] = None
+        self.attempts_used = 0
         self.vram_oom_attempts = 0
         self._done_event = threading.Event()
 
@@ -98,6 +102,10 @@ class BaseTask(ABC):
         self.status = TaskStatus.RUNNING
         try:
             for attempt in range(1, self.VRAM_OOM_ATTEMPTS + 1):
+                # Recorded before the attempt runs, so whatever ends the task —
+                # success, a different exception, a shutdown — the count says
+                # which attempt that was rather than which one last OOMed.
+                self.attempts_used = attempt
                 try:
                     self.result = self._run_task()
                     self.status = TaskStatus.COMPLETED

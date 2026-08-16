@@ -324,6 +324,9 @@ describe("useUpdatesSocket: the GPU out-of-memory notice", () => {
     expect(noticeStore.notices).toHaveLength(1);
     expect(noticeStore.notices[0].level).toBe("warning");
     expect(noticeStore.notices[0].text).toContain("attempt 1 of 3");
+    // The one thing the reader can act on: it is very rarely this app's own
+    // budgeting that filled the card.
+    expect(noticeStore.notices[0].text).toContain("another program");
     // Must outlive the backend's pause between attempts, or the next frame
     // opens a second card instead of updating this one. The level default
     // (6 s) is too close to that pause to rely on.
@@ -347,7 +350,7 @@ describe("useUpdatesSocket: the GPU out-of-memory notice", () => {
     expect(noticeStore.notices[0].key).toBe(VRAM_OOM_NOTICE_KEY);
     // The last frame is the one the user is left reading: all three attempts
     // are gone and nothing was written.
-    expect(noticeStore.notices[0].text).toContain("after 3 of 3 attempts");
+    expect(noticeStore.notices[0].text).toContain("after 3 attempts");
     expect(noticeStore.notices[0].text).toContain("Nothing was changed");
     vi.useRealTimers();
   });
@@ -360,7 +363,7 @@ describe("useUpdatesSocket: the GPU out-of-memory notice", () => {
     await vi.advanceTimersByTimeAsync(5000);
     receive({
       type: "vram_oom",
-      attempt: 1,
+      attempt: 2,
       max_attempts: 3,
       gave_up: false,
       recovered: true,
@@ -371,7 +374,23 @@ describe("useUpdatesSocket: the GPU out-of-memory notice", () => {
     // Not left reading "retrying" about work that finished.
     expect(noticeStore.notices[0].level).toBe("success");
     expect(noticeStore.notices[0].text).toContain("freed up");
+    // The attempt that did the work, not the one that OOMed before it.
+    expect(noticeStore.notices[0].text).toContain("attempt 2 of 3");
     vi.useRealTimers();
+  });
+
+  it("promises nothing when the sequence ended before its last attempt", () => {
+    connect();
+
+    // The task OOMed once and then died of something else (or the app is
+    // shutting down): the retries were not exhausted, so the card must not
+    // claim nothing changed or that this will be tried again.
+    receive({ type: "vram_oom", attempt: 2, max_attempts: 3, gave_up: true });
+
+    const text = useNoticeStore().notices[0].text;
+    expect(text).toContain("stopped on attempt 2 of 3");
+    expect(text).not.toContain("Nothing was changed");
+    expect(text).not.toContain("tried again later");
   });
 
   it("says nothing to a read-only session", () => {

@@ -681,20 +681,24 @@ class TaskRunner:
                 self._active_tasks[thread_ident] = task
             try:
                 task.run(on_vram_oom=self._pause_and_report_vram_oom)
+                # ``vram_oom_attempts`` decides whether the user has a card open
+                # about this task; ``attempts_used`` is what that card counts —
+                # the attempt that actually finished the work, not the last one
+                # that OOMed.
                 if task.vram_oom_attempts:
                     # It got there in the end — say so, rather than leaving the
                     # user's last card reading "retrying".
                     self._report_vram_oom(
-                        task, task.vram_oom_attempts, final=False, recovered=True
+                        task, task.attempts_used, final=False, recovered=True
                     )
             except Exception as exc:
                 error = exc
-                # Keyed on the attempts actually spent, not on this exception:
-                # a task that OOMed twice and then died of something else still
-                # has a card open, and a task abandoned at shutdown used one
+                # Same split: a task that OOMed twice and then died of something
+                # else still has a card open, and it closes naming the attempt
+                # that died — as does one abandoned at shutdown, which used one
                 # attempt, not three.
                 if task.vram_oom_attempts:
-                    self._report_vram_oom(task, task.vram_oom_attempts, final=True)
+                    self._report_vram_oom(task, task.attempts_used, final=True)
                 tb = traceback.extract_tb(exc.__traceback__)
                 if tb:
                     last = tb[-1]
