@@ -1,101 +1,57 @@
-# [Unreleased]
+# [1.10.0]
 
-- The desktop app can now run the PixlStash CLI: `PixlStash.AppImage cli
-  libraries list` works whether or not the app is open, and targets the desktop
-  app's own library registry. Turn on Settings → Backend → Desktop → Shell
-  command to get a `pixlstash` command in `~/.local/bin` and attach libraries or
-  install plugins from any terminal. Settings → Libraries shows the exact
-  command for your install.
-- Add multiple image libraries with switching from Settings → Libraries. Each
-  library keeps its own pictures, tags, scores and snapshots while your account
-  and preferences stay with the PixlStash installation.
-- API tokens and share links now belong to the library where they were created.
-  They stop serving or changing data while another library is active; create a
-  token in each library used by scripts or integrations.
-- Switching libraries now waits for work on the old library to stop, refuses a
-  replaced/fingerprint-mismatched vault before migration, and clears
-  library-specific caches before publication. After the new library is live it
-  closes update and ComfyUI connections so every open tab reloads without stale
-  picture ids. Overlapping switch requests fail promptly instead of deadlocking.
-- Library listings now report each library's active share-link count so Settings
-  can warn before switching away from links that will temporarily stop working.
-- Upgrading an existing pip/source/headless/Docker installation requires one
-  explicit preparation command **after installing the new version but before
-  its first normal startup**; startup never infers migration authority from a
-  config file or an existing vault. Pip: `pixlstash-cli --hub <config-dir>/hub.db
-  libraries prepare-legacy-identity <library-folder>`. Source checkout:
-  `python -m pixlstash.cli --hub <config-dir>/hub.db libraries
-  prepare-legacy-identity <library-folder>`. Docker Compose (with the normal
-  home volume mounted): `docker compose run --rm --entrypoint pixlstash-cli
-  pixlstash --hub /home/pixlstash/.config/pixlstash/hub.db libraries
-  prepare-legacy-identity /home/pixlstash/.config/pixlstash/images`. The desktop
-  app runs this preparer itself. Startup then moves owner credentials from the
-  portable library into the installation hub; securely removes portable owner,
-  token, guest-session, and guest-score rows and SQLite remnants from the live
-  vault and its historical snapshots; and asks guests to reopen their links.
-  New snapshots and restores are sanitized too. See [Multiple
-  libraries](README.md#multiple-libraries) for custom paths and all commands.
+Pip, source, headless and Docker installations need one preparation command
+between installing and first startup — see
+[Multiple libraries](README.md#multiple-libraries). The desktop app runs it for
+you. Startup then moves owner credentials into the installation hub and clears
+owner, token and guest rows from the vault and its snapshots, so guests must
+reopen their links.
+
+- Multiple image libraries, switched from Settings → Libraries. Each keeps its
+  own pictures, tags, scores and snapshots; your account and preferences stay
+  with the installation.
+- API tokens and share links belong to the library that created them and stop
+  working while another library is active, so create a token in each library
+  your scripts use. Settings warns before you switch away from live share links.
+- A functional pixlstash CLI to perform backups, restore from backup, install
+  plugins and add picture libraries. Lets you perform regular backups with cron.
+- The desktop app can run that CLI itself: `PixlStash.AppImage cli libraries
+  list` works whether or not the app is open. Settings → Backend → Desktop →
+  Shell command adds a `pixlstash` command in `~/.local/bin` for any terminal,
+  and Settings → Libraries shows the exact command for your install.
 - Add `pixlstash-cli libraries backup` for an owner-readable local archive of a
-  library plus its hub. Existing files and symlink destinations are refused and
-  never overwritten.
-- Add `pixlstash-cli plugins install|list|remove`. Install a captioning plugin
-  or an image filter from the PixlStash-plugins repository, a zip, a folder or a
-  single `.py`; the installer works out which kind it is and where it belongs
-  instead of asking you to copy files into a path that differs by OS and by
-  kind. It refuses a source that is not a plugin, a name that collides with a
-  built-in, a zip that would unpack outside the folder it unpacks into, and a
-  `--ref` that would fetch from anywhere but the plugins repository; it never
-  installs a plugin's `requirements.txt` unless you pass `--with-deps`.
-  `plugins remove` deletes an installed plugin, wherever it came from, and can
-  only ever reach a file directly inside the two plugin directories.
-- Add `pixlstash-cli plugins test <plugin>`, for writing a captioning plugin
-  without paying a server restart per typo. It loads the file the way the server
-  does at start-up, registers every plugin class it defines, and checks that the
-  parameter schema is one the settings screen can actually render — an unknown
-  `type` or a `select` with no options renders as a text box today and reports
-  nothing. `--image` also runs the plugin over one picture with your defaults and
-  prints what came back, stopping instead of running when the plugin reports its
-  model is missing (a plugin that downloads inside `init()` still will — that is
-  the plugin's own code, and nothing here can prevent it). It is a development aid
-  and **not a security scanner**: unlike the other plugin verbs it imports the
-  plugin, so the plugin's code runs unsandboxed with your permissions, and a
-  pass says nothing about whether that plugin is safe to install. Only test one
-  you would have installed anyway.
+  library and its hub, and `libraries restore` to read one back into a new
+  folder and make it the library that opens — password and API tokens included.
+  Restore needs PixlStash stopped and never overwrites: your current config and
+  hub are moved into a dated `pre-restore-` folder, and it prints the launch
+  command for both the restored library and the one you had.
+- Add `pixlstash-cli plugins install|list|remove` for captioning plugins and
+  image filters, from the PixlStash-plugins repository, a zip, a folder or a
+  single `.py`. A plugin's `requirements.txt` is only installed with
+  `--with-deps`.
+- Add `pixlstash-cli plugins test <plugin>`, so writing a captioning plugin no
+  longer costs a server restart per typo. It loads the file the way the server
+  does, registers every plugin class it defines, and checks the parameter schema
+  is one the settings screen can render; `--image` also runs it over one picture.
+  It imports the plugin, so that code runs unsandboxed with your permissions —
+  a development aid, **not a security scanner**.
 - An image filter plugin now registers the first concrete `ImagePlugin` subclass
-  the file itself defines. A class the file only imports is no longer registered
-  in place of the one you wrote (which, since a user plugin wins a name
-  collision, could replace a built-in filter with it), and an abstract base
-  above your real class no longer wins. A file whose only plugin class is
-  abstract still reports the class and the method it is missing. A plugin whose
-  class is built elsewhere — by a factory or a decorator in another module —
-  will now be reported as absent rather than loaded; give the file a class of
-  its own.
-- A user image filter that replaces a built-in of the same name is now logged
-  against *your* file. The log used to name the built-in as the duplicate being
-  ignored, which pointed away from the cause; `pixlstash-cli plugins list`
-  already marked such a file `(replaces the built-in)`.
-- The documented Windows plugin directory was missing a path component. It is
-  `%LOCALAPPDATA%\pixlstash\pixlstash\image-plugins\user\`, which is why hand-copying
-  a plugin to the path the README gave appeared to do nothing.
-- Both command lines now document themselves in full. Every `pixlstash-cli`
-  verb explains itself under `<command> --help` rather than only listing its
-  arguments, the exit codes a script needs are in the top-level help, and
-  `pixlstash-server` names itself in its usage line instead of `app.py`.
-- Removed `pixlstash-server --retag-and-embed`. It was accepted and documented
-  but never read by anything, so it silently did nothing.
-- The model shelf can now delete models from disk, so getting rid of a 6 GB
-  checkpoint no longer means a trip to the file manager and a rescan. It is in
-  the selection pill, the row's right-click menu and on the `Delete` key, and it
-  works the way your file manager does: on its own it moves the files to your
-  Trash (Recycle Bin on Windows), and with Shift held it deletes them
-  permanently. Only your own model folders and PixlStash's own store are
-  touched — the engines it downloaded for itself, the InsightFace packs and the
-  HuggingFace cache it shares with your other tools are refused, and so is
-  anything with a copy on a drive that is not plugged in. Two things the trash
-  cannot do for you: Windows deletes a file outright when it is bigger than the
-  Recycle Bin allows, which a multi-GB checkpoint often is, and on Linux and
-  macOS the trash sits on the same drive as the file — so the space comes back
-  when you empty it, not when you delete.
+  the file itself defines, rather than one it merely imports, and a name
+  collision with a built-in is logged against your file instead of the built-in.
+- Fixed the documented Windows plugin directory, which was missing a path
+  component: it is `%LOCALAPPDATA%\pixlstash\pixlstash\image-plugins\user\`.
+- Both command lines now document themselves in full, including the exit codes a
+  script needs.
+- Removed `pixlstash-server --retag-and-embed`; nothing ever read it.
+- PixlStash can now serve an adapter's file to another machine, addressed by its
+  content hash, so a ComfyUI running on a different box can use a LoRA this one
+  catalogues instead of needing its own copy. Owner-only, and reachable from
+  your own network rather than the internet.
+- The model shelf can delete models from disk — from the selection pill, the
+  row's right-click menu or the `Delete` key. It moves files to your Trash, or
+  deletes them permanently with Shift held. Only your own model folders and
+  PixlStash's own store are touched; shared caches and drives that are not
+  plugged in are refused.
 
 # [1.9.0]
 
