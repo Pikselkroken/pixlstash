@@ -504,7 +504,7 @@ def test_the_batch_thumbnail_endpoint_serves_a_token_carrying_the_orientation(
     None)`` does not soften it: SQLAlchemy raises that, not ``AttributeError``.
 
     This shipped broken and was caught by hand, because the sibling test below
-    calls ``thumbnail_cache_token`` inside a DB task on a session-bound row — it
+    calls ``thumbnail_cache_version`` inside a DB task on a session-bound row — it
     exercises the formula and never the endpoint that has to produce it. Assert
     on the response.
     """
@@ -542,7 +542,7 @@ def test_the_batch_thumbnail_endpoint_serves_a_token_carrying_the_orientation(
     )
 
 
-def test_a_180_rotate_changes_the_thumbnail_cache_token(client, server):
+def test_a_180_rotate_changes_the_thumbnail_cache_version(client, server):
     """W and H are unchanged by a 180° turn, so the token needs the orientation.
 
     Thumbnails are served ``max-age=3600``. On dimensions alone the URL would be
@@ -562,7 +562,7 @@ def test_a_180_rotate_changes_the_thumbnail_cache_token(client, server):
         picture.thumbnail_height = 240
         session.add(picture)
         session.commit()
-        return ImageUtils.thumbnail_cache_token(320, 240, picture.orientation)
+        return ImageUtils.thumbnail_cache_version(320, 240, picture.orientation)
 
     before = server.vault.db.run_task(_token)
     assert before == "320x240"

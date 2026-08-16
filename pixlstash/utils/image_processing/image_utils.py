@@ -661,7 +661,7 @@ class ImageUtils:
         return sha256.hexdigest()
 
     @staticmethod
-    def thumbnail_cache_token(
+    def thumbnail_cache_version(
         thumbnail_width: Optional[int],
         thumbnail_height: Optional[int],
         orientation: Optional[int] = None,
@@ -680,16 +680,16 @@ class ImageUtils:
         on painting the pre-rotate bitmap for up to an hour.
 
         Single source of truth on purpose: the batch-thumbnail endpoint and the
-        duplicate queue both hand this token to the same frontend cache, and two
+        duplicate queue both hand this version to the same frontend cache, and two
         independent copies of the formula would eventually disagree and
-        reintroduce the stale-thumbnail bug this token exists to fix.
+        reintroduce the stale-thumbnail bug this version exists to fix.
 
         Args:
             thumbnail_width: Stored bitmap width, or ``None`` when unprocessed.
             thumbnail_height: Stored bitmap height, or ``None`` when unprocessed.
             orientation: The picture's stored EXIF orientation, 1-8, or ``None``
                 when it has not been read yet. ``None`` and ``1`` produce the
-                same token: an unrotated picture keeps the URL it has always had,
+                same version: an unrotated picture keeps the URL it has always had,
                 so backfilling the mirror does not invalidate every thumbnail in
                 the library at once.
 
@@ -700,10 +700,10 @@ class ImageUtils:
         """
         if not (thumbnail_width and thumbnail_height):
             return "0"
-        token = f"{thumbnail_width}x{thumbnail_height}"
+        version = f"{thumbnail_width}x{thumbnail_height}"
         if orientation and int(orientation) != 1:
-            token = f"{token}o{int(orientation)}"
-        return token
+            version = f"{version}o{int(orientation)}"
+        return version
 
     @staticmethod
     def calculate_hash_from_bytes(image_bytes: bytes) -> str:

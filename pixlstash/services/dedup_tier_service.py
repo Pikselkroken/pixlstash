@@ -587,14 +587,14 @@ class CandidateMember:
 
     @property
     def thumbnail_version(self) -> str:
-        """The ``?v=`` token the queue's thumbnail URLs must carry.
+        """The ``?v=`` version the queue's thumbnail URLs must carry.
 
         Same value and same semantics as the batch-thumbnail endpoint's — both
-        call :meth:`ImageUtils.thumbnail_cache_token`. Without it a thumbnail
+        call :meth:`ImageUtils.thumbnail_cache_version`. Without it a thumbnail
         regenerated mid-triage would keep painting the stale cached bitmap in the
         queue, because the queue's URL would never change.
         """
-        return ImageUtils.thumbnail_cache_token(
+        return ImageUtils.thumbnail_cache_version(
             self.thumbnail_width, self.thumbnail_height, self.orientation
         )
 
@@ -1274,7 +1274,7 @@ def load_stack_facts(
         facts[stack_id] = StackFacts(
             stack_id=stack_id,
             member_ids=member_ids,
-            leader_thumbnail_version=ImageUtils.thumbnail_cache_token(
+            leader_thumbnail_version=ImageUtils.thumbnail_cache_version(
                 width, height, orientation
             ),
         )

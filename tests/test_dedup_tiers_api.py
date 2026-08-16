@@ -1170,7 +1170,7 @@ def test_the_counts_scope_list_is_capped():
 # ── frontend contract additions ───────────────────────────────────────────────
 
 
-def test_every_candidate_carries_a_thumbnail_cache_token():
+def test_every_candidate_carries_a_thumbnail_cache_version():
     """The queue must be able to bust a stale thumbnail like the grid does."""
     temp_dir, client, server, ids, _token, _set_id = _env()
     try:
@@ -1191,7 +1191,7 @@ def test_every_candidate_carries_a_thumbnail_cache_token():
             c["thumbnail_version"] for c in candidates if c["picture_id"] == ids[0]
         )
         # Exactly the token the batch-thumbnail endpoint puts in its ?v=.
-        assert token == ImageUtils.thumbnail_cache_token(320, 240) == "320x240"
+        assert token == ImageUtils.thumbnail_cache_version(320, 240) == "320x240"
     finally:
         _teardown(temp_dir, server)
 
