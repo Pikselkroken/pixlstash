@@ -242,27 +242,3 @@ describe("optional glyphs keep their box", () => {
     }
   });
 });
-
-describe("nested destinations indent by depth, never by a private inset", () => {
-  // Training runs sits UNDER Models: the ai-toolkit runs are models too, still
-  // in the output folder rather than on the shelf. It was briefly a top-level
-  // entry, which read as a separate thing from the shelf, so this pins both
-  // halves of the fix — that it is indented at all, and that the indent goes
-  // through the one mechanism rather than a hand-written padding.
-  it("gives the Models child a depth", () => {
-    const body = ruleBody(scopedCss, ".sidebar-models-child");
-    expect(body).toBeTruthy();
-    expect(body).toMatch(/--depth:\s*1/);
-  });
-
-  it("does not let it hand-roll the inset", () => {
-    // The shared row rule only names the six row TYPES, so a modifier class
-    // layered on top of `.sidebar-list-item` is outside the sweep above and
-    // needs its own guard.
-    for (const body of ruleBodies(scopedCss, ".sidebar-models-child")) {
-      expect(body).not.toMatch(/(^|\s|;)padding-left\s*:/);
-      expect(body).not.toMatch(/(^|\s|;)padding\s*:/);
-      expect(body).not.toMatch(/margin-left\s*:/);
-    }
-  });
-});

@@ -7,7 +7,6 @@ import {
   watch,
   nextTick,
 } from "vue";
-import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import ImageImporter from "../io/ImageImporter.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
 import PictureSetEditor from "../editors/PictureSetEditor.vue";
@@ -90,7 +89,6 @@ import { useSortStore } from "../../stores/useSortStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useGridStore } from "../../stores/useGridStore";
-import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { errorDetail } from "../../utils/apiError";
 import {
@@ -162,14 +160,6 @@ const hasFolderFilter = computed(
 // no pictures, so there is no selection to express.
 const isDuplicatesView = computed(() => route.name === "duplicates");
 const isModelsView = computed(() => route.name === "models");
-const isTrainingRunsView = computed(() => route.name === "training-runs");
-
-// The runs destination exists only once an ai-toolkit output root is set, the
-// same rule the folders dialog's button follows: with no folder there is
-// nothing to list, and a permanent entry for a tool most libraries never use
-// would be a destination that always reads empty.
-const modelFoldersStore = useModelFoldersStore();
-const hasTrainingRuns = computed(() => Boolean(modelFoldersStore.sourceFolder));
 
 // A shared library keeps the duplicate affordances VISIBLE and inert rather
 // than hiding them: a read-only visitor should still see that the feature
@@ -188,7 +178,6 @@ const props = defineProps({
 const emit = defineEmits([
   "select-duplicates",
   "select-models",
-  "select-training-runs",
   "select-character",
   "select-set",
   "import-finished",
@@ -3304,16 +3293,6 @@ async function characterSaved() {
 }
 
 onMounted(() => {
-  // Whether the Training runs destination exists is a fact about the registered
-  // folders, and nothing else on the first screen reads them — the shelf and the
-  // folders dialog both load this store, but only once the owner has gone
-  // looking. Without this the destination would stay missing after a restart
-  // until something else happened to fetch the registry. Owner-only data, so a
-  // read-only session does not ask and does not collect a 403 at boot.
-  if (!isReadOnly.value && !modelFoldersStore.loaded) {
-    modelFoldersStore.refresh({ quiet: true });
-  }
-
   // When the session is scoped to a project via a share token, initialise
   // SideBar's internal project view state before any data is fetched.
   // This path DOES emit so App.vue can push the correct route.
@@ -5438,32 +5417,6 @@ defineExpose({
                   ><v-icon size="18">mdi-layers-outline</v-icon></span
                 >
                 <span class="sidebar-list-label">Models</span>
-              </button>
-            </div>
-
-            <!-- Under Models, not beside it. These are models too — still in
-                 ai-toolkit's output folder rather than on the shelf, and
-                 importing one is the act of moving it from here to there. A
-                 top-level entry would have claimed the runs are a separate
-                 thing from the shelf, which is the opposite of what the
-                 destination is for. Its own wrapper, because
-                 `.sidebar-all-pictures-row` is a flex ROW and a second child
-                 inside it would sit beside Models rather than under it. Depth
-                 by `--depth`, the sidebar's one indent mechanism (never a
-                 hardcoded inset — `SideBarRowSystem.test.js` fails the build on
-                 a row type that sets its own `padding-left`). -->
-            <div v-if="hasTrainingRuns" class="sidebar-all-pictures-row">
-              <button
-                type="button"
-                class="sidebar-list-item sidebar-destination-btn sidebar-models-child"
-                :class="{ active: isTrainingRunsView }"
-                :aria-current="isTrainingRunsView ? 'page' : undefined"
-                @click="emit('select-training-runs')"
-              >
-                <span class="sidebar-list-icon"
-                  ><AiToolkitIcon :size="16"
-                /></span>
-                <span class="sidebar-list-label">Training runs</span>
               </button>
             </div>
 

@@ -348,21 +348,16 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
 
   // Same reasoning for the model shelf: it lists files on this machine, not
   // pictures in the library, so it is a route rather than a selection.
-  const isModelsView = computed(() => route.name === "models");
+  // Both of the shelf's views. `/models/runs` is the ai-toolkit runs waiting to
+  // be imported — the same destination, a second tab — so the sidebar's Models
+  // entry stays the current page across both and no second destination lights.
+  const isModelsView = computed(
+    () => route.name === "models" || route.name === "models-runs",
+  );
 
   /** Open the model shelf. */
   function handleSelectModels() {
     pushAppRoute({ name: "models" });
-  }
-
-  // The training runs sitting in the ai-toolkit output root. A route and not a
-  // dialog: what is inside that folder changes without PixlStash doing
-  // anything, so it has to be somewhere that can be re-entered and reloaded.
-  const isTrainingRunsView = computed(() => route.name === "training-runs");
-
-  /** Open the ai-toolkit training runs. */
-  function handleSelectTrainingRuns() {
-    pushAppRoute({ name: "training-runs" });
   }
 
   /**
@@ -393,9 +388,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   return {
     isDuplicatesView,
     isModelsView,
-    isTrainingRunsView,
     handleSelectModels,
-    handleSelectTrainingRuns,
     handleSelectCharacter,
     handleSelectSet,
     handleSelectFolder,

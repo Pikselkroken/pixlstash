@@ -157,7 +157,7 @@ frontend/src/
 | UI component library | Vuetify 3 |
 | State management | **Pinia** — 21 domain stores in `src/stores/`; `App.vue` owns only UI-shell state |
 | HTTP client | Axios (singleton `apiClient`) |
-| Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`, `/duplicates`, `/models`, `/training-runs`) render `App.vue` via `<RouterView>`. `useViewStore` owns the app's single route watcher and syncs params to Pinia stores (§4.5); `App.vue`'s nav handlers call `router.push()` to update the URL. `/duplicates` is deliberately NOT a grid view: `parseRouteView` returns `null` for it, so the selection stores keep whatever the user was looking at. **The route is the single source of truth for what the grid shows** — only explicit entry clicks push routes; sidebar tab/category switches never do (see Key Design Principles). |
+| Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`, `/duplicates`, `/models`, `/models/runs`) render `App.vue` via `<RouterView>`. `useViewStore` owns the app's single route watcher and syncs params to Pinia stores (§4.5); `App.vue`'s nav handlers call `router.push()` to update the URL. `/duplicates` is deliberately NOT a grid view: `parseRouteView` returns `null` for it, so the selection stores keep whatever the user was looking at. **The route is the single source of truth for what the grid shows** — only explicit entry clicks push routes; sidebar tab/category switches never do (see Key Design Principles). |
 | Build tool | Vite 5 |
 | Unit tests | Vitest (jsdom environment) — test files co-located as `*.test.js` in `utils/` |
 | End-to-end tests | Playwright (`frontend/e2e/`) — drives the real SPA against a backend booted on a throwaway copy of the `test-data/` fixture. See `frontend/e2e/README.md`. |
@@ -1545,17 +1545,48 @@ express that. Like Duplicates it is excluded from `selectionOwnsHighlight` in
 `SideBar.vue`, or the underlying picture selection would light a second active
 destination in the rail.
 
-**`/training-runs` is its sibling, on the same pattern.** `TrainingRuns.vue`
-replaces the grid from `isTrainingRunsView` and lists the ai-toolkit runs
-waiting to be imported — files on this machine again, and again nothing a
-picture selection can express. Its sidebar entry and the two offers to set the
-output folder all read one signal, `useModelFoldersStore.sourceFolder`: before
-it exists there is a destination to create and no list to show, and after it
-exists there is a list and nothing left to create. `SideBar.vue` refreshes the
-folder registry on mount for exactly this reason — otherwise the destination
-would stay missing after a restart until something else happened to fetch it —
-and skips that read on a read-only session, which has no business asking for
-owner-only host paths.
+**The shelf has TWO views, and `/models/runs` is the second one.** The ai-toolkit
+training runs are models too — still in the output folder rather than on the
+shelf, and importing one is the act of moving it from here to there — so they
+are a tab of this destination and not a destination of their own. `ModelShelf`
+renders `TrainingRuns.vue` as a sibling tabpanel from `isShelfTab`, which is
+derived from `route.name` so reload and back-navigation land on the same view by
+construction; `isModelsView` covers both route names, which is what keeps the
+sidebar's **Models** entry `aria-current="page"` across the pair and stops a
+second destination lighting. `/models/runs` is a PATH and not `?view=runs`: the
+query string is reserved here for modifiers layered on a destination
+(`?overlay=`, `?review=`, the duplicates `?scope=`), and this is a different list
+of different objects with its own keyboard model. `/training-runs` was published
+before the runs moved inside the shelf and redirects rather than 404s.
+
+**The switcher is two ARIA tabs in the toolbar's left group**, which is free
+because the bar has a flexible spacer after `Model folders` — nothing is
+displaced until it collides with the right cluster. They carry text labels and
+no glyphs: `AiToolkitIcon` is a brand mark that names ai-toolkit *the product*
+(§8 exempts brand marks from the one-family rule as content), and these two name
+*our* views, so a filled mark on one segment against mdi line art on the other
+would unbalance a control that has to read as symmetric. The selected state is
+three layers — `--active-wash`, `--weight-semibold`, and a 2px `--active-bar`
+underline — because the underline alone measures 2.93:1 light / 2.72:1 dark
+against the toolbar, under WCAG 1.4.11's 3:1. It is reinforcement, never the
+only signal. Deliberately NOT `.bar-btn--active`, whose `primary` label measures
+**2.72:1** on dark toolbar chrome; that is a pre-existing defect on every
+consumer of that class and wants its own issue.
+
+**Switching keeps the shelf's selection and takes away its keys.** `selectedIds`
+lives in `useModelShelfStore`, so it survives the panel swap and the rows come
+back exactly as they were left — losing forty deliberately-clicked rows because
+someone glanced at a run would be the worse error. But `onShelfKeydown` is a
+**window** listener and the shelf component stays mounted behind the runs panel,
+so `shelfOwnsTheKey` returns false off the shelf tab; without that line `Delete`
+would open a confirmation for rows nobody can see. The pill is inside the shelf
+panel and unmounts with it, so nothing on screen claims a selection you cannot
+act on.
+
+**`v-if`, never `v-show`, for the panels.** `TrainingRuns` reloads itself on
+`visibilitychange` and `window.focus` and tears those listeners down in
+`onBeforeUnmount`; a hidden-but-mounted panel would keep fetching a list nobody
+is looking at.
 
 **And like Duplicates its bar carries the shell chrome.** Replacing the grid
 also replaces the grid's toolbar, so `.shelf-toolbar` ends in
@@ -2824,12 +2855,11 @@ is a *setting* — one folder, set once, because ai-toolkit writes every run und
 a single root — so it is registered from the model-folders dialog (its
 `Set ai-toolkit folder` button) or from the shelf's `Add` menu, and both offers
 disappear once `useModelFoldersStore.sourceFolder` exists. The runs *inside* it
-are not a setting and change without PixlStash doing anything, so they are a
-destination of their own: `TrainingRuns.vue` at `/training-runs`, with a sidebar
-entry that appears from the same signal. This split is the reason the list can
-stay current at all — a dialog is opened, read once and dismissed, so a run that
-finished while it was open used to be invisible until it was closed and
-reopened. Do not move the run grid back behind a dialog.
+are not a setting and change without PixlStash doing anything, so they are the
+shelf's second view (§9.1a). This split is the reason the list can stay current
+at all — a dialog is opened, read once and dismissed, so a run that finished
+while it was open used to be invisible until it was closed and reopened. Do not
+move the run grid back behind a dialog.
 
 **The view reloads itself; it does not poll.** `loadRuns` runs on mount, on
 `visibilitychange` and on `window.focus`, which is the shape of the real
@@ -2853,13 +2883,42 @@ against — is drawn for an entire output root before the user has committed to
 anything. That is also what makes reloading on every focus affordable. Do not
 add a call to `TrainingRuns` that breaks it.
 
-**One run at a time**, `role="radiogroup"` rather than a multi-select. The
-destination, the step selection and the receipt are all per-run, so ticking two
-would promise a batch `POST /model-imports` does not implement.
+**Several runs at a time**, `role="listbox"` + `aria-multiselectable`. The
+endpoint is per-run and takes `SHELF_IO_LOCK` with `blocking=False`, so a batch
+is **N sequential requests** — awaited one after another, because fanning them
+out concurrently would 409 everything after the first. Each run is caught on its
+own so run 5 still gets its turn when run 3 fails, and the receipt names what
+landed; stopping at the first failure would leave the user unable to tell which
+of the five are now on the shelf.
 
-**Picking a run ticks every checkpoint in it.** Importing part of a run is the
-exception, not the default: the steps land as one `adapter_stack` and the point
-of the stack is that the run stays together.
+**The checkpoint picker appears only at exactly one selected run.** At two or
+more the rule is every checkpoint in each, and the Import label says which rule
+is in force — a per-step list across five runs is forty checkboxes for a
+decision nobody came here to make. At one run the list starts fully ticked:
+importing part of a run is the exception, because the steps land as one
+`adapter_stack` and the point of the stack is that the run stays together. That
+fill is keyed on the run's NAME, not on the computed's identity — a reload
+replaces `runs` on every window focus, and refilling there would silently
+re-tick a checkpoint the reader had just excluded.
+
+**The verbs live in the shared selection pill** (`.selbar`, promoted from
+`ShelfSelectionBar.vue`'s scoped block into `App.css` for the same reason
+`.bar-btn` was: a scoped rule compiles to `.selbar[data-v-hash]` and a second
+consumer renders a bare `<div>`). It docks in `.selbar-float`, centred over the
+grid — which is also what keeps it clear of the fixed bottom-right shortcuts
+FAB that the previous full-width bar ran underneath. The count control carries
+*Select all shown* and *Clear selection* (`Esc`), the same shape the shelf's own
+pill uses.
+
+**The checked card is the shelf row's own recipe**: a `--rail-w` `primary` rail
+inset on the left edge, plus a `primary` 0.12 wash on the metadata body and
+**never on the preview** — the image is the evidence the choice is being made
+on, and tinting it changes the thing being judged. The card sits on `background`
+with a `divider` hairline like a row, not filled with `surface`: on dark,
+`surface` is 1.12:1 from `background`, so the fill bought nothing visually and
+cost the rail its contrast (`primary` measures 2.72:1 on `surface`, under WCAG
+1.4.11's 3:1, and 3.04:1 on `background`). A hover-revealed check disc makes the
+*count* readable at a glance, which a rail alone does not.
 
 **An unconfirmed cover is stated, never resolved silently.** ai-toolkit writes a
 bare final file when a run finishes, so a run without one is still training or

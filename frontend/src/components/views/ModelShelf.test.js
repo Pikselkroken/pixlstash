@@ -84,6 +84,31 @@ vi.mock("../../api/modelStacks", () => ({
   listStackProposals: vi.fn(),
 }));
 
+// The shelf reads `route.name` to decide which of its two views is showing, so
+// the suite drives the tab by writing `nav.route.name`. REACTIVE, not a plain
+// object with a getter: the tab is a `computed`, and a non-reactive source
+// simply never re-evaluates — which reads in a test exactly like the panel
+// failing to swap. Mocked rather than given a real router, because these tests
+// mount the view alone and a router would have to carry every app route.
+const nav = vi.hoisted(() => ({ route: null, push: null }));
+vi.mock("vue-router", async () => {
+  const { reactive } = await vi.importActual("vue");
+  const { vi: vitest } = await import("vitest");
+  nav.route = reactive({
+    name: "models",
+    query: {},
+    params: {},
+    path: "/models",
+  });
+  nav.push = vitest.fn(({ name }) => {
+    nav.route.name = name;
+  });
+  return {
+    useRoute: () => nav.route,
+    useRouter: () => ({ push: nav.push, replace: vitest.fn() }),
+  };
+});
+
 const createModelFolder = vi.fn();
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
@@ -194,6 +219,8 @@ beforeEach(() => {
   listModelFolderDevices.mockResolvedValue([]);
   listModelFolders.mockReset();
   listModelFolders.mockResolvedValue([]);
+  nav.route.name = "models";
+  nav.push.mockClear();
   createModelFolder.mockReset();
   createModelFolder.mockResolvedValue({
     id: 7,
@@ -801,7 +828,12 @@ describe("the shelf's own accessible name", () => {
     const root = wrapper.find(".shelf");
     expect(root.attributes("role")).toBe("region");
     expect(root.attributes("aria-label")).toBe("Model shelf");
-    expect(root.attributes("aria-describedby")).toBe("shelf-help");
+    // The description hangs on the shelf PANEL rather than the region: every
+    // sentence in it is about the row list, and the region now also contains
+    // the training-runs panel, which has none of those controls.
+    const panel = wrapper.find("#shelf-panel-shelf");
+    expect(panel.attributes("role")).toBe("tabpanel");
+    expect(panel.attributes("aria-describedby")).toBe("shelf-help");
     expect(wrapper.find("#shelf-help").exists()).toBe(true);
   });
 
@@ -3527,7 +3559,86 @@ describe("setting the ai-toolkit output folder", () => {
       path: "/home/g/ai-toolkit/output",
       kind: "source",
     });
-    expect(wrapper.emitted("select-training-runs")).toBeTruthy();
+    // Navigating is the point of setting it: the owner set it because they have
+    // runs to import, so landing them on the list beats announcing a new tab.
+    expect(nav.push).toHaveBeenCalledWith({ name: "models-runs" });
+    wrapper.unmount();
+  });
+});
+
+describe("the two views of the shelf", () => {
+  const rowAt = (wrapper, i) => wrapper.findAll(".shelf-row")[i];
+  const SOURCE = {
+    id: 7,
+    path: "/home/g/ai-toolkit/output",
+    kind: "source",
+    movable: "external",
+    file_count: 0,
+    present_bytes: 0,
+  };
+
+  it("shows the runs panel on /models/runs and the rows on /models", async () => {
+    listModelFolders.mockResolvedValue([SOURCE]);
+    const wrapper = await mountShelf([adapter()]);
+    expect(wrapper.find("#shelf-panel-shelf").exists()).toBe(true);
+    expect(wrapper.find("#shelf-panel-runs").exists()).toBe(false);
+
+    nav.route.name = "models-runs";
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find("#shelf-panel-shelf").exists()).toBe(false);
+    expect(wrapper.find("#shelf-panel-runs").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("keeps a shelf selection across a switch, but takes its keys away", async () => {
+    // The shelf component stays mounted behind the runs panel and its key
+    // handler is on the WINDOW, so without the tab guard `Delete` would open a
+    // confirmation for rows nobody can see and `Escape` would silently clear a
+    // selection the reader does not know they still have. Keeping the selection
+    // is deliberate: losing forty deliberately-clicked rows because someone
+    // glanced at a run would be the worse error.
+    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+    await rowAt(wrapper, 0).trigger("click");
+    expect(store.selectedRows).toHaveLength(1);
+
+    nav.route.name = "models-runs";
+    await wrapper.vm.$nextTick();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(1);
+
+    nav.route.name = "models";
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(1);
+    // …and the keys come back with the rows.
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("does not dock the shelf's pill over the runs grid", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    await rowAt(wrapper, 0).trigger("click");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".selbar").exists()).toBe(true);
+
+    nav.route.name = "models-runs";
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".selbar").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("moves between the tabs on Left and Right", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    await wrapper.find("#shelf-tab-shelf").trigger("keydown", {
+      key: "ArrowRight",
+    });
+    expect(nav.push).toHaveBeenCalledWith({ name: "models-runs" });
     wrapper.unmount();
   });
 });

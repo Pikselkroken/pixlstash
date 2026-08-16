@@ -1,12 +1,13 @@
-// The ai-toolkit training-runs view.
+// The ai-toolkit training-runs view — the model shelf's second tab.
 //
-// The assertions worth having are the ones guarding promises the backend makes
-// and this view is the only place to keep. Drawing the grid must not import
-// anything; a run with no bare final file must SAY its cover is a guess (that
-// run is either still training or was interrupted, and importing it silently is
-// how the wrong step becomes the cover of a stack); and — new to the view — a
-// reload must not move the ground under someone mid-decision, because unlike
-// the dialog this replaced, reloads happen on their own.
+// The assertions worth having are the ones guarding promises this view is the
+// only place to keep. Drawing the grid must import nothing. A run with no bare
+// final file must SAY its cover is a guess (it is still training or was
+// interrupted, and importing it silently is how the wrong step becomes the
+// cover of a stack). A reload happens unprompted, so it must not move the
+// ground under someone mid-decision. And a batch must go out SEQUENTIALLY —
+// `POST /model-imports` holds a non-blocking lock, so a concurrent fan-out
+// would 409 every request after the first.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -23,15 +24,23 @@ vi.mock("../../api/modelImports", () => ({
 
 import TrainingRuns from "./TrainingRuns.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
+import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 
 const globalOpts = {
   global: {
     stubs: {
       "v-icon": true,
       AiToolkitIcon: true,
+      // Renders the activator AND the panel inline. The real one teleports, so
+      // nothing inside a menu would be findable.
+      "v-menu": {
+        props: ["modelValue"],
+        template: "<div><slot name='activator' :props='{}' /><slot /></div>",
+      },
       AppButton: {
         template: "<button :disabled='disabled'><slot /></button>",
-        props: ["disabled", "loading", "variant", "iconLeft"],
+        props: ["disabled", "loading", "variant", "iconLeft", "size"],
       },
     },
   },
@@ -43,12 +52,12 @@ const FOLDERS = [
   { id: 3, path: "/hf-cache", kind: "foreign", movable: "external" },
 ];
 
-function run(overrides = {}) {
+function run(name = "Clementine", overrides = {}) {
   return {
-    name: "Clementine",
+    name,
     checkpoints: [
-      { filename: "Clementine_000000500.safetensors", step: 500, size: 1000 },
-      { filename: "Clementine.safetensors", step: null, size: 1000 },
+      { filename: `${name}_000000500.safetensors`, step: 500, size: 1000 },
+      { filename: `${name}.safetensors`, step: null, size: 1000 },
     ],
     samples: [
       { filename: "s_500_0.jpg", step: 500, index: 0 },
@@ -86,10 +95,23 @@ async function openWith(runs, folders = FOLDERS) {
   return wrapper;
 }
 
+/** Tick the card whose name matches, the way a pointer would. */
+async function tick(wrapper, name) {
+  const card = wrapper
+    .findAll(".tr-card")
+    .find((c) => c.find(".tr-card-name").text() === name);
+  await card.trigger("click");
+  return card;
+}
+
+const importBtn = (wrapper) =>
+  wrapper.findAll("button").find((b) => b.text().startsWith("Import"));
+
 beforeEach(() => {
   setActivePinia(createPinia());
   listRuns.mockReset();
   importRun.mockReset();
+  useModelShelfStore().fetchRows = vi.fn();
 });
 
 afterEach(() => {
@@ -101,7 +123,7 @@ describe("drawing the grid", () => {
     // The listing route's whole promise: it hashes, copies and writes nothing,
     // so the grid is drawn before the user has decided about anything. It is
     // also what makes reloading on every focus affordable.
-    const wrapper = await openWith([run(), run({ name: "Foxglove" })]);
+    const wrapper = await openWith([run(), run("Foxglove")]);
     expect(wrapper.findAll(".tr-card")).toHaveLength(2);
     expect(importRun).not.toHaveBeenCalled();
   });
@@ -111,7 +133,7 @@ describe("drawing the grid", () => {
     // last rendered: `index` separates prompts within a step rather than time,
     // so the cover stays on one prompt and two cards stay comparable.
     const wrapper = await openWith([
-      run({
+      run("Clementine", {
         samples: [
           { filename: "s_250_0.jpg", step: 250, index: 0 },
           { filename: "s_500_1.jpg", step: 500, index: 1 },
@@ -125,10 +147,7 @@ describe("drawing the grid", () => {
   });
 
   it("says so when a run has no final file, rather than picking silently", async () => {
-    // ai-toolkit writes the bare final at the end, so a run without one is
-    // still training or was interrupted. The highest step is then the best
-    // available answer, not a certain one.
-    const unfinished = run({
+    const unfinished = run("Clementine", {
       checkpoints: [
         { filename: "Clementine_000000500.safetensors", step: 500, size: 1 },
       ],
@@ -139,62 +158,144 @@ describe("drawing the grid", () => {
 
   it("keeps a run importable when its config could not be read", async () => {
     // Steps and samples come from filenames, so the config is decoration.
-    const wrapper = await openWith([run({ config_error: "bad yaml" })]);
-    await wrapper.find(".tr-card").trigger("click");
+    const wrapper = await openWith([
+      run("Clementine", { config_error: "bad" }),
+    ]);
     expect(wrapper.text()).toContain("The steps still import");
-    expect(wrapper.find(".tr-steps").exists()).toBe(true);
+    await tick(wrapper, "Clementine");
+    expect(importBtn(wrapper).attributes("disabled")).toBeUndefined();
   });
 
-  it("points at the control that sets the folder when none is set", async () => {
-    // The view is reachable with no output root only by URL, so its empty state
-    // has to name the way out rather than describe the state it is in.
+  it("offers the way out when no output folder is set", async () => {
     const wrapper = await openWith([], [FOLDERS[1]]);
     expect(wrapper.text()).toContain("No ai-toolkit output folder is set");
-    expect(wrapper.text()).toContain("Set ai-toolkit folder");
     expect(listRuns).not.toHaveBeenCalled();
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Set ai-toolkit folder"))
+      .trigger("click");
+    expect(wrapper.emitted("set-folder")).toBeTruthy();
+  });
+
+  it("tells the shelf how many runs there are, for the count beside the tabs", async () => {
+    const wrapper = await openWith([run(), run("Foxglove")]);
+    expect(wrapper.emitted("count").at(-1)).toEqual([2]);
   });
 });
 
-describe("choosing what to take", () => {
-  it("ticks the whole run on pick, because a run is one stack", async () => {
-    const wrapper = await openWith([run()]);
-    await wrapper.find(".tr-card").trigger("click");
-    const boxes = wrapper.findAll(".tr-step input");
-    expect(boxes).toHaveLength(2);
-    expect(boxes.every((b) => b.element.checked)).toBe(true);
+describe("choosing runs", () => {
+  it("takes more than one, because an import is a batch", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
+    await tick(wrapper, "Clementine");
+    await tick(wrapper, "Hazel");
+    expect(wrapper.findAll(".tr-card--checked")).toHaveLength(2);
+    expect(importBtn(wrapper).text()).toContain("2 runs");
+  });
+
+  it("unticks what is already ticked", async () => {
+    const wrapper = await openWith([run(), run("Foxglove")]);
+    await tick(wrapper, "Clementine");
+    await tick(wrapper, "Clementine");
+    expect(wrapper.findAll(".tr-card--checked")).toHaveLength(0);
+    // With nothing ticked the pill is gone, not merely disabled.
+    expect(wrapper.find(".selbar").exists()).toBe(false);
+  });
+
+  it("selects all shown and clears again", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
+    await tick(wrapper, "Clementine");
+    await wrapper
+      .findAll(".shelf-mi")
+      .find((b) => b.text().includes("Select all shown"))
+      .trigger("click");
+    expect(wrapper.findAll(".tr-card--checked")).toHaveLength(3);
+
+    await wrapper
+      .findAll(".shelf-mi")
+      .find((b) => b.text().includes("Clear selection"))
+      .trigger("click");
+    expect(wrapper.findAll(".tr-card--checked")).toHaveLength(0);
+  });
+
+  it("clears on Escape", async () => {
+    const wrapper = await openWith([run(), run("Foxglove")]);
+    await tick(wrapper, "Clementine");
+    await wrapper.find(".tr-grid").trigger("keydown", { key: "Escape" });
+    expect(wrapper.findAll(".tr-card--checked")).toHaveLength(0);
+  });
+
+  it("offers the checkpoint picker only while exactly one run is chosen", async () => {
+    // At two or more the answer is every checkpoint in each: a per-step list
+    // across five runs is forty checkboxes for a decision nobody came here for.
+    const wrapper = await openWith([run(), run("Foxglove")]);
+    await tick(wrapper, "Clementine");
+    expect(wrapper.findAll(".tr-step")).toHaveLength(2);
+
+    await tick(wrapper, "Foxglove");
+    expect(wrapper.findAll(".tr-step")).toHaveLength(0);
+    expect(importBtn(wrapper).text()).toContain("4 files");
   });
 
   it("never offers a source or an external folder as a destination", async () => {
     // A source folder is taken from, never written into (the server refuses
     // it); an external one is shared with other software.
     const wrapper = await openWith([run()]);
-    await wrapper.find(".tr-card").trigger("click");
+    await tick(wrapper, "Clementine");
     const paths = wrapper
-      .find(".tr-field select")
-      .findAll("option")
-      .map((o) => o.text());
+      .findAll('[role="menuitemradio"]')
+      .map((b) => b.text());
     expect(paths).toEqual(["/models/store"]);
   });
 
   it("warns before importing when the folder deletes its runs", async () => {
-    // The one part of an import that cannot be undone, said before it starts.
     const wrapper = await openWith(
       [run()],
       [{ ...FOLDERS[0], delete_after_import: true }, FOLDERS[1]],
     );
-    await wrapper.find(".tr-card").trigger("click");
+    await tick(wrapper, "Clementine");
     expect(wrapper.find(".tr-warning").text()).toContain(
       "will be gone from disk",
     );
   });
+});
 
-  it("sends the picked steps and nothing else", async () => {
+describe("importing the batch", () => {
+  it("sends one request per run, in order, never concurrently", async () => {
+    // `POST /model-imports` takes SHELF_IO_LOCK with blocking=False, so a
+    // fan-out would 409 everything after the first. Each call must therefore be
+    // settled before the next is made.
+    let inFlight = 0;
+    let overlapped = false;
+    importRun.mockImplementation(async () => {
+      inFlight += 1;
+      if (inFlight > 1) overlapped = true;
+      await new Promise((r) => setTimeout(r, 0));
+      inFlight -= 1;
+      return { run_name: "x", files: [] };
+    });
+
+    const wrapper = await openWith([run(), run("Foxglove")]);
+    await tick(wrapper, "Clementine");
+    await tick(wrapper, "Foxglove");
+    await importBtn(wrapper).trigger("click");
+    await settle(wrapper);
+
+    expect(overlapped).toBe(false);
+    expect(importRun.mock.calls.map((c) => c[0].runName)).toEqual([
+      "Clementine",
+      "Foxglove",
+    ]);
+  });
+
+  it("sends only the ticked checkpoints when one run is chosen", async () => {
     const wrapper = await openWith([run()]);
-    await wrapper.find(".tr-card").trigger("click");
+    await tick(wrapper, "Clementine");
     await wrapper.findAll(".tr-step input")[0].setValue(false);
     importRun.mockResolvedValue({ run_name: "Clementine", files: [] });
 
-    await wrapper.findAll("button").at(-1).trigger("click");
+    await importBtn(wrapper).trigger("click");
+    await settle(wrapper);
+
     expect(importRun).toHaveBeenCalledWith({
       sourceFolderId: 1,
       runName: "Clementine",
@@ -203,15 +304,49 @@ describe("choosing what to take", () => {
     });
   });
 
-  it("cannot be submitted with nothing ticked", async () => {
+  it("sends every checkpoint of every run when several are chosen", async () => {
+    const wrapper = await openWith([run(), run("Foxglove")]);
+    await tick(wrapper, "Clementine");
+    await tick(wrapper, "Foxglove");
+    importRun.mockResolvedValue({ run_name: "x", files: [] });
+
+    await importBtn(wrapper).trigger("click");
+    await settle(wrapper);
+
+    expect(importRun.mock.calls.map((c) => c[0].steps)).toEqual([
+      [500, null],
+      [500, null],
+    ]);
+  });
+
+  it("finishes the batch when one run fails, and names it", async () => {
+    // Stopping at the first failure would leave the user unable to tell which
+    // of the five are now on the shelf.
+    importRun.mockImplementation(async ({ runName }) => {
+      if (runName === "Foxglove") throw new Error("nope");
+      return { run_name: runName, files: [] };
+    });
+
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
+    await tick(wrapper, "Clementine");
+    await tick(wrapper, "Foxglove");
+    await tick(wrapper, "Hazel");
+    await importBtn(wrapper).trigger("click");
+    await settle(wrapper);
+
+    expect(importRun).toHaveBeenCalledTimes(3);
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toContain("Imported 2 runs");
+    expect(notice.text).toContain("Foxglove");
+  });
+
+  it("cannot be submitted with no checkpoints ticked", async () => {
     const wrapper = await openWith([run()]);
-    await wrapper.find(".tr-card").trigger("click");
-    for (const box of wrapper.findAll(".tr-step input")) {
+    await tick(wrapper, "Clementine");
+    for (const box of wrapper.findAll(".tr-step input"))
       await box.setValue(false);
-    }
-    expect(
-      wrapper.findAll("button").at(-1).attributes("disabled"),
-    ).toBeDefined();
+    expect(importBtn(wrapper).attributes("disabled")).toBeDefined();
   });
 });
 
@@ -222,44 +357,42 @@ describe("staying current without moving the ground", () => {
     const wrapper = await openWith([run()]);
     expect(wrapper.findAll(".tr-card")).toHaveLength(1);
 
-    listRuns.mockResolvedValue([run(), run({ name: "Foxglove" })]);
+    listRuns.mockResolvedValue([run(), run("Foxglove")]);
     document.dispatchEvent(new Event("visibilitychange"));
     await settle(wrapper);
 
     expect(wrapper.findAll(".tr-card")).toHaveLength(2);
   });
 
-  it("keeps the picked run and its ticked checkpoints across a reload", async () => {
+  it("keeps every ticked run, and the ticked checkpoints, across a reload", async () => {
     // A reload fires on its own, so it must not discard a decision in progress.
-    // Untick one box, reload, and the choice has to survive: re-ticking every
-    // checkpoint would silently import a step the user had just excluded.
-    const wrapper = await openWith([run(), run({ name: "Foxglove" })]);
-    await wrapper.find(".tr-card").trigger("click");
+    const wrapper = await openWith([run(), run("Foxglove")]);
+    await tick(wrapper, "Clementine");
     await wrapper.findAll(".tr-step input")[0].setValue(false);
 
-    listRuns.mockResolvedValue([run(), run({ name: "Foxglove" })]);
+    listRuns.mockResolvedValue([run(), run("Foxglove")]);
     window.dispatchEvent(new Event("focus"));
     await settle(wrapper);
 
-    expect(wrapper.find(".tr-card--picked").text()).toContain("Clementine");
+    expect(wrapper.findAll(".tr-card--checked")).toHaveLength(1);
     const boxes = wrapper.findAll(".tr-step input");
     expect(boxes[0].element.checked).toBe(false);
     expect(boxes[1].element.checked).toBe(true);
   });
 
-  it("drops the selection when the picked run is gone", async () => {
-    // Imported from another window, or deleted on disk. Keeping the name would
-    // leave the import bar pointing at a run that is no longer there.
-    const wrapper = await openWith([run(), run({ name: "Foxglove" })]);
-    await wrapper.find(".tr-card").trigger("click");
-    expect(wrapper.find(".tr-bar").exists()).toBe(true);
+  it("drops only the runs that are gone, keeping the rest ticked", async () => {
+    const wrapper = await openWith([run(), run("Foxglove"), run("Hazel")]);
+    await tick(wrapper, "Clementine");
+    await tick(wrapper, "Foxglove");
 
-    listRuns.mockResolvedValue([run({ name: "Foxglove" })]);
+    listRuns.mockResolvedValue([run("Foxglove"), run("Hazel")]);
     document.dispatchEvent(new Event("visibilitychange"));
     await settle(wrapper);
 
-    expect(wrapper.find(".tr-bar").exists()).toBe(false);
-    expect(wrapper.find(".tr-card--picked").exists()).toBe(false);
+    const checked = wrapper
+      .findAll(".tr-card--checked")
+      .map((c) => c.find(".tr-card-name").text());
+    expect(checked).toEqual(["Foxglove"]);
   });
 
   it("stops listening once it is left", async () => {

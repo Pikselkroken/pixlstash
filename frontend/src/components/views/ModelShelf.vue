@@ -9,7 +9,6 @@
     role="region"
     tabindex="-1"
     aria-label="Model shelf"
-    aria-describedby="shelf-help"
   >
     <p id="shelf-help" class="visually-hidden">
       Every adapter and checkpoint PixlStash has found on this machine. Group
@@ -42,7 +41,58 @@
          lives on the row or in the selection pill (#904). -->
     <div class="shelf-toolbar">
       <span class="shelf-title">Models</span>
-      <span class="shelf-sub">{{ countLabel }}</span>
+
+      <!-- Two views of one destination, not two destinations. The runs are
+           models too — still in ai-toolkit's output folder rather than on the
+           shelf, and importing one is the act of moving it from here to there.
+           This sits in the LEFT group because the bar has a flexible spacer
+           after `Model folders`, so anything added here costs the right cluster
+           nothing until they collide.
+
+           Text labels and no glyphs. `AiToolkitIcon` is a brand mark and names
+           ai-toolkit the product; these two name OUR views, and a filled mark
+           on one segment against mdi line art on the other unbalances a control
+           that has to read as symmetric.
+
+           Selected state is three layers — wash, weight, and a 2px underline —
+           because the underline alone measures 2.93:1 light / 2.72:1 dark
+           against this chrome, under WCAG 1.4.11's 3:1. It is reinforcement,
+           never the only signal. -->
+      <div class="shelf-viewswitch" role="tablist" aria-label="Model view">
+        <button
+          id="shelf-tab-shelf"
+          type="button"
+          role="tab"
+          class="bar-btn shelf-viewseg"
+          :class="{ 'shelf-viewseg--on': isShelfTab }"
+          :aria-selected="isShelfTab"
+          :aria-controls="isShelfTab ? 'shelf-panel-shelf' : undefined"
+          :tabindex="isShelfTab ? 0 : -1"
+          @click="showTab('shelf')"
+          @keydown="onTabKeydown"
+        >
+          Shelf
+        </button>
+        <button
+          id="shelf-tab-runs"
+          type="button"
+          role="tab"
+          class="bar-btn shelf-viewseg"
+          :class="{ 'shelf-viewseg--on': !isShelfTab }"
+          :aria-selected="!isShelfTab"
+          :aria-controls="!isShelfTab ? 'shelf-panel-runs' : undefined"
+          :tabindex="isShelfTab ? -1 : 0"
+          @click="showTab('runs')"
+          @keydown="onTabKeydown"
+        >
+          Training runs
+        </button>
+      </div>
+
+      <!-- Reports the list actually on screen, not always the shelf's. -->
+      <span class="shelf-sub">{{
+        isShelfTab ? countLabel : runsCountLabel
+      }}</span>
 
       <!-- The one accented, labelled button in the bar, because it is the only
            thing here with a result behind it. Three ways in, one menu: a
@@ -319,7 +369,15 @@
          leaves every row clickable and every one of them in the tab order,
          which is worse than no veil at all. The toolbar stays live: Show and
          Sort still answer correctly while files are in flight. -->
-    <div class="shelf-body" :inert="moves.running || undefined">
+    <div
+      v-if="isShelfTab"
+      id="shelf-panel-shelf"
+      class="shelf-body"
+      role="tabpanel"
+      aria-labelledby="shelf-tab-shelf"
+      aria-describedby="shelf-help"
+      :inert="moves.running || undefined"
+    >
       <!-- The visible half of the same statement. `inert` on the wrapper is
            what actually stops the interaction; this is what says so. -->
       <div v-if="moves.running" class="shelf-dim" aria-hidden="true"></div>
@@ -1026,13 +1084,26 @@
       </template>
     </div>
 
+    <!-- The other view of the same destination. `v-if` and not `v-show`: the
+         runs grid reloads itself on window focus and tears those listeners down
+         in `onBeforeUnmount`, so a hidden-but-mounted panel would keep fetching
+         a list nobody is looking at. -->
+    <TrainingRuns
+      v-else
+      id="shelf-panel-runs"
+      role="tabpanel"
+      aria-labelledby="shelf-tab-runs"
+      @set-folder="openAddSource"
+      @count="runsCount = $event"
+    />
+
     <!-- The pill floats bottom-centre OVER the list, exactly like the photo
          grid's: the list is what the selection was made in, and a docked strip
          between the toolbar and the rows pushed the whole list down every time
          a row was clicked. This wrapper is the float; the pill owns its own
          shape. `pointer-events` is off on the strip and back on for the pill,
          so the rows underneath it stay clickable. -->
-    <div class="shelf-selbar-float">
+    <div v-if="isShelfTab" class="selbar-float">
       <ShelfSelectionBar
         ref="selBarRef"
         @rename="startRenameSelected"
@@ -1112,6 +1183,7 @@ import {
   shallowRef,
   watch,
 } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
@@ -1122,6 +1194,7 @@ import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
+import TrainingRuns from "./TrainingRuns.vue";
 import { SOURCE_KIND } from "../../api/modelFolders";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
@@ -1172,7 +1245,7 @@ import {
 // Settings lives in App.vue's sidebar dialog, so the toolbar's Settings button
 // asks for it the way the duplicates queue does. The stats toggle needs no
 // event: TbGlobalActions flips the sidebar store itself.
-const emit = defineEmits(["open-settings", "select-training-runs"]);
+const emit = defineEmits(["open-settings"]);
 
 const store = useModelShelfStore();
 const entityLists = useEntityListsStore();
@@ -1719,6 +1792,11 @@ function onBandDrop(band, event) {
  * FIRST, and a capture-phase listener would take it from them.
  */
 function shelfOwnsTheKey(event) {
+  // The shelf component stays mounted while the runs panel is showing, and this
+  // is a WINDOW listener, so without this line `Delete` would open the delete
+  // confirmation for rows the reader cannot see and `Escape` would silently
+  // clear a selection they did not know they still had.
+  if (!isShelfTab.value) return false;
   if (
     moveOpen.value ||
     addSourceOpen.value ||
@@ -1909,6 +1987,58 @@ function stepLabel(row) {
   return typeof step === "number" ? `Step ${step.toLocaleString()}` : "";
 }
 
+// ── The two views of this destination (shelf plan F6) ───────────────────────
+//
+// The tab is DERIVED from the route rather than held beside it, so there is no
+// second source of truth to desync: reload and back-navigation land on the same
+// view by construction. `/models/runs` is a path and not `?view=runs` because
+// the query string is reserved here for modifiers layered on a destination
+// (`?overlay=`, `?review=`, the duplicates `?scope=`), and this is a different
+// list of different objects with its own keyboard model.
+
+const route = useRoute();
+const router = useRouter();
+
+const isShelfTab = computed(() => route.name !== "models-runs");
+
+/** How many runs the other view is showing, for the count beside the tabs. */
+const runsCount = ref(null);
+const runsCountLabel = computed(() =>
+  runsCount.value == null
+    ? ""
+    : `${runsCount.value.toLocaleString()} ${runsCount.value === 1 ? "run" : "runs"}`,
+);
+
+function showTab(which) {
+  const name = which === "runs" ? "models-runs" : "models";
+  if (route.name !== name) router.push({ name });
+}
+
+/**
+ * Arrow keys move between the tabs and activate on arrival.
+ *
+ * Automatic activation, per the APG: there are two tabs and neither panel is
+ * expensive to show — the runs listing reads filenames and one `config.yaml`
+ * per run and is re-run on every window focus anyway. Focus STAYS on the newly
+ * selected tab, which is what makes Left/Right flickable; moving it into the
+ * panel would strand someone comparing the two lists.
+ */
+function onTabKeydown(event) {
+  const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+  if (!keys.includes(event.key)) return;
+  event.preventDefault();
+  const toRuns =
+    event.key === "End" ||
+    (event.key === "ArrowRight" && isShelfTab.value) ||
+    (event.key === "ArrowLeft" && isShelfTab.value);
+  showTab(toRuns ? "runs" : "shelf");
+  nextTick(() => {
+    document
+      .getElementById(toRuns ? "shelf-tab-runs" : "shelf-tab-shelf")
+      ?.focus();
+  });
+}
+
 // ── Set the ai-toolkit output folder (shelf plan F6) ────────────────────────
 //
 // Setting the folder is all this menu does. The runs inside it are a
@@ -1944,7 +2074,7 @@ async function closeAddSource() {
 async function onSourcePicked(path) {
   const added = await foldersStore.add({ path, kind: SOURCE_KIND });
   await closeAddSource();
-  if (added) emit("select-training-runs");
+  if (added) showTab("runs");
 }
 
 // ── Add file (shelf plan F6's remainder) ────────────────────────────────────
@@ -3119,19 +3249,46 @@ watch(
    Bottom-centre over the list, the same object the photo grid docks over its
    tiles. The strip takes no pointer events so the rows it crosses stay
    clickable; the pill inside it takes them back. */
-.shelf-selbar-float {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: var(--space-5);
-  display: flex;
-  justify-content: center;
-  pointer-events: none;
-  z-index: var(--z-sticky);
+
+/* ── The view switcher ─────────────────────────────────────────────────────
+   A welded pair of `.bar-btn`s: gap 0, and the outer corners rounded the way
+   `.bar-split-toggle`/`.bar-split-menu` already do it. NO container border —
+   `--v-theme-border` against this chrome measures 1.28:1 light / 1.35:1 dark,
+   which is a box with no job. Adjacency at gap 0 is what groups them. */
+.shelf-viewswitch {
+  display: inline-flex;
+  gap: 0;
 }
 
-.shelf-selbar-float > :deep(*) {
-  pointer-events: auto;
+.shelf-viewseg {
+  border-radius: 0;
+  color: rgba(var(--v-theme-toolbar-text), 0.7);
+}
+
+.shelf-viewseg:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.shelf-viewseg:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+/* Three layers, and the underline is the LEAST of them. `--active-bar` measures
+   2.93:1 light / 2.72:1 dark against the toolbar — under WCAG 1.4.11's 3:1 — so
+   it is reinforcement only; the wash and the weight carry the state, and
+   `aria-selected` carries it to a screen reader. Deliberately NOT
+   `.bar-btn--active`, whose `primary` label measures 2.72:1 on dark chrome. */
+.shelf-viewseg--on {
+  background: var(--active-wash);
+  color: var(--active-text);
+  font-weight: var(--weight-semibold);
+  box-shadow: inset 0 -2px 0 var(--active-bar);
+}
+
+/* Raised so the focus ring is not clipped by the welded sibling. */
+.shelf-viewseg:focus-visible {
+  position: relative;
+  z-index: var(--z-raised);
 }
 
 /* ── Banners ───────────────────────────────────────────────────────────────
