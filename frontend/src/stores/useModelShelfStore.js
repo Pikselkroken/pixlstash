@@ -375,6 +375,11 @@ function defaultFilters() {
     // (#927). The box is still there to turn it off.
     unclassified: true,
     engines: true,
+    // The VAEs and text encoders a generation graph loads beside a checkpoint.
+    // On for the same reason as the two above and rather more urgently: until
+    // they had kinds of their own the big ones were counted as checkpoints, so
+    // "what are my base models" answered with a list mostly made of encoders.
+    support: true,
     baseModels: [],
     capabilities: [],
   };
@@ -416,7 +421,9 @@ function storedFilters() {
   // default forward forever.
   if (!parsed || parsed.v !== FILTERS_SCHEMA_VERSION) return null;
   const filters = defaultFilters();
-  for (const key of ["adapters", "checkpoints", "unclassified", "engines"]) {
+  // `support` is absent from every blob an earlier build wrote, which needs no
+  // schema bump: the key simply misses this loop and keeps its default of on.
+  for (const key of BLOCKS) {
     if (typeof parsed[key] === "boolean") filters[key] = parsed[key];
   }
   for (const key of ["adapterKinds", "baseModels", "capabilities"]) {
@@ -591,14 +598,30 @@ function groupsOf(row, axis) {
   }));
 }
 
-/** The four top-level type checkboxes, each one request and one row bucket. */
-const BLOCKS = ["adapters", "checkpoints", "unclassified", "engines"];
+/** The top-level type checkboxes, each one row bucket. */
+const BLOCKS = [
+  "adapters",
+  "checkpoints",
+  "unclassified",
+  "engines",
+  "support",
+];
 
-/** Which block a row came from, so a fetch only replaces what it asked for. */
+/**
+ * Which block a row came from, so a fetch only replaces what it asked for.
+ *
+ * `support` is the one block that is two kinds. A VAE and a text encoder are
+ * separate answers to "what is this file" and one answer to "what does the
+ * shelf show", so they are separate `file_kind`s and one checkbox — the alt
+ * being two boxes nobody wants to tick separately.
+ */
 function blockOf(row) {
   if (row.file_kind === "checkpoint") return "checkpoints";
   if (row.file_kind === "unknown") return "unclassified";
   if (row.file_kind === "engine") return "engines";
+  if (row.file_kind === "vae" || row.file_kind === "text_encoder") {
+    return "support";
+  }
   return "adapters";
 }
 
@@ -685,6 +708,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // InsightFace packs and every HuggingFace repo in the cache. Same
       // route, same shape, one more `file_kind`.
       if (filters.engines) requests.push(listAdapters({ fileKind: "engine" }));
+      // Two requests for one checkbox: the route takes a single `file_kind`,
+      // and these two kinds are one thing to a reader deciding what to keep.
+      if (filters.support) {
+        requests.push(listAdapters({ fileKind: "vae" }));
+        requests.push(listAdapters({ fileKind: "text_encoder" }));
+      }
       const results = await Promise.all(requests);
       if (startedAt !== epoch) return;
       const refreshed = new Set(BLOCKS.filter((block) => filters[block]));

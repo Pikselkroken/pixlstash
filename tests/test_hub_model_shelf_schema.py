@@ -25,6 +25,7 @@ import time
 import pytest
 
 from pixlstash.hub.schema import (
+    CURRENT_DATA_VERSION,
     CURRENT_SCHEMA_VERSION,
     _V2_MODEL,
     _V2_MODEL_FILE,
@@ -554,6 +555,178 @@ class TestUnknownIsFirstClass:
         assert hub.execute(
             "SELECT COUNT(*) FROM model_file WHERE model_id = ?", (model_id,)
         ).fetchone() == (2,)
+
+
+class TestComponentRoleBackfill:
+    """Re-filing support files that were registered before they had kinds.
+
+    Every row on an existing shelf was classified by tensor markers and a
+    parameter count, and neither can see a VAE or a text encoder. The folder
+    each file sits in can, and it is already in the hub — so this is a data
+    backfill over stored columns, not a rescan.
+
+    It runs exactly once per hub, tracked in ``PRAGMA user_version`` rather than
+    in ``schema_version``: the schema steps are re-applied on every open by
+    design, and a step that rewrote an owner-correctable value on every restart
+    would undo the correction each time.
+    """
+
+    def test_a_small_vae_stored_as_unknown_is_refiled(self, hub):
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 0")
+        model_id = add_model(hub, file_kind="unknown", sha256="v", kind=None)
+        add_file(hub, model_id, add_folder(hub, "/models"), "VAE/sdxl_vae.safetensors")
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE id = ?", (model_id,)
+        ).fetchone() == ("vae",)
+
+    def test_a_large_text_encoder_stored_as_checkpoint_is_refiled(self, hub):
+        # The 131 GB case: a T5-class encoder clears the checkpoint threshold,
+        # so it was filed as a base model and counted as one.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 0")
+        model_id = add_model(hub, file_kind="checkpoint", sha256="t", kind=None)
+        add_file(
+            hub,
+            model_id,
+            add_folder(hub, "/models"),
+            "TextEncoders/t5xxl_fp16.safetensors",
+        )
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE id = ?", (model_id,)
+        ).fetchone() == ("text_encoder",)
+
+    def test_an_adapter_is_never_touched(self, hub):
+        # Markers are positive evidence. A LoRA kept beside the VAEs is a
+        # misfiled LoRA, and the backfill must not "fix" it into a VAE.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 0")
+        model_id = add_model(hub, file_kind="adapter", sha256="a", kind="lora")
+        add_file(hub, model_id, add_folder(hub, "/models"), "VAE/mislaid.safetensors")
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE id = ?", (model_id,)
+        ).fetchone() == ("adapter",)
+
+    def test_copies_that_disagree_leave_the_row_alone(self, hub):
+        # One copy under `VAE/` and one loose in a mixed folder is not evidence.
+        # Resolving it by picking a side would be a guess wearing a fact's face.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 0")
+        model_id = add_model(hub, file_kind="unknown", sha256="d", kind=None)
+        add_file(hub, model_id, add_folder(hub, "/a"), "VAE/thing.safetensors")
+        add_file(hub, model_id, add_folder(hub, "/b"), "Downloads/thing.safetensors")
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE id = ?", (model_id,)
+        ).fetchone() == ("unknown",)
+
+    def test_a_tombstone_cannot_veto_what_the_live_copies_agree_on(self, hub):
+        # `model_file` is also the tombstone, so a copy deleted months ago leaves
+        # its row behind. Counting that dead path as a dissenting voice would
+        # block the re-filing every present copy agrees on.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 0")
+        model_id = add_model(hub, file_kind="unknown", sha256="t", kind=None)
+        add_file(hub, model_id, add_folder(hub, "/a"), "VAE/thing.safetensors")
+        add_file(
+            hub,
+            model_id,
+            add_folder(hub, "/b"),
+            "Downloads/thing.safetensors",
+            state="missing",
+        )
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE id = ?", (model_id,)
+        ).fetchone() == ("vae",)
+
+    def test_present_copies_that_disagree_still_veto(self, hub):
+        # Preferring the live copies is not the same as ignoring disagreement:
+        # two folders we can currently see, naming different roles, is exactly
+        # the case that must be left alone.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 0")
+        model_id = add_model(hub, file_kind="unknown", sha256="p", kind=None)
+        add_file(hub, model_id, add_folder(hub, "/a"), "VAE/thing.safetensors")
+        add_file(hub, model_id, add_folder(hub, "/b"), "Downloads/thing.safetensors")
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE id = ?", (model_id,)
+        ).fetchone() == ("unknown",)
+
+    def test_a_model_with_no_present_copy_is_still_refiled(self, hub):
+        # An unplugged drive. This runs once, so skipping it here would leave
+        # that drive's support files mislabelled for good.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 0")
+        model_id = add_model(hub, file_kind="checkpoint", sha256="o", kind=None)
+        add_file(
+            hub,
+            model_id,
+            add_folder(hub, "/detached"),
+            "TextEncoders/t5xxl.safetensors",
+            state="unreachable",
+        )
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE id = ?", (model_id,)
+        ).fetchone() == ("text_encoder",)
+
+    def test_it_runs_once_and_never_undoes_a_correction(self, hub):
+        # The reason this is not a schema step. `_apply_v2` re-runs on every
+        # open; if this did too, an owner who corrected a row would find it
+        # reverted on their next restart, silently, forever.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 0")
+        model_id = add_model(hub, file_kind="unknown", sha256="c", kind=None)
+        add_file(hub, model_id, add_folder(hub, "/models"), "VAE/odd.safetensors")
+        hub.commit()
+
+        apply_migrations(hub)
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE id = ?", (model_id,)
+        ).fetchone() == ("vae",)
+
+        # The owner disagrees: it is really a checkpoint someone filed oddly.
+        hub.execute(
+            "UPDATE model SET file_kind = 'checkpoint' WHERE id = ?", (model_id,)
+        )
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert hub.execute(
+            "SELECT file_kind FROM model WHERE id = ?", (model_id,)
+        ).fetchone() == ("checkpoint",)
+
+    def test_a_fresh_hub_records_the_backfill_as_done(self, hub):
+        apply_migrations(hub)
+
+        assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION
 
 
 class TestTombstone:

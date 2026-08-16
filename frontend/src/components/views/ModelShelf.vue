@@ -2589,6 +2589,10 @@ function toggleDirection() {
 function kindLabel(row) {
   if (row.file_kind === "checkpoint") return "Checkpoint";
   if (row.file_kind === "unknown") return "Unclassified";
+  // Named as roles rather than as file types, because the reader deciding what
+  // to keep is asking what the file DOES beside a checkpoint.
+  if (row.file_kind === "vae") return "VAE";
+  if (row.file_kind === "text_encoder") return "Text encoder";
   const capabilities = Array.isArray(row.capabilities) ? row.capabilities : [];
   if (capabilities.length) return capabilities.map(capabilityLabel).join(", ");
   // One vocabulary with the `feature` group axis, though not always the same

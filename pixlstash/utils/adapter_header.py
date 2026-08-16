@@ -29,6 +29,7 @@ metadata: it is the only signal present on every file regardless of provenance.
 from __future__ import annotations
 
 import json
+import os
 import re
 import struct
 from dataclasses import dataclass, field
@@ -83,6 +84,47 @@ FILE_UNKNOWN = "unknown"
 # already holds free text, so this vocabulary stays four values wide.
 FILE_ENGINE = "engine"
 
+# The two support roles a generation graph loads beside a diffusion model. They
+# are not checkpoints and they are not adapters, and until they had names of
+# their own the shelf had nowhere to put them: measured against a real shelf,
+# every VAE and CLIP fell below `_CHECKPOINT_MIN_PARAMS` and read as `unknown`,
+# while every T5/UMT5/Qwen/Gemma text encoder cleared it and read as
+# `checkpoint`. That is 131 GB of encoders counted as base models on one
+# machine, and it is why "what can I delete" had no answer.
+FILE_VAE = "vae"
+FILE_TEXT_ENCODER = "text_encoder"
+
+# What a directory NAMES the files inside it, normalised by `_normalise_folder`.
+#
+# ComfyUI files models by role (`models/vae`, `models/text_encoders`,
+# `models/clip`) and the launchers that front it mirror the layout, so the role
+# is sitting in the path of nearly every file on a real shelf. That is a better
+# signal than anything the header carries here: a VAE and a text encoder are
+# ordinary tensor bundles with no marker to find, and their parameter counts
+# straddle the checkpoint threshold from both sides.
+#
+# Only genuinely different words belong here — the normaliser already folds
+# spacing and case, so a `text_encoders` entry covers `TextEncoders` too.
+#
+# Deliberately absent, each for its own reason:
+#
+# * `loras` / `lora` — an adapter is asserted from tensor markers, which is
+#   positive evidence no directory can improve on. Trusting the folder here
+#   would actively break the case that already works: an all-in-one checkpoint
+#   dropped in a LoRA folder is caught today by its parameter count.
+# * `approxvae` — TAESD previews and latent interposers. They live beside real
+#   autoencoders and are not one, so treating them as VAEs would offer the wrong
+#   file as a companion.
+# * `clipvision` — an image encoder. It shares a prefix with `clip` and does a
+#   different job, which is exactly the confusion worth not shipping.
+_ROLE_FOLDERS: dict[str, str] = {
+    "vae": FILE_VAE,
+    "vaes": FILE_VAE,
+    "clip": FILE_TEXT_ENCODER,
+    "textencoder": FILE_TEXT_ENCODER,
+    "textencoders": FILE_TEXT_ENCODER,
+}
+
 # Parameter count above which a marker-free file is a base checkpoint rather
 # than an adapter we failed to recognise.
 #
@@ -116,9 +158,10 @@ class AdapterInfo:
             from names the file cannot strip without breaking, so an
             unrecognised LyCORIS variant reads as "an adapter whose kind we do
             not know" rather than being mistaken for a checkpoint.
-        file_kind: What the file is: ``"adapter"``, ``"checkpoint"`` or
-            ``"unknown"``. Never guesses checkpoint from the absence of
-            markers alone; see :func:`classify_model_file`.
+        file_kind: What the file is: ``"adapter"``, ``"vae"``,
+            ``"text_encoder"``, ``"checkpoint"`` or ``"unknown"``. Never
+            guesses checkpoint from the absence of markers alone; see
+            :func:`classify_model_file`.
         param_count: Total parameters, summed from the tensor shapes already in
             the header. Exact and free, unlike file size which quantisation and
             rank both confound.
@@ -297,28 +340,79 @@ def count_parameters(header: dict) -> int:
     return total
 
 
-def classify_model_file(tensor_names, param_count: int) -> str:
-    """Return what a file *is*, given its tensor names and parameter count.
+def _normalise_folder(name: str) -> str:
+    """Fold a directory name to its letters and digits, lowercased.
 
-    The rule is deliberately asymmetric. Adapter is asserted on **positive**
-    evidence (markers the file cannot strip). Checkpoint is also asserted on
-    positive evidence (a parameter count no adapter reaches). Everything else
-    is ``"unknown"``, which the shelf shows as unknown and lets the user
-    correct.
+    ``TextEncoders``, ``text_encoders`` and ``text-encoders`` are one layout
+    spelled three ways, so :data:`_ROLE_FOLDERS` carries the word once.
+    """
+    return re.sub(r"[^a-z0-9]", "", name.lower())
 
-    ``unknown`` must never be rendered or stored as checkpoint. A marker-free
-    file is only a checkpoint when it is big enough to be one; otherwise it is
-    most likely an adapter format we have not met yet.
+
+def role_from_folder(path: str) -> Optional[str]:
+    """Return the component role the file's own directory names, or ``None``.
+
+    Only the directory the file sits in is consulted, never an ancestor: a
+    registered folder may itself be called ``vae`` (someone can register
+    ``ComfyUI/models/vae`` directly) and it may equally be a whole models tree
+    with ``vae/`` inside it. Both cases put the role one level up from the file,
+    and nothing else in the path is evidence about a particular file.
+
+    Args:
+        path: Path to the model file. May be relative or absolute.
+
+    Returns:
+        ``"vae"``, ``"text_encoder"``, or ``None`` when the directory names no
+        role we recognise — which is the answer for a flat folder of mixed
+        downloads and must never be read as "not a VAE".
+    """
+    folder = os.path.basename(os.path.dirname(path))
+    if not folder:
+        return None
+    return _ROLE_FOLDERS.get(_normalise_folder(folder))
+
+
+def classify_model_file(tensor_names, param_count: int, path: str = "") -> str:
+    """Return what a file *is*, from its tensor names, parameter count and location.
+
+    The rule is deliberately asymmetric, and the order below is the ranking of
+    how much each signal can be trusted:
+
+    1. **Adapter markers**, when present, settle it. They are positive evidence
+       the file cannot strip without breaking, so nothing overrides them — not
+       a parameter count and not a directory. This is what keeps an all-in-one
+       checkpoint dropped in someone's ``Lora/`` folder from being filed as a
+       LoRA.
+    2. **The directory**, when it names a role. A VAE and a text encoder carry
+       no marker to find, so the layout the user (or their launcher) already
+       maintains is the best evidence there is. It outranks the parameter count
+       because the parameter count is *wrong* for both: they sit either side of
+       a threshold that was only ever meant to separate adapters from base
+       models.
+    3. **The parameter count**, for a marker-free file in a folder that says
+       nothing. A count no adapter reaches asserts checkpoint.
+
+    Everything else is ``"unknown"``, which the shelf shows as unknown and lets
+    the user correct. ``unknown`` must never be rendered or stored as
+    checkpoint: a marker-free file too small to be a base model is most likely
+    an adapter format we have not met yet.
 
     Args:
         tensor_names: Iterable of tensor keys from the header.
         param_count: Total parameters, from :func:`count_parameters`.
+        path: Where the file lives. Optional — omitting it drops rule 2 and
+            leaves the pre-existing behaviour, which is what a caller holding
+            only a header should get.
 
     Returns:
-        ``"adapter"``, ``"checkpoint"`` or ``"unknown"``.
+        ``"adapter"``, ``"vae"``, ``"text_encoder"``, ``"checkpoint"`` or
+        ``"unknown"``.
     """
     if has_adapter_markers(tensor_names):
         return FILE_ADAPTER
+    role = role_from_folder(path) if path else None
+    if role is not None:
+        return role
     if param_count >= _CHECKPOINT_MIN_PARAMS:
         return FILE_CHECKPOINT
     return FILE_UNKNOWN
@@ -438,7 +532,7 @@ def describe_adapter(path: str) -> Optional[AdapterInfo]:
         kind=detect_adapter_kind(tensor_names),
         tensor_count=len(tensor_names),
         is_adapter=has_adapter_markers(tensor_names),
-        file_kind=classify_model_file(tensor_names, param_count),
+        file_kind=classify_model_file(tensor_names, param_count, path),
         param_count=param_count,
         base_model=str(base_model) if base_model else None,
         trigger_words=_trigger_words_from_tag_frequency(

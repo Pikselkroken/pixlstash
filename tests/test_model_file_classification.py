@@ -19,7 +19,9 @@ import pytest
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
+    FILE_TEXT_ENCODER,
     FILE_UNKNOWN,
+    FILE_VAE,
     KIND_UNKNOWN,
     classify_model_file,
     count_parameters,
@@ -113,6 +115,138 @@ class TestFileClassification:
 
     def test_an_empty_file_is_unknown(self):
         assert classify_model_file([], param_count=0) == FILE_UNKNOWN
+
+
+class TestTheFolderNamesTheRole:
+    """The support kinds, which no header signal can assert.
+
+    A VAE and a text encoder carry no marker, and their parameter counts land on
+    both sides of the checkpoint threshold — a CLIP-L below it, a T5-XXL well
+    above. The directory is what actually knows, because ComfyUI and the
+    launchers that front it file models by role.
+    """
+
+    def test_a_vae_folder_names_a_vae_however_small(self):
+        # Below the checkpoint threshold, and previously stored as `unknown`.
+        assert (
+            classify_model_file(
+                ["decoder.conv_in.weight"],
+                param_count=83_000_000,
+                path="/models/VAE/sdxl_vae.safetensors",
+            )
+            == FILE_VAE
+        )
+
+    def test_a_text_encoder_folder_beats_the_checkpoint_threshold(self):
+        # The regression that motivated the kind: a T5-XXL is 4.9 B parameters,
+        # clears `_CHECKPOINT_MIN_PARAMS`, and was filed as a base model.
+        assert (
+            classify_model_file(
+                ["encoder.block.0.layer.0.SelfAttention.q.weight"],
+                param_count=4_890_000_000,
+                path="/models/TextEncoders/t5xxl_fp16.safetensors",
+            )
+            == FILE_TEXT_ENCODER
+        )
+
+    @pytest.mark.parametrize(
+        "folder", ["text_encoders", "TextEncoders", "text-encoders", "TEXTENCODERS"]
+    )
+    def test_spelling_and_case_of_one_folder_are_one_folder(self, folder):
+        assert (
+            classify_model_file(
+                ["encoder.block.0.weight"],
+                param_count=123_000_000,
+                path=f"/models/{folder}/clip_l.safetensors",
+            )
+            == FILE_TEXT_ENCODER
+        )
+
+    def test_comfyui_spells_its_text_encoders_clip_too(self):
+        assert (
+            classify_model_file(
+                ["text_model.encoder.layers.0.weight"],
+                param_count=123_000_000,
+                path="/ComfyUI/models/clip/clip_l.safetensors",
+            )
+            == FILE_TEXT_ENCODER
+        )
+
+    def test_markers_still_win_over_the_folder(self):
+        # Positive evidence outranks a directory. Someone keeping a LoRA beside
+        # their VAEs has a misfiled LoRA, not a VAE.
+        assert (
+            classify_model_file(
+                ["x.lora_A.weight"],
+                param_count=40_000_000,
+                path="/models/VAE/mislaid.safetensors",
+            )
+            == FILE_ADAPTER
+        )
+
+    def test_a_lora_folder_names_nothing_so_a_big_file_is_still_a_checkpoint(self):
+        # `loras` is deliberately absent from the table. All-in-one checkpoints
+        # get dropped in LoRA folders, and the parameter count already catches
+        # them — trusting the folder here would BREAK that.
+        assert (
+            classify_model_file(
+                ["model.weight"],
+                param_count=10_260_000_000,
+                path="/models/Lora/everything_aio.safetensors",
+            )
+            == FILE_CHECKPOINT
+        )
+
+    @pytest.mark.parametrize("folder", ["ApproxVAE", "clip_vision", "Downloads"])
+    def test_a_folder_that_names_no_role_leaves_the_answer_where_it_was(self, folder):
+        # TAESD previews are not VAEs and a CLIP-Vision is not a text encoder,
+        # despite sharing a word with one. Not recognising a folder must read as
+        # "no evidence", never as "not a VAE".
+        assert (
+            classify_model_file(
+                ["some.unrecognised.weight"],
+                param_count=40_000_000,
+                path=f"/models/{folder}/thing.safetensors",
+            )
+            == FILE_UNKNOWN
+        )
+
+    def test_no_path_at_all_leaves_the_old_behaviour_intact(self):
+        assert (
+            classify_model_file(["model.weight"], param_count=2_600_000_000)
+            == FILE_CHECKPOINT
+        )
+
+    def test_a_bare_filename_has_no_folder_and_asserts_nothing(self):
+        assert (
+            classify_model_file(
+                ["model.weight"], param_count=40_000_000, path="vae.safetensors"
+            )
+            == FILE_UNKNOWN
+        )
+
+    def test_only_the_files_own_folder_counts_not_an_ancestor(self):
+        # A registered root called `vae` says nothing about a subdirectory of
+        # checkpoints inside it.
+        assert (
+            classify_model_file(
+                ["model.weight"],
+                param_count=2_600_000_000,
+                path="/models/vae/checkpoints/big.safetensors",
+            )
+            == FILE_CHECKPOINT
+        )
+
+    def test_describe_adapter_files_a_real_file_by_its_folder(self, tmp_path):
+        folder = tmp_path / "TextEncoders"
+        folder.mkdir()
+        path = _write_safetensors(
+            folder / "t5xxl_fp16.safetensors",
+            {"encoder.block.0.weight": _tensor([4096, 4096])},
+        )
+        info = describe_adapter(str(path))
+        assert info is not None
+        assert info.file_kind == FILE_TEXT_ENCODER
 
 
 class TestDescribeAdapterCarriesTheNewFields:

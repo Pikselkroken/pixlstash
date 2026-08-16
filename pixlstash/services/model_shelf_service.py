@@ -44,7 +44,9 @@ from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
     FILE_ENGINE,
+    FILE_TEXT_ENCODER,
     FILE_UNKNOWN,
+    FILE_VAE,
 )
 
 logger = get_logger(__name__)
@@ -468,7 +470,17 @@ CURATABLE_FIELDS = ("display_name", "base_model", "kind", "file_kind")
 # What a file may be corrected to. Closed, and checked before the UPDATE rather
 # than left to the CHECK constraint: a violation would surface as a 500 naming
 # a constraint, which tells the owner nothing about the file they picked.
-FILE_KINDS = (FILE_ADAPTER, FILE_CHECKPOINT, FILE_UNKNOWN)
+#
+# `vae` and `text_encoder` are correctable like the rest, and they are the two
+# most likely to need it: their kind is read off the folder the file sits in, so
+# a support file kept outside the layout gets the answer the layout gives.
+FILE_KINDS = (
+    FILE_ADAPTER,
+    FILE_CHECKPOINT,
+    FILE_VAE,
+    FILE_TEXT_ENCODER,
+    FILE_UNKNOWN,
+)
 
 # A location state that means the bytes are still out there somewhere, so the
 # row is NOT a candidate for Forget. `unreachable` is in here deliberately: it

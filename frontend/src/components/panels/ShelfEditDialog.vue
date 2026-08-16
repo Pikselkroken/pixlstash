@@ -116,9 +116,14 @@ const emit = defineEmits(["close"]);
 
 const store = useModelShelfStore();
 
+// The support kinds are correctable like the rest, and are the two most likely
+// to need it: they are read off the folder the file sits in, so one kept outside
+// the usual layout gets whatever that folder says.
 const FILE_KINDS = [
   { value: "adapter", label: "Adapter (LoRA and friends)" },
   { value: "checkpoint", label: "Checkpoint (a base model)" },
+  { value: "vae", label: "VAE" },
+  { value: "text_encoder", label: "Text encoder" },
   { value: "unknown", label: "Unclassified" },
 ];
 
