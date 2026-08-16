@@ -4465,12 +4465,14 @@ def test_delete_moves_the_file_to_the_trash_and_takes_the_row_with_it(
 
     r = _delete(shelf_env, [alice])
     assert r.status_code == 200, r.text
-    assert r.json() == {
-        "deleted": [alice],
-        "files_removed": 1,
-        "permanent": False,
-        "refused": [],
-    }
+    body = r.json()
+    assert body["deleted"] == [alice]
+    assert body["files_removed"] == 1
+    assert body["permanent"] is False
+    assert body["refused"] == []
+    # Where the bytes went comes from the machine they are ON, not from the
+    # browser that asked.
+    assert body["trash_name"] == ("Recycle Bin" if sys.platform == "win32" else "Trash")
 
     assert not (real_files / "alice.safetensors").exists()
     assert (fake_trash / "alice.safetensors").exists(), "the file was not trashed"
@@ -4666,7 +4668,7 @@ def test_a_relpath_that_escapes_its_folder_is_refused_not_unlinked(
 
     r = _delete(shelf_env, [alice])
     assert r.status_code == 200, r.text
-    assert r.json()["refused"] == [{"id": alice, "reason": "delete_failed"}]
+    assert r.json()["refused"] == [{"id": alice, "reason": "escapes_its_folder"}]
     assert outsider.exists(), "a file outside the registered folder was deleted"
     assert list(fake_trash.iterdir()) == []
 
@@ -4723,3 +4725,122 @@ def test_delete_refuses_every_share_token(shelf_env, real_files, fake_trash):
     assert (real_files / "alice.safetensors").exists(), "a refused call still deleted"
     # Positive control: the owner is not blocked on the same call.
     assert shelf_env.owner.request(method, path, **kwargs).status_code == 200
+
+
+def test_a_symlinked_model_loses_the_link_and_not_the_file_it_points_at(
+    shelf_env, real_files, fake_trash, tmp_path
+):
+    """A symlinked model is ordinary practice on this shelf — the download route
+    serves one — so deleting one has to behave like a file manager: the name the
+    shelf catalogues goes, and the bytes it points at are somebody else's."""
+    target = tmp_path / "real-weights.safetensors"
+    write_adapter(target)
+    link = real_files / "linked.safetensors"
+    os.symlink(target, link)
+    alice = shelf_env.model_ids["alice.safetensors"]
+    _relpath_of(shelf_env.server, "alice.safetensors", "linked.safetensors")
+
+    r = _delete(shelf_env, [alice])
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == [alice]
+    assert not os.path.lexists(link), "the link the shelf catalogued is still there"
+    assert target.exists(), (
+        "the file the link pointed at was deleted; only the link is ours to remove"
+    )
+
+
+def test_a_copy_that_fails_after_another_one_went_says_so(
+    shelf_env, real_files, monkeypatch, tmp_path
+):
+    """The one refusal that has already destroyed something.
+
+    Reporting `delete_failed` here would tell the reader nothing happened while
+    one of the model's copies was in fact gone, which is the worst sentence this
+    route could produce.
+    """
+    spare = tmp_path / "spare"
+    spare.mkdir()
+    write_adapter(spare / "alice.safetensors")
+    alice = shelf_env.model_ids["alice.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (id, path, kind, movable, created_at) "
+            "VALUES (5, ?, 'user', 'per_item', '2026-08-16T00:00:00Z')",
+            (str(spare),),
+        )
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+            "seen_at) VALUES (?, 5, 'alice.safetensors', 'present', "
+            "'2026-08-16T00:00:00Z')",
+            (alice,),
+        )
+
+    removed = []
+
+    def one_then_fail(path):
+        if removed:
+            raise PermissionError(13, "read-only file system", path)
+        removed.append(path)
+        os.remove(path)
+
+    monkeypatch.setattr(model_files_routes, "send2trash", one_then_fail)
+
+    r = _delete(shelf_env, [alice])
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == []
+    assert r.json()["files_removed"] == 1
+    assert r.json()["refused"] == [{"id": alice, "reason": "partly_deleted"}]
+    # The rows stay, so the shelf still names the copy that did not go.
+    assert _model_row(shelf_env, alice)["display_name"] == "Alice"
+    assert (
+        shelf_env.server.hub.fetchone(
+            "SELECT model_id FROM model_file WHERE model_id = ?", (alice,)
+        )
+        is not None
+    )
+
+
+def test_a_copy_registered_while_the_files_went_keeps_its_model_alive(
+    shelf_env, real_files, fake_trash, tmp_path
+):
+    """The other half of the window the plan cannot hold a transaction across.
+
+    A scan can register a copy between the gate and the purge — the unlink is
+    disk I/O and cannot run under the hub's write lock. Purging the model row
+    anyway would leave a file on disk that nothing on the shelf names, which is
+    the one thing the tombstone design forbids.
+    """
+    spare = tmp_path / "reappeared"
+    spare.mkdir()
+    write_adapter(spare / "alice.safetensors")
+    alice = shelf_env.model_ids["alice.safetensors"]
+    original = model_files_routes._plan_deletions
+
+    def plan_then_register(hub, ids):
+        planned = original(hub, ids)
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model_folder (id, path, kind, movable, created_at) "
+                "VALUES (6, ?, 'user', 'per_item', '2026-08-16T00:00:00Z')",
+                (str(spare),),
+            )
+            conn.execute(
+                "INSERT INTO model_file (model_id, model_folder_id, relpath, "
+                "state, seen_at) VALUES (?, 6, 'alice.safetensors', 'present', "
+                "'2026-08-16T00:00:00Z')",
+                (alice,),
+            )
+        return planned
+
+    model_files_routes._plan_deletions = plan_then_register
+    try:
+        r = _delete(shelf_env, [alice])
+    finally:
+        model_files_routes._plan_deletions = original
+
+    assert r.status_code == 200, r.text
+    assert not (real_files / "alice.safetensors").exists(), "the planned copy stayed"
+    assert _model_row(shelf_env, alice)["display_name"] == "Alice", (
+        "the model row was purged while a registered copy was still on disk"
+    )
+    assert (spare / "alice.safetensors").exists()

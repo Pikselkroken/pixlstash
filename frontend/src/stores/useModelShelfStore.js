@@ -224,9 +224,19 @@ export function forgetReceipt(gone, kept, vanished = 0) {
  * @param {number} gone - models whose files and rows were destroyed.
  * @param {Array<{reason: string}>} refused - the server's refusals, verbatim.
  * @param {boolean} permanent - whether the files were unlinked or trashed.
- * @param {string} trash - what this machine calls its trash.
+ * @param {string} trash - what the SERVER calls its trash.
+ * @param {number} [filesRemoved=0] - how many files actually moved. Zero with
+ *   `gone` above it is the row-only case — every copy was already off the disk —
+ *   and saying "moved to the Trash" there would name a place the reader could go
+ *   and fail to find them.
  */
-export function deleteReceipt(gone, refused, permanent, trash) {
+export function deleteReceipt(
+  gone,
+  refused,
+  permanent,
+  trash,
+  filesRemoved = 0,
+) {
   const counts = new Map();
   for (const item of refused || []) {
     counts.set(item?.reason, (counts.get(item?.reason) || 0) + 1);
@@ -258,6 +268,16 @@ export function deleteReceipt(gone, refused, permanent, trash) {
       `There is no ${trash} this server can reach, so ${modelCount(n)} ${n === 1 ? "was" : "were"} kept. Hold Shift to delete permanently.`,
   );
   note(
+    "partly_deleted",
+    (n) =>
+      `${modelCount(n)} lost some of ${n === 1 ? "its" : "their"} copies before the delete failed, and ${n === 1 ? "was" : "were"} kept on the shelf so you can see what is left.`,
+  );
+  note(
+    "escapes_its_folder",
+    (n) =>
+      `${modelCount(n)} ${n === 1 ? "is" : "are"} recorded at a path outside the folder ${n === 1 ? "it belongs" : "they belong"} to; rescan that folder.`,
+  );
+  note(
     "no_such_model",
     (n) => `${modelCount(n)} ${n === 1 ? "was" : "were"} already gone.`,
   );
@@ -276,9 +296,11 @@ export function deleteReceipt(gone, refused, permanent, trash) {
       ? `Nothing was deleted. ${notes.join(" ")}`
       : "Nothing to delete.";
   }
-  const head = permanent
-    ? `Permanently deleted ${modelCount(gone)}.`
-    : `Moved ${modelCount(gone)} to the ${trash}.`;
+  const head = !filesRemoved
+    ? `Removed ${modelCount(gone)} from the shelf; the files were already gone.`
+    : permanent
+      ? `Permanently deleted ${modelCount(gone)}.`
+      : `Moved ${modelCount(gone)} to the ${trash}.`;
   return [head, ...notes].join(" ");
 }
 
@@ -1359,21 +1381,25 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Delete the selection from disk, then say what went and what did not.
    *
    * The shelf's only destructive verb. The confirmation is the view's — this
-   * runs after it — and `permanent` comes from the gesture that triggered it,
-   * never from anything this store remembers, so a stale Shift can never turn a
-   * trash into an unlink.
+   * runs after it — and both of the things that decide what is destroyed come
+   * from the gesture rather than from anything this store remembers: `permanent`
+   * from the press's own Shift, and `ids` from the list the prompt counted, so
+   * the reader can never agree to one number and have another one deleted.
    *
    * @param {Object} [options]
    * @param {boolean} [options.permanent=false] - Shift+Delete: unlink rather
    *   than trash.
+   * @param {number[]} [options.ids] - the models to delete. Defaults to the
+   *   whole selection, stacks expanded; the view narrows it to the subset the
+   *   route will accept.
    * @returns {Promise<boolean>} true when the call was made at all.
    */
-  async function deleteSelected({ permanent = false } = {}) {
+  async function deleteSelected({ permanent = false, ids } = {}) {
     const notices = useNoticeStore();
-    const ids = selectedModelIds.value;
-    if (!ids.length) return false;
+    const targets = ids?.length ? ids : selectedModelIds.value;
+    if (!targets.length) return false;
     try {
-      const body = await deleteModels(ids, { permanent });
+      const body = await deleteModels(targets, { permanent });
       clearSelection();
       await fetchRows();
       const gone = body?.deleted?.length ?? 0;
@@ -1383,7 +1409,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           gone,
           body?.refused ?? [],
           Boolean(body?.permanent),
-          trashName(),
+          // The server's word for its own trash, because the server is the
+          // machine the files were on. `trashName()` is the browser's guess and
+          // stands in only for an older backend.
+          body?.trash_name || trashName(),
+          body?.files_removed ?? 0,
         ),
       });
       return true;

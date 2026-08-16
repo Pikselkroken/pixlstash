@@ -76,6 +76,16 @@ class UnknownAttachmentEntityError(LookupError):
 # this filter; free text makes that theoretically possible and practically not.
 UNSET = "UNASSIGNED"
 
+# Ceiling on one verb's selection, shared by `PATCH /models`, `POST
+# /models/forget` and `POST /model-files/delete`. A shelf of 1,806 rows can be
+# selected whole, so this is set above the largest real selection rather than
+# below it: the cost is one hub UPDATE or DELETE over an id list, not a lookup
+# per id, and 5,000 ids is still a single short transaction. It exists so a
+# malformed client cannot post an unbounded list into the SQL builder, not to
+# ration the verb. It lives here rather than in a route module because a second
+# route needed it and routes do not import each other.
+MAX_MODELS_PER_EDIT = 5000
+
 # SQLite LIKE wildcards, escaped before a caller-supplied search term reaches
 # one, or a search for ``sd_xl`` would also match ``sdaxl``.
 _LIKE_ESCAPE = str.maketrans({"\\": "\\\\", "%": "\\%", "_": "\\_"})
@@ -614,20 +624,47 @@ def _purge(conn, ids: list[int]) -> None:
     conn.execute(f"DELETE FROM model WHERE id IN ({marks})", tuple(ids))
 
 
-def purge_models(hub, ids: list[int]) -> None:
-    """Drop these models unconditionally, files and all already dealt with.
+def purge_deleted_models(hub, emptied: dict[int, list[tuple[int, str]]]) -> list[int]:
+    """Drop the location rows a delete removed, and the models left with none.
 
     The row half of ``POST /model-files/delete``, which unlinks the bytes first
-    and calls this for the models it actually emptied. It shares
-    :func:`forget_models`' delete order and deliberately **not** its gate: the
-    state check there exists to stop a row being dropped while its file is
-    still on disk, and here the file has just been removed by this very call.
+    and calls this for the copies it actually removed. It shares
+    :func:`forget_models`' delete order, and it keeps a gate of its own — a
+    narrower one, because the state check there would refuse every row this is
+    called for. A ``model`` row goes only when **no** ``model_file`` row for it
+    survives the location delete, so a copy a background ``ModelFolderScanner``
+    registered while the files were being removed keeps its model alive rather
+    than being purged out from under a file that is really there. That is the
+    other half of the window :func:`~pixlstash.routes.model_files._plan_deletions`
+    cannot hold a transaction across.
 
     Args:
         hub: The open hub database.
-        ids: ``model.id`` values whose files are gone.
+        emptied: ``model.id`` to the ``(model_folder_id, relpath)`` keys of the
+            copies this call dealt with.
+
+    Returns:
+        The ids whose ``model`` row is gone, ascending. Shorter than
+        ``emptied`` only in the race above, which the caller logs.
     """
-    if not ids:
-        return
+    if not emptied:
+        return []
+    ids = list(emptied)
+    marks = ", ".join("?" for _ in ids)
     with hub.transaction() as conn:
-        _purge(conn, ids)
+        for model_id, keys in emptied.items():
+            for folder_id, relpath in keys:
+                conn.execute(
+                    "DELETE FROM model_file WHERE model_folder_id = ? AND relpath = ?",
+                    (folder_id, relpath),
+                )
+        survivors = {
+            int(row[0])
+            for row in conn.execute(
+                f"SELECT DISTINCT model_id FROM model_file WHERE model_id IN ({marks})",
+                tuple(ids),
+            ).fetchall()
+        }
+        gone = [model_id for model_id in ids if model_id not in survivors]
+        _purge(conn, gone)
+    return sorted(gone)

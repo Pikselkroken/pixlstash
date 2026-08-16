@@ -2922,6 +2922,65 @@ describe("Delete", () => {
     wrapper.unmount();
   });
 
+  it("counts a run's members, and deletes exactly what it counted", async () => {
+    // The wrong-count-in-a-destructive-prompt case. A stack is ONE row standing
+    // for its whole run, and the call sends every member — so a prompt counting
+    // rows would offer "Move this model to the Trash?" over six checkpoints and
+    // tens of gigabytes.
+    listModelFolders.mockResolvedValue([FOLDER]);
+    const wrapper = await mountShelf([
+      adapter({
+        id: 1,
+        stack_id: 7,
+        stack_position: 0,
+        locations: [
+          { state: "present", folder_id: 1, folder_path: "/m", relpath: "1" },
+        ],
+      }),
+      adapter({
+        id: 2,
+        stack_id: 7,
+        stack_position: 1,
+        sha256: "b".repeat(64),
+        locations: [
+          { state: "present", folder_id: 1, folder_path: "/m", relpath: "2" },
+        ],
+      }),
+    ]);
+    document.body.appendChild(wrapper.element);
+    useModelShelfStore().toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    deleteModels.mockResolvedValue({
+      deleted: [1, 2],
+      files_removed: 2,
+      permanent: false,
+      refused: [],
+    });
+
+    await pressDelete();
+    expect(confirmSpy.mock.calls[0][0]).toContain("2 models");
+    expect(deleteModels).toHaveBeenCalledWith([1, 2], { permanent: false });
+    wrapper.unmount();
+  });
+
+  it("says why rather than doing nothing when the key finds nothing", async () => {
+    // The pill's button is disabled there; `Delete` has no disabled state, so
+    // without this a valid-looking selection answers a keypress with silence.
+    listModelFolders.mockResolvedValue([
+      { id: 1, path: "/hf", kind: "foreign", movable: "fixed" },
+    ]);
+    const wrapper = await mountShelf([inFolder(1)]);
+    document.body.appendChild(wrapper.element);
+    useModelShelfStore().toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    await pressDelete();
+    expect(useNoticeStore().notices.at(-1).text).toContain("own model folders");
+    expect(deleteModels).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it("stops listening once the shelf is gone", async () => {
     // The view is v-else-if'd away when another one opens, and a window
     // listener that outlived it would delete files from another screen.

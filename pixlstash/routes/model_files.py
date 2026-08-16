@@ -68,9 +68,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from send2trash import TrashPermissionError, send2trash
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.routes.model_shelf import MAX_MODELS_PER_EDIT
 from pixlstash.services.managed_model_store import MANAGED_KIND
-from pixlstash.services.model_folder_scanner import MODEL_SUFFIX, ModelFolderScanner
+from pixlstash.services.model_folder_scanner import (
+    MODEL_SUFFIX,
+    STATE_PRESENT,
+    STATE_UNREACHABLE,
+    ModelFolderScanner,
+)
 from pixlstash.services.model_mover import (
     PARTIAL_SUFFIX,
     SHELF_IO_LOCK,
@@ -80,9 +84,12 @@ from pixlstash.services.model_mover import (
     file_digest,
     require_space,
 )
-from pixlstash.services.model_shelf_service import purge_models
+from pixlstash.services.model_shelf_service import (
+    MAX_MODELS_PER_EDIT,
+    purge_deleted_models,
+)
 from pixlstash.utils.adapter_header import FILE_ENGINE
-from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.system_utils import TRASH_NAME
 
 logger = get_logger(__name__)
@@ -103,12 +110,12 @@ SOURCE_FOLDER_KIND = "source"
 # while the files in it are individually the owner's.
 DELETABLE_FOLDER_KINDS = ("user", MANAGED_KIND)
 
-# A copy the scan could not look at, on a drive that is not plugged in. It is the
-# one state that must never be treated as a deletion: the bytes are out there,
-# and dropping the row would leave them orphaned with nothing on the shelf naming
-# them.
-STATE_UNREACHABLE = "unreachable"
-STATE_PRESENT = "present"
+# `STATE_UNREACHABLE` — a copy the scan could not look at, on a drive that is not
+# plugged in — is the one state that must never be treated as a deletion: the
+# bytes are out there, and dropping the row would leave them orphaned with
+# nothing on the shelf naming them. Imported from the scanner that writes them
+# rather than re-spelled here, so a rename cannot quietly turn this gate into a
+# no-op.
 
 
 class AddModelFileRequest(BaseModel):
@@ -175,10 +182,13 @@ class DeleteRefusal(BaseModel):
             "sits somewhere PixlStash will not unlink from — its own engine "
             "folders, the InsightFace packs, the shared HuggingFace cache), "
             "`unreachable_copy` (a copy is on a drive that is not plugged in, "
-            "which is not a deletion), `trash_unavailable` (this machine has no "
-            "trash we can reach; a permanent delete would still work) or "
-            "`delete_failed` (the unlink itself failed — the server log says "
-            "why)."
+            "which is not a deletion), `escapes_its_folder` (the row names a "
+            "path outside the folder it is registered in, which is a broken "
+            "row), `trash_unavailable` (this machine has no trash we can reach; "
+            "a permanent delete would still work), `partly_deleted` (some "
+            "copies went and one failed, so the rows were kept — the only "
+            "refusal that has already destroyed something) or `delete_failed` "
+            "(nothing was removed and the server log says why)."
         )
     )
 
@@ -197,6 +207,16 @@ class DeleteModelsResponse(BaseModel):
     permanent: bool = Field(
         description="What was done, echoed: trashed (false) or unlinked (true)."
     )
+    trash_name: str = Field(
+        default=TRASH_NAME,
+        description=(
+            "What THIS machine calls the place the files went — `Trash`, or "
+            "`Recycle Bin` on Windows. On the receipt because where the bytes "
+            "are is the difference between recoverable and not, and the server "
+            "is the machine they are on: a shelf opened from a laptop deletes "
+            "files wherever PixlStash is running."
+        ),
+    )
     refused: list[DeleteRefusal] = Field(
         description=(
             "Ids that were left alone, each with a reason. Reported rather than "
@@ -207,42 +227,82 @@ class DeleteModelsResponse(BaseModel):
     )
 
 
-def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[str]], list[dict]]:
-    """Split the requested ids into files-to-remove and refusals.
+def _contained_path(folder_path: str, relpath: str) -> str:
+    """Where one registered copy is, proven to be inside its own folder.
+
+    **The link, never the link's target.** ``resolve_path_within`` returns a
+    ``realpath``, and unlinking that would delete the file a symlinked model
+    points AT while leaving the link — which is not what a file manager does,
+    and which silently guts any other model row naming those bytes. A symlinked
+    model is ordinary practice on this shelf (``model_shelf._present_copy``
+    contains lexically for exactly that reason), so the containment here is
+    lexical on the file itself and ``realpath`` on the DIRECTORY holding it:
+    a ``..`` in the row cannot escape, a symlinked *directory* component cannot
+    redirect the unlink out of the folder, and the thing removed is still the
+    name the shelf catalogues.
+
+    Raises:
+        ValueError: when the row names something outside its registered folder.
+    """
+    lexical = os.path.normpath(os.path.join(folder_path, relpath))
+    if not path_is_within(lexical, folder_path):
+        raise ValueError(f"{relpath!r} is not inside {folder_path!r}")
+    parent = os.path.realpath(os.path.dirname(lexical))
+    if not path_is_within(parent, folder_path):
+        raise ValueError(
+            f"{relpath!r} sits in a directory that resolves outside {folder_path!r}"
+        )
+    return os.path.join(parent, os.path.basename(lexical))
+
+
+def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[dict]], list[dict]]:
+    """Split the requested ids into copies-to-remove and refusals.
 
     Every gate is per MODEL and refuses the whole of it: a model with one copy
     in a user folder and another in the HuggingFace cache is not half-deleted,
     because half of it would come straight back on the next scan and the row the
     owner wanted gone would still be there.
 
+    **The reads share one transaction**, which is what
+    :func:`~pixlstash.services.model_shelf_service.forget_models` learned to do
+    and for the same reason: ``hub.fetchall`` takes and releases the hub lock per
+    call, so two of them leave a window in which a background
+    ``ModelFolderScanner`` can rewrite the very states being gated on. The
+    unlink cannot run inside this block — a 24 GB file would hold the hub's
+    write lock for the length of a disk copy — so the window against the FILES
+    remains and is closed on the other side instead: the purge drops a ``model``
+    row only when no location row for it survives (see
+    :func:`~pixlstash.services.model_shelf_service.purge_deleted_models`).
+
     Args:
         hub: The open hub database.
         ids: ``model.id`` values, already de-duplicated.
 
     Returns:
-        ``(deletable, refused)`` — ``deletable`` maps a model id to the resolved
-        paths of its ``present`` copies (an empty list when every copy is
-        ``missing``, which is a row to drop and nothing to unlink), and
-        ``refused`` carries ``{"id", "reason"}``.
+        ``(deletable, refused)``. ``deletable`` maps a model id to one entry per
+        registered copy — ``{"folder_id", "relpath", "path"}``, where ``path``
+        is ``None`` for a ``missing`` copy, which has a row to drop and nothing
+        to unlink. ``refused`` carries ``{"id", "reason"}``.
     """
     marks = ", ".join("?" for _ in ids)
-    kinds = {
-        int(row["id"]): row["file_kind"]
-        for row in hub.fetchall(
-            f"SELECT id, file_kind FROM model WHERE id IN ({marks})", tuple(ids)
-        )
-    }
-    copies: dict[int, list] = {}
-    for row in hub.fetchall(
-        "SELECT mf.model_id, mf.relpath, mf.state, f.path AS folder_path, "
-        "f.kind AS folder_kind FROM model_file mf "
-        f"JOIN model_folder f ON f.id = mf.model_folder_id "
-        f"WHERE mf.model_id IN ({marks})",
-        tuple(ids),
-    ):
-        copies.setdefault(int(row["model_id"]), []).append(row)
+    with hub.transaction() as conn:
+        kinds = {
+            int(row[0]): row[1]
+            for row in conn.execute(
+                f"SELECT id, file_kind FROM model WHERE id IN ({marks})", tuple(ids)
+            ).fetchall()
+        }
+        copies: dict[int, list[dict]] = {}
+        for row in conn.execute(
+            "SELECT mf.model_id, mf.model_folder_id, mf.relpath, mf.state, "
+            "f.path AS folder_path, f.kind AS folder_kind FROM model_file mf "
+            f"JOIN model_folder f ON f.id = mf.model_folder_id "
+            f"WHERE mf.model_id IN ({marks})",
+            tuple(ids),
+        ).fetchall():
+            copies.setdefault(int(row["model_id"]), []).append(dict(row))
 
-    deletable: dict[int, list[str]] = {}
+    deletable: dict[int, list[dict]] = {}
     refused: list[dict] = []
     for model_id in ids:
         rows = copies.get(model_id, [])
@@ -259,13 +319,19 @@ def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[str]], list[dic
         else:
             try:
                 deletable[model_id] = [
-                    # The containment site. A relpath that escapes its folder is
-                    # a broken row, not a request to unlink somebody's file
-                    # outside the shelf — and this is the mover's rule, so a
-                    # symlinked model is refused here exactly as it is there.
-                    resolve_path_within(row["folder_path"], row["relpath"])
+                    {
+                        "folder_id": int(row["model_folder_id"]),
+                        "relpath": row["relpath"],
+                        # The containment site. A relpath that escapes its
+                        # folder is a broken row, not a request to unlink
+                        # somebody's file outside the shelf.
+                        "path": (
+                            _contained_path(row["folder_path"], row["relpath"])
+                            if row["state"] == STATE_PRESENT
+                            else None
+                        ),
+                    }
                     for row in rows
-                    if row["state"] == STATE_PRESENT
                 ]
             except ValueError as exc:
                 logger.error(
@@ -275,7 +341,7 @@ def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[str]], list[dic
                     model_id,
                     exc,
                 )
-                refused.append({"id": model_id, "reason": "delete_failed"})
+                refused.append({"id": model_id, "reason": "escapes_its_folder"})
     return deletable, refused
 
 
@@ -567,44 +633,64 @@ def create_router(server) -> APIRouter:
         try:
             deletable, refused = _plan_deletions(server.hub, ids)
             deleted: list[int] = []
+            emptied: dict[int, list[tuple[int, str]]] = {}
             files_removed = 0
-            for model_id, paths in deletable.items():
+            for model_id, copies in deletable.items():
+                paths = [copy["path"] for copy in copies if copy["path"]]
                 done = 0
                 try:
                     for path in paths:
                         _remove(path, permanent=payload.permanent)
                         done += 1
-                except TrashPermissionError as exc:
-                    logger.error(
-                        "There is no trash this server can reach for %s (%s), so "
-                        "model %s was left alone.",
-                        paths[done],
-                        exc,
-                        model_id,
+                except (TrashPermissionError, OSError) as exc:
+                    # `done` files of this model are already gone. Its rows stay
+                    # so the shelf keeps naming the copies that did not go, and
+                    # the refusal says which of the two happened — "could not be
+                    # deleted" over a model that lost half its copies is the one
+                    # sentence a reader must not be given.
+                    partly = done > 0
+                    reason = (
+                        "partly_deleted"
+                        if partly
+                        else (
+                            "trash_unavailable"
+                            if isinstance(exc, TrashPermissionError)
+                            else "delete_failed"
+                        )
                     )
-                    refused.append({"id": model_id, "reason": "trash_unavailable"})
-                except OSError as exc:
                     logger.error(
-                        "Could not delete %s (%s), so model %s keeps its rows. "
-                        "%d of its %d copies had already gone; a rescan of that "
-                        "folder will mark them missing.",
+                        "Could not delete %s (%s). Model %s keeps its rows; %d "
+                        "of its %d copies were already removed, and a rescan of "
+                        "that folder will mark those missing.",
                         paths[done],
                         exc,
                         model_id,
                         done,
                         len(paths),
-                        exc_info=True,
+                        exc_info=not isinstance(exc, TrashPermissionError),
                     )
-                    refused.append({"id": model_id, "reason": "delete_failed"})
+                    refused.append({"id": model_id, "reason": reason})
                 else:
                     deleted.append(model_id)
+                    emptied[model_id] = [
+                        (copy["folder_id"], copy["relpath"]) for copy in copies
+                    ]
                 finally:
                     files_removed += done
             # One transaction for every model that came through, after the last
-            # unlink rather than per model: the rows are only ever dropped for
-            # files this call has already removed, so batching them cannot widen
-            # any window that matters.
-            purge_models(server.hub, deleted)
+            # unlink rather than per model. It drops the location rows this call
+            # emptied and then the models left with none — so a copy a scan
+            # registered while the files were going keeps its model alive rather
+            # than being purged out from under a file that is still there.
+            purged = purge_deleted_models(server.hub, emptied)
+            if len(purged) != len(deleted):
+                logger.warning(
+                    "Deleted the files of %d model(s) but %d row(s) survived: a "
+                    "scan registered a copy while this ran. The shelf will show "
+                    "them as missing until it next walks that folder.",
+                    len(deleted),
+                    len(deleted) - len(purged),
+                )
         finally:
             SHELF_IO_LOCK.release()
 

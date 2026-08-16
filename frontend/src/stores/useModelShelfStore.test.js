@@ -1665,13 +1665,34 @@ describe("deleting from disk", () => {
 
 describe("deleteReceipt", () => {
   it("names where the bytes went, because that is what recoverable means", () => {
-    expect(deleteReceipt(3, [], false, "Recycle Bin")).toBe(
+    expect(deleteReceipt(3, [], false, "Recycle Bin", 3)).toBe(
       "Moved 3 models to the Recycle Bin.",
     );
-    expect(deleteReceipt(1, [], true, "Trash")).toBe(
+    expect(deleteReceipt(1, [], true, "Trash", 1)).toBe(
       "Permanently deleted 1 model.",
     );
-    expect(deleteReceipt(0, [], false, "Trash")).toBe("Nothing to delete.");
+    expect(deleteReceipt(0, [], false, "Trash", 0)).toBe("Nothing to delete.");
+  });
+
+  it("does not claim a trip to the trash when no file moved", () => {
+    // Every copy was already off the disk, so the row went and nothing else
+    // did. "Moved 1 model to the Trash" would send the reader somewhere the
+    // file was never put.
+    expect(deleteReceipt(1, [], false, "Trash", 0)).toBe(
+      "Removed 1 model from the shelf; the files were already gone.",
+    );
+  });
+
+  it("says plainly when a model lost copies before the delete failed", () => {
+    // The one refusal that has already destroyed something.
+    const text = deleteReceipt(
+      0,
+      [{ id: 1, reason: "partly_deleted" }],
+      false,
+      "Trash",
+      1,
+    );
+    expect(text).toContain("lost some of its copies");
   });
 
   it("keeps the refusals apart, because they are acted on differently", () => {
@@ -1686,6 +1707,7 @@ describe("deleteReceipt", () => {
       ],
       false,
       "Trash",
+      1,
     );
     expect(text).toContain("Moved 1 model to the Trash.");
     expect(text).toContain("not plugged in");
@@ -1698,6 +1720,7 @@ describe("deleteReceipt", () => {
       [{ id: 1, reason: "trash_unavailable" }],
       false,
       "Trash",
+      0,
     );
     expect(text).toContain("no Trash this server can reach");
     expect(text).toContain("Shift");
@@ -1714,6 +1737,7 @@ describe("deleteReceipt", () => {
       ],
       true,
       "Trash",
+      0,
     );
     expect(text).toBe(
       "Nothing was deleted. 2 models could not be deleted; the server log says why.",

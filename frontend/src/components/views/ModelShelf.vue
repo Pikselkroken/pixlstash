@@ -1057,10 +1057,14 @@ async function confirmForget() {
  *
  * It names the operation rather than the gesture, because the gesture is a
  * modifier the reader may not have meant to be holding: a trash says where the
- * files are going and a permanent delete says nothing gets them back. The count
- * is the SUBSET the server will act on — a selection of forty holding two
- * HuggingFace-cache rows deletes thirty-eight, and a prompt that said forty
- * would be lying about what the button does.
+ * files are going and a permanent delete says nothing gets them back.
+ *
+ * **The count is the exact list of models the call will send.** Two things make
+ * it easy to get wrong in the destructive direction, and both are handled here
+ * rather than left to the server: a selection of forty holding two
+ * HuggingFace-cache rows deletes thirty-eight, and a selected STACK is one row
+ * standing for six files. So the subset is taken first and then expanded to
+ * member ids, and those ids are what is posted.
  *
  * `permanent` arrives from the event that triggered this and is passed straight
  * through: nothing here re-reads the keyboard, so the prompt the reader agreed
@@ -1070,24 +1074,42 @@ async function confirmForget() {
  */
 async function confirmDelete(permanent) {
   const rows = deletableModels(store.selectedRows, foldersById.value);
-  if (!rows.length) return;
-  const many = rows.length !== 1;
-  const subject = many ? `${rows.length} models` : "this model";
+  // MODELS, not rows: a stack is one row and six checkpoints, and it is deleted
+  // whole exactly as it is moved whole. Counting rows would have offered
+  // "Move this model to the Trash?" over tens of gigabytes — and these are the
+  // ids the call sends, so what the prompt counts and what goes are one list.
+  const ids = rows.flatMap((row) => row.memberIds ?? [row.id]);
+  if (!ids.length) {
+    // The keyboard can reach this with nothing deletable selected — the pill's
+    // button is disabled there, but `Delete` has no disabled state. Silence
+    // would read as a broken key.
+    if (store.selectedRows.length) {
+      useNoticeStore().push({
+        level: "info",
+        text:
+          "Nothing here can be deleted. PixlStash only removes files from your " +
+          "own model folders, and never from a drive that is not plugged in.",
+      });
+    }
+    return;
+  }
+  const many = ids.length !== 1;
+  const subject = many ? `${ids.length} models` : "this model";
   const trash = trashName();
   const ok = await confirm({
     title: permanent
-      ? `Permanently delete ${many ? `${rows.length} models?` : "this model?"}`
-      : `Move ${many ? `${rows.length} models` : "this model"} to the ${trash}?`,
+      ? `Permanently delete ${many ? `${ids.length} models?` : "this model?"}`
+      : `Move ${many ? `${ids.length} models` : "this model"} to the ${trash}?`,
     message: permanent
       ? `The files for ${subject} are deleted permanently from this machine, along with everything recorded about them.`
       : `The files for ${subject} go to your ${trash}, where you can put them back. The shelf stops listing them.`,
     warning: permanent
       ? "There is no undo for this."
-      : `PixlStash cannot undo this itself — only your ${trash} can.`,
+      : `A very large file may be too big for the ${trash} and be deleted outright.`,
     confirmLabel: permanent ? "Delete permanently" : `Move to ${trash}`,
     danger: true,
   });
-  if (ok) await store.deleteSelected({ permanent });
+  if (ok) await store.deleteSelected({ permanent, ids });
 }
 
 // ── Move (shelf plan F4) ─────────────────────────────────────────────────────
