@@ -116,6 +116,8 @@ pixlstash-cli libraries rename "Existing library" "Better name"
 pixlstash-cli libraries relocate "Existing library" /new/path
 pixlstash-cli libraries detach "Existing library"
 pixlstash-cli libraries backup "Existing library" /path/to/backups/
+pixlstash-cli libraries backup "Existing library" /path/to/backups/monday.tar.zst
+pixlstash-cli libraries restore /path/to/backups/monday.tar.zst /path/to/new-library
 ```
 
 | Command | What it does |
@@ -127,18 +129,33 @@ pixlstash-cli libraries backup "Existing library" /path/to/backups/
 | `relocate` | Points an existing registration at a new path, keeping its identity and share links. |
 | `detach` | Forgets a library. **No files are removed and nothing inside the folder changes.** |
 | `backup` | Writes the library and the hub to a single archive. |
+| `restore` | Unpacks an archive into a **new** folder and makes it the library that opens. |
 
 Notes worth knowing before you need them:
 
 - `detach` refuses the **active** library. Switch to another one first.
 - Reattaching the same folder revives its original registration, including its
   share links, because a library carries a fingerprint of its own identity.
+- A backup is a **zstd-compressed tar**, named `.tar.zst` — not `.tar.gz`.
+  `--no-compress` writes a plain `.tar` instead. Given a folder, `backup`
+  invents a dated name with the right ending; given a filename, it adds the
+  right ending if you left it off. `restore` recognises an archive by its
+  contents, so a renamed file still works.
 - A backup contains `hub.db`, and therefore your login and token secrets.
   PixlStash writes it owner-readable and refuses to overwrite an existing file.
 - A backup covers the library folder. Pictures kept in **reference folders** live
   outside it and are *not* included, so back those up separately.
 - Backing up finishes any outstanding one-time snapshot cleanup first, so the
   archive never carries credentials from before your upgrade.
+- `restore` needs PixlStash stopped, and names a folder that is empty or does
+  not exist yet — it never writes over a library. Because the archive holds the hub,
+  restoring also brings back the password and API tokens that library was
+  using, so your current ones are replaced.
+- **`restore` does not delete your current setup.** It *moves*
+  `server-config.json` and `hub.db` into a dated `pre-restore-*` folder beside
+  themselves and prints the launch command for each, so
+  `pixlstash-server --server-config <pre-restore-*>/server-config.json` reopens
+  what you had. Your old library folder is never touched.
 
 #### Which form to type
 
