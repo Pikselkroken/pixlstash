@@ -1004,13 +1004,21 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         //
         // Under `folder` a row also reports THAT copy's state rather than the
         // merged one, or a file present here and missing there would claim to
-        // be fine in the folder it is absent from.
+        // be fine in the folder it is absent from. `locations` is narrowed to
+        // the same one copy for the same reason: the draw stands for one copy,
+        // and the file line's path tooltip reading the merged array would
+        // answer "where is this file" with a path in the folder above.
+        //
+        // Narrowing here is safe because nothing else reads a DRAWN row's
+        // locations — `selectedRows` and the verbs all read `visibleRows`,
+        // which still carries every copy.
         bucket.rows.push(
           group.location
             ? {
                 ...row,
                 rowKey: `${row.id}:${group.key}`,
                 locState: locationState([group.location]),
+                locations: [group.location],
               }
             : { ...row, rowKey: `${row.id}:${group.key}` },
         );
