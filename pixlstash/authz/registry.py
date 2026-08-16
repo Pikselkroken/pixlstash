@@ -492,6 +492,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 takes a caller-supplied host path, copies that file into a registered host folder and registers it — the POST /model-folders path-taking class carrying the file writing of POST /model-moves, minus the unlink; the read is bounded to one regular .safetensors file and the write is contained against the destination folder; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # The unlink half (#933), and the shelf's only destructive verb. Takes no
+    # host path — the ids address rows the scanner wrote — but it REMOVES the
+    # owner's files, which is the unlink of POST /model-moves without the copy
+    # that justifies it, so it sits on the same tier as every other shelf route
+    # that writes the host filesystem.
+    ("POST", "/api/v1/model-files/delete"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 unlinks the owner's model files (OS trash by default, permanent on request) out of registered host folders — the unlink half of POST /model-moves standing alone, and the shelf's only destructive verb. Takes no host path: the ids address rows the scanner wrote, every path is resolve_path_within its registered folder, and only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
         _LOCAL,

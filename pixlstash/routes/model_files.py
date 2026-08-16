@@ -1,6 +1,13 @@
-"""Take one loose model file onto the shelf (shelf plan F6, ``Add file``).
+"""Files onto the shelf (shelf plan F6, ``Add file``) and off it again (#933).
 
-The path for a single adapter or checkpoint that is **not** part of a training
+``POST /model-files`` is the way in and ``POST /model-files/delete`` is the way
+out. They are one module because they are one authority — a file in a registered
+folder, written or unlinked — and because the second is the only shelf route
+that destroys the owner's own bytes, which is worth reading beside the one that
+insists it never touches them.
+
+``POST /model-files`` is the path for a single adapter or checkpoint that is
+**not** part of a training
 run and does not deserve a whole registered folder of its own: a file downloaded
 into ``~/Downloads`` an hour ago. It is copied into the managed store — the
 folder PixlStash owns, the ruled default destination for a drop or an import —
@@ -31,6 +38,24 @@ path like ``POST /model-folders`` and writes into a registered folder like
 second copy of a file the shelf already catalogues into the store, under the same
 name, forever; a rescan of the folder it is already in is what the owner wants
 and the refusal says so.
+
+``POST /model-files/delete`` is the shelf's destructive verb, and it is
+deliberately narrow. It acts only on the folders whose contents are the owner's:
+``user``, and the managed store PixlStash keeps for files it was *given*.
+Everything else the shelf lists is refused whole — the engines PixlStash
+downloads for itself, the InsightFace packs, the HuggingFace cache shared with
+every other tool on the machine — and so is a model with an ``unreachable``
+copy, because an unplugged drive is not a deletion and must never be read as
+one. The default is the OS trash (``send2trash``), which is the undo;
+``permanent=true`` unlinks, and that one has none.
+
+**Bytes first, rows second, and per model.** Every copy of a model is removed
+before its hub rows are, so an interruption leaves a row naming a file that is
+not there — which the next scan turns into ``missing`` — rather than a file
+nothing on the shelf can see. A model whose unlink fails keeps its rows and is
+reported as refused, so one bad file cannot take the rest of the batch with it.
+The whole call holds the same machine-wide ``SHELF_IO_LOCK`` slot an add, a move
+and an import take, so nothing can be copying into a folder this is emptying.
 """
 
 from __future__ import annotations
@@ -40,8 +65,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+from send2trash import TrashPermissionError, send2trash
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.routes.model_shelf import MAX_MODELS_PER_EDIT
 from pixlstash.services.managed_model_store import MANAGED_KIND
 from pixlstash.services.model_folder_scanner import MODEL_SUFFIX, ModelFolderScanner
 from pixlstash.services.model_mover import (
@@ -53,11 +80,35 @@ from pixlstash.services.model_mover import (
     file_digest,
     require_space,
 )
+from pixlstash.services.model_shelf_service import purge_models
+from pixlstash.utils.adapter_header import FILE_ENGINE
 from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.system_utils import TRASH_NAME
 
 logger = get_logger(__name__)
 
 SOURCE_FOLDER_KIND = "source"
+
+# The folder kinds whose contents are the owner's to destroy. `user` is a folder
+# they registered; `managed` is the store PixlStash keeps for files it was given,
+# which is where `Add file` and an import land, so a shelf that could not delete
+# from it could not undo either of them.
+#
+# Every other kind is `foreign` — PixlStash's own engines, the InsightFace packs,
+# the HuggingFace cache — and those are registered so the owner can SEE what they
+# cost on disk, not so the shelf can unlink them. The cache in particular is a
+# symlink store shared with every other tool on the machine. This is the same
+# line `model_mover._plan_one` draws for a move, drawn by `kind` rather than by
+# `movable` because the managed store is `root_only` (the FOLDER moves as a unit)
+# while the files in it are individually the owner's.
+DELETABLE_FOLDER_KINDS = ("user", MANAGED_KIND)
+
+# A copy the scan could not look at, on a drive that is not plugged in. It is the
+# one state that must never be treated as a deletion: the bytes are out there,
+# and dropping the row would leave them orphaned with nothing on the shelf naming
+# them.
+STATE_UNREACHABLE = "unreachable"
+STATE_PRESENT = "present"
 
 
 class AddModelFileRequest(BaseModel):
@@ -89,6 +140,163 @@ class AddModelFileResponse(BaseModel):
     filename: str = Field(description="The name it now carries in the folder.")
     folder_id: int = Field(description="The registered folder it was copied into.")
     folder_path: str = Field(description="That folder's path on this machine.")
+
+
+class DeleteModelsRequest(BaseModel):
+    """Body of ``POST /model-files/delete``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ids: list[int] = Field(
+        min_length=1,
+        max_length=MAX_MODELS_PER_EDIT,
+        description="The models to delete, by hub `model.id`. Every copy goes.",
+    )
+    permanent: bool = Field(
+        default=False,
+        description=(
+            "False (the default) moves the files to this machine's trash, which "
+            "is the undo. True unlinks them, and nothing gets them back. The "
+            "shelf sends true only for Shift+Delete, the file-manager gesture."
+        ),
+    )
+
+
+class DeleteRefusal(BaseModel):
+    """One id the delete declined, and why."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: int
+    reason: str = Field(
+        description=(
+            "`no_such_model` (the id names no row), `is_a_builtin_engine` "
+            "(PixlStash downloaded it for itself), `not_a_user_folder` (a copy "
+            "sits somewhere PixlStash will not unlink from — its own engine "
+            "folders, the InsightFace packs, the shared HuggingFace cache), "
+            "`unreachable_copy` (a copy is on a drive that is not plugged in, "
+            "which is not a deletion), `trash_unavailable` (this machine has no "
+            "trash we can reach; a permanent delete would still work) or "
+            "`delete_failed` (the unlink itself failed — the server log says "
+            "why)."
+        )
+    )
+
+
+class DeleteModelsResponse(BaseModel):
+    """Body of ``POST /model-files/delete``: the receipt the shelf shows."""
+
+    model_config = ConfigDict(extra="allow")
+
+    deleted: list[int] = Field(
+        description="Ids whose files are gone and whose rows went with them, ascending."
+    )
+    files_removed: int = Field(
+        description="How many files were actually unlinked or trashed."
+    )
+    permanent: bool = Field(
+        description="What was done, echoed: trashed (false) or unlinked (true)."
+    )
+    refused: list[DeleteRefusal] = Field(
+        description=(
+            "Ids that were left alone, each with a reason. Reported rather than "
+            "raised: a selection is made against a list that may be seconds old, "
+            "and failing the whole call because one model moved would be the "
+            "wrong answer to good news."
+        )
+    )
+
+
+def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[str]], list[dict]]:
+    """Split the requested ids into files-to-remove and refusals.
+
+    Every gate is per MODEL and refuses the whole of it: a model with one copy
+    in a user folder and another in the HuggingFace cache is not half-deleted,
+    because half of it would come straight back on the next scan and the row the
+    owner wanted gone would still be there.
+
+    Args:
+        hub: The open hub database.
+        ids: ``model.id`` values, already de-duplicated.
+
+    Returns:
+        ``(deletable, refused)`` — ``deletable`` maps a model id to the resolved
+        paths of its ``present`` copies (an empty list when every copy is
+        ``missing``, which is a row to drop and nothing to unlink), and
+        ``refused`` carries ``{"id", "reason"}``.
+    """
+    marks = ", ".join("?" for _ in ids)
+    kinds = {
+        int(row["id"]): row["file_kind"]
+        for row in hub.fetchall(
+            f"SELECT id, file_kind FROM model WHERE id IN ({marks})", tuple(ids)
+        )
+    }
+    copies: dict[int, list] = {}
+    for row in hub.fetchall(
+        "SELECT mf.model_id, mf.relpath, mf.state, f.path AS folder_path, "
+        "f.kind AS folder_kind FROM model_file mf "
+        f"JOIN model_folder f ON f.id = mf.model_folder_id "
+        f"WHERE mf.model_id IN ({marks})",
+        tuple(ids),
+    ):
+        copies.setdefault(int(row["model_id"]), []).append(row)
+
+    deletable: dict[int, list[str]] = {}
+    refused: list[dict] = []
+    for model_id in ids:
+        rows = copies.get(model_id, [])
+        if model_id not in kinds:
+            refused.append({"id": model_id, "reason": "no_such_model"})
+        elif kinds[model_id] == FILE_ENGINE:
+            # Declared again on every start, so deleting one removes a file
+            # PixlStash re-downloads the moment something needs it.
+            refused.append({"id": model_id, "reason": "is_a_builtin_engine"})
+        elif any(row["folder_kind"] not in DELETABLE_FOLDER_KINDS for row in rows):
+            refused.append({"id": model_id, "reason": "not_a_user_folder"})
+        elif any(row["state"] == STATE_UNREACHABLE for row in rows):
+            refused.append({"id": model_id, "reason": "unreachable_copy"})
+        else:
+            try:
+                deletable[model_id] = [
+                    # The containment site. A relpath that escapes its folder is
+                    # a broken row, not a request to unlink somebody's file
+                    # outside the shelf — and this is the mover's rule, so a
+                    # symlinked model is refused here exactly as it is there.
+                    resolve_path_within(row["folder_path"], row["relpath"])
+                    for row in rows
+                    if row["state"] == STATE_PRESENT
+                ]
+            except ValueError as exc:
+                logger.error(
+                    "Refusing to delete model %s: a registered copy resolves "
+                    "outside its folder (%s). The row is wrong; nothing was "
+                    "touched.",
+                    model_id,
+                    exc,
+                )
+                refused.append({"id": model_id, "reason": "delete_failed"})
+    return deletable, refused
+
+
+def _remove(path: str, *, permanent: bool) -> None:
+    """Trash or unlink one file, treating an already-gone one as done.
+
+    ``FileNotFoundError`` is success, not failure: the shelf is a catalogue of
+    what a scan saw, the owner may have deleted the file themselves since, and
+    the call asked for the file to not be there.
+    """
+    try:
+        if permanent:
+            os.remove(path)
+        else:
+            send2trash(path)
+    except FileNotFoundError:
+        logger.warning(
+            "%s was already gone when the shelf went to delete it; the row is "
+            "dropped anyway, which is what was asked for.",
+            path,
+        )
 
 
 def create_router(server) -> APIRouter:
@@ -319,6 +527,99 @@ def create_router(server) -> APIRouter:
             filename=relpath,
             folder_id=int(folder["id"]),
             folder_path=folder["path"],
+        )
+
+    @router.post(
+        "/model-files/delete",
+        summary="Delete models from disk",
+        description=(
+            "Removes every registered copy of the named models and then their "
+            "shelf rows. `permanent=false` (the default) moves the files to "
+            f"this machine's {TRASH_NAME.lower()}, which is the undo; "
+            "`permanent=true` unlinks them and there is none. Only the folders "
+            "whose contents are yours are touched — the ones you registered and "
+            "the store PixlStash keeps for files it was given. A model with a "
+            "copy anywhere else, a copy on a drive that is not plugged in, or "
+            "one of PixlStash's own engines is refused with a reason rather "
+            "than half-deleted."
+        ),
+        tags=["model_shelf"],
+        response_model=DeleteModelsResponse,
+    )
+    def delete_model_files(request: Request, payload: DeleteModelsRequest = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        # Order preserved so the receipt reads in the order asked; duplicates
+        # dropped so one id cannot be planned, deleted and then planned again.
+        ids = list(dict.fromkeys(payload.ids))
+
+        # The *same* slot a move, an import and an add take. A move copying a
+        # file into the folder this is emptying, or out of it, would otherwise
+        # race the unlink for the row it is repointing.
+        if not SHELF_IO_LOCK.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A move or an import is already running. Deleting files out "
+                    "from under it would leave rows naming files neither of us "
+                    "put there."
+                ),
+            )
+        try:
+            deletable, refused = _plan_deletions(server.hub, ids)
+            deleted: list[int] = []
+            files_removed = 0
+            for model_id, paths in deletable.items():
+                done = 0
+                try:
+                    for path in paths:
+                        _remove(path, permanent=payload.permanent)
+                        done += 1
+                except TrashPermissionError as exc:
+                    logger.error(
+                        "There is no trash this server can reach for %s (%s), so "
+                        "model %s was left alone.",
+                        paths[done],
+                        exc,
+                        model_id,
+                    )
+                    refused.append({"id": model_id, "reason": "trash_unavailable"})
+                except OSError as exc:
+                    logger.error(
+                        "Could not delete %s (%s), so model %s keeps its rows. "
+                        "%d of its %d copies had already gone; a rescan of that "
+                        "folder will mark them missing.",
+                        paths[done],
+                        exc,
+                        model_id,
+                        done,
+                        len(paths),
+                        exc_info=True,
+                    )
+                    refused.append({"id": model_id, "reason": "delete_failed"})
+                else:
+                    deleted.append(model_id)
+                finally:
+                    files_removed += done
+            # One transaction for every model that came through, after the last
+            # unlink rather than per model: the rows are only ever dropped for
+            # files this call has already removed, so batching them cannot widen
+            # any window that matters.
+            purge_models(server.hub, deleted)
+        finally:
+            SHELF_IO_LOCK.release()
+
+        logger.info(
+            "Deleted %d model(s) from the shelf (%d file(s) %s), %d refused.",
+            len(deleted),
+            files_removed,
+            "unlinked" if payload.permanent else "trashed",
+            len(refused),
+        )
+        return DeleteModelsResponse(
+            deleted=sorted(deleted),
+            files_removed=files_removed,
+            permanent=payload.permanent,
+            refused=[DeleteRefusal(**item) for item in refused],
         )
 
     return router

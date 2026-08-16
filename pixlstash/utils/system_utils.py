@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 _BY_LABEL_DIR = "/dev/disk/by-label"
 _MOUNTS_FILE = "/proc/mounts"
 
+# What this machine calls the place a deleted file goes. Windows says "Recycle
+# Bin"; macOS and every Linux desktop say "Trash". Used in the delete route's
+# own description, so the API documents what it will actually do on the host
+# it is running on.
+TRASH_NAME = "Recycle Bin" if sys.platform == "win32" else "Trash"
+
 # Hard upper bound for the VRAM budget setting. Applies both to the UI slider
 # maximum and to backend validation. Keep in sync with the frontend constant.
 MAX_VRAM_BUDGET_GB: float = 12.0

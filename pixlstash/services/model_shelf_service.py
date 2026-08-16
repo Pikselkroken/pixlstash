@@ -594,19 +594,40 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
             else:
                 forgettable.append(model_id)
 
-        if forgettable:
-            marks = ", ".join("?" for _ in forgettable)
-            # Children first: `model_file` and `model_capability` both
-            # reference `model(id)`, and the delete order is what keeps this
-            # working without turning foreign keys off. Missing either one does
-            # not leak a row, it aborts the whole delete.
-            conn.execute(
-                f"DELETE FROM model_file WHERE model_id IN ({marks})",
-                tuple(forgettable),
-            )
-            conn.execute(
-                f"DELETE FROM model_capability WHERE model_id IN ({marks})",
-                tuple(forgettable),
-            )
-            conn.execute(f"DELETE FROM model WHERE id IN ({marks})", tuple(forgettable))
+        _purge(conn, forgettable)
     return sorted(forgettable), refused
+
+
+def _purge(conn, ids: list[int]) -> None:
+    """Delete the given models and their child rows, on an open connection."""
+    if not ids:
+        return
+    marks = ", ".join("?" for _ in ids)
+    # Children first: `model_file` and `model_capability` both reference
+    # `model(id)`, and the delete order is what keeps this working without
+    # turning foreign keys off. Missing either one does not leak a row, it
+    # aborts the whole delete.
+    conn.execute(f"DELETE FROM model_file WHERE model_id IN ({marks})", tuple(ids))
+    conn.execute(
+        f"DELETE FROM model_capability WHERE model_id IN ({marks})", tuple(ids)
+    )
+    conn.execute(f"DELETE FROM model WHERE id IN ({marks})", tuple(ids))
+
+
+def purge_models(hub, ids: list[int]) -> None:
+    """Drop these models unconditionally, files and all already dealt with.
+
+    The row half of ``POST /model-files/delete``, which unlinks the bytes first
+    and calls this for the models it actually emptied. It shares
+    :func:`forget_models`' delete order and deliberately **not** its gate: the
+    state check there exists to stop a row being dropped while its file is
+    still on disk, and here the file has just been removed by this very call.
+
+    Args:
+        hub: The open hub database.
+        ids: ``model.id`` values whose files are gone.
+    """
+    if not ids:
+        return
+    with hub.transaction() as conn:
+        _purge(conn, ids)

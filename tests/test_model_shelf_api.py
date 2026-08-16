@@ -49,6 +49,7 @@ from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models.adapter_attachment import AdapterAttachment
+from pixlstash.routes import model_files as model_files_routes
 from pixlstash.routes import model_folders as model_folders_routes
 from pixlstash.routes.model_imports import sample_path_within
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
@@ -4406,3 +4407,319 @@ def test_an_unauthenticated_caller_cannot_download(shelf_env, tmp_path):
 
     anon = TestClient(shelf_env.server.api)
     assert anon.get(_file_url(ADAPTER_WITH_BASE)).status_code == 401
+
+
+# ===========================================================================
+# Delete from disk (#933) — the shelf's one destructive verb
+# ===========================================================================
+#
+# `POST /model-files/delete` is the only shelf route that destroys the owner's
+# bytes, so the tests below are mostly about what it REFUSES. The trash is
+# faked rather than real: a CI runner has no desktop trash, and what is under
+# test is which path is handed to it and in what order, not whether
+# `send2trash` works. The permanent half unlinks for real, because that one has
+# nothing to fake.
+
+_DELETE_ROUTE = ("POST", f"{API}/model-files/delete", {"json": {"ids": [1]}})
+
+
+@pytest.fixture
+def real_files(shelf_env, tmp_path):
+    """The seeded folder (id 1, `user`), pointed at a directory that exists.
+
+    The seed writes `present` rows against `/models/loras`, which is nobody's
+    real path. Delete is the one verb that has to find the file, so it gets a
+    real directory with the two adapters it names actually in it.
+    """
+    folder = tmp_path / "loras"
+    folder.mkdir()
+    for filename in ("alice.safetensors", "bob.safetensors"):
+        write_adapter(folder / filename)
+    _seeded_folder_at(shelf_env.server, str(folder))
+    return folder
+
+
+@pytest.fixture
+def fake_trash(monkeypatch, tmp_path):
+    """A trash we can look inside, standing in for the OS one."""
+    bin_dir = tmp_path / "trash"
+    bin_dir.mkdir()
+
+    def send(path):
+        os.replace(path, bin_dir / os.path.basename(path))
+
+    monkeypatch.setattr(model_files_routes, "send2trash", send)
+    return bin_dir
+
+
+def _delete(shelf_env, ids, **body):
+    return shelf_env.owner.post(f"{API}/model-files/delete", json={"ids": ids, **body})
+
+
+def test_delete_moves_the_file_to_the_trash_and_takes_the_row_with_it(
+    shelf_env, real_files, fake_trash
+):
+    """The default gesture: the bytes go where the OS can give them back, and
+    the shelf stops naming them."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+
+    r = _delete(shelf_env, [alice])
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "deleted": [alice],
+        "files_removed": 1,
+        "permanent": False,
+        "refused": [],
+    }
+
+    assert not (real_files / "alice.safetensors").exists()
+    assert (fake_trash / "alice.safetensors").exists(), "the file was not trashed"
+    assert (real_files / "bob.safetensors").exists(), "an unnamed file was deleted"
+    assert (
+        shelf_env.server.hub.fetchone("SELECT id FROM model WHERE id = ?", (alice,))
+        is None
+    )
+    assert (
+        shelf_env.server.hub.fetchone(
+            "SELECT model_id FROM model_file WHERE model_id = ?", (alice,)
+        )
+        is None
+    ), "the location rows outlived the model they point at"
+
+
+def test_a_permanent_delete_unlinks_the_file_rather_than_trashing_it(
+    shelf_env, real_files, monkeypatch
+):
+    """Shift+Delete, the file-manager gesture. Nothing gets these bytes back, so
+    the trash must not be reached at all."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    monkeypatch.setattr(
+        model_files_routes,
+        "send2trash",
+        lambda path: pytest.fail(f"a permanent delete went to the trash: {path}"),
+    )
+
+    r = _delete(shelf_env, [alice], permanent=True)
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == [alice]
+    assert r.json()["permanent"] is True
+    assert not (real_files / "alice.safetensors").exists()
+
+
+def test_delete_refuses_a_model_pixlstash_downloaded_for_itself(
+    shelf_env, real_files, fake_trash
+):
+    """An engine is declared again on every start, so deleting one removes a file
+    that comes straight back — after the feature that needed it has broken."""
+    engine = _declare_engine(shelf_env)
+
+    r = _delete(shelf_env, [engine])
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == []
+    assert r.json()["refused"] == [{"id": engine, "reason": "is_a_builtin_engine"}]
+    assert _model_row(shelf_env, engine)["file_kind"] == "engine"
+
+
+def test_delete_refuses_a_copy_in_a_folder_that_is_not_the_owners(
+    shelf_env, real_files, fake_trash, tmp_path
+):
+    """The HuggingFace cache is a symlink store shared with every other tool on
+    the machine, and the InsightFace packs are PixlStash's. The shelf lists them
+    so the owner can see what they cost, not so it can unlink them."""
+    cache = tmp_path / "hf-cache"
+    cache.mkdir()
+    write_adapter(cache / "shared.safetensors")
+    alice = shelf_env.model_ids["alice.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (id, path, kind, owner, movable, created_at) "
+            "VALUES (7, ?, 'foreign', 'huggingface', 'fixed', "
+            "'2026-08-16T00:00:00Z')",
+            (str(cache),),
+        )
+        # One model, two copies: one the owner's, one in the cache. Half-deleting
+        # it would unlink the owner's copy and leave the row the shelf shows.
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+            "seen_at) VALUES (?, 7, 'shared.safetensors', 'present', "
+            "'2026-08-16T00:00:00Z')",
+            (alice,),
+        )
+
+    r = _delete(shelf_env, [alice])
+    assert r.status_code == 200, r.text
+    assert r.json()["refused"] == [{"id": alice, "reason": "not_a_user_folder"}]
+    assert (real_files / "alice.safetensors").exists(), "the owner's copy went anyway"
+    assert (cache / "shared.safetensors").exists(), "a file in the cache was unlinked"
+    assert list(fake_trash.iterdir()) == []
+
+
+def test_delete_refuses_a_model_on_a_drive_we_could_not_look_at(
+    shelf_env, real_files, fake_trash
+):
+    """The one that matters. `unreachable` is "we could not look" — an unplugged
+    NAS — and deleting the row would leave those bytes orphaned with nothing on
+    the shelf naming them."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    _set_states(shelf_env, alice, "unreachable")
+
+    r = _delete(shelf_env, [alice])
+    assert r.status_code == 200, r.text
+    assert r.json()["refused"] == [{"id": alice, "reason": "unreachable_copy"}]
+    assert _model_row(shelf_env, alice)["display_name"] == "Alice"
+    assert (real_files / "alice.safetensors").exists()
+
+
+def test_a_model_whose_file_is_already_gone_is_simply_dropped(
+    shelf_env, real_files, fake_trash
+):
+    """`missing` is a fact: the folder was readable and the file was not in it.
+    There is nothing to unlink and the row is exactly what the owner asked to be
+    rid of."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    _set_states(shelf_env, alice, "missing")
+    os.remove(real_files / "alice.safetensors")
+
+    r = _delete(shelf_env, [alice])
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == [alice]
+    assert r.json()["files_removed"] == 0
+    assert (
+        shelf_env.server.hub.fetchone("SELECT id FROM model WHERE id = ?", (alice,))
+        is None
+    )
+
+
+def test_a_mixed_selection_deletes_what_it_can_and_reports_the_rest(
+    shelf_env, real_files, fake_trash
+):
+    """Reported, not raised: the selection was made against a list that may be
+    seconds old, and failing the whole call because one row moved would be the
+    wrong answer to good news."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    engine = _declare_engine(shelf_env)
+
+    r = _delete(shelf_env, [alice, engine, 999_999])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["deleted"] == [alice]
+    assert body["refused"] == [
+        {"id": engine, "reason": "is_a_builtin_engine"},
+        {"id": 999_999, "reason": "no_such_model"},
+    ]
+    assert (fake_trash / "alice.safetensors").exists()
+
+
+def test_no_trash_on_this_machine_is_a_refusal_not_a_quiet_permanent_delete(
+    shelf_env, real_files, monkeypatch
+):
+    """A server in a container has nowhere to put a trashed file. The one thing
+    that must not happen then is the unlink the owner did not ask for."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+
+    def refuse(path):
+        raise model_files_routes.TrashPermissionError(path)
+
+    monkeypatch.setattr(model_files_routes, "send2trash", refuse)
+
+    r = _delete(shelf_env, [alice])
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == []
+    assert r.json()["refused"] == [{"id": alice, "reason": "trash_unavailable"}]
+    assert (real_files / "alice.safetensors").exists(), "it was deleted anyway"
+    assert _model_row(shelf_env, alice)["display_name"] == "Alice"
+
+
+def test_a_failed_unlink_keeps_the_rows_that_still_name_the_file(
+    shelf_env, real_files, monkeypatch
+):
+    """Bytes first, rows second. A row dropped for a file that is still there is
+    a file nothing on the shelf can ever see again."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+
+    def refuse(path):
+        raise PermissionError(13, "read-only file system", path)
+
+    monkeypatch.setattr(model_files_routes, "send2trash", refuse)
+
+    r = _delete(shelf_env, [alice])
+    assert r.status_code == 200, r.text
+    assert r.json()["refused"] == [{"id": alice, "reason": "delete_failed"}]
+    assert _model_row(shelf_env, alice)["display_name"] == "Alice"
+    assert (
+        shelf_env.server.hub.fetchone(
+            "SELECT model_id FROM model_file WHERE model_id = ?", (alice,)
+        )
+        is not None
+    )
+
+
+def test_a_relpath_that_escapes_its_folder_is_refused_not_unlinked(
+    shelf_env, real_files, fake_trash, tmp_path
+):
+    """A row naming a path outside its registered folder is a broken row, never a
+    request to delete somebody's file elsewhere on the disk."""
+    outsider = tmp_path / "not-on-the-shelf.safetensors"
+    write_adapter(outsider)
+    alice = shelf_env.model_ids["alice.safetensors"]
+    _relpath_of(shelf_env.server, "alice.safetensors", f"../{outsider.name}")
+
+    r = _delete(shelf_env, [alice])
+    assert r.status_code == 200, r.text
+    assert r.json()["refused"] == [{"id": alice, "reason": "delete_failed"}]
+    assert outsider.exists(), "a file outside the registered folder was deleted"
+    assert list(fake_trash.iterdir()) == []
+
+
+def test_delete_takes_the_same_job_slot_as_a_move_and_an_import(
+    shelf_env, real_files, fake_trash
+):
+    """One shelf I/O slot machine-wide: a move copying into the folder this is
+    emptying would race the unlink for the row it is repointing."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    assert SHELF_IO_LOCK.acquire(blocking=False), "the slot was left held"
+    try:
+        r = _delete(shelf_env, [alice])
+        assert r.status_code == 409, r.text
+        assert (real_files / "alice.safetensors").exists()
+    finally:
+        SHELF_IO_LOCK.release()
+
+    # Positive control: with the slot free, the same delete is accepted.
+    assert _delete(shelf_env, [alice]).status_code == 200
+
+
+def test_the_delete_route_is_declared_local_owner_only():
+    declared = ROUTE_POLICIES.get(("POST", "/api/v1/model-files/delete"))
+    assert declared is not None, (
+        "(POST, /api/v1/model-files/delete) has no ROUTE_POLICIES entry"
+    )
+    assert declared.policy is AccessPolicy.LOCAL_OWNER_ONLY, (
+        f"POST /model-files/delete declares {declared.policy}, not LOCAL_OWNER_ONLY"
+    )
+    assert declared.justification, (
+        "POST /model-files/delete is on the tier with no reason"
+    )
+
+
+def test_delete_refuses_every_share_token(shelf_env, real_files, fake_trash):
+    method, path, kwargs = _DELETE_ROUTE
+    alice = shelf_env.model_ids["alice.safetensors"]
+    kwargs = {"json": {"ids": [alice]}}
+    for description, restriction in (
+        ("delete scoped probe", {"resource_type": "character", "resource_id": 1}),
+        ("delete unscoped probe", {}),
+    ):
+        token = _mint(shelf_env.owner, description, **restriction)
+        client = _bearer(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"{description} is dead; the refusal below would prove nothing"
+        )
+        assert_real_route(shelf_env.server.api, method, path)
+        r = client.request(method, path, **kwargs)
+        assert r.status_code == 403, (
+            f"a share token deleted model files: {r.status_code} {r.text}"
+        )
+    assert (real_files / "alice.safetensors").exists(), "a refused call still deleted"
+    # Positive control: the owner is not blocked on the same call.
+    assert shelf_env.owner.request(method, path, **kwargs).status_code == 200

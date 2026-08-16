@@ -19,6 +19,7 @@ const listEngines = vi.fn();
 // And the unclassified block, for the same reason, now that it is on by
 // default (#927): one route, one more result set, its own double.
 const listUnclassified = vi.fn();
+const deleteModels = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
@@ -28,6 +29,11 @@ vi.mock("../../api/modelShelf", () => ({
     return listAdapters(...args);
   },
   listCheckpoints: (...args) => listCheckpoints(...args),
+  // The shelf's destructive verb. Mocked for the same reason the folder reads
+  // are — it is a network call on a user gesture — and because a suite that
+  // really called it would be asserting the server's gate rather than the
+  // view's.
+  deleteModels: (...args) => deleteModels(...args),
   // The base-model field asks for its completion list as it opens. Answered
   // with nothing here: the list is the widget's own suite's business, and left
   // unmocked this is a network call on a double-click.
@@ -2800,5 +2806,126 @@ describe("the app-wide toolbar tail", () => {
     expect(cluster.lastElementChild.classList.contains("tb-stats-btn")).toBe(
       true,
     );
+  });
+});
+
+describe("Delete", () => {
+  // The file-manager gesture, spelled the way Explorer spells it: Del trashes,
+  // Shift+Del deletes permanently. Handled on the WINDOW beside Escape, so
+  // every assertion needs a real event path out of the shelf.
+  const FOLDER = { id: 1, path: "/m", kind: "user", movable: "per_item" };
+
+  const inFolder = (id) =>
+    adapter({
+      id,
+      locations: [
+        { state: "present", folder_id: 1, folder_path: "/m", relpath: `${id}` },
+      ],
+    });
+
+  async function mountWithSelection() {
+    listModelFolders.mockResolvedValue([FOLDER]);
+    const wrapper = await mountShelf([inFolder(1)]);
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  }
+
+  function pressDelete(extra = {}) {
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Delete", bubbles: true, ...extra }),
+    );
+    return new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  beforeEach(() => {
+    deleteModels.mockReset();
+    deleteModels.mockResolvedValue({
+      deleted: [1],
+      files_removed: 1,
+      permanent: false,
+      refused: [],
+    });
+  });
+
+  it("asks before it deletes, and deletes nothing when the answer is no", async () => {
+    // The key opens a prompt, never a deletion: a stray Del with forty rows
+    // selected has to cost one Escape and nothing else.
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await pressDelete();
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(confirmSpy.mock.calls[0][0]).toContain("Trash");
+    expect(deleteModels).not.toHaveBeenCalled();
+
+    confirmSpy.mockReturnValue(true);
+    await pressDelete();
+    expect(deleteModels).toHaveBeenCalledWith([1], { permanent: false });
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
+  it("makes Shift+Delete a permanent one, and says so in the prompt", async () => {
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await pressDelete({ shiftKey: true });
+    expect(confirmSpy.mock.calls[0][0]).toContain("permanently");
+    expect(deleteModels).toHaveBeenCalledWith([1], { permanent: true });
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
+  it("leaves the key to whoever is being typed in", async () => {
+    // A Del in a search field is a character, not a file deletion. This is the
+    // guard Escape already had, and it matters far more here.
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const field = document.createElement("input");
+    document.body.appendChild(field);
+
+    field.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Delete", bubbles: true }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(deleteModels).not.toHaveBeenCalled();
+
+    field.remove();
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
+  it("does nothing for a selection it could only get refused for", async () => {
+    // The gate is the server's, and this is the same one drawn client-side so
+    // the prompt is never shown for files PixlStash will not unlink.
+    listModelFolders.mockResolvedValue([
+      { id: 1, path: "/hf", kind: "foreign", movable: "fixed" },
+    ]);
+    const wrapper = await mountShelf([inFolder(1)]);
+    document.body.appendChild(wrapper.element);
+    useModelShelfStore().toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await pressDelete();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
+  it("stops listening once the shelf is gone", async () => {
+    // The view is v-else-if'd away when another one opens, and a window
+    // listener that outlived it would delete files from another screen.
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    wrapper.unmount();
+
+    await pressDelete();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 });
