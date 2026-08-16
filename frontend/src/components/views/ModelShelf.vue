@@ -15,7 +15,7 @@
       Every adapter and checkpoint PixlStash has found on this machine. Group
       and Sort choose the order and whether the list is cut into groups; Show
       chooses which kinds are listed and which base models. Above the list, the
-      Name, Base, Size and date headings sort it too, and every column but Name
+      Name, Base, Size and Date headings sort it too, and every column but Name
       begins with a handle that resizes it: Left and Right move the edge, Home
       and End take it to its widest and narrowest, Enter puts it back. The bar
       ends in the app-wide controls: Settings and the stats sidebar toggle.
