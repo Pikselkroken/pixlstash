@@ -23,11 +23,11 @@ container queries today**):
 `shelfbar toolbar`) — added 2026-08-15, after this record was written:
 
 - Left: title → count → Add (accent) → stack sweep
-- Right: Group → Sort split-button → Show → separator → **UndoControl** →
-  TbGlobalActions
+- Right: Group → Sort split-button → Show → separator → TbGlobalActions
+  (no UndoControl — see Amendment #4)
 
 It was shipped without the tail at all, so both app-wide controls simply
-vanished on `/models`; it now follows Decision 1 as written rather than
+vanished on `/models`; it then followed Decision 1 as written rather than
 inventing a third arrangement.
 
 So undo/redo sits mid-left in the grid and right-adjacent-to-TbGlobalActions in
@@ -281,3 +281,51 @@ S stacks it. K keeps it separate. Down moves on without deciding."
   a marginal taxonomy gain.
 - **A separator-less tail**: proximity alone cannot separate identical 32px
   icon buttons; the boundary needs the rule.
+
+## Amendment #4 (2026-08-16): the model shelf carries no undo
+
+**The finding:** Decision 1 gave every toolbar the same tail, and the shelf bar
+took it whole. But the shelf writes nothing to the operation log — adapters,
+model folders, model stacks and model moves are not operations — so on
+`/models` the pair sat permanently at "Nothing to undo", and the one time it
+did not, the step it offered to revert was a library edit made on a screen the
+reader had since left. Meanwhile the shelf's own destructive verbs say "There
+is no undo for this" in as many words, two icons away from an undo button. An
+affordance that never answers for what is in front of it teaches the wrong
+thing about the actions beside it, and it is worse when the actions beside it
+are the unrecoverable ones.
+
+**The change:** `ModelShelf.vue` drops `UndoControl`; its tail is
+`[separator] [TbGlobalActions]`. The separator stays — the rejected-options
+list above still holds, the boundary between this view's controls and the
+app's needs the rule. The shelf has no ⋯ overflow, so there is no "History…"
+row to remove, and undo stays exactly where Decision 1 put it in the grid and
+Duplicates bars, which do write the log.
+
+**And the chord goes with the button**, which is the part it would have been
+easy to skip. `useGlobalKeydown` is route-agnostic, so `Ctrl+Z` on `/models`
+kept calling `operationStore.undo()` — and the shelf mounts no `ActionReceipt`
+either, while `UndoControl` is the app's ONLY renderer of the "Changed
+elsewhere" warning. Removing the display and leaving the action reachable is
+the one combination worse than either alternative: a library mutation with no
+button, no state, no history, no receipt and no warning. The handler already
+declines behind a modal scrim for exactly this reason ("every undo raises a
+receipt"), so the shelf joins that guard on the same kind of DOM signal the
+lightbox check uses. What is gone is not only the claim that this screen has
+something to take back, but the silent way it had of taking it.
+
+**And it declines out loud.** A chord that does nothing at all teaches nothing,
+and the reader's next move is to press it again or go hunting for the buttons.
+The notice surface is app-wide and already renders over the shelf, so the
+answer costs no new chrome: one `info` notice, one sentence — "Model shelf
+changes aren't undoable — undo and redo apply to library actions in the grid."
+No action button; it would offer to navigate away mid-task. The push carries a
+fixed coalescing key, so a repeated press updates one card rather than building
+a wall (notice spec §9.1).
+
+**Rejected: hiding the control but keeping it inert**, the read-only pattern
+(`aria-disabled` + an explaining title, "show-but-disable, never hide"). That
+rule exists so a demo can see a feature it may not use — the feature is real,
+the session is not entitled to it. Here the feature does not exist on this
+screen at all, and a permanently inert undo two icons from verbs that say
+"There is no undo for this" teaches the opposite of what is true.

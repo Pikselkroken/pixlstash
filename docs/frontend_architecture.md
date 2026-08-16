@@ -756,7 +756,7 @@ The transient undo pill, built to the owner's "Undo / Redo System" design. One i
 **The second sentence.** The server's `summary` says what an operation *did*; an action that deliberately left something alone can add one sentence about what it did **not** do, by calling `useOperationStore.noteNextReceipt(opType, note)` immediately before the `refresh()` that will narrate it. `useActionReceipt` appends it to `text` (and therefore to the announcement) on both surfaces, and drops it once the pill flips to "Undone", where it would describe work that has just been taken back. The note is armed for one op type and consumed by the **first** receipt built afterwards, matching or not, so it can never drift onto an unrelated action. This exists so a skip belongs on the same pill as the move it qualifies: split across a pill and a notice, the half that needed a decision gets dismissed along with the half that did not. First and only consumer: `stack.keep_cover_only`'s skipped stacks.
 
 #### `UndoControl.vue` (`panels/`)
-The toolbar undo/redo pair plus a chevron opening the History popover. Mounted in the **right-side app-wide cluster of every toolbar** — the canonical tail `[separator] [UndoControl] [TbGlobalActions]`, identical in the grid bar and the Duplicates bar (see `docs/design/toolbar-responsive-decisions.md`), and the same position in the Electron shell and in the browser, which is why it is not in the breadcrumb. Under the shared `toolbar` container it collapses in steps: ≤480px the chevron hides (the hosts' ⋯ overflow "History…" row calls the exposed `openHistory()` instead), ≤420px redo hides; **undo itself never folds or hides** — the recovery control stays a single visible target, which also keeps the "Changed elsewhere" warning surfaced. Buttons use `aria-disabled` + a guarded handler rather than the native `disabled`, so they stay tabbable and keep naming the step ("Nothing to undo"), and carry `aria-keyshortcuts`. The popover reuses the shared `.tbm*` menu chrome and is labelled `role="dialog"` (not `menu`): it is a list of ordinary tab-order buttons with no roving arrow-key navigation, so claiming a menu would promise a contract it does not honour. Rows are newest-first, undone steps struck through and inert; hovering **or focusing** a row previews how far back you would go (`--active-wash` + an `--active-bar` inset rail across the whole range), and activating it walks the stack via `undoTo`. Enter is handled explicitly because Vuetify's menu `preventDefault`s it. Focus returns to the chevron on a programmatic close. Exposes `openHistory()`.
+The toolbar undo/redo pair plus a chevron opening the History popover. Mounted in the **right-side app-wide cluster of every toolbar that writes the operation log** — the canonical tail `[separator] [UndoControl] [TbGlobalActions]`, identical in the grid bar and the Duplicates bar (see `docs/design/toolbar-responsive-decisions.md`; the model shelf is the one documented exception and mounts no undo), and the same position in the Electron shell and in the browser, which is why it is not in the breadcrumb. Under the shared `toolbar` container it collapses in steps: ≤480px the chevron hides (the hosts' ⋯ overflow "History…" row calls the exposed `openHistory()` instead), ≤420px redo hides; **undo itself never folds or hides in a host that mounts it** — the recovery control stays a single visible target at every width, which also keeps the "Changed elsewhere" warning surfaced. (Whether a host mounts it at all is a separate question, answered per view: the model shelf does not, and `useGlobalKeydown` declines the chord there for the same reason.) Buttons use `aria-disabled` + a guarded handler rather than the native `disabled`, so they stay tabbable and keep naming the step ("Nothing to undo"), and carry `aria-keyshortcuts`. The popover reuses the shared `.tbm*` menu chrome and is labelled `role="dialog"` (not `menu`): it is a list of ordinary tab-order buttons with no roving arrow-key navigation, so claiming a menu would promise a contract it does not honour. Rows are newest-first, undone steps struck through and inert; hovering **or focusing** a row previews how far back you would go (`--active-wash` + an `--active-bar` inset rail across the whole range), and activating it walks the stack via `undoTo`. Enter is handled explicitly because Vuetify's menu `preventDefault`s it. Focus returns to the chevron on a programmatic close. Exposes `openHistory()`.
 
 #### `OverlayActionReceipt.vue` (`widgets/`)
 The lightbox's own narration of the same single receipt, mounted by `ImageOverlay` as the last child of `.overlay-main`. The owner ruled that undo must work in the lightbox and that the affordance may be fitted differently there, because the lightbox has its own GUI — so this is not the grid pill promoted above the modal layer. Everything the receipt *means* comes from the shared `useActionReceipt` composable, so the two surfaces cannot drift; only the chrome differs: `dark-surface`/`on-dark-surface` at 0.9 (the exact fill `.overlay-topbar` and `.overlay-rail` carry), `--elevation-4` (the rung `visual-language.md` §7 names for lightbox chrome, and the reason the grid pill takes -3), a `0.2` border matching `.overlay-nav`, and its own 64px transient-status lane inset by `--filmstrip-rail-width` / `--sidebar-width` so it centres on the visible image. Three deliberate differences beyond the material: **no live region** (the grid's still speaks from underneath, so a second one would double-speak); **no History popover** (choosing a step is a browsing task whose preview has no referent on a surface showing one picture); and a **scope clause** above one target ("Across 2,700 pictures, not just this one"), derived from the count alone so navigating to the next picture cannot falsify it. Nothing on this surface ever says "this picture". Exposes `containsFocus()` / `dismiss()` for the overlay's Escape guard.
@@ -1532,15 +1532,26 @@ express that. Like Duplicates it is excluded from `selectionOwnsHighlight` in
 destination in the rail.
 
 **And like Duplicates its bar carries the shell chrome.** Replacing the grid
-also replaces the grid's toolbar, so `.shelf-toolbar` ends in the canonical tail
-whole — `[separator] [UndoControl] [TbGlobalActions]`, the same components the
-grid and the queue mount, with `TbGlobalActions` emitting `open-settings` up to
-`App.vue`. The shelf writes nothing to the operation log itself, but
-`useOperationStore` is a read model over the backend's app-wide log, so undo
-here is live for whatever library work preceded the visit — which is the point
-of a recovery control that survives a change of destination. `.shelf-toolbar`
-declares `container-name: shelfbar toolbar` for the same reason both other
-hosts do: the shared chrome's scoped `@container toolbar` rules must reach it.
+also replaces the grid's toolbar, so `.shelf-toolbar` ends in
+`[separator] [TbGlobalActions]`, with `TbGlobalActions` emitting `open-settings`
+up to `App.vue`. **`UndoControl` is the documented exception to the canonical
+tail** (`docs/design/toolbar-responsive-decisions.md`): nothing the shelf does
+is an operation-log entry, so every step its History popover listed belonged to
+a screen the reader was not on, and the pair sat permanently at "Nothing to
+undo" or else offered to revert a library edit made elsewhere — a recovery
+control that never answers for what is in front of it, next to shelf actions
+that say in as many words that they cannot be undone. **`Ctrl+Z` declines here
+too** (`useGlobalKeydown`, the `.shelf` check beside the existing modal guard):
+the shelf mounts no `ActionReceipt` either, and `UndoControl` is the app's only
+renderer of the "Changed elsewhere" warning, so the chord would otherwise
+revert a library action with nothing on screen to say it happened — the same
+"every undo raises a receipt" invariant the modal guard protects. It declines
+*out loud*: one `info` notice under the coalescing key `SHELF_NO_UNDO_KEY`, so
+a held or repeated chord updates a single card instead of stacking (notice spec
+§9.1). A silent no-op would leave the reader pressing it again. `.shelf-toolbar`
+still declares `container-name: shelfbar toolbar` — the convention both other
+hosts follow, so a shared control mounted here degrades by the same scoped
+rules — though after this change nothing queries either name on this bar.
 
 These rules come from measurement against real adapter folders and are easy to
 undo by accident:

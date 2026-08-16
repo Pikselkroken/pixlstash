@@ -248,18 +248,15 @@
           <ShelfShowPanel />
         </v-menu>
 
-        <!-- The canonical tail, whole and in the documented order:
-             [separator] [UndoControl] [TbGlobalActions]
-             (docs/design/toolbar-responsive-decisions.md). The shelf replaces
-             the grid, and with it the grid's toolbar, so it owes the same
-             app-wide chrome the duplicates queue does — including undo, which
-             is about RECOVERY: the shelf writes nothing to the operation log
-             itself, but a library action undone from here is one the reader
-             does not have to navigate back to reach. The separator is required
-             at every width: proximity alone cannot separate identical icon
-             buttons into "this view's controls" and "the app's". -->
+        <!-- The tail, minus undo: [separator] [TbGlobalActions]
+             (docs/design/toolbar-responsive-decisions.md). The shelf records
+             nothing in the operation log, so every step the History popover
+             could offer here belongs to a screen the reader is not on — an
+             undo control that never answers for anything in front of you is
+             worse than no control. The separator is still required: proximity
+             alone cannot separate identical icon buttons into "this view's
+             controls" and "the app's". -->
         <span class="bar-separator" aria-hidden="true"></span>
-        <UndoControl />
         <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
     </div>
@@ -956,7 +953,6 @@ import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
-import UndoControl from "../panels/UndoControl.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
@@ -2599,9 +2595,15 @@ watch(
   align-items: center;
   gap: var(--space-4);
   /* `shelfbar` for this bar's own ladder, and the shared `toolbar` name the
-     app-wide chrome (UndoControl, TbGlobalActions) writes its scoped
-     @container rules against — so it degrades here exactly as it does in the
-     grid bar (`selbar toolbar`) and the queue's (`dqbar toolbar`). */
+     app-wide chrome writes its scoped @container rules against — the same
+     pair the grid bar (`selbar toolbar`) and the queue's (`dqbar toolbar`)
+     declare, so a shared control mounted here degrades exactly as it does
+     there. Nothing queries either name on this bar today: the shelf has no
+     ladder of its own yet, and dropping UndoControl took the one control that
+     wrote `@container toolbar` rules with it. The declaration stays because
+     the convention is what makes the next shared control work without a
+     second look — and `container-type: inline-size` is also what keeps the
+     bar's width independent of its contents. */
   container-type: inline-size;
   container-name: shelfbar toolbar;
   height: var(--bar-height);
