@@ -887,6 +887,7 @@
         @set-icon="pickIcon"
         @clear-icons="confirmClearIcons"
         @forget="confirmForget"
+        @delete="confirmDelete"
       />
     </div>
 
@@ -981,6 +982,8 @@ import {
   bandProjection,
   bandUsage,
   capabilityLabel,
+  deletableModels,
+  trashName,
   withEmptyFolders,
   withFolderSignals,
   formatModelSize,
@@ -1047,6 +1050,66 @@ async function confirmForget() {
     danger: true,
   });
   if (ok) await store.forgetSelected();
+}
+
+/**
+ * The third confirmation, and the only one standing in front of real bytes.
+ *
+ * It names the operation rather than the gesture, because the gesture is a
+ * modifier the reader may not have meant to be holding: a trash says where the
+ * files are going and a permanent delete says nothing gets them back.
+ *
+ * **The count is the exact list of models the call will send.** Two things make
+ * it easy to get wrong in the destructive direction, and both are handled here
+ * rather than left to the server: a selection of forty holding two
+ * HuggingFace-cache rows deletes thirty-eight, and a selected STACK is one row
+ * standing for six files. So the subset is taken first and then expanded to
+ * member ids, and those ids are what is posted.
+ *
+ * `permanent` arrives from the event that triggered this and is passed straight
+ * through: nothing here re-reads the keyboard, so the prompt the reader agreed
+ * to is the call that runs.
+ *
+ * @param {boolean} permanent - Shift was down: unlink rather than trash.
+ */
+async function confirmDelete(permanent) {
+  const rows = deletableModels(store.selectedRows, foldersById.value);
+  // MODELS, not rows: a stack is one row and six checkpoints, and it is deleted
+  // whole exactly as it is moved whole. Counting rows would have offered
+  // "Move this model to the Trash?" over tens of gigabytes — and these are the
+  // ids the call sends, so what the prompt counts and what goes are one list.
+  const ids = rows.flatMap((row) => row.memberIds ?? [row.id]);
+  if (!ids.length) {
+    // The keyboard can reach this with nothing deletable selected — the pill's
+    // button is disabled there, but `Delete` has no disabled state. Silence
+    // would read as a broken key.
+    if (store.selectedRows.length) {
+      useNoticeStore().push({
+        level: "info",
+        text:
+          "Nothing here can be deleted. PixlStash only removes files from your " +
+          "own model folders, and never from a drive that is not plugged in.",
+      });
+    }
+    return;
+  }
+  const many = ids.length !== 1;
+  const subject = many ? `${ids.length} models` : "this model";
+  const trash = trashName();
+  const ok = await confirm({
+    title: permanent
+      ? `Permanently delete ${many ? `${ids.length} models?` : "this model?"}`
+      : `Move ${many ? `${ids.length} models` : "this model"} to the ${trash}?`,
+    message: permanent
+      ? `The files for ${subject} are deleted permanently from this machine, along with everything recorded about them.`
+      : `The files for ${subject} go to your ${trash}, where you can put them back. The shelf stops listing them.`,
+    warning: permanent
+      ? "There is no undo for this."
+      : `A very large file may be too big for the ${trash} and be deleted outright.`,
+    confirmLabel: permanent ? "Delete permanently" : `Move to ${trash}`,
+    danger: true,
+  });
+  if (ok) await store.deleteSelected({ permanent, ids });
 }
 
 // ── Move (shelf plan F4) ─────────────────────────────────────────────────────
@@ -1393,7 +1456,12 @@ function onBandDrop(band, event) {
 }
 
 /**
- * Escape clears the selection, from anywhere — including outside the shelf.
+ * Does the shelf own this press, or does something in front of it?
+ *
+ * The guard both window-level keys ask first — Escape, which clears the
+ * selection from anywhere including outside the shelf, and Delete, which is in
+ * front of a file deletion and must never fire against a surface that is merely
+ * drawn over the rows.
  *
  * On the WINDOW rather than on the shelf root, because a keydown only reaches
  * an element that contains the focus: bound to the root it worked from a row
@@ -1406,8 +1474,9 @@ function onBandDrop(band, event) {
  * Everything that can own the key ahead of the shelf gets it handed back
  * rather than taken from it, all one rule — Escape means "undo the thing in
  * front of you", and clearing the selection underneath would be a second,
- * unasked-for effect. What that means in practice, and why each one is checked
- * the way it is:
+ * unasked-for effect. The same list is what keeps Delete from reaching the
+ * shelf while a dialog, a menu or the review overlay is up. What that means in
+ * practice, and why each one is checked the way it is:
  *   * one of the shelf's OWN dialogs is open. By ref, not by target: those are
  *     `AppDialog`s inside this subtree and a press with nothing focused targets
  *     `<body>`, which no ancestor test can see. `docs/frontend_architecture.md`
@@ -1430,8 +1499,7 @@ function onBandDrop(band, event) {
  * Bubble phase, not capture: every owner above is meant to resolve the key
  * FIRST, and a capture-phase listener would take it from them.
  */
-function onShelfEscape(event) {
-  if (event.key !== "Escape") return;
+function shelfOwnsTheKey(event) {
   if (
     moveOpen.value ||
     importOpen.value ||
@@ -1440,23 +1508,49 @@ function onShelfEscape(event) {
     addFileOpen.value ||
     editVerb.value
   ) {
-    return;
+    return false;
   }
   if (
     reviewSessionsStore.overlayOpen ||
     document.querySelector(".v-overlay--active:not(.v-tooltip), .image-overlay")
   ) {
-    return;
+    return false;
   }
-  if (sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible) return;
-  if (event.target?.closest?.(".ate, [role='dialog']")) return;
-  if (isTypingTarget(event.target)) return;
-  if (!store.selectedRows.length) return;
-  store.clearSelection();
+  if (sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible) return false;
+  if (event.target?.closest?.(".ate, [role='dialog']")) return false;
+  if (isTypingTarget(event.target)) return false;
+  return Boolean(store.selectedRows.length);
 }
 
-onMounted(() => window.addEventListener("keydown", onShelfEscape));
-onUnmounted(() => window.removeEventListener("keydown", onShelfEscape));
+/**
+ * Escape clears, Delete deletes.
+ *
+ * One handler and one set of guards, because the question both keys ask first
+ * is the same one: does the shelf own this press, or does something in front of
+ * it? Splitting them would be two copies of the list above, and the copy that
+ * drifted would be the one in front of a file deletion.
+ *
+ * **Delete is the file-manager gesture and is spelled the way Explorer spells
+ * it**: on its own it moves to the trash, with Shift it deletes permanently.
+ * `event.shiftKey` is read off the press itself and handed to the same
+ * confirmation the pill uses, so the key opens a prompt and never a deletion —
+ * a stray Del with forty rows selected costs one Escape.
+ */
+function onShelfKeydown(event) {
+  if (event.key !== "Escape" && event.key !== "Delete") return;
+  if (!shelfOwnsTheKey(event)) return;
+  if (event.key === "Escape") {
+    store.clearSelection();
+    return;
+  }
+  // The row list is a listbox, and Delete means nothing else in it. Stopped so
+  // it cannot also reach a browser shortcut on the way out.
+  event.preventDefault();
+  confirmDelete(event.shiftKey);
+}
+
+onMounted(() => window.addEventListener("keydown", onShelfKeydown));
+onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
 
 // ── The icon verb ───────────────────────────────────────────────────────────
 

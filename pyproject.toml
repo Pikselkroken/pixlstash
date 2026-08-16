@@ -43,6 +43,11 @@ dependencies = [
     "opencv-python>=4.13.0.92",
     "scipy>=1.17.1",
     "platformdirs>=4.9.4",
+    # The OS trash, for the shelf's delete verb. Pure Python, no dependencies of
+    # its own, and the only portable way to reach the Recycle Bin, the macOS
+    # Trash and the freedesktop.org one — none of which is a directory you can
+    # correctly write to by hand.
+    "send2trash>=2.1.0",
     "tomli>=2.4.0",
     "colorlog>=6.10.1",
     "python-multipart>=0.0.22",

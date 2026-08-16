@@ -24,6 +24,7 @@ const listUnclassified = vi.fn();
 const editModels = vi.fn();
 const listBaseModelCompletions = vi.fn();
 const forgetModels = vi.fn();
+const deleteModels = vi.fn();
 const setAdapterAttachments = vi.fn();
 const setModelIcon = vi.fn();
 const clearModelIcons = vi.fn();
@@ -39,6 +40,7 @@ vi.mock("../api/modelShelf", () => ({
   editModels: (...args) => editModels(...args),
   listBaseModelCompletions: (...args) => listBaseModelCompletions(...args),
   forgetModels: (...args) => forgetModels(...args),
+  deleteModels: (...args) => deleteModels(...args),
   setAdapterAttachments: (...args) => setAdapterAttachments(...args),
 }));
 
@@ -50,6 +52,7 @@ vi.mock("../api/modelIcons", () => ({
 
 import {
   assignReceipt,
+  deleteReceipt,
   editReceipt,
   forgetReceipt,
   useModelShelfStore,
@@ -1606,5 +1609,138 @@ describe("what the base-model field completes against", () => {
 
     await store.loadBaseModelCompletions();
     expect(listBaseModelCompletions).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("deleting from disk", () => {
+  it("sends every member of the selection and says where the files went", async () => {
+    const store = useModelShelfStore();
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    listAdapters.mockResolvedValue([]);
+    deleteModels.mockResolvedValue({
+      deleted: [1],
+      files_removed: 1,
+      permanent: false,
+      refused: [],
+    });
+
+    expect(await store.deleteSelected()).toBe(true);
+    expect(deleteModels).toHaveBeenCalledWith([1], { permanent: false });
+    // Nothing left to act on, exactly as after a forget.
+    expect([...store.selectedIds]).toEqual([]);
+    expect(useNoticeStore().notices.at(-1).text).toContain("to the Trash");
+  });
+
+  it("passes the permanent flag straight through", async () => {
+    // The gesture decides. Nothing in the store may re-derive it.
+    const store = useModelShelfStore();
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    listAdapters.mockResolvedValue([]);
+    deleteModels.mockResolvedValue({
+      deleted: [1],
+      files_removed: 1,
+      permanent: true,
+      refused: [],
+    });
+
+    await store.deleteSelected({ permanent: true });
+    expect(deleteModels).toHaveBeenCalledWith([1], { permanent: true });
+    expect(useNoticeStore().notices.at(-1).text).toContain(
+      "Permanently deleted",
+    );
+  });
+
+  it("says what failed rather than swallowing it", async () => {
+    const store = useModelShelfStore();
+    store.rows = [adapter({ id: 1 })];
+    store.toggleSelected(1);
+    deleteModels.mockRejectedValue(new Error("nope"));
+
+    expect(await store.deleteSelected()).toBe(false);
+    expect(useNoticeStore().notices.at(-1).level).toBe("error");
+  });
+});
+
+describe("deleteReceipt", () => {
+  it("names where the bytes went, because that is what recoverable means", () => {
+    expect(deleteReceipt(3, [], false, "Recycle Bin", 3)).toBe(
+      "Moved 3 models to the Recycle Bin.",
+    );
+    expect(deleteReceipt(1, [], true, "Trash", 1)).toBe(
+      "Permanently deleted 1 model.",
+    );
+    expect(deleteReceipt(0, [], false, "Trash", 0)).toBe("Nothing to delete.");
+  });
+
+  it("does not claim a trip to the trash when no file moved", () => {
+    // Every copy was already off the disk, so the row went and nothing else
+    // did. "Moved 1 model to the Trash" would send the reader somewhere the
+    // file was never put.
+    expect(deleteReceipt(1, [], false, "Trash", 0)).toBe(
+      "Removed 1 model from the shelf; the files were already gone.",
+    );
+  });
+
+  it("says plainly when a model lost copies before the delete failed", () => {
+    // The one refusal that has already destroyed something.
+    const text = deleteReceipt(
+      0,
+      [{ id: 1, reason: "partly_deleted" }],
+      false,
+      "Trash",
+      1,
+    );
+    expect(text).toContain("lost some of its copies");
+  });
+
+  it("keeps the refusals apart, because they are acted on differently", () => {
+    // "Plug the drive in" and "stop trying to delete PixlStash's own" are two
+    // different next steps; a combined "2 kept" would leave the reader
+    // re-selecting rows to find out which was which.
+    const text = deleteReceipt(
+      1,
+      [
+        { id: 2, reason: "unreachable_copy" },
+        { id: 3, reason: "not_a_user_folder" },
+      ],
+      false,
+      "Trash",
+      1,
+    );
+    expect(text).toContain("Moved 1 model to the Trash.");
+    expect(text).toContain("not plugged in");
+    expect(text).toContain("PixlStash keeps for itself");
+  });
+
+  it("says how to get past a machine with no trash", () => {
+    const text = deleteReceipt(
+      0,
+      [{ id: 1, reason: "trash_unavailable" }],
+      false,
+      "Trash",
+      0,
+    );
+    expect(text).toContain("no Trash this server can reach");
+    expect(text).toContain("Shift");
+  });
+
+  it("names a failure it does not recognise rather than dropping it", () => {
+    // A row still on the shelf with its file still on disk is the one outcome
+    // the reader must not be left to discover for themselves.
+    const text = deleteReceipt(
+      0,
+      [
+        { id: 1, reason: "delete_failed" },
+        { id: 2, reason: "invented_later" },
+      ],
+      true,
+      "Trash",
+      0,
+    );
+    expect(text).toBe(
+      "Nothing was deleted. 2 models could not be deleted; the server log says why.",
+    );
   });
 });

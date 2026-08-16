@@ -509,6 +509,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/login                                                                 | auth            | Login                                                      |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                     |
 | POST   | /api/v1/model-files                                                           | model_shelf     | Add one model file to the shelf                            |
+| POST   | /api/v1/model-files/delete                                                    | model_shelf     | Delete models from disk                                    |
 | GET    | /api/v1/model-folders                                                         | model_shelf     | List registered model folders                              |
 | POST   | /api/v1/model-folders                                                         | model_shelf     | Register a model folder                                    |
 | GET    | /api/v1/model-folders/devices                                                 | model_shelf     | Capacity of the drives the model folders sit on            |
@@ -2046,6 +2047,85 @@ the shelf when the call returns and the owner never has to rescan.
   discarded and the call is a 400, because the scanner would not have registered
   it either and a file the shelf never lists is not what "added" means.
 
+### `Delete`: models off the shelf and off the disk (#933)
+
+`POST /api/v1/model-files/delete`
+([`routes/model_files.py`](../pixlstash/routes/model_files.py)) is the shelf's
+only destructive verb, and it lives beside `Add file` because the two are one
+authority — a file in a registered folder, written or unlinked. Before it, the
+shelf could rename a model, move it and forget a row whose file was *already*
+gone, but the only way to actually delete the 6 GB checkpoint the owner no
+longer wants was a file manager and then a rescan.
+
+- **The trash is the default and the undo.** `permanent=false` hands each path
+  to `send2trash`, so the OS keeps the bytes recoverable by the mechanism the
+  owner already knows; `permanent=true` unlinks, and there is no undo, no
+  operation-log half and no scrapheap behind it (the shelf-wide ruling of
+  2026-08-09 stands). The frontend sends `true` only for Shift+Delete, the
+  Windows-Explorer gesture. A machine with no trash we can reach — a container —
+  refuses with `trash_unavailable` rather than quietly unlinking instead, which
+  is the one substitution that could not be taken back. **Two honest limits on "the trash is the
+  undo":** Windows deletes outright anything larger than the Recycle Bin's
+  per-volume quota, which a multi-GB checkpoint routinely is, and a
+  freedesktop trash lives on the same volume as the file — so trashing frees no
+  space until the trash itself is emptied. The confirmation says the first out
+  loud; neither is something PixlStash can fix from here.
+- **Only the folders whose contents are the owner's.** `user`, and the
+  `managed` store PixlStash keeps for files it was *given* — which is where
+  `Add file` and an import land, so a shelf that could not delete from it could
+  not undo either of them. Everything else is refused whole: the engines
+  PixlStash re-declares on every start, the InsightFace packs, and the
+  HuggingFace cache, which is a symlink store shared with every other tool on
+  the machine. That is the line `model_mover._plan_one` draws for a move, drawn
+  here by `kind` rather than by `movable` because the managed store is
+  `root_only` — the *folder* moves as a unit — while the files in it are
+  individually the owner's.
+- **A model is deleted whole or not at all.** Every copy goes, so a model with
+  one copy in a user folder and another in the cache is refused rather than
+  half-deleted: unlinking the reachable half would leave the row the owner
+  wanted gone still on the shelf, rebuilt by the next scan. `unreachable` is
+  refused for the reason Forget refuses it — an unplugged drive is not a
+  deletion — and `missing` is not a refusal at all: there is nothing to unlink
+  and the row is exactly what was asked for.
+- **Bytes first, rows second, per model.** The unlink runs before
+  `purge_deleted_models` drops the rows, so an interruption leaves a row naming
+  a file that is not there — which the next scan marks `missing` — rather than a
+  file nothing on the shelf can see, which is the tombstone invariant the
+  mover's ordering exists to protect, read in the other direction. A model whose
+  unlink fails keeps its rows; the refusal distinguishes `delete_failed`
+  (nothing went) from **`partly_deleted`** (some copies went and one did not),
+  because "could not be deleted" over a model that has already lost half its
+  copies is the one sentence this route must not produce.
+- **The gate reads share one transaction, and the purge has a gate of its own.**
+  `forget_models` documents why the first is necessary: two `hub.fetchall` calls
+  take and release the hub lock between them, so a background
+  `ModelFolderScanner` can rewrite the states being gated on. The unlink cannot
+  run inside that transaction — a 24 GB file would hold the hub's write lock for
+  the length of a disk operation — so the remaining window is closed on the
+  other side: `purge_deleted_models` deletes the location rows this call emptied
+  and then drops a `model` row **only when no location row for it survives**. A
+  copy the scanner registered while the files were going therefore keeps its
+  model alive instead of being purged out from under a file that is really
+  there, and the route logs the difference.
+- **The link, never what the link points at.** Containment here is *not*
+  `resolve_path_within`, which returns a `realpath`: unlinking that would delete
+  the bytes a symlinked model points at and leave the link, gutting any other
+  row naming those bytes. A symlinked model is ordinary practice on this shelf
+  (`_present_copy` contains lexically for exactly that reason), so
+  `_contained_path` contains the file lexically and `realpath`s the *directory*
+  holding it — a `..` cannot escape, a symlinked directory component cannot
+  redirect the unlink out of the folder, and what is removed is the name the
+  shelf catalogues. A row that still escapes is refused as
+  `escapes_its_folder`: a broken row, never a request to unlink somebody's file
+  elsewhere on the disk.
+- **It holds the machine-wide `SHELF_IO_LOCK`** for the whole call, the same
+  slot an add, a move and an import take, so nothing can be copying into a
+  folder this is emptying.
+- Authorization is `LOCAL_OWNER_ONLY` (§16.3). It takes no host path — the body
+  is a list of hub `model.id` — so it is on that tier for the destruction
+  alone, which is the unlink half of `POST /model-moves` without the copy that
+  justifies it.
+
 ### Hub and library identity
 
 `hub.db` sits beside `server-config.json`, outside every image library. It owns
@@ -2547,6 +2627,8 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
     Three narrowings inside the handler, none of them the authz tier: only a `present` copy is served (`missing` says the scan looked and found nothing, `unreachable` says the drive is unplugged, and a forgotten folder leaves its rows **tombstoned rather than deleted** — so serving on any other state would hand out bytes from a folder the owner un-registered); a checkpoint hash is refused with the same 404 as the detail route beside it; and the join is contained with `path_is_within` even though neither half is caller-supplied, because on *this* route a `..` from a faulty scan or a restored hub would be an arbitrary-file reader rather than a wrong row — the same argument B7 makes for containing its writes. The containment is lexical first for the reason `path_is_within` documents: a model symlinked into a models directory is ordinary practice, and realpath-only containment refuses every one of them. A known hash with no readable copy is **409, not 404**, because "no such adapter" and "the file is not here right now" call for different behaviour from the caller. The digest is deliberately not re-verified on the way out: that reads every byte twice per request, and the caller addressed the file by the hash it can check itself. Both directions and both halves of the tier are pinned in `tests/test_model_shelf_api.py`; the share-token direction is asserted rather than reasoned about, because this is a **GET** and the `test_share_tokens_never_reach_a_folder_mutator` docstring warns in as many words that a GET on this tier is refused by the gate alone. Arithmetic, not judgement.
 
     **It is the third member of the templated `READ_BLOCKED_GET_PATHS` gap, and the sharpest.** The belt matches literal paths, so no templated locality GET can be on it; the two already there serve a run listing and a preview image, and this one streams model weights. Under the documented `AUTHZ_GATE_ENFORCING = False` rollback a share token would therefore not read a directory but download every adapter on the shelf. It is recorded rather than closed here because closing it means prefix matching in a belt every request passes through — its own change with its own review — and a bespoke `startswith` for one route is the special case that rots. The gate refuses it today, proved by mutation in `tests/test_model_shelf_api.py::test_no_share_token_can_download_a_model_file`; `tests/test_authz_host_capability_16_3.py::test_every_untemplated_locality_get_is_on_the_read_blocked_belt` fails the build if a fourth is added without this decision being made again.
+
+  - **Updated 2026-08-16 (#933, `Delete from disk`) — the locality total is now `34 = 29 local + 5 loopback`.** `POST /api/v1/model-files/delete` removes every registered copy of the named models — to the OS trash by default, permanently on request — and then drops their hub rows. It is the **unlink half of `POST /model-moves` standing alone**, without the copy that justifies it, and it is the first route on this tier for *destruction* alone. It takes **no host path**: the body is a list of hub `model.id`, and every path it touches is contained against the folder the scanner recorded, so a row that escapes its folder is refused rather than unlinked. The containment is `_contained_path` rather than the mover's `resolve_path_within`, and deliberately: that one returns a `realpath`, so on a symlinked model it would delete the bytes the link points at and leave the link. This contains the file lexically and `realpath`s the *directory* holding it, so a `..` cannot escape, a symlinked directory component cannot redirect the unlink, and what is removed is the name the shelf catalogues. Two narrowings inside the handler are not the authz tier and are worth reading beside it: only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; and a model with an `unreachable` copy is refused, because an unplugged drive is not a deletion. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_29_local_5_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 

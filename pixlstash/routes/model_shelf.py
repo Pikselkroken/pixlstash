@@ -84,6 +84,7 @@ from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_shelf_service import (
     CURATABLE_FIELDS,
+    MAX_MODELS_PER_EDIT,
     DEFAULT_DIRECTION,
     DEFAULT_SORT,
     ENTITY_TYPES,
@@ -184,13 +185,6 @@ class ModelAttachmentRequest(ModelAttachment):
 # data (one adapter used by a handful of characters or sets) and far below a
 # list long enough to hold the write path.
 MAX_ATTACHMENTS_PER_MODEL = 200
-
-# Ceiling on one verb's selection. A shelf of 1,806 rows can be selected whole,
-# so this is set above the largest real selection rather than below it: the cost
-# is one hub UPDATE or DELETE over an id list, not a lookup per id, and 5,000
-# ids is still a single short transaction. It exists so a malformed client
-# cannot post an unbounded list into the SQL builder, not to ration the verb.
-MAX_MODELS_PER_EDIT = 5000
 
 
 class ModelResponse(BaseModel):

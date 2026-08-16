@@ -157,10 +157,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_28_local_5_loopback():
+def test_host_capability_tier_split_is_29_local_5_loopback():
     """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 33 routes carry a
-    locality tier = 28 local + 5 loopback.
+    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 34 routes carry a
+    locality tier = 29 local + 5 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -245,6 +245,15 @@ def test_host_capability_tier_split_is_28_local_5_loopback():
     exists for, so the tier costs it nothing; a genuinely remote generator needs
     ``allow_remote_host_ops``, which is the safe direction to fail in.
 
+    34 = 29 + 5 with ``POST /model-files/delete``, the shelf's delete verb
+    (#933). It is the **unlink half of ``POST /model-moves`` standing alone**:
+    it removes the owner's model files — to the OS trash by default, permanently
+    on request — and then drops their hub rows. It takes no host path, and the
+    same containment the mover uses for its source decides every path it
+    touches; what puts it here is the destruction itself, which is the strongest
+    thing the shelf does to a disk and is not made weaker by the ids being ours
+    rather than the caller's.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -258,7 +267,7 @@ def test_host_capability_tier_split_is_28_local_5_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 28, sorted(local)
+    assert len(local) == 29, sorted(local)
 
 
 # ===========================================================================
