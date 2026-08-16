@@ -20,6 +20,7 @@ deletes is always inside one of the two plugin directories.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import Sequence
 
@@ -41,21 +42,6 @@ EXIT_OK = 0
 EXIT_REFUSED = 1
 EXIT_HUB_UNAVAILABLE = 3
 
-# Shown under every top-level `--help`. Exit codes belong in the help output
-# rather than only in this file's docstring: a script calling the CLI has to
-# tell "you asked for something I will not do" apart from "I could not open
-# the hub", and nothing else tells it.
-EPILOG = """\
-Every command has its own help, e.g.
-  pixlstash-cli libraries backup --help
-
-Exit codes:
-  0  the command did what it says
-  1  refused for a reason you can act on, or you answered no to a prompt
-  2  the command line itself was wrong
-  3  the hub database could not be opened
-"""
-
 # Every verb that names a library accepts the same three forms, so they are
 # documented in one place rather than drifting apart across five parsers.
 LIBRARY_ARG_HELP = (
@@ -65,17 +51,51 @@ LIBRARY_ARG_HELP = (
 )
 
 
+def invoked_as() -> str:
+    """Return the command the user typed to get here.
+
+    Every usage line, error and "add one with:" hint names this, so on a desktop
+    install they must not say ``pixlstash-cli``: that console script is sealed
+    inside the app image and is on nobody's PATH. The launcher that ran us
+    declares the working form in ``PIXLSTASH_CLI_COMMAND`` (see
+    :mod:`pixlstash.hub.cli_hint`, which reads the same variable to fill the
+    Settings panel). Everywhere else the console script is exactly right.
+    """
+    return os.environ.get("PIXLSTASH_CLI_COMMAND", "").strip() or "pixlstash-cli"
+
+
+def epilog() -> str:
+    """Return the text shown under every top-level ``--help``.
+
+    Exit codes belong in the help output rather than only in this file's
+    docstring: a script calling the CLI has to tell "you asked for something I
+    will not do" apart from "I could not open the hub", and nothing else tells
+    it. Built per call rather than held as a constant so its worked example
+    names the command the reader actually typed (see :func:`invoked_as`).
+    """
+    return f"""\
+Every command has its own help, e.g.
+  {invoked_as()} libraries backup --help
+
+Exit codes:
+  0  the command did what it says
+  1  refused for a reason you can act on, or you answered no to a prompt
+  2  the command line itself was wrong
+  3  the hub database could not be opened
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Return the argument parser for the library CLI."""
     parser = argparse.ArgumentParser(
-        prog="pixlstash-cli",
+        prog=invoked_as(),
         # Wrapped by hand: RawDescriptionHelpFormatter prints the description
         # as written, which is the price of an epilog that keeps its layout.
         description=(
             "PixlStash command line. Run this on the machine hosting\n"
             "PixlStash, signed in as the user that owns it."
         ),
-        epilog=EPILOG,
+        epilog=epilog(),
         # Keeps the epilog's exit-code list on separate lines instead of
         # reflowing it into a paragraph.
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -315,6 +335,54 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
     )
     install_parser.set_defaults(handler=_cmd_plugins_install)
 
+    test_parser = commands.add_parser(
+        "test",
+        help="Load a captioning plugin as the server does and check it.",
+        # Wrapped by hand, like the top-level parser: the safety caveat is the
+        # first thing to read and has to stay its own paragraph rather than
+        # being reflowed into the middle of a block.
+        description=(
+            "A development aid for writing a plugin. NOT a security scanner:\n"
+            "it does not tell you whether a plugin is safe, it RUNS it. The\n"
+            "module body — and the model itself, with --image — executes in\n"
+            "this process, with your permissions, exactly as it would in the\n"
+            "server. Nothing is sandboxed, and nothing here inspects what the\n"
+            "code does. Only test a plugin you would have installed anyway.\n"
+            "\n"
+            "What it does check: that the plugin imports the way the server\n"
+            "imports it at start-up, that every plugin class it defines\n"
+            "registers, and that its parameter schema is one the settings\n"
+            "screen can render — the last of which the server does not check\n"
+            "and which fails quietly when it is wrong. Prints what registered.\n"
+            "\n"
+            "A `problem:` means the plugin will not work and exits 1. A\n"
+            "`warning:` means it works and could be tidier — a parameter with\n"
+            "no label, no capability flag set — and exits 0.\n"
+            "\n"
+            "Passing still is not the same as working in PixlStash: a plugin\n"
+            "that hangs at import hangs the server's boot and would hang this\n"
+            "command too, and nothing here says the captions are any good.\n"
+            "Image filters are not checked."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    test_parser.add_argument(
+        "path", help="The plugin's .py file, or its folder holding __init__.py."
+    )
+    test_parser.add_argument(
+        "--image",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Also run the plugin over this one image with the schema's "
+            "defaults and print what comes back. This loads the model, so it "
+            "is the slow one. It stops rather than running when the plugin "
+            "reports its model is missing, but a plugin that downloads inside "
+            "init() will still do so — nothing here can prevent that."
+        ),
+    )
+    test_parser.set_defaults(handler=_cmd_plugins_test)
+
     list_parser = commands.add_parser(
         "list",
         help="Show the installed plugins, grouped by kind.",
@@ -400,7 +468,7 @@ def _cmd_list(registry: LibraryRegistry, _args: argparse.Namespace) -> int:
     libraries = registry.list_libraries()
     if not libraries:
         print("No libraries are registered yet.")
-        print("Add one with:  pixlstash-cli libraries attach /path/to/library")
+        print(f"Add one with:  {invoked_as()} libraries attach /path/to/library")
         return EXIT_OK
 
     name_width = max(len(library.name) for library in libraries)
@@ -458,7 +526,8 @@ def _cmd_detach(registry: LibraryRegistry, args: argparse.Namespace) -> int:
     print(f'Detached library "{library.name}".')
     print(f"No files were removed. {library.path} is unchanged.")
     print(
-        f'Add it back at any time with:  pixlstash-cli libraries attach "{library.path}"'
+        f"Add it back at any time with:  {invoked_as()} "
+        f'libraries attach "{library.path}"'
     )
     return EXIT_OK
 
@@ -602,6 +671,93 @@ def _cmd_plugins_install(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_plugins_test(args: argparse.Namespace) -> int:
+    """Load a plugin as the server does and report what would register."""
+    # Local import: this is the one verb that imports the plugin system (and,
+    # with --image, whatever the plugin itself pulls in).
+    from pixlstash import plugin_check
+
+    # Printed *before* the load, because after it the plugin's code has
+    # already run — and if the plugin hangs at import, this line is the last
+    # thing on screen and the one that explains what is hanging.
+    print(
+        f"About to run {args.path} in this process, unsandboxed, with your "
+        "permissions.\nThis is a development check, not a security check."
+    )
+    report = plugin_check.check_plugin(args.path, image=args.image)
+    for failure in report.failures:
+        # Not "Loaded <path>" first: a plugin that raised on import did not
+        # load, and saying so above the error is a contradiction the reader
+        # has to resolve. Whether it loaded is what the rest of this says.
+        print(f"error: {failure}", file=sys.stderr)
+
+    for check in report.checked:
+        schema = check.schema
+        capabilities = ", ".join(
+            label
+            for label, supported in (
+                ("captions", schema.get("supports_descriptions")),
+                ("tags", schema.get("supports_tags")),
+            )
+            if supported
+        )
+        print(
+            f'\nRegistered "{check.name}"  '
+            f"({schema.get('display_name') or check.name})  — "
+            f"{capabilities or 'no capability flags'}"
+        )
+        _print_parameters(schema.get("parameters"))
+        if check.output is not None:
+            print(f"  Ran over {args.image} and got:")
+            if isinstance(check.output, dict):
+                for key, value in check.output.items():
+                    print(f"    {key} -> {value!r}")
+            else:
+                print(f"    {check.output!r}")
+        for problem in check.problems:
+            print(f"  problem: {problem}", file=sys.stderr)
+        for warning in check.warnings:
+            # Said, never failed on: the plugin works with these. Failing the
+            # command on something cosmetic would make it less useful than the
+            # restart it is meant to replace.
+            print(f"  warning: {warning}", file=sys.stderr)
+
+    if not report.ok:
+        print(
+            "\nThis plugin would not work as it stands. Fix the above and run "
+            "this again — no restart needed.",
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED
+
+    print(
+        "\nIt loads, registers and renders. That is a contract check, and it "
+        "is neither a quality one nor a safety one: it says nothing about "
+        "whether the captions are any good, and nothing about whether this "
+        "plugin is safe to install — it just ran it. A plugin that hangs at "
+        "import would hang the server's boot the same way it would hang this "
+        "command."
+    )
+    if not args.image:
+        print("Pass --image to run it over a picture as well.")
+    return EXIT_OK
+
+
+def _print_parameters(parameters: object) -> None:
+    """Print the schema's parameters, one per line, as the UI would see them."""
+    if not isinstance(parameters, list) or not parameters:
+        print("  No parameters.")
+        return
+    for definition in parameters:
+        if not isinstance(definition, dict):
+            print(f"  {definition!r}")
+            continue
+        print(
+            f"  {definition.get('name')}: {definition.get('type')} "
+            f"= {definition.get('default')!r}"
+        )
+
+
 def _cmd_plugins_list(_args: argparse.Namespace) -> int:
     """Print both plugin directories, grouped by kind, with a marker legend."""
     listing = plugin_install.list_installed()
@@ -611,7 +767,7 @@ def _cmd_plugins_list(_args: argparse.Namespace) -> int:
             print(
                 f"  {plugin_install.KIND_LABELS[kind]}: {plugin_install.user_dir(kind)}"
             )
-        print("Add one with:  pixlstash-cli plugins install hello_world_stamp")
+        print(f"Add one with:  {invoked_as()} plugins install hello_world_stamp")
         return EXIT_OK
 
     notes = {

@@ -14,11 +14,12 @@
       Every adapter and checkpoint PixlStash has found on this machine. Group
       and Sort choose the order and whether the list is cut into groups; Show
       chooses which kinds are listed and which base models. The bar ends in the
-      app-wide controls: Undo and Redo, Settings, and the stats sidebar toggle.
-      A ring around a model's mark says who it is assigned to. A name in italics
-      has not been given one. A row that stands for a training run says how many
-      files it holds; Right and Left open and close it. Right-click a row for
-      everything that can be done to it. Escape clears the selection.
+      app-wide controls: Settings and the stats sidebar toggle. Nothing on this
+      screen can be undone. A ring around a model's mark says who it is assigned
+      to. A name in italics has not been given one. A row that stands for a
+      training run says how many files it holds; Right and Left open and close
+      it. Right-click a row for everything that can be done to it. Escape clears
+      the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -27,12 +28,14 @@
          header already says it and a second announcer double-speaks. -->
     <p class="visually-hidden" role="status">{{ sortAnnouncement }}</p>
 
-    <!-- The toolbar changes the VIEW. The two things on it that are not view
+    <!-- The toolbar changes the VIEW. The three things on it that are not view
          controls are the ones with no selection to hang on — Add, which makes a
-         row that does not exist yet, and the stack sweep, which proposes over
-         the whole shelf — so they sit together on the left, apart from the view
-         controls, and both open something before they write anything. Every
-         other verb lives on the row or in the selection pill (#904). -->
+         row that does not exist yet; the stack sweep, which proposes over the
+         whole shelf; and Model folders, which edits the registry the shelf
+         reads — so they sit together on the left, apart from the view controls.
+         The test the left group applies: it opens something, it writes nothing
+         on the press, and it has no selection to hang on. Every other verb
+         lives on the row or in the selection pill (#904). -->
     <div class="shelf-toolbar">
       <span class="shelf-title">Models</span>
       <span class="shelf-sub">{{ countLabel }}</span>
@@ -73,7 +76,7 @@
             class="shelf-mi"
             type="button"
             role="menuitem"
-            @click="openFolders()"
+            @click="openFolders(addBtnRef)"
           >
             <v-icon size="16">mdi-folder-plus-outline</v-icon>
             <span>Add folder…</span>
@@ -114,13 +117,43 @@
       <button
         ref="stacksBtnRef"
         class="bar-btn bar-btn--boxed"
-        :class="{ 'bar-btn--open': stacksOpen }"
         type="button"
         title="Stack training runs — review proposed stacks"
         aria-label="Stack training runs"
+        aria-haspopup="dialog"
         @click="stacksOpen = true"
       >
         <v-icon size="19">mdi-layers-plus</v-icon>
+      </button>
+
+      <!-- The registry the shelf reads, and the only door to it once the empty
+           state is gone: Add ▾ spells this "Add folder…", which is the wrong
+           promise for rescan, relocate and forget.
+
+           No count badge: `bar-filter-badge` counts a deviation from a default
+           the reader set, and a folder count never returns to zero (the managed
+           store always exists), so a permanent number beside Show's identical
+           pill would mean something else entirely.
+
+           No `bar-btn--open`, and the sweep above lost its copy in the same
+           change: `App.css` declares that class for "the toolbar button while
+           its MENU is open", and both of these open an `AppDialog`, which sets
+           `:scrim="true"`. The highlight is painted under the scrim for exactly
+           as long as it applies, and neither button has the chevron the rule
+           rotates. Group/Sort/Show keep it because they really are menus.
+           `aria-haspopup="dialog"` on both, and `aria-expanded` on neither:
+           focus moves into the dialog rather than into anything the button
+           owns. -->
+      <button
+        ref="foldersBtnRef"
+        class="bar-btn bar-btn--boxed"
+        type="button"
+        title="Model folders — add, rescan, move or forget a folder"
+        aria-label="Model folders"
+        aria-haspopup="dialog"
+        @click="openFolders(foldersBtnRef)"
+      >
+        <v-icon size="19">mdi-folder-multiple-outline</v-icon>
       </button>
 
       <span class="shelf-spacer"></span>
@@ -248,18 +281,15 @@
           <ShelfShowPanel />
         </v-menu>
 
-        <!-- The canonical tail, whole and in the documented order:
-             [separator] [UndoControl] [TbGlobalActions]
-             (docs/design/toolbar-responsive-decisions.md). The shelf replaces
-             the grid, and with it the grid's toolbar, so it owes the same
-             app-wide chrome the duplicates queue does — including undo, which
-             is about RECOVERY: the shelf writes nothing to the operation log
-             itself, but a library action undone from here is one the reader
-             does not have to navigate back to reach. The separator is required
-             at every width: proximity alone cannot separate identical icon
-             buttons into "this view's controls" and "the app's". -->
+        <!-- The tail, minus undo: [separator] [TbGlobalActions]
+             (docs/design/toolbar-responsive-decisions.md). The shelf records
+             nothing in the operation log, so every step the History popover
+             could offer here belongs to a screen the reader is not on — an
+             undo control that never answers for anything in front of you is
+             worse than no control. The separator is still required: proximity
+             alone cannot separate identical icon buttons into "this view's
+             controls" and "the app's". -->
         <span class="bar-separator" aria-hidden="true"></span>
-        <UndoControl />
         <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
     </div>
@@ -359,9 +389,11 @@
           machine. Add the folder where you keep them.
         </p>
         <button
+          ref="emptyFoldersBtnRef"
           class="tbm-action tbm-action--primary"
           type="button"
-          @click="openFolders()"
+          aria-haspopup="dialog"
+          @click="openFolders(emptyFoldersBtnRef)"
         >
           Add a model folder
         </button>
@@ -884,6 +916,7 @@
         @set-kind="editVerb = 'kind'"
         @stack="confirmStack"
         @move="openMove(store.selectedRows)"
+        @open-location="openLocation"
         @set-icon="pickIcon"
         @clear-icons="confirmClearIcons"
         @forget="confirmForget"
@@ -956,13 +989,13 @@ import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
-import UndoControl from "../panels/UndoControl.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
+import { openModelLocation } from "../../api/modelShelf";
 import { createStack } from "../../api/modelStacks";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -1014,10 +1047,15 @@ const sortMenuOpen = ref(false);
 const foldersOpen = ref(false);
 const addMenuOpen = ref(false);
 const groupMenuOpen = ref(false);
-// One button behind every dialog the toolbar's left half opens, so focus has
-// one place to come back to however the reader got there. The menu item that
-// opened it is gone by then — it unmounts with the menu.
+// The toolbar buttons behind the dialogs its left half opens, so focus has a
+// place to come back to however the reader got there. A menu item cannot be
+// that place — it unmounts with the menu.
 const addBtnRef = ref(null);
+const foldersBtnRef = ref(null);
+// The empty state's own door. Unlike the two above it is NOT always mounted —
+// the first scan that finds a model replaces the empty state with the list —
+// which is the case `closeFolders`' `isConnected` check exists for.
+const emptyFoldersBtnRef = ref(null);
 const selBarRef = ref(null);
 /** Read once, dismissed for this visit; a refetch says it again. */
 const offlineDismissed = ref(false);
@@ -1110,6 +1148,46 @@ async function confirmDelete(permanent) {
     danger: true,
   });
   if (ok) await store.deleteSelected({ permanent, ids });
+}
+
+/**
+ * Show the selected row's folder in the file manager of the SERVER's desktop.
+ *
+ * No confirmation, because it changes nothing — the one verb on the shelf that
+ * only looks. The id posted is the ROW's, which for a collapsed stack is the
+ * cover's: one press opens one window, and the cover is the file the reader
+ * right-clicked. A stack the shelf built shares a folder (its own gate refuses
+ * to group across folders), but a stack is not required to, so this is the
+ * cover's folder rather than "the run's" — those are the same directory in
+ * every case the shelf can create and not by a rule the server enforces.
+ *
+ * **Three different failures, three different sentences.** Nothing visible
+ * happens on this screen when it works, so a wrong reason is as bad as no
+ * reason: 403 is a shelf opened from another machine (the route is
+ * loopback-only), 409 is a row whose file has gone since the list was drawn —
+ * which the disabled state cannot catch, because it knows the recorded state
+ * and not whether the file is still there — and anything else is a server with
+ * no desktop to open anything on.
+ */
+async function openLocation() {
+  const row = store.selectedRows[0];
+  if (!row) return;
+  try {
+    await openModelLocation(row.id);
+  } catch (err) {
+    const status = err?.response?.status;
+    useNoticeStore().push({
+      level: "warning",
+      text:
+        status === 403
+          ? "A file manager opens on the machine running PixlStash, so this only works when you are sitting at it."
+          : status === 409
+            ? "That file is not where the shelf last saw it. Rescan its folder to catch up."
+            : "Couldn't open that folder — the machine running PixlStash has no desktop file manager.",
+      key: "shelf-open-location",
+    });
+    console.warn(`Failed to open the location of model ${row.id}`, err);
+  }
 }
 
 // ── Move (shelf plan F4) ─────────────────────────────────────────────────────
@@ -1775,9 +1853,15 @@ async function onFilePicked(path) {
 // making it reactive would deep-track an element tree for nothing.
 const folderInvoker = shallowRef(null);
 
-function openFolders(event) {
-  folderInvoker.value =
-    event?.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+/**
+ * @param {HTMLElement} invoker Control to hand focus back to on close. Every
+ *   door names one, and names the durable control rather than the pressed
+ *   element: the `Add folder…` item is gone by the time the dialog closes, so
+ *   it names the Add button it hangs off. The earlier version read
+ *   `event.currentTarget` and was dead — no call site ever passed an event.
+ */
+function openFolders(invoker) {
+  folderInvoker.value = invoker;
   foldersOpen.value = true;
 }
 
@@ -1787,8 +1871,9 @@ async function closeFolders() {
   folderInvoker.value = null;
   await nextTick();
   // The empty-state button unmounts the moment the first folder is scanned in,
-  // so fall back to the toolbar control rather than dropping focus to <body>.
-  (returnTo?.isConnected ? returnTo : addBtnRef.value)?.focus();
+  // so fall back to the toolbar's folder button — the one door that is always
+  // mounted — rather than dropping focus to <body>.
+  (returnTo?.isConnected ? returnTo : foldersBtnRef.value)?.focus();
 }
 
 // `missing` is a fact (the folder was readable, the file was not in it);
@@ -2599,9 +2684,15 @@ watch(
   align-items: center;
   gap: var(--space-4);
   /* `shelfbar` for this bar's own ladder, and the shared `toolbar` name the
-     app-wide chrome (UndoControl, TbGlobalActions) writes its scoped
-     @container rules against — so it degrades here exactly as it does in the
-     grid bar (`selbar toolbar`) and the queue's (`dqbar toolbar`). */
+     app-wide chrome writes its scoped @container rules against — the same
+     pair the grid bar (`selbar toolbar`) and the queue's (`dqbar toolbar`)
+     declare, so a shared control mounted here degrades exactly as it does
+     there. Nothing queries either name on this bar today: the shelf has no
+     ladder of its own yet, and dropping UndoControl took the one control that
+     wrote `@container toolbar` rules with it. The declaration stays because
+     the convention is what makes the next shared control work without a
+     second look — and `container-type: inline-size` is also what keeps the
+     bar's width independent of its contents. */
   container-type: inline-size;
   container-name: shelfbar toolbar;
   height: var(--bar-height);

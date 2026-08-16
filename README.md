@@ -149,6 +149,13 @@ the environment PixlStash is installed into is active.
   `python -m pixlstash.cli libraries list`
 - **Docker Compose**, for a running service (paths are inside the container):
   `docker compose exec pixlstash pixlstash-cli libraries list`
+- **Desktop app** (AppImage, deb, .dmg, installer): the app is its own CLI, so
+  `/path/to/PixlStash.AppImage cli libraries list` works whether or not the app
+  is running. Turn on Settings › Backend › Desktop › **Shell command** to get a
+  `pixlstash` command in `~/.local/bin` and type `pixlstash libraries list`
+  instead. Either form targets the desktop app's own hub; there is no need to
+  pass `--hub`. Settings › Libraries always shows the exact command for your
+  install.
 - **A different hub** than the default: put global options *before* `libraries`,
   e.g. `pixlstash-cli --hub /path/to/hub.db libraries list`. Without `--hub` the
   CLI uses the standard config location, which is what you want almost always.
@@ -452,6 +459,7 @@ pixlstash-cli plugins install hello_world_stamp     # from the plugins repositor
 pixlstash-cli plugins install ./my_captioner.zip    # a zip of a plugin folder
 pixlstash-cli plugins install ./my_captioner/       # an extracted folder
 pixlstash-cli plugins install ./my_filter.py        # a single module
+pixlstash-cli plugins test ./my_captioner.py       # does it load and render?
 pixlstash-cli plugins list
 pixlstash-cli plugins remove my_captioner
 ```
@@ -474,6 +482,20 @@ permissions** — install what you would run yourself.
 
 Captioning plugins load at server start, so restart PixlStash after installing
 one; image filters are re-scanned every time the Filters menu is listed.
+
+`plugins test` is for the person *writing* a captioning plugin, and it is the
+one verb that imports the plugin instead of reading it: it loads the file the
+way the server does, registers what it defines, and checks that the parameter
+schema is one the settings screen can render — so a typo costs a command rather
+than a restart. `--image PATH` runs it over one picture as well, and stops
+instead of running when the plugin reports its model is not present — though a
+plugin that downloads inside `init()` still will, since by then it is the
+plugin's code deciding.
+
+**It is a development aid, not a security scanner.** It does not tell you
+whether a plugin is safe to install — it *runs* the plugin, unsandboxed, with
+your permissions, which is exactly what the server would do. Only test a plugin
+you would have installed anyway.
 
 ### User plugin directory
 

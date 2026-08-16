@@ -210,8 +210,9 @@
         </v-menu>
         <!-- Undo/redo moved to the right-side app-wide tail (see below): the
              canonical [separator][UndoControl][TbGlobalActions] cluster is
-             identical in every view, so the position learned here holds in
-             Duplicates too. -->
+             identical in every view that writes the operation log, so the
+             position learned here holds in Duplicates too. (The model shelf
+             writes none and carries no undo — amendment #4.) -->
         <!-- ── Filter button ──────────────────────────────────────── -->
         <v-menu
           v-model="gbFilterMenuOpen"
@@ -600,7 +601,8 @@
           <v-icon size="20">mdi-tag-check-outline</v-icon>
         </button>
         <!-- ── Separator G-S4: view-local actions | app-wide chrome ─────
-             The canonical toolbar tail, identical in every view:
+             The canonical toolbar tail, identical in every view that writes
+             the operation log (not the model shelf, amendment #4):
              [separator] [UndoControl] [TbGlobalActions]. The rule is
              required AND stays at every width (it mirrors the Duplicates
              bar's D-S2): proximity alone cannot separate identical 32px
@@ -1114,9 +1116,9 @@ const gbCollapseAllStacksDisabled = computed(
   align-items: center;
   container-type: inline-size;
   /* Two names on one container: `selbar` for this bar's own ladder, and the
-     shared `toolbar` name that UndoControl, TbGlobalActions and the overflow
-     write their scoped @container rules against — so the shared chrome
-     degrades identically here and in the Duplicates bar (`dqbar toolbar`). */
+     shared `toolbar` name that UndoControl and the overflow write their
+     scoped @container rules against — so the shared chrome degrades
+     identically here and in the Duplicates bar (`dqbar toolbar`). */
   container-name: selbar toolbar;
 }
 .selection-bar-content {

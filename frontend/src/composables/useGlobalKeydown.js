@@ -1,6 +1,7 @@
 import { onMounted, onUnmounted } from "vue";
 import { isReadOnly } from "../utils/apiClient";
 import { useReviewSessionsStore } from "../stores/useReviewSessionsStore";
+import { useNoticeStore } from "../stores/useNoticeStore";
 import { useOperationStore } from "../stores/useOperationStore";
 import { useSearchStore } from "../stores/useSearchStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
@@ -20,12 +21,19 @@ import { isTypingTarget } from "../utils/dom.js";
  * @param {import("vue").Ref} deps.shortcutsDialogOpen - the keyboard-help
  *   dialog, which its own shortcut toggles.
  */
+/**
+ * Coalescing key for the shelf's "no undo here" answer, so holding the chord
+ * updates one card instead of stacking them (notice spec §9.1).
+ */
+export const SHELF_NO_UNDO_KEY = "shelf-no-undo";
+
 export function useGlobalKeydown({
   gridContainer,
   sidebarRef,
   shortcutsDialogOpen,
 }) {
   const reviewSessionsStore = useReviewSessionsStore();
+  const noticeStore = useNoticeStore();
   const operationStore = useOperationStore();
   const searchStore = useSearchStore();
   const sidebarStore = useSidebarStore();
@@ -43,6 +51,21 @@ export function useGlobalKeydown({
     return (
       document.querySelector(".v-overlay--active .v-overlay__scrim") != null
     );
+  }
+
+  /**
+   * Is the model shelf the mounted destination?
+   *
+   * The shelf replaces the grid, and it is the one destination that neither
+   * writes the operation log nor mounts an `ActionReceipt` — and since it also
+   * dropped `UndoControl`, nothing on that screen can narrate an undo or carry
+   * the "Changed elsewhere" warning. Read off the same kind of DOM signal the
+   * lightbox check above uses, for the same reason: there is no shared
+   * which-view-is-up flag, and `.shelf` is v-if'd on the route.
+   */
+  function isModelShelfOpen() {
+    if (typeof document === "undefined") return false;
+    return document.querySelector(".shelf") != null;
   }
 
   function handleGlobalKeydown(e) {
@@ -91,7 +114,7 @@ export function useGlobalKeydown({
     // and Meta are both accepted (the HINT is platform-specific, the binding is
     // not); Ctrl+Shift+Z is the macOS redo convention and is accepted everywhere.
     //
-    // Four guards, each for its own reason:
+    // Five guards, each for its own reason:
     //   * typing: a text field keeps its own native undo stack;
     //   * read-only: the endpoints are owner-only anyway;
     //   * auto-repeat: a HELD Ctrl+Z must not walk the whole stack;
@@ -100,6 +123,17 @@ export function useGlobalKeydown({
     //     library with no visible narration. That breaks the design's own "every
     //     undo raises a receipt" invariant, so the shortcut declines rather than
     //     acting blind.
+    //
+    // The MODEL SHELF declines rather than acts, for the same invariant
+    // arrived at from the other side: it mounts no receipt and (deliberately)
+    // no UndoControl, so the chord there would revert a library action taken
+    // on a screen the reader has left, with nothing on this one to say it
+    // happened — not even the "Changed elsewhere" warning, whose only renderer
+    // is the control the shelf does not have. It declines OUT LOUD: a chord
+    // that does nothing at all teaches nothing, and the next thing a reader
+    // does is press it again. The notice surface is app-wide and already
+    // renders over the shelf, so this costs no new chrome; the coalescing key
+    // is what keeps a repeated press one card rather than a wall.
     //
     // The lightbox is NOT covered by that last guard and never was:
     // `isModalOverlayOpen()` looks for a Vuetify scrim, and `.image-overlay`
@@ -117,12 +151,21 @@ export function useGlobalKeydown({
       !isModalOverlayOpen()
     ) {
       const key = e.key?.toLowerCase();
-      if (key === "z" && !e.shiftKey) {
+      const wantsUndo = key === "z" && !e.shiftKey;
+      const wantsRedo = key === "y" || (key === "z" && e.shiftKey);
+      if (wantsUndo || wantsRedo) {
         e.preventDefault();
-        operationStore.undo();
-      } else if (key === "y" || (key === "z" && e.shiftKey)) {
-        e.preventDefault();
-        operationStore.redo();
+        if (isModelShelfOpen()) {
+          noticeStore.push({
+            level: "info",
+            key: SHELF_NO_UNDO_KEY,
+            text: "Model shelf changes aren't undoable — undo and redo apply to library actions in the grid.",
+          });
+        } else if (wantsUndo) {
+          operationStore.undo();
+        } else {
+          operationStore.redo();
+        }
       }
     }
 

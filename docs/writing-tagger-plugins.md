@@ -40,6 +40,44 @@ Entries whose name starts with `.` or `_` are skipped, as is any other file type
 plugin.** There is deliberately no reload button: re-instantiating a plugin whose model
 is resident would orphan that model in VRAM.
 
+**So check your plugin from the command line instead of paying a restart per typo:**
+
+```bash
+pixlstash-cli plugins test ./my_captioner.py            # or the folder
+pixlstash-cli plugins test ./my_captioner.py --image ~/Pictures/sample.jpg
+```
+
+It imports the file exactly as the server does — same module namespacing, so a folder
+plugin's `from . import helper` resolves here too — instantiates every plugin class the
+module *defines*, calls `plugin_schema()`, and checks the parameter schema against what
+the settings screen can actually render (§3), which the server does not check. `--image`
+also runs the plugin over one picture with your defaults and prints what came back.
+
+It asks your `needs_download()` first and stops if you answer yes, so a check does not
+start a multi-gigabyte fetch nobody asked for — but that is a courtesy and not a
+guarantee. If your `init()` downloads (which is what `from_pretrained_local_first` does,
+and therefore what the shipped captioners do), it downloads here too. Fetch models from
+**Settings → Auto-tagging** first if you would rather it did not.
+
+It reports two severities and only one of them is a refusal. A **problem** — it did not
+load, a parameter has no `name` or `default`, a `type` that will not render, a name a
+built-in or an installed plugin already holds — exits `1`. A **warning** — a parameter
+with no `label`, or neither capability flag set — is printed and exits `0`, because those
+plugins do work: the settings screen falls back to the parameter's `name`, and a plugin
+with no flags registers exactly as written, it is simply never called. Script against the
+exit code and you are scripting against "will this work", not "is this tidy".
+
+**It is a development aid, not a security scanner.** It does not tell you whether a plugin
+is safe — it *runs* it, in that process, with your permissions, exactly as the server
+would. Nothing is sandboxed and nothing inspects what the code does, so the rule for
+`plugins test` is the same as the rule for installing: only run a plugin you would have
+installed anyway. Checking somebody else's plugin with this command is not a way to find
+out whether you should trust it; by the time it prints anything, their code has run.
+
+Passing is a contract check and neither a quality one nor a safety one: nothing here says
+the captions are any good, and a plugin that hangs at import will hang the server's boot
+the same way it hangs this command.
+
 Plugin code runs unsandboxed, in the server process, with your permissions. Only install
 plugins you trust — the same caveat as the image plugins.
 
@@ -101,6 +139,17 @@ Optional: `description` (tooltip), `min` / `max` / `step` (numeric types),
 | `string` | Single-line text field |
 | `textarea` | Multi-line text field |
 | `csv-int` | Comma-separated integers |
+
+Write those. Two spellings beyond them are *accepted* by the component and are not worth
+using: `bool` is an alias for `boolean`, and a `select` may name its choices `enum`
+instead of `options`. `pixlstash-cli plugins test` mirrors what
+`TaggerParametersUI.vue` renders rather than what this table recommends, so it passes both
+— a guardrail test keeps that list and the component in step.
+
+None of the ways to get this wrong raise anywhere. A `type` the component has no branch
+for renders as a plain text box, and so does a `select` with neither `options` nor `enum`;
+give it an *empty* `options` list instead and you get a real dropdown with nothing in it.
+Silent in all three cases, which is why `plugins test` checks it.
 
 ```python
 def parameter_schema(self):
