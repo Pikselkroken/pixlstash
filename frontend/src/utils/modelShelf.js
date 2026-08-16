@@ -1145,12 +1145,13 @@ export function deletableModels(rows, foldersById = null) {
 /**
  * Fold each stack's members into the one row that stands for them.
  *
- * A training run is many `model` rows and the list query returns all of them,
- * so without this a six-step run reads as six unrelated adapters — which is the
+ * A stack is many `model` rows and the list query returns all of them, so
+ * without this a six-step run reads as six unrelated adapters — which is the
  * state the shelf shipped in until F5.
  *
  * The **cover** is `stack_position` 0, which the backend already ordered: the
- * bare final file if the run wrote one, else its highest step. A stack whose
+ * newest version, and within it the bare final file if the run wrote one, else
+ * its highest step. A stack whose
  * cover is filtered out of view collapses onto its lowest surviving position
  * rather than vanishing, because a run half-hidden by a base-model filter is
  * still a run and dropping it would make the filter lie about what is on disk.
@@ -1163,7 +1164,10 @@ export function deletableModels(rows, foldersById = null) {
  *
  * @param {Array<Object>} rows - shown rows, already narrowed by the filters.
  * @returns {Array<Object>} one row per unstacked model and per stack, each
- *   stacked row carrying `memberIds`, `memberCount` and `members`.
+ *   stacked row carrying `memberIds`, `memberCount`, `members` and
+ *   `spansVersions`. All four describe what is SHOWN — a filter that hides half
+ *   a stack changes them, which is deliberate and is why they are recomputed
+ *   here rather than read off the payload.
  */
 export function collapseStacks(rows) {
   const list = Array.isArray(rows) ? rows : [];
@@ -1196,33 +1200,69 @@ export function collapseStacks(rows) {
       // filter can hide part of a run, and a badge reading 6 over a strip that
       // opens to 4 would be describing rows the reader cannot reach.
       memberCount: members.length,
+      // Computed ONCE per stack, here, rather than per member row at render:
+      // the member label needs to know whether the stack spans versions, and
+      // asking that question inside the label made it O(n²) in the members —
+      // 200 members is 40,000 filename parses, redone on every re-render.
+      //
+      // Compared on the PARSED version, matching `propose_stacks`, so `v2` and
+      // `V2.0` are one version here exactly as they are on the server.
+      spansVersions:
+        new Set(members.map((m) => versionSortKey(modelVersion(m.filename))))
+          .size > 1,
     });
   }
   return out;
 }
 
 /**
- * Say how many runs were grouped, and how many were not.
+ * Say how many stacks were made, and how many were not.
  *
  * One call per group, so a partial outcome is real: a group whose rows were
  * stacked between the dry run and the confirmation comes back 409 and is
  * counted rather than throwing, or one stale group would discard the others.
  *
- * @param {number} grouped - runs collapsed into a stack.
- * @param {number} failed - runs the server refused.
+ * "Stacks", not "runs": a stack can span training runs now — several versions
+ * of one character LoRA — so calling every one of them a run would be false.
+ *
+ * @param {number} grouped - stacks made.
+ * @param {number} failed - groups the server refused.
  * @returns {string}
  */
 export function stackReceipt(grouped, failed) {
-  const runs = (n) => `${n.toLocaleString()} ${n === 1 ? "run" : "runs"}`;
+  const stacks = (n) => `${n.toLocaleString()} ${n === 1 ? "stack" : "stacks"}`;
   if (!grouped) {
     return failed
-      ? `Nothing was grouped. ${runs(failed)} could not be, and the files are unchanged.`
+      ? `Nothing was grouped. ${stacks(failed)} could not be, and the files are unchanged.`
       : "Nothing to group.";
   }
   const note = failed
-    ? ` ${runs(failed)} could not be grouped; something changed them first.`
+    ? ` ${stacks(failed)} could not be grouped; something changed them first.`
     : "";
-  return `Grouped ${runs(grouped)}.${note}`;
+  return `Grouped ${stacks(grouped)}.${note}`;
+}
+
+/**
+ * Say how many stacks were broken up, and how many were not.
+ *
+ * Says **where the files went**, which the grouping receipt does not have to:
+ * "ungrouped" on its own is the one word in this view that a reader could
+ * reasonably fear meant "deleted", and the whole point of the verb is that
+ * nothing on disk moved.
+ *
+ * @param {number} released - stacks dissolved.
+ * @param {number} failed - stacks the server refused.
+ * @returns {string}
+ */
+export function unstackReceipt(released, failed) {
+  const stacks = (n) => `${n.toLocaleString()} ${n === 1 ? "stack" : "stacks"}`;
+  if (!released) {
+    return failed
+      ? `Nothing was ungrouped. ${stacks(failed)} could not be, and the files are unchanged.`
+      : "Nothing to ungroup.";
+  }
+  const note = failed ? ` ${stacks(failed)} could not be ungrouped.` : "";
+  return `Ungrouped ${stacks(released)}; the files are still on the shelf.${note}`;
 }
 
 /**
@@ -1243,6 +1283,49 @@ export function trainingStep(filename) {
   if (!last || !TRAINING_SUFFIX_RE.test(last)) return null;
   const digits = last.replace(/\D/g, "");
   return digits ? Number(digits) : null;
+}
+
+/** A trailing version token. Mirrors `_VERSION_SUFFIX_RE` in `model_utils.py`.
+ *
+ * Only an explicit `v<digits>` counts, optionally with one decimal. A bare
+ * trailing `2` is not a version: `JimmyVehicle` beside `JimmyVehicle2` is the
+ * ambiguous prefix case, and reading it as a version would merge two subjects.
+ */
+const VERSION_SUFFIX_RE = /^v(\d+)(?:\.(\d+))?$/i;
+
+/**
+ * The version a filename records, or null when it carries none.
+ *
+ * Mirrors `split_model_version`: runs on top of {@link deriveModelName}, so
+ * training bookkeeping is already gone and `Foxglove_v2_000000500` answers the
+ * same as `Foxglove_v2`. Lower-cased as written, so it can be shown verbatim.
+ *
+ * @param {string} filename
+ * @returns {string|null}
+ */
+export function modelVersion(filename) {
+  const tokens = deriveModelName(filename).split(/\s+/).filter(Boolean);
+  const last = tokens[tokens.length - 1];
+  // Verbatim, matching `split_model_version`: this token is shown, and the
+  // comparison that matters goes through {@link versionSortKey} instead.
+  return last && VERSION_SUFFIX_RE.test(last) ? last : null;
+}
+
+/**
+ * Order two version tokens, newest highest. Mirrors `version_sort_key`.
+ *
+ * **This is what versions must be compared on, never the raw token.** The
+ * backend tests distinctness on the parsed pair, so `v2` and `V2.0` are one
+ * version there; comparing strings here instead made the shelf call them two
+ * and label a run's members with a version it does not have. An unversioned
+ * file reads as `v1`, exactly as the server reads it.
+ *
+ * @param {string|null} version - a token from {@link modelVersion}.
+ * @returns {string} a stable `major.minor` key for identity comparison.
+ */
+export function versionSortKey(version) {
+  const match = VERSION_SUFFIX_RE.exec(version || "");
+  return match ? `${Number(match[1])}.${Number(match[2] || 0)}` : "1.0";
 }
 
 /**

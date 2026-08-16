@@ -16,6 +16,7 @@ from pixlstash.services.stack_detector import (
     StackRefused,
     apply_stack,
     propose_stacks,
+    unstack,
 )
 
 
@@ -80,14 +81,14 @@ def _names(proposals):
 def test_files_differing_only_by_step_are_one_run(hub, tmp_path):
     folder = _folder(hub, str(tmp_path / "loras"))
     for name in (
-        "JimmyCarr_000000500.safetensors",
-        "JimmyCarr_000001000.safetensors",
-        "JimmyCarr.safetensors",
+        "JimmyVehicle_000000500.safetensors",
+        "JimmyVehicle_000001000.safetensors",
+        "JimmyVehicle.safetensors",
     ):
         _adapter(hub, folder, name)
 
     proposals = propose_stacks(hub)
-    assert _names(proposals) == ["JimmyCarr"]
+    assert _names(proposals) == ["JimmyVehicle"]
     assert len(proposals[0].members) == 3
 
 
@@ -116,6 +117,157 @@ def test_a_run_with_no_bare_final_covers_with_its_highest_step(hub, tmp_path):
     assert [m.step for m in members] == [2750, 500]
 
 
+def test_two_versions_of_one_subject_are_one_stack(hub, tmp_path):
+    """The ask: a stack is a subject, not a training run.
+
+    `Foxglove_v2` shares no training run with `Foxglove` — it is a retrain — but
+    it is the same character on the shelf, so it belongs behind one row.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    _adapter(hub, folder, "Foxglove.safetensors")
+    _adapter(hub, folder, "Foxglove_v2.safetensors")
+    _adapter(hub, folder, "Foxglove_v3.safetensors")
+
+    proposals = propose_stacks(hub)
+    assert _names(proposals) == ["Foxglove"]
+    assert proposals[0].tier == "version_group"
+    # Newest version covers, and the strip reads backwards through them. The
+    # unversioned file is v1: it existed before v2 did.
+    assert [m.version for m in proposals[0].members] == ["v3", "v2", None]
+
+
+def test_a_decimal_version_sorts_above_its_major(hub, tmp_path):
+    """`v2.1` is later than `v2`, and `v10` is later than `v9`.
+
+    Both fail under a string compare, which is why the token is parsed into
+    `(major, minor)` rather than sorted as written.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    _adapter(hub, folder, "Clementine_v2.safetensors")
+    _adapter(hub, folder, "Clementine_v10.safetensors")
+    _adapter(hub, folder, "Clementine_v2.1.safetensors")
+
+    members = propose_stacks(hub)[0].members
+    assert [m.version for m in members] == ["v10", "v2.1", "v2"]
+
+
+def test_versions_and_steps_order_versions_first(hub, tmp_path):
+    """Inside a version the old rule is unchanged; between versions it loses.
+
+    Step 4000 of v1 is a later moment in time than the bare final of v2, and the
+    cover is still v2: what a person means by "the LoRA" is the newest version,
+    not the newest file.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    _adapter(hub, folder, "Marigold_000004000.safetensors")
+    _adapter(hub, folder, "Marigold_000000500.safetensors")
+    _adapter(hub, folder, "Marigold_v2.safetensors")
+    _adapter(hub, folder, "Marigold_v2_000000500.safetensors")
+
+    members = propose_stacks(hub)[0].members
+    assert [(m.version, m.step) for m in members] == [
+        ("v2", None),
+        ("v2", 500),
+        (None, 4000),
+        (None, 500),
+    ]
+
+
+def test_a_single_version_keeps_it_in_the_stack_name(hub, tmp_path):
+    """Grouping strips the version; naming must not.
+
+    A run of `portrait_mix_v2` checkpoints is called "portrait mix v2". Dropping
+    the version would rename every versioned run already on the shelf.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    _adapter(hub, folder, "portrait_mix_v2_000000500.safetensors")
+    _adapter(hub, folder, "portrait_mix_v2_000001000.safetensors")
+
+    proposals = propose_stacks(hub)
+    assert _names(proposals) == ["portrait mix v2"]
+    assert proposals[0].tier == "step_group"
+
+
+def test_the_stack_name_keeps_the_version_s_own_capitals(hub, tmp_path):
+    """The name is what gets persisted, so folding its case renames the run.
+
+    An all-lowercase fixture cannot see this: `.lower()` and `.upper()` both
+    leave `portrait mix v2` alone, so the assertion above stays green either
+    way. `_V3` is what makes the mutation visible.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    _adapter(hub, folder, "portrait_mix_V3_000000500.safetensors")
+    _adapter(hub, folder, "portrait_mix_V3_000001000.safetensors")
+
+    assert _names(propose_stacks(hub)) == ["portrait mix V3"]
+
+
+def test_a_unicode_digit_is_not_a_version(hub, tmp_path):
+    """Python's `\\d` spans every Unicode decimal; JavaScript's does not.
+
+    Without `re.ASCII` the server reads `v٢` as version 2 while the shelf that
+    draws the strip reads no version at all, and the two halves disagree about
+    what a member is.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    _adapter(hub, folder, "Marigold_v٢.safetensors")
+    _adapter(hub, folder, "Marigold_v2.safetensors")
+
+    # Only one of the two carries a version, so there is no second version to
+    # differ from and nothing is proposed.
+    assert propose_stacks(hub) == []
+
+
+def test_a_bare_trailing_digit_is_not_a_version(hub, tmp_path):
+    """`JimmyVehicle` beside `JimmyVehicle2` is the prefix case, not offered.
+
+    Only an explicit `v<digits>` counts. Reading a bare digit as a version would
+    silently merge two subjects that may have nothing to do with each other.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    _adapter(hub, folder, "JimmyVehicle.safetensors")
+    _adapter(hub, folder, "JimmyVehicle2.safetensors")
+
+    assert propose_stacks(hub) == []
+
+
+def test_a_bare_version_file_groups_nothing(hub, tmp_path):
+    """Nothing survives the strip for `v2.safetensors`.
+
+    Same refusal as a name that is only a step number: grouping on the empty
+    string would collapse every such file in a folder into one invented subject.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    _adapter(hub, folder, "v2.safetensors")
+    _adapter(hub, folder, "v3.safetensors")
+
+    assert propose_stacks(hub) == []
+
+
+def test_an_unversioned_file_beside_v1_is_not_a_subject_with_a_history(hub, tmp_path):
+    """`Foxglove` and `Foxglove_v1` are the same version, so they are a copy.
+
+    The distinctness test runs on the parsed version rather than the token; if
+    it ran on the token these two would read as two versions and a duplicate
+    would be presented as a history.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    _adapter(hub, folder, "Foxglove.safetensors")
+    _adapter(hub, folder, "Foxglove_v1.safetensors")
+
+    assert propose_stacks(hub) == []
+
+
+def test_versions_in_two_folders_are_still_never_one_group(hub, tmp_path):
+    """The per-folder rule is not weakened by the version rule."""
+    first = _folder(hub, str(tmp_path / "disk-a"))
+    second = _folder(hub, str(tmp_path / "disk-b"))
+    _adapter(hub, first, "Foxglove.safetensors")
+    _adapter(hub, second, "Foxglove_v2.safetensors")
+
+    assert propose_stacks(hub) == []
+
+
 def test_two_files_sharing_a_name_with_no_step_are_not_a_run(hub, tmp_path):
     """The refusal that keeps a duplicate from being called a training run.
 
@@ -138,8 +290,8 @@ def test_a_group_never_spans_two_folders(hub, tmp_path):
     """
     first = _folder(hub, str(tmp_path / "disk-a"))
     second = _folder(hub, str(tmp_path / "disk-b"))
-    _adapter(hub, first, "JimmyCarr_000000500.safetensors")
-    _adapter(hub, second, "JimmyCarr_000001000.safetensors")
+    _adapter(hub, first, "JimmyVehicle_000000500.safetensors")
+    _adapter(hub, second, "JimmyVehicle_000001000.safetensors")
 
     assert propose_stacks(hub) == []
 
@@ -200,8 +352,8 @@ def test_a_name_that_is_only_a_step_number_groups_nothing(hub, tmp_path):
 def test_detection_writes_nothing(hub, tmp_path):
     """The house rule, asserted rather than assumed."""
     folder = _folder(hub, str(tmp_path / "loras"))
-    _adapter(hub, folder, "JimmyCarr_000000500.safetensors")
-    _adapter(hub, folder, "JimmyCarr_000001000.safetensors")
+    _adapter(hub, folder, "JimmyVehicle_000000500.safetensors")
+    _adapter(hub, folder, "JimmyVehicle_000001000.safetensors")
 
     propose_stacks(hub)
 
@@ -233,6 +385,28 @@ def test_applying_orders_the_cover_first_whatever_order_it_was_given(hub, tmp_pa
         (stack_id,),
     )
     assert [r["id"] for r in rows] == [final, high, low]
+
+
+def test_applying_covers_a_version_stack_with_its_newest_version(hub, tmp_path):
+    """The other half of the ask: pick the cover from name and version alone.
+
+    No member here carries a step, so the old rule had nothing to sort on and
+    the cover fell out of whatever order the ids happened to arrive in. The ids
+    are handed over oldest-first precisely so that order cannot be what passes.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    first = _adapter(hub, folder, "Foxglove.safetensors")
+    second = _adapter(hub, folder, "Foxglove_v2.safetensors")
+    third = _adapter(hub, folder, "Foxglove_v10.safetensors")
+
+    stack_id = apply_stack(hub, [first, second, third], "Foxglove")
+
+    rows = hub.fetchall(
+        "SELECT id, stack_position FROM model WHERE stack_id = ? "
+        "ORDER BY stack_position",
+        (stack_id,),
+    )
+    assert [r["id"] for r in rows] == [third, second, first]
 
 
 def test_applying_refuses_a_group_of_one(hub, tmp_path):
@@ -447,3 +621,243 @@ def test_applying_ignores_a_duplicate_id(hub, tmp_path):
 
     with pytest.raises(StackRefused):
         apply_stack(hub, [one, one], None)
+
+
+# ── fusing ──────────────────────────────────────────────────────────────────
+
+
+def _members(hub, stack_id):
+    return [
+        int(row["id"])
+        for row in hub.fetchall(
+            "SELECT id FROM model WHERE stack_id = ? ORDER BY stack_position",
+            (stack_id,),
+        )
+    ]
+
+
+def test_stacking_two_stacks_fuses_them(hub, tmp_path):
+    """The ask. Two stacks selected on the shelf become one.
+
+    Without `fuse` every member is already stacked, so the gate empties the
+    selection and the call is refused — which is right for the proposals flow
+    and wrong for a person pointing at two rows and asking for one.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    v1_final = _adapter(hub, folder, "JimmyVehicle.safetensors")
+    v1_step = _adapter(hub, folder, "JimmyVehicle_000000500.safetensors")
+    v2_final = _adapter(hub, folder, "JimmyVehicle_v2.safetensors")
+    v2_step = _adapter(hub, folder, "JimmyVehicle_v2_000000500.safetensors")
+
+    first = apply_stack(hub, [v1_final, v1_step], "JimmyVehicle")
+    second = apply_stack(hub, [v2_final, v2_step], "JimmyVehicle v2")
+
+    fused = apply_stack(hub, [v1_final, v2_final], "JimmyVehicle", fuse=True)
+
+    # Every member of both, cover-first: newest version leads, then its bare
+    # final, then its steps.
+    assert _members(hub, fused) == [v2_final, v2_step, v1_final, v1_step]
+    # And the two absorbed stacks are gone rather than left as empty rows.
+    for old in (first, second):
+        assert hub.fetchone("SELECT id FROM adapter_stack WHERE id = ?", (old,)) is None
+
+
+def test_fusing_absorbs_a_whole_stack_not_the_members_named(hub, tmp_path):
+    """A stack is atomic, so naming one member takes all of them.
+
+    The alternative leaves a remnant: a stack that gained a member between the
+    click and the call would keep that one member and become a "stack" of one.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    a_one = _adapter(hub, folder, "Marigold_000000500.safetensors")
+    a_two = _adapter(hub, folder, "Marigold_000001000.safetensors")
+    a_three = _adapter(hub, folder, "Marigold_000002000.safetensors")
+    loose = _adapter(hub, folder, "Marigold_v2.safetensors")
+
+    original = apply_stack(hub, [a_one, a_two, a_three], "Marigold")
+
+    # Only ONE of the three is named, beside a loose file.
+    fused = apply_stack(hub, [a_one, loose], None, fuse=True)
+
+    assert sorted(_members(hub, fused)) == sorted([a_one, a_two, a_three, loose])
+    assert (
+        hub.fetchone("SELECT id FROM adapter_stack WHERE id = ?", (original,)) is None
+    )
+
+
+def test_fusing_inherits_a_name_rather_than_dropping_it(hub, tmp_path):
+    """The stack's name is the one field its files do not carry."""
+    folder = _folder(hub, str(tmp_path / "loras"))
+    first_a = _adapter(hub, folder, "Clementine_000000500.safetensors")
+    first_b = _adapter(hub, folder, "Clementine_000001000.safetensors")
+    loose = _adapter(hub, folder, "Clementine_v2.safetensors")
+    apply_stack(hub, [first_a, first_b], "Clementine")
+
+    fused = apply_stack(hub, [first_a, loose], None, fuse=True)
+
+    row = hub.fetchone("SELECT name FROM adapter_stack WHERE id = ?", (fused,))
+    assert row["name"] == "Clementine"
+
+
+def test_stacking_a_stacked_model_is_still_refused_without_fuse(hub, tmp_path):
+    """The default gate is unchanged, and that is the point of the flag.
+
+    The proposals flow confirms a dry run over loose files. A row stacked in the
+    meantime must be left in the stack it has, not silently rehomed — so fusing
+    had to be something a caller asks for.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    one = _adapter(hub, folder, "Foxglove_000000500.safetensors")
+    two = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    loose = _adapter(hub, folder, "Foxglove_v2.safetensors")
+    original = apply_stack(hub, [one, two], "Foxglove")
+
+    with pytest.raises(StackRefused) as exc:
+        apply_stack(hub, [one, loose], None)
+    assert exc.value.reason == "already_stacked"
+
+    # Nothing moved: the original stack still has both of its members.
+    assert sorted(_members(hub, original)) == sorted([one, two])
+    row = hub.fetchone("SELECT stack_id FROM model WHERE id = ?", (loose,))
+    assert row["stack_id"] is None
+
+
+def test_fusing_never_takes_a_row_from_a_stack_it_is_not_absorbing(hub, tmp_path):
+    """The race guard survives the flag.
+
+    `fuse` widens the gate to the stacks this call is absorbing and no further.
+    A row that moved into some third stack between the widening and its own
+    UPDATE still aborts the whole thing.
+    """
+    from pixlstash.services import stack_detector
+
+    folder = _folder(hub, str(tmp_path / "loras"))
+    one = _adapter(hub, folder, "Race_000000500.safetensors")
+    two = _adapter(hub, folder, "Race_000001000.safetensors")
+
+    real_step_of = stack_detector._step_of
+    landed = []
+
+    def write_inside_the_open_transaction(filename):
+        # Same shape as the non-fusing race test: `_step_of` runs after the gate
+        # SELECT and before the first UPDATE, so this lands exactly in the gap.
+        if not landed:
+            landed.append(True)
+            conn = hub.connection
+            conn.execute(
+                "INSERT INTO adapter_stack (id, name, created_at, updated_at) "
+                "VALUES (77, 'Third', '2026-08-11T00:00:00Z', "
+                "'2026-08-11T00:00:00Z')"
+            )
+            conn.execute("UPDATE model SET stack_id = 77 WHERE id = ?", (two,))
+        return real_step_of(filename)
+
+    stack_detector._step_of = write_inside_the_open_transaction
+    try:
+        with pytest.raises(StackRefused):
+            apply_stack(hub, [one, two], "Race", fuse=True)
+    finally:
+        stack_detector._step_of = real_step_of
+
+    assert landed, "the interleaved write never ran; the window was not exercised"
+    for model_id in (one, two):
+        row = hub.fetchone("SELECT stack_id FROM model WHERE id = ?", (model_id,))
+        assert row["stack_id"] is None
+    assert hub.fetchone("SELECT COUNT(*) AS n FROM adapter_stack")["n"] == 0
+
+
+# ── unstacking ──────────────────────────────────────────────────────────────
+
+
+def test_unstacking_releases_every_member_and_removes_the_stack(hub, tmp_path):
+    folder = _folder(hub, str(tmp_path / "loras"))
+    one = _adapter(hub, folder, "Foxglove_000000500.safetensors")
+    two = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    stack_id = apply_stack(hub, [one, two], "Foxglove")
+
+    assert unstack(hub, stack_id) == 2
+
+    for model_id in (one, two):
+        row = hub.fetchone(
+            "SELECT stack_id, stack_position FROM model WHERE id = ?", (model_id,)
+        )
+        assert row["stack_id"] is None
+        # The position goes too. A released row keeping `stack_position = 1`
+        # would sort as though it were still behind a cover.
+        assert row["stack_position"] is None
+    assert (
+        hub.fetchone("SELECT id FROM adapter_stack WHERE id = ?", (stack_id,)) is None
+    )
+
+
+def test_unstacking_touches_no_file_row(hub, tmp_path):
+    """It writes two columns and deletes one row. Nothing on disk moves."""
+    folder = _folder(hub, str(tmp_path / "loras"))
+    one = _adapter(hub, folder, "Foxglove_000000500.safetensors")
+    two = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    stack_id = apply_stack(hub, [one, two], "Foxglove")
+    before = hub.fetchall(
+        "SELECT model_id, model_folder_id, relpath, state FROM model_file "
+        "ORDER BY model_id"
+    )
+
+    unstack(hub, stack_id)
+
+    after = hub.fetchall(
+        "SELECT model_id, model_folder_id, relpath, state FROM model_file "
+        "ORDER BY model_id"
+    )
+    assert [tuple(r) for r in after] == [tuple(r) for r in before]
+
+
+def test_unstacking_an_id_that_names_no_stack_changes_nothing(hub, tmp_path):
+    """A wrong address must not half-release rows on its way to saying so."""
+    folder = _folder(hub, str(tmp_path / "loras"))
+    one = _adapter(hub, folder, "Foxglove_000000500.safetensors")
+    two = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    stack_id = apply_stack(hub, [one, two], "Foxglove")
+
+    with pytest.raises(StackRefused) as exc:
+        unstack(hub, stack_id + 999)
+    assert exc.value.reason == "no_such_stack"
+
+    assert sorted(_members(hub, stack_id)) == sorted([one, two])
+
+
+def test_unstacked_members_can_be_proposed_again(hub, tmp_path):
+    """Stated because it is a consequence, not an accident.
+
+    Released files are loose, so detection sees them again. Unstacking undoes a
+    grouping; it does not record a refusal, and there is nowhere yet to keep one.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    one = _adapter(hub, folder, "Foxglove_000000500.safetensors")
+    two = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    stack_id = apply_stack(hub, [one, two], "Foxglove")
+    assert propose_stacks(hub) == []
+
+    unstack(hub, stack_id)
+
+    assert _names(propose_stacks(hub)) == ["Foxglove"]
+
+
+def test_a_fused_stack_can_be_unstacked_back_to_loose_files(hub, tmp_path):
+    """The round trip, end to end: group, fuse, undo."""
+    folder = _folder(hub, str(tmp_path / "loras"))
+    ids = [
+        _adapter(hub, folder, "Foxglove.safetensors"),
+        _adapter(hub, folder, "Foxglove_000000500.safetensors"),
+        _adapter(hub, folder, "Foxglove_v2.safetensors"),
+        _adapter(hub, folder, "Foxglove_v2_000000500.safetensors"),
+    ]
+    first = apply_stack(hub, ids[:2], "Foxglove")
+    apply_stack(hub, ids[2:], "Foxglove v2")
+    fused = apply_stack(hub, [ids[0], ids[2]], "Foxglove", fuse=True)
+    assert len(_members(hub, fused)) == 4
+
+    assert unstack(hub, fused) == 4
+
+    assert hub.fetchone("SELECT COUNT(*) AS n FROM adapter_stack")["n"] == 0
+    loose = hub.fetchone("SELECT COUNT(*) AS n FROM model WHERE stack_id IS NULL")
+    assert loose["n"] == 4
+    assert first != fused

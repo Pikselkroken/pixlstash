@@ -472,7 +472,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("POST", "/api/v1/model-stacks"): RoutePolicy(
         _OWNER,
-        justification="Collapses the owner's own models into a stack; writes hub columns only, no filesystem access; POST blocked for READ tokens; owner only",
+        justification="Collapses the owner's own models into a stack, optionally fusing stacks it absorbs; writes hub columns only, no filesystem access; POST blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/model-stacks/{stack_id}"): RoutePolicy(
+        _OWNER,
+        justification="Breaks up one of the owner's own stacks; clears two hub columns and deletes the adapter_stack row, touching no file on disk; DELETE blocked for READ tokens; owner only",
     ),
     # ── model_imports.py (shelf plan B7; §16.3 host-capability) ────────────
     # The listing walks a registered output root; the import writes into one

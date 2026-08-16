@@ -119,12 +119,26 @@
       class="selbar-btn"
       type="button"
       data-verb="stack"
-      aria-label="Stack these into one training run"
+      :aria-label="
+        stackFuses ? 'Fuse these into one stack' : 'Stack these into one stack'
+      "
       :disabled="!stackable"
       :title="stackTitle"
       @click="emit('stack')"
     >
       <v-icon size="19">mdi-layers-outline</v-icon>
+    </button>
+
+    <button
+      class="selbar-btn"
+      type="button"
+      data-verb="unstack"
+      aria-label="Break this stack up"
+      :disabled="!unstackable"
+      :title="unstackTitle"
+      @click="emit('unstack')"
+    >
+      <v-icon size="19">mdi-layers-off-outline</v-icon>
     </button>
 
     <button
@@ -280,6 +294,7 @@ const emit = defineEmits([
   "set-base-model",
   "set-kind",
   "stack",
+  "unstack",
   "set-icon",
   "clear-icons",
   "move",
@@ -550,19 +565,24 @@ const moveTitle = computed(() => {
 });
 
 /**
- * Why this selection cannot become one training run, or `""` when it can.
+ * Why this selection cannot become one stack, or `""` when it can.
  *
  * Stack is the manual counterpart to the toolbar's detection sweep, which
- * proposes only files differing by a training step: a run the detector cannot
+ * proposes only files whose names it can explain: a subject the detector cannot
  * name is otherwise ungroupable, and there is no other way to say "these are
- * one run".
+ * one thing".
  *
- * Every gate the route enforces (`services/stack_detector.apply_stack`) is
- * checked here, so the button is never offered where it could only come back
- * refused: two or more models, adapters only, none already in a stack, each
- * with a copy actually present, and ONE folder holding all of them — a run is
- * files that sit together, and stacking across folders would invent one and put
- * its members on two drives.
+ * **An already-stacked row is no longer a refusal.** Stacking two stacks fuses
+ * them — the route absorbs their stacks whole and removes the emptied rows —
+ * so the gate that used to read "something here is already part of a run" was
+ * blocking the operation this bar now exists to offer.
+ *
+ * Every other gate the route enforces (`services/stack_detector.apply_stack`)
+ * is checked here, so the button is never offered where it could only come back
+ * refused: two or more models, adapters only, each with a copy actually
+ * present, and ONE folder holding all of them — a stack is files that sit
+ * together, and stacking across folders would invent one and put its members on
+ * two drives.
  *
  * The gate and its sentence are ONE computed rather than a boolean beside a
  * message that has to be kept in step with it. Written as two, the tooltip
@@ -574,13 +594,10 @@ const moveTitle = computed(() => {
 const stackRefusal = computed(() => {
   const rows = store.selectedRows;
   if (rows.length < 2) {
-    return "Select the files of one training run to group them";
-  }
-  if (rows.some((row) => row.stack_id != null)) {
-    return "Something here is already part of a run";
+    return "Select two or more files, or stacks, to group them";
   }
   if (rows.some((row) => row.file_kind !== "adapter")) {
-    return "Only adapters are training runs";
+    return "Only adapters can be stacked";
   }
   let shared = null;
   for (const row of rows) {
@@ -598,7 +615,7 @@ const stackRefusal = computed(() => {
         ? new Set(here)
         : new Set(here.filter((id) => shared.has(id)));
     if (!shared.size) {
-      return "A run is files that sit together, so they must all be in one folder";
+      return "A stack is files that sit together, so they must all be in one folder";
     }
   }
   return "";
@@ -606,11 +623,59 @@ const stackRefusal = computed(() => {
 
 const stackable = computed(() => !stackRefusal.value);
 
-const stackTitle = computed(
-  () =>
-    stackRefusal.value ||
-    `Group these ${store.selectedRows.length.toLocaleString()} files into one run`,
+/** Whether pressing Stack would fuse existing stacks rather than build one. */
+const stackFuses = computed(() =>
+  store.selectedRows.some((row) => row.stack_id != null),
 );
+
+const stackTitle = computed(() => {
+  if (stackRefusal.value) return stackRefusal.value;
+  const n = store.selectedRows.length.toLocaleString();
+  // The verb says which of the two things it is about to do. Fusing takes rows
+  // that are already grouped and merges them, which is a different sentence
+  // from collapsing loose files, and the reader is entitled to know which.
+  return stackFuses.value
+    ? `Fuse these ${n} rows into one stack`
+    : `Group these ${n} files into one stack`;
+});
+
+/**
+ * Why this selection cannot be ungrouped, or `""` when it can.
+ *
+ * The undo the shelf never had, and the reason the grouping dialog could once
+ * only warn that nothing takes a stack back. Whole stacks only: a shelf row IS
+ * a stack here (selecting a collapsed row selects the run), so "ungroup this
+ * row" is unambiguous, and releasing part of a stack is not offered because a
+ * stack is atomic everywhere else in this view.
+ */
+const unstackRefusal = computed(() => {
+  const rows = store.selectedRows;
+  if (!rows.length) return "Select a stack to break it up";
+  if (rows.some((row) => row.stack_id == null)) {
+    return "Something here is not part of a stack";
+  }
+  return "";
+});
+
+const unstackable = computed(() => !unstackRefusal.value);
+
+/** The distinct stacks the selection covers, which is what Ungroup acts on. */
+const selectedStackIds = computed(() => [
+  ...new Set(
+    store.selectedRows
+      .map((row) => row.stack_id)
+      .filter((id) => id != null)
+      .map(Number),
+  ),
+]);
+
+const unstackTitle = computed(() => {
+  if (unstackRefusal.value) return unstackRefusal.value;
+  const n = selectedStackIds.value.length;
+  return n === 1
+    ? "Break this stack up, leaving its files on the shelf"
+    : `Break these ${n.toLocaleString()} stacks up, leaving their files on the shelf`;
+});
 
 /**
  * Can the host be asked to show this row's folder? (#933)
@@ -709,6 +774,8 @@ const verbHandlers = computed(() => ({
   membership: membership.value,
   stackable: stackable.value,
   stackTitle: stackTitle.value,
+  unstackable: unstackable.value,
+  unstackTitle: unstackTitle.value,
   movable: movable.value.length > 0 && !moves.busy,
   moveTitle: moveTitle.value,
   openable: openable.value,
@@ -816,6 +883,11 @@ const VerbMenu = (props) => {
         title: props.stackTitle,
       },
     ),
+    item("mdi-layers-off-outline", "Ungroup", {
+      on: () => props.onVerb("unstack"),
+      disabled: !props.unstackable,
+      title: props.unstackTitle,
+    }),
     item("mdi-folder-move-outline", "Move to…", {
       on: () => props.onVerb("move"),
       disabled: !props.movable,
@@ -879,6 +951,9 @@ defineExpose({
   openable,
   selectedBytes,
   stackable,
+  stackFuses,
+  unstackable,
+  selectedStackIds,
   withIcons,
 });
 </script>

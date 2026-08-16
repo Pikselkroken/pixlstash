@@ -324,7 +324,7 @@ describe("the selection bar", () => {
     expect(stack.attributes("title")).not.toContain("folder");
   });
 
-  it("refuses Stack on one model, a checkpoint, or a row already in a run", async () => {
+  it("refuses Stack on one model or a checkpoint", async () => {
     const store = selectRows([row(1, "present")]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
     expect(verb(wrapper, "stack").attributes("disabled")).toBeDefined();
@@ -338,15 +338,34 @@ describe("the selection bar", () => {
     expect(verb(wrapper, "stack").attributes("title")).toContain(
       "Only adapters",
     );
+  });
 
-    store.rows = [row(1, "present"), row(3, "present", { stack_id: 7 })];
+  it("OFFERS Stack on a row that is already stacked, as a fuse", async () => {
+    // This used to be a refusal — "something here is already part of a run" —
+    // and it was the gate that made stacking two stacks impossible. Fusing is
+    // the operation the bar now exists to offer, so the button has to be live
+    // and has to say which of the two things it will do.
+    selectRows([row(1, "present"), row(3, "present", { stack_id: 7 })]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    await wrapper.vm.$nextTick();
+
+    expect(verb(wrapper, "stack").attributes("disabled")).toBeUndefined();
+    expect(verb(wrapper, "stack").attributes("title")).toContain("Fuse");
+  });
+
+  it("refuses Ungroup unless everything selected is in a stack", async () => {
+    const store = selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(verb(wrapper, "unstack").attributes("disabled")).toBeDefined();
+    expect(verb(wrapper, "unstack").attributes("title")).toContain(
+      "not part of a stack",
+    );
+
+    store.rows = [row(3, "present", { stack_id: 7 })];
     store.clearSelection();
-    store.toggleSelected(1);
     store.toggleSelected(3);
     await wrapper.vm.$nextTick();
-    expect(verb(wrapper, "stack").attributes("title")).toContain(
-      "already part of a run",
-    );
+    expect(verb(wrapper, "unstack").attributes("disabled")).toBeUndefined();
   });
 
   it("clears the selection without touching the rows", async () => {

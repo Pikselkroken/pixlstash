@@ -1,17 +1,17 @@
 <template>
   <AppDialog
     :open="open"
-    title="Group training runs"
+    title="Group adapters"
     :subtitle="subtitle"
     :width="640"
     @close="emit('close')"
   >
-    <p v-if="loading" class="ssp-note" role="status">Looking for runs…</p>
+    <p v-if="loading" class="ssp-note" role="status">Looking for groups…</p>
     <p v-else-if="error" class="ssp-note" role="alert">{{ error }}</p>
     <p v-else-if="!proposals.length" class="ssp-note" role="status">
-      Nothing on the shelf looks like a training run that is not already
-      grouped. PixlStash only groups files whose names differ by a training
-      step, and only within one folder.
+      Nothing on the shelf looks like an adapter that is not already grouped.
+      PixlStash only groups files whose names differ by a training step or a
+      version (<code>v2</code>, <code>v2.1</code>), and only within one folder.
     </p>
 
     <template v-else>
@@ -20,8 +20,10 @@
            applies — the same promise the folder scan and the ai-toolkit run
            listing make. -->
       <p class="ssp-note">
-        These files differ only by a training step, so PixlStash is confident
-        they are one run each. Nothing has been changed yet.
+        Files differing only by a training step are one run, and open ticked.
+        Groups that span <strong>versions</strong> are a judgement — they merge
+        separate trainings — so they open unticked and you choose them. Nothing
+        has been changed yet, and Ungroup takes any of it back.
       </p>
 
       <ul class="ssp-list">
@@ -35,12 +37,18 @@
             />
             <span class="ssp-name">{{ proposal.name }}</span>
             <span class="ssp-count">{{ stepCount(proposal) }}</span>
+            <!-- The tier is drawn, not merely carried. It is what decides
+                 whether the row opened ticked, so a reader who is about to
+                 merge two trainings can see WHICH rows those are. -->
+            <span v-if="spansVersions(proposal)" class="ssp-tier"
+              >merges versions</span
+            >
             <span class="ssp-size">{{
               formatModelSize(proposal.total_size)
             }}</span>
           </label>
           <!-- Cover first, and said out loud: the file that will represent the
-               run on the shelf is the one decision a reader might disagree
+               group on the shelf is the one decision a reader might disagree
                with, and it is not obvious from a list of steps. -->
           <p class="ssp-cover">
             Shown as <strong>{{ coverLabel(proposal) }}</strong>
@@ -67,18 +75,23 @@
 </template>
 
 <script setup>
-// The tier-1 stack dry run (shelf plan F5).
+// The stack dry run (shelf plan F5).
 //
-// One dry run and one confirmation for the whole batch, which is what tier 1
-// earns: files differing solely by a training step are one run and there is
-// nothing for a person to weigh. Tier 2 — prefix grouping, `JimmyCarr` beside
-// `JimmyCarr2` — needs per-group adjudication with counter-evidence and is not
-// offered here, because the backend does not propose it yet.
+// One dry run, then one press for whatever is ticked. Prefix grouping —
+// `JimmyVehicle` beside `JimmyVehicle2` — needs per-group adjudication with
+// counter-evidence and is not offered here, because the backend does not
+// propose it.
 //
-// Every group is ticked on open. The reader is confirming a batch, not
-// assembling one, and the tier exists precisely because the groups are not in
-// doubt; making them opt in one at a time would be the tier-2 flow applied to
-// the tier that does not need it.
+// **Step groups open ticked; version groups do not.** A `step_group` is not in
+// doubt — the reader is confirming a batch, not assembling one, and making those
+// opt in one at a time would be an adjudication surface applied to the case that
+// does not need it. A `version_group` is the opposite: it merges trainings the
+// owner may have kept apart deliberately. Ungroup takes it back now, so this is
+// no longer about a one-way door — but pre-ticking would still turn one press
+// into a merge of every versioned run on the shelf, which is a judgement nobody
+// made and a lot of undoing.
+//
+// That is what `tier` is FOR. It is a wire field with a job, not a label.
 
 import { computed, ref, watch } from "vue";
 
@@ -105,7 +118,7 @@ const error = ref("");
 
 const subtitle = computed(() =>
   proposals.value.length
-    ? `${proposals.value.length.toLocaleString()} ${proposals.value.length === 1 ? "run" : "runs"} found`
+    ? `${proposals.value.length.toLocaleString()} ${proposals.value.length === 1 ? "group" : "groups"} found`
     : "",
 );
 
@@ -116,7 +129,9 @@ const canSubmit = computed(
 const confirmLabel = computed(() => {
   const n = chosen.value.length;
   if (!n) return "Group them";
-  return `Group ${n.toLocaleString()} ${n === 1 ? "run" : "runs"}`;
+  // "Group 3 selected", not "Group 3 groups": the verb and the noun are the
+  // same word here, and a group can span training runs now so "runs" is false.
+  return `Group ${n.toLocaleString()} selected`;
 });
 
 function stepCount(proposal) {
@@ -124,11 +139,22 @@ function stepCount(proposal) {
   return `${n.toLocaleString()} ${n === 1 ? "file" : "files"}`;
 }
 
-/** What the run will be shown as once it is one row. */
+/** Whether this group would merge separate trainings. */
+function spansVersions(proposal) {
+  return proposal.tier === "version_group";
+}
+
+/** What the group will be shown as once it is one row.
+ *
+ * The version leads when the group has one, because that is the whole decision
+ * in a `version_group`: `Foxglove` and `Foxglove_v2` are one subject and the
+ * reader is agreeing that v2 is what "Foxglove" now means.
+ */
 function coverLabel(proposal) {
   const cover = proposal.members?.[0];
   if (!cover) return "";
-  return cover.step === null ? "the final file" : `step ${cover.step}`;
+  const step = cover.step === null ? "the final file" : `step ${cover.step}`;
+  return cover.version ? `${cover.version}, ${step}` : step;
 }
 
 async function load() {
@@ -136,9 +162,13 @@ async function load() {
   error.value = "";
   try {
     proposals.value = await listStackProposals();
-    chosen.value = proposals.value.map((p) => p.key);
+    // Step groups only. A version group is an irreversible merge of separate
+    // trainings and has to be chosen, not un-chosen.
+    chosen.value = proposals.value
+      .filter((p) => !spansVersions(p))
+      .map((p) => p.key);
   } catch (err) {
-    error.value = errorDetail(err) || "Could not look for runs.";
+    error.value = errorDetail(err) || "Could not look for groups.";
     proposals.value = [];
     chosen.value = [];
   } finally {
@@ -159,7 +189,7 @@ watch(
 /**
  * Apply the ticked groups, one call each, then say what landed.
  *
- * One call per group because a stack is one run: the route creates one
+ * One call per group because a group is one stack: the route creates one
  * `adapter_stack` and points its members at it. A group refused in the meantime
  * (409 — something stacked its rows first) is counted rather than thrown, so
  * one stale group does not discard the others.
@@ -238,6 +268,14 @@ async function submit() {
 .ssp-size {
   font-size: var(--text-xs);
   color: rgb(var(--v-theme-on-surface-variant));
+}
+
+/* The one row state a reader has to notice before pressing, so it carries the
+   warning role rather than the muted one the counts use. */
+.ssp-tier {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: rgb(var(--v-theme-warning));
 }
 
 .ssp-size {

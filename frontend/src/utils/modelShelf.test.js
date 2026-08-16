@@ -32,6 +32,9 @@ import {
   movableCopies,
   offlineFolders,
   stackReceipt,
+  unstackReceipt,
+  modelVersion,
+  versionSortKey,
   trainingStep,
   withFolderSignals,
   FOLDER_TIERS,
@@ -1166,18 +1169,44 @@ describe("the generated mark's contrast", () => {
 });
 
 describe("stackReceipt", () => {
-  it("reports the runs that landed and the ones that did not", () => {
-    expect(stackReceipt(3, 0)).toBe("Grouped 3 runs.");
+  it("reports the stacks that landed and the ones that did not", () => {
+    // "Stacks", not "runs": a stack can span training runs — several versions
+    // of one character LoRA — so calling every one a run would be false.
+    expect(stackReceipt(3, 0)).toBe("Grouped 3 stacks.");
     expect(stackReceipt(2, 1)).toBe(
-      "Grouped 2 runs. 1 run could not be grouped; something changed them first.",
+      "Grouped 2 stacks. 1 stack could not be grouped; something changed them first.",
     );
   });
 
   it("says the files are unchanged when nothing was grouped", () => {
     expect(stackReceipt(0, 2)).toBe(
-      "Nothing was grouped. 2 runs could not be, and the files are unchanged.",
+      "Nothing was grouped. 2 stacks could not be, and the files are unchanged.",
     );
     expect(stackReceipt(0, 0)).toBe("Nothing to group.");
+  });
+});
+
+describe("unstackReceipt", () => {
+  it("says where the files went, not just that it happened", () => {
+    // "Ungrouped 2 stacks." on its own is the one sentence in this view a
+    // reader could reasonably fear meant "deleted", and the entire point of
+    // the verb is that nothing on disk moved.
+    expect(unstackReceipt(2, 0)).toBe(
+      "Ungrouped 2 stacks; the files are still on the shelf.",
+    );
+    expect(unstackReceipt(1, 0)).toBe(
+      "Ungrouped 1 stack; the files are still on the shelf.",
+    );
+  });
+
+  it("counts the ones that were refused", () => {
+    expect(unstackReceipt(1, 1)).toBe(
+      "Ungrouped 1 stack; the files are still on the shelf. 1 stack could not be ungrouped.",
+    );
+    expect(unstackReceipt(0, 2)).toBe(
+      "Nothing was ungrouped. 2 stacks could not be, and the files are unchanged.",
+    );
+    expect(unstackReceipt(0, 0)).toBe("Nothing to ungroup.");
   });
 });
 
@@ -1192,6 +1221,45 @@ describe("trainingStep", () => {
     // must not read it as a step.
     expect(trainingStep("JimmyCarr.safetensors")).toBe(null);
     expect(trainingStep("portrait_mix_v2.safetensors")).toBe(null);
+  });
+});
+
+describe("modelVersion", () => {
+  it("reads a version token past the training bookkeeping, verbatim", () => {
+    expect(modelVersion("Foxglove_v2.safetensors")).toBe("v2");
+    // Case preserved, matching `split_model_version`. The server puts this
+    // token back into a stack's name, so folding it renames the run.
+    expect(modelVersion("Foxglove_V2.1_000000500.safetensors")).toBe("V2.1");
+  });
+
+  it("agrees with the server on which versions are the SAME version", () => {
+    // The divergence this pair exists to prevent: the backend compares parsed
+    // `(major, minor)`, so `v2`, `V2` and `v2.0` are one version. Comparing the
+    // raw tokens here made the shelf call them three, and label every member of
+    // an all-v2 run with a version prefix the server never assigned.
+    const key = (f) => versionSortKey(modelVersion(f));
+    expect(key("Foxglove_v2.safetensors")).toBe("2.0");
+    expect(key("Foxglove_V2.safetensors")).toBe("2.0");
+    expect(key("Foxglove_v2.0.safetensors")).toBe("2.0");
+    // And an unversioned file reads as v1, exactly as the server reads it —
+    // which is what stops `Foxglove` + `Foxglove_v1` looking like two versions.
+    expect(key("Foxglove.safetensors")).toBe("1.0");
+    expect(key("Foxglove_v1.safetensors")).toBe("1.0");
+    expect(key("Foxglove_v10.safetensors")).toBe("10.0");
+  });
+
+  it("does not read a non-ASCII digit as a version", () => {
+    // Python's `\d` spans every Unicode decimal and JavaScript's does not, so
+    // the backend pins `re.ASCII`. Asserted on this side too, because a silent
+    // disagreement about what a version is is exactly what that pin prevents.
+    expect(modelVersion("Marigold_v٢.safetensors")).toBe(null);
+  });
+
+  it("reports no version for a bare name or a bare trailing digit", () => {
+    // `JimmyVehicle` beside `JimmyVehicle2` is the prefix case, which needs
+    // counter-evidence; reading the `2` as a version would merge two subjects.
+    expect(modelVersion("Foxglove.safetensors")).toBe(null);
+    expect(modelVersion("JimmyVehicle2.safetensors")).toBe(null);
   });
 });
 

@@ -3556,11 +3556,12 @@ def test_a_row_with_no_base_model_folds_to_null(shelf_env):
 
 
 def test_every_stack_route_is_declared_owner_only():
-    """Not the §16.3 locality tier its shelf neighbours are on: neither route
+    """Not the §16.3 locality tier its shelf neighbours are on: no route here
     takes, walks, writes or unlinks a host path."""
     for method, path in (
         ("GET", "/api/v1/model-stacks/proposals"),
         ("POST", "/api/v1/model-stacks"),
+        ("DELETE", "/api/v1/model-stacks/{stack_id}"),
     ):
         declared = ROUTE_POLICIES.get((method, path))
         assert declared is not None, f"({method}, {path}) has no ROUTE_POLICIES entry"
@@ -3657,6 +3658,79 @@ def test_applying_a_stack_collapses_the_rows_and_reports_the_count(shelf_env):
             (bob, noname),
         )
         conn.execute("DELETE FROM adapter_stack WHERE id = ?", (body["stack_id"],))
+
+
+def test_fusing_two_stacks_over_http_leaves_one(shelf_env):
+    """Stacking two stacks fuses them, and the emptied rows are removed.
+
+    Restores the shelf afterwards, because the environment is module-scoped and
+    the seeded stack is what several other tests read.
+    """
+    bob = shelf_env.model_ids["bob.safetensors"]
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    alice = shelf_env.model_ids["alice.safetensors"]
+    seeded = shelf_env.server.hub.fetchone(
+        "SELECT stack_id FROM model WHERE id = ?", (alice,)
+    )["stack_id"]
+    assert seeded is not None, "this test needs alice to be in the seeded stack"
+
+    built = shelf_env.owner.post(
+        f"{API}/model-stacks", json={"model_ids": [bob, noname], "name": "Duo"}
+    ).json()
+
+    # Two stacks named by ONE member each, and `fuse` on.
+    r = shelf_env.owner.post(
+        f"{API}/model-stacks",
+        json={"model_ids": [bob, alice], "name": "Fused", "fuse": True},
+    )
+    assert r.status_code == 200, r.text
+    fused = r.json()["stack_id"]
+
+    # Every member of both came along, including the ones not named.
+    members = {
+        int(row["id"])
+        for row in shelf_env.server.hub.fetchall(
+            "SELECT id FROM model WHERE stack_id = ?", (fused,)
+        )
+    }
+    assert {bob, noname, alice} <= members
+    # And neither absorbed stack is left behind as an empty row.
+    for gone in (built["stack_id"], seeded):
+        assert (
+            shelf_env.server.hub.fetchone(
+                "SELECT id FROM adapter_stack WHERE id = ?", (gone,)
+            )
+            is None
+        )
+
+    # Restore: unstack the fused row, then rebuild the seeded stack exactly.
+    assert shelf_env.owner.delete(f"{API}/model-stacks/{fused}").status_code == 200
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO adapter_stack (id, name, created_at, updated_at) "
+            "VALUES (?, 'Seeded', '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z')",
+            (seeded,),
+        )
+        for position, model_id in enumerate(_seeded_stack_members(shelf_env)):
+            conn.execute(
+                "UPDATE model SET stack_id = ?, stack_position = ? WHERE id = ?",
+                (seeded, position, model_id),
+            )
+
+
+def _seeded_stack_members(shelf_env):
+    """The ids the shelf fixture puts in its one stack, cover first."""
+    return [
+        shelf_env.model_ids["alice.safetensors"],
+        shelf_env.model_ids["dana.safetensors"],
+    ]
+
+
+def test_unstacking_an_unknown_stack_is_a_404(shelf_env):
+    """A wrong address, not a shelf that moved — so 404 rather than the
+    apply's 409, and nothing is written on the way to saying so."""
+    r = shelf_env.owner.delete(f"{API}/model-stacks/999999")
+    assert r.status_code == 404, r.text
 
 
 # ── The icon verb over HTTP (shelf plan, the sixth verb) ────────────────────
