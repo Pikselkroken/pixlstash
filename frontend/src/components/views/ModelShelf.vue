@@ -1061,8 +1061,8 @@
                   >
                 </li>
 
-              <!-- The stack's other members — later steps, earlier versions, or
-                 both — rendered as ROWS rather than through
+                <!-- The stack's other members — later steps, earlier versions,
+                   or both — rendered as ROWS rather than through
                    `StackExpansionStrip`: that component draws picture thumbnails
                    for the dedup queue, and a model file has no thumbnail. A
                    stack's members already ARE shelf rows, so they are drawn as
@@ -1084,7 +1084,7 @@
                     </span>
                     <span role="gridcell" class="shelf-row-label">
                       <span class="shelf-row-name">{{
-                      memberLabel(member, row)
+                        memberLabel(member, row)
                       }}</span>
                       <span
                         class="shelf-row-file"

@@ -663,11 +663,11 @@ function groupsOf(row, axis) {
       // "Unclassified" beside `Other` is the same shrug twice. It falls to
       // `Other` with everything else that says nothing.
       if (row.file_kind !== "unknown" && fileKindLabel(row.file_kind)) {
-      return [
-        {
+        return [
+          {
             key: String(row.file_kind),
             label: fileKindLabel(row.file_kind),
-          labelKind: "name",
+            labelKind: "name",
             // "" for the support kinds, which no capability marks — the header
             // falls back to the axis glyph rather than borrowing a wrong one.
             icon: capabilityIcon(row.file_kind),
