@@ -12,6 +12,7 @@ import time
 from typing import Any, Callable, Optional
 from datetime import datetime, UTC
 
+from .event_types import EventType
 from .pixl_logging import get_logger
 from .tasks.base_task import BaseTask, QueueType, TaskPriority, TaskStatus
 from .utils.vram_utils import empty_cuda_cache
@@ -36,6 +37,13 @@ class TaskRunner:
     SPILLOVER_GRACE_SECONDS = 1.5
     SPILLOVER_TOLERANCE_MB = 256
 
+    # Pause between attempts after a GPU out-of-memory failure. Long enough to
+    # be worth waiting for — whatever else is holding the card has to give some
+    # back — and short enough that the single GPU worker is not parked on it:
+    # an interactive ``submit_and_wait`` (face detection, character likeness)
+    # queues behind this and has a 60 s budget. Two pauses is the worst case.
+    VRAM_OOM_RETRY_PAUSE_S = 5.0
+
     # Cache nvidia-smi results: (timestamp, value). A fresh query is only made
     # if the cached value is older than this many seconds, preventing all 4
     # worker threads from spawning simultaneous nvidia-smi subprocesses.
@@ -47,8 +55,18 @@ class TaskRunner:
     # when nvidia-smi stalls under heavy GPU load.
     _NVIDIA_SMI_TIMEOUT_S = 5
 
-    def __init__(self, name: str = "TaskRunner", num_workers: int = 1):
+    def __init__(
+        self,
+        name: str = "TaskRunner",
+        num_workers: int = 1,
+        notifier: Optional[Callable[[EventType, Any], None]] = None,
+    ):
         self._name = name
+        # Bound ``Vault.notify``, so a GPU out-of-memory retry can reach the
+        # user's screen. Passed as the bound method rather than the vault for
+        # the same reason the work finders take one: this is all the runner
+        # needs from it.
+        self._notifier = notifier
         self._num_workers = max(1, int(num_workers))
         # CPU queue: serviced by num_workers threads.
         self._queue: queue.PriorityQueue[tuple[int, int, BaseTask]] = (
@@ -179,6 +197,74 @@ class TaskRunner:
             cls._vram_cache_value = used_mb
             cls._vram_cache_ts = time.perf_counter()
         return used_mb
+
+    def _pause_and_report_vram_oom(
+        self, task: BaseTask, attempt: int, error: BaseException
+    ) -> None:
+        """Give the GPU back, tell the user, and wait before the next attempt.
+
+        Called by :meth:`BaseTask.run` between attempts. Flushing the allocator
+        cache first is what makes the retry worth making: the failed attempt's
+        partial allocations are still reserved by PyTorch until it is.
+
+        Args:
+            task: The task that failed.
+            attempt: How many attempts have been used, 1-based.
+            error: The out-of-memory error, for the log line.
+        """
+        try:
+            if empty_cuda_cache():
+                with TaskRunner._vram_cache_lock:
+                    TaskRunner._vram_cache_ts = 0.0
+        except Exception:
+            logger.warning(
+                "Failed to flush CUDA cache before retrying task %s (%s): %s",
+                task.id,
+                task.type,
+                traceback.format_exc(),
+            )
+        self._report_vram_oom(task, attempt, final=False)
+        # ``_stop.wait`` rather than ``sleep`` so a shutdown does not have to sit
+        # out the pause.
+        self._stop.wait(self.VRAM_OOM_RETRY_PAUSE_S)
+        if self._stop.is_set():
+            # The runner is shutting down: raising abandons the remaining
+            # attempts rather than starting an inference pass nobody is waiting
+            # for. ``run()`` records it as the task's failure, as it would have
+            # done had the last attempt failed.
+            raise error
+
+    def _report_vram_oom(
+        self, task: BaseTask, attempt: int, final: bool, recovered: bool = False
+    ) -> None:
+        """Emit the VRAM_OOM event the SPA turns into a toast.
+
+        Every retry sequence ends with one closing frame — ``recovered`` or
+        ``gave_up`` — because the SPA coalesces them all onto one card, and a
+        card whose last word is "retrying…" describes a state that is over.
+        """
+        if self._notifier is None:
+            return
+        try:
+            self._notifier(
+                EventType.VRAM_OOM,
+                {
+                    # Diagnostic only, like the envelope's ``event`` field: the
+                    # SPA's sentence is about the GPU, not about a task class.
+                    "task_type": task.type,
+                    "attempt": attempt,
+                    "max_attempts": task.VRAM_OOM_ATTEMPTS,
+                    "gave_up": final,
+                    "recovered": recovered,
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to announce the GPU out-of-memory retry for task %s (%s): %s",
+                task.id,
+                task.type,
+                exc,
+            )
 
     def _wait_for_vram_budget(self, task: BaseTask) -> int:
         """Wait until VRAM budget allows the task and return the MB reserved.
@@ -594,9 +680,21 @@ class TaskRunner:
             with self._active_task_lock:
                 self._active_tasks[thread_ident] = task
             try:
-                task.run()
+                task.run(on_vram_oom=self._pause_and_report_vram_oom)
+                if task.vram_oom_attempts:
+                    # It got there in the end — say so, rather than leaving the
+                    # user's last card reading "retrying".
+                    self._report_vram_oom(
+                        task, task.vram_oom_attempts, final=False, recovered=True
+                    )
             except Exception as exc:
                 error = exc
+                # Keyed on the attempts actually spent, not on this exception:
+                # a task that OOMed twice and then died of something else still
+                # has a card open, and a task abandoned at shutdown used one
+                # attempt, not three.
+                if task.vram_oom_attempts:
+                    self._report_vram_oom(task, task.vram_oom_attempts, final=True)
                 tb = traceback.extract_tb(exc.__traceback__)
                 if tb:
                     last = tb[-1]

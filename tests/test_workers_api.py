@@ -40,6 +40,11 @@ def test_workers_progress_has_expected_keys():
         process = data["process"]
         assert "ram_used_gb" in process
         assert "ram_total_gb" in process
+        # Asserted on a warm server rather than in a file of its own: the GPU
+        # out-of-memory retry announces itself through this notifier, and
+        # without the wiring the toast never leaves the machine
+        # (tests/test_vram_oom_retry.py covers everything downstream of it).
+        assert server.vault._task_runner._notifier is not None
     finally:
         server.close()
         temp_dir.cleanup()

@@ -15,6 +15,7 @@ import { useSearchStore } from "../stores/useSearchStore";
 import { useOperationStore } from "../stores/useOperationStore";
 import { useSnapshotsStore } from "../stores/useSnapshotsStore";
 import { useDedupStore } from "../stores/useDedupStore";
+import { useNoticeStore } from "../stores/useNoticeStore";
 import {
   isFullRestoreRequestInFlight,
   prepareForFullRestoreTransition,
@@ -41,6 +42,56 @@ export function handleUpdatesSocketClose(event, { reload, reconnect }) {
     return;
   }
   reconnect();
+}
+
+/** Coalescing key for the GPU-memory notice: one card, updated in place, so a
+ *  retry sequence reads as one event rather than three stacked warnings. */
+export const VRAM_OOM_NOTICE_KEY = "vram-oom";
+
+// How long a "retrying" card stays up. Stated explicitly rather than left to
+// the level default (6 s), which is shorter than the backend's pause between
+// attempts — the card would expire and the next frame would open a NEW one, so
+// the key would coalesce nothing and the user would get a flicker of three
+// separate warnings. This has to outlive `TaskRunner.VRAM_OOM_RETRY_PAUSE_S`.
+const VRAM_OOM_RETRY_NOTICE_MS = 15000;
+
+/**
+ * The card shown while a GPU task is fighting for VRAM, in its three states.
+ *
+ * @param {object} payload - the `vram_oom` event.
+ * @param {number} payload.attempt - attempts used so far (1-based).
+ * @param {number} payload.max_attempts - attempts the task gets in total.
+ * @param {boolean} payload.gave_up - true once the last attempt has failed.
+ * @param {boolean} payload.recovered - true when a later attempt succeeded.
+ * @returns {{level: string, text: string, timeout: number|undefined}}
+ */
+export function vramOomNotice({
+  attempt,
+  max_attempts: max,
+  gave_up,
+  recovered,
+}) {
+  const used = Number(attempt) || 0;
+  const total = Number(max) || 0;
+  if (recovered) {
+    return {
+      level: "success",
+      text: `GPU memory freed up — the work finished after ${used} of ${total} attempts.`,
+      timeout: undefined,
+    };
+  }
+  if (gave_up) {
+    return {
+      level: "warning",
+      text: `Ran out of GPU memory after ${used} of ${total} attempts. Nothing was changed — this work will be tried again later.`,
+      timeout: undefined,
+    };
+  }
+  return {
+    level: "warning",
+    text: `Ran out of GPU memory. Retrying — attempt ${used} of ${total} used.`,
+    timeout: VRAM_OOM_RETRY_NOTICE_MS,
+  };
 }
 
 /**
@@ -71,6 +122,7 @@ export function useUpdatesSocket({
   const operationStore = useOperationStore();
   const snapshotsStore = useSnapshotsStore();
   const dedupStore = useDedupStore();
+  const noticeStore = useNoticeStore();
 
   let updatesSocket = null;
   let updatesReconnectTimer = null;
@@ -96,9 +148,7 @@ export function useUpdatesSocket({
     // middleware does not cover WebSockets). A full session authenticates via
     // the same-origin session cookie; a share/read-only session has no cookie,
     // so append its READ token as ?token= the same way HTTP requests do.
-    return appendShareToken(
-      toBackendWebSocketUrl(`${BACKEND_URL}/ws/updates`),
-    );
+    return appendShareToken(toBackendWebSocketUrl(`${BACKEND_URL}/ws/updates`));
   }
 
   // A `pictures_changed` event may carry a `fields` list naming the columns that
@@ -348,6 +398,14 @@ export function useUpdatesSocket({
           key: Date.now(),
           payload,
         };
+      } else if (payload?.type === "vram_oom" && !isReadOnly.value) {
+        // A fact about the machine, not about the library, so no grid-filter or
+        // origin decision applies. The backend only delivers it to owner-level
+        // sockets; the read-only guard matches the sibling branches rather than
+        // relying on that alone. One keyed card: the retries and the closing
+        // frame update it in place rather than stacking three warnings.
+        const notice = vramOomNotice(payload);
+        noticeStore.push({ ...notice, key: VRAM_OOM_NOTICE_KEY });
       } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
         snapshotsStore.onSnapshotCreated();
       } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {

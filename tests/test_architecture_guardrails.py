@@ -306,6 +306,9 @@ def test_event_types_fully_classified():
             # all of them regardless of grid filters, because their picture ids
             # now name different pictures.
             EventType.LIBRARY_SWITCHED.name,
+            # The GPU ran out of memory. A fact about the machine, so it goes to
+            # every client regardless of grid filters.
+            EventType.VRAM_OOM.name,
         }
     )
 

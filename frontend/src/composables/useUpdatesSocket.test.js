@@ -53,7 +53,9 @@ vi.mock("../utils/apiClient", async (importOriginal) => {
 import {
   handleUpdatesSocketClose,
   useUpdatesSocket,
+  VRAM_OOM_NOTICE_KEY,
 } from "./useUpdatesSocket";
+import { useNoticeStore } from "../stores/useNoticeStore";
 import { API_BASE_URL } from "../utils/apiClient";
 
 describe("updates socket close lifecycle", () => {
@@ -74,10 +76,7 @@ describe("updates socket close lifecycle", () => {
     const reload = vi.fn();
     const reconnect = vi.fn();
 
-    handleUpdatesSocketClose(
-      { code: 1006, reason: "" },
-      { reload, reconnect },
-    );
+    handleUpdatesSocketClose({ code: 1006, reason: "" }, { reload, reconnect });
 
     expect(reload).not.toHaveBeenCalled();
     expect(reconnect).toHaveBeenCalledOnce();
@@ -306,5 +305,83 @@ describe("useUpdatesSocket: connection lifecycle", () => {
     connect();
     receive({ type: "restore_completed", resource_type: "full" });
     expect(reloadAfterFullRestore).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useUpdatesSocket: the GPU out-of-memory notice", () => {
+  it("raises one warning card that counts the attempts used", () => {
+    connect();
+
+    receive({
+      type: "vram_oom",
+      task_type: "DescriptionTask",
+      attempt: 1,
+      max_attempts: 3,
+      gave_up: false,
+    });
+
+    const noticeStore = useNoticeStore();
+    expect(noticeStore.notices).toHaveLength(1);
+    expect(noticeStore.notices[0].level).toBe("warning");
+    expect(noticeStore.notices[0].text).toContain("attempt 1 of 3");
+    // Must outlive the backend's pause between attempts, or the next frame
+    // opens a second card instead of updating this one. The level default
+    // (6 s) is too close to that pause to rely on.
+    expect(noticeStore.notices[0].timeout).toBeGreaterThanOrEqual(15000);
+  });
+
+  it("updates the same card as the retries go by, rather than stacking", async () => {
+    vi.useFakeTimers();
+    connect();
+
+    // Real timing: the backend pauses between attempts, so the card has to
+    // still be alive when the next frame lands or the key coalesces nothing.
+    receive({ type: "vram_oom", attempt: 1, max_attempts: 3, gave_up: false });
+    await vi.advanceTimersByTimeAsync(5000);
+    receive({ type: "vram_oom", attempt: 2, max_attempts: 3, gave_up: false });
+    await vi.advanceTimersByTimeAsync(5000);
+    receive({ type: "vram_oom", attempt: 3, max_attempts: 3, gave_up: true });
+
+    const noticeStore = useNoticeStore();
+    expect(noticeStore.notices).toHaveLength(1);
+    expect(noticeStore.notices[0].key).toBe(VRAM_OOM_NOTICE_KEY);
+    // The last frame is the one the user is left reading: all three attempts
+    // are gone and nothing was written.
+    expect(noticeStore.notices[0].text).toContain("after 3 of 3 attempts");
+    expect(noticeStore.notices[0].text).toContain("Nothing was changed");
+    vi.useRealTimers();
+  });
+
+  it("closes the card when a later attempt succeeds", async () => {
+    vi.useFakeTimers();
+    connect();
+
+    receive({ type: "vram_oom", attempt: 1, max_attempts: 3, gave_up: false });
+    await vi.advanceTimersByTimeAsync(5000);
+    receive({
+      type: "vram_oom",
+      attempt: 1,
+      max_attempts: 3,
+      gave_up: false,
+      recovered: true,
+    });
+
+    const noticeStore = useNoticeStore();
+    expect(noticeStore.notices).toHaveLength(1);
+    // Not left reading "retrying" about work that finished.
+    expect(noticeStore.notices[0].level).toBe("success");
+    expect(noticeStore.notices[0].text).toContain("freed up");
+    vi.useRealTimers();
+  });
+
+  it("says nothing to a read-only session", () => {
+    isReadOnly.value = true;
+    connect();
+
+    receive({ type: "vram_oom", attempt: 1, max_attempts: 3, gave_up: false });
+
+    // A share viewer cannot act on the machine's GPU, and the backend does not
+    // deliver the event to them either — this is the second lock.
+    expect(useNoticeStore().notices).toHaveLength(0);
   });
 });
