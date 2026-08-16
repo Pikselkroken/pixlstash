@@ -246,6 +246,79 @@ def test_restore_refuses_an_archive_it_did_not_write(temp_root, capsys):
     assert not os.path.exists(destination)
 
 
+@pytest.mark.parametrize(
+    "member_name",
+    [
+        "images/../../escaped.txt",
+        "../escaped.txt",
+        "/etc/escaped.txt",
+        "images/..\\..\\escaped.txt",
+        # Windows only in effect, but refused everywhere: os.path.join discards
+        # the root when a component carries a drive letter, so this name lands
+        # outside the staging directory on Windows while passing every check
+        # that reasons about the string.
+        "images/C:escaped.txt",
+        "images/C:/Windows/escaped.txt",
+    ],
+)
+def test_archive_member_cannot_escape_the_restore_directory(member_name):
+    """Every path that leaves the staging root is refused, not sanitised."""
+    from pixlstash.services.library_restore_service import (
+        RestoreError,
+        _safe_member_target,
+    )
+
+    member = tarfile.TarInfo(member_name)
+    member.type = tarfile.REGTYPE
+    member.size = 1
+    with pytest.raises(RestoreError):
+        _safe_member_target(member, os.path.join(os.sep, "scratch", "root"))
+
+
+def test_containment_backstop_refuses_a_target_outside_the_root():
+    """Asserted directly: on POSIX no name reaching it can escape, so nothing else covers it.
+
+    The check exists for the Windows join behaviour the name checks cannot see.
+    Without a direct test it would be unfalsifiable on the Linux gate — a guard
+    that no test can fail is indistinguishable from one that does nothing.
+    """
+    from pixlstash.services.library_restore_service import RestoreError, _contained
+
+    member = tarfile.TarInfo("images/whatever.jpg")
+    root = os.path.join(os.sep, "scratch", "root")
+    assert _contained(os.path.join(root, "library", "a.jpg"), root, member)
+    with pytest.raises(RestoreError, match="outside the restore directory"):
+        _contained(os.path.join(os.sep, "elsewhere", "a.jpg"), root, member)
+
+
+def test_archive_symlink_members_are_refused():
+    """A symlink member could redirect a later write outside the library."""
+    from pixlstash.services.library_restore_service import (
+        RestoreError,
+        _safe_member_target,
+    )
+
+    member = tarfile.TarInfo("images/evil.jpg")
+    member.type = tarfile.SYMTYPE
+    member.linkname = "/etc/passwd"
+    with pytest.raises(RestoreError, match="non-regular"):
+        _safe_member_target(member, os.path.join(os.sep, "scratch", "root"))
+
+
+def test_restore_warns_that_the_archive_supplies_the_credentials(temp_root, capsys):
+    """The reassuring output must not bury who ends up owning the install."""
+    source = _install(temp_root, "credential-warning")
+    archive = os.path.join(temp_root, "credential-warning.tar.zst")
+    assert _backup(source, archive) == 0
+    capsys.readouterr()
+
+    destination = os.path.join(temp_root, "credential-warning-restored")
+    assert _restore(source, archive, destination) == 0
+    out = capsys.readouterr().out
+    assert "owner access to this machine" in out
+    assert "archive you made yourself" in out
+
+
 def test_restore_refuses_while_the_hub_is_locked(temp_root, capsys):
     """A held write lock means the server is running, and moving hub.db would lose data."""
     source = _install(temp_root, "locked")

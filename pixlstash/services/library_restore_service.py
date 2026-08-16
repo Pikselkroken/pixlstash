@@ -33,6 +33,7 @@ command undoes.
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import shutil
 import sqlite3
@@ -136,7 +137,9 @@ def _safe_member_target(member: tarfile.TarInfo, root: str) -> Optional[str]:
     """
     # Windows-authored archives can carry backslashes. Normalise before any
     # check, so traversal is evaluated against the name that will be used.
-    name = member.name.replace("\\", "/").lstrip("./")
+    name = member.name.replace("\\", "/")
+    while name.startswith("./"):
+        name = name[2:]
     if not name or name != os.path.normpath(name).replace(os.sep, "/"):
         raise RestoreError(
             f"Refusing archive member with an unsafe name: {member.name}"
@@ -144,6 +147,15 @@ def _safe_member_target(member: tarfile.TarInfo, root: str) -> Optional[str]:
     if name.startswith("/") or ".." in name.split("/"):
         raise RestoreError(
             f"Refusing archive member outside the archive: {member.name}"
+        )
+    # Checked on every platform, not just Windows, and deliberately so. A
+    # component like `C:evil` makes `os.path.join` discard everything to its
+    # left *on Windows only*, so a POSIX-only gate would never see the escape
+    # it causes. Refusing it everywhere makes the Linux suite proof about the
+    # Windows behaviour, and no backup this writes ever contains one.
+    if any(ntpath.splitdrive(part)[0] for part in name.split("/")):
+        raise RestoreError(
+            f"Refusing archive member with a drive-qualified name: {member.name}"
         )
 
     if member.isdir():
@@ -155,18 +167,46 @@ def _safe_member_target(member: tarfile.TarInfo, root: str) -> Optional[str]:
         raise RestoreError(f"Refusing non-regular archive member: {member.name}")
 
     if name in (_MANIFEST_NAME, VAULT_FILENAME, _HUB_NAME):
-        return os.path.join(root, name)
+        return _contained(os.path.join(root, name), root, member)
     if name.startswith(_IMAGES_PREFIX):
         # The whole point: `images/a/b.jpg` in the archive is `a/b.jpg` in the
         # library, beside vault.db rather than under a subfolder.
         relative = name[len(_IMAGES_PREFIX) :]
         if not relative:
             return None
-        return os.path.join(root, "library", *relative.split("/"))
+        target = os.path.join(root, "library", *relative.split("/"))
+        return _contained(target, root, member)
     raise RestoreError(
         f"{member.name} is not part of a PixlStash backup. Refusing to restore "
         "an archive this did not write."
     )
+
+
+def _contained(target: str, root: str, member: tarfile.TarInfo) -> str:
+    """Prove *target* is inside *root*, whatever the name checks concluded.
+
+    The name checks above reason about the string; this reasons about the path
+    that was actually built, and the two can disagree. On Windows a component
+    carrying a drive letter makes ``os.path.join`` discard everything to its
+    left — ``join(r"\\scratch\\library", "C:evil")`` is ``"C:evil"`` — so a
+    member named ``images/C:evil`` passes every check above and lands outside
+    the staging directory. One containment test closes that and any sibling of
+    it, and costs nothing per member.
+    """
+    resolved = os.path.normcase(os.path.abspath(target))
+    root_resolved = os.path.normcase(os.path.abspath(root))
+    try:
+        contained = os.path.commonpath((root_resolved, resolved)) == root_resolved
+    except ValueError:
+        # Different drives on Windows: not merely uncontained, but proof the
+        # member steered the path somewhere else entirely.
+        contained = False
+    if not contained:
+        raise RestoreError(
+            f"Refusing archive member that resolves outside the restore "
+            f"directory: {member.name}"
+        )
+    return target
 
 
 def _extract(archive: str, scratch: str) -> int:

@@ -657,6 +657,15 @@ def _cmd_restore(args: argparse.Namespace) -> int:
             )
         print()
         print("Your current library folder is NOT touched, and nothing is deleted.")
+        # The credentials come out of the archive, so restoring one you did not
+        # make is handing its author the owner account on this machine — which
+        # reaches the host-capability routes, not just the restored pictures.
+        # Worth saying plainly: the rest of this output reads reassuring.
+        print(
+            "Restore only an archive you made yourself. Its password and tokens "
+            "become this installation's, so restoring someone else's archive "
+            "gives whoever made it owner access to this machine."
+        )
         if plan.metadata_only:
             print(
                 "warning: this is a metadata-only archive. It restores the "
