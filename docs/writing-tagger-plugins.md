@@ -59,7 +59,13 @@ guarantee. If your `init()` downloads (which is what `from_pretrained_local_firs
 and therefore what the shipped captioners do), it downloads here too. Fetch models from
 **Settings → Auto-tagging** first if you would rather it did not.
 
-It exits `1` on anything it found.
+It reports two severities and only one of them is a refusal. A **problem** — it did not
+load, a parameter has no `name` or `default`, a `type` that will not render, a name a
+built-in or an installed plugin already holds — exits `1`. A **warning** — a parameter
+with no `label`, or neither capability flag set — is printed and exits `0`, because those
+plugins do work: the settings screen falls back to the parameter's `name`, and a plugin
+with no flags registers exactly as written, it is simply never called. Script against the
+exit code and you are scripting against "will this work", not "is this tidy".
 
 **It is a development aid, not a security scanner.** It does not tell you whether a plugin
 is safe — it *runs* it, in that process, with your permissions, exactly as the server

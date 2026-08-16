@@ -924,6 +924,52 @@ def test_a_result_not_keyed_by_the_paths_it_was_given_is_caught(tmp_path, capsys
     assert "not the path it was given" in capsys.readouterr().err
 
 
+def test_image_loads_no_model_for_a_plugin_nothing_will_ever_call(tmp_path, capsys):
+    """No capability flag means no method to call, so there is nothing to load.
+
+    `init()` is made to raise, so the run reports `init() raised` and fails the
+    command if it is reached at all — which it was, before the capability check
+    moved above the download-and-init pair.
+    """
+    source = _write(
+        tmp_path / "mine.py",
+        _template(
+            ("    supports_descriptions = True", "    supports_descriptions = False"),
+            (
+                "self._model = object()",
+                'raise AssertionError("init() must not run for a flagless plugin")',
+            ),
+        ),
+    )
+    image = _write(tmp_path / "sample.jpg", "not really a jpeg")
+
+    assert _check(source, "--image", str(image)) == cli.EXIT_OK
+
+    err = capsys.readouterr().err
+    assert "init() raised" not in err
+    assert "neither supports_tags nor supports_descriptions" in err
+
+
+def test_a_torch_that_will_not_answer_does_not_take_the_command_down(monkeypatch):
+    """The plugin's own init() gives a better error than a traceback from here.
+
+    An installed-but-unloadable torch raises `OSError` rather than
+    `ImportError` — a missing CUDA shared library is the usual way — so the
+    narrower catch let it escape and end the command before the plugin could
+    report its own missing dependency.
+    """
+    from pixlstash import plugin_check
+
+    class Unloadable:
+        @property
+        def cuda(self):
+            raise OSError("libcuda.so.1: cannot open shared object file")
+
+    monkeypatch.setitem(sys.modules, "torch", Unloadable())
+
+    assert plugin_check._device() == "cpu"
+
+
 def test_image_stops_when_the_plugin_says_its_model_is_missing(tmp_path, capsys):
     """A check command has no business starting a multi-gigabyte fetch.
 

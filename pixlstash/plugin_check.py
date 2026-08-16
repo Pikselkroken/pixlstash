@@ -49,9 +49,12 @@ from pathlib import Path
 from typing import Any
 
 from pixlstash import plugin_install
+from pixlstash.pixl_logging import get_logger
 from pixlstash.plugin_install import PluginError
 from pixlstash.tagger_plugins.base import TaggerPlugin
 from pixlstash.tagger_plugins.registry import TaggerPluginManager
+
+logger = get_logger(__name__)
 
 #: The parameter types ``TaggerParametersUI.vue`` has an explicit branch for,
 #: plus ``string``, which is that component's ``v-else``.  A ``type`` outside
@@ -366,6 +369,18 @@ def _run_over_image(plugin: TaggerPlugin, image: str) -> tuple[Any | None, list[
         ``(what came back, problems)``. The result is ``None`` when the plugin
         never got as far as returning anything.
     """
+    # Decided before anything is loaded: a plugin with neither capability flag
+    # has no method for this to call, and the workflows would never reach it
+    # either, so downloading its model and initialising it is work done for a
+    # call that is not going to happen. `_schema_findings` has already warned
+    # about the flags themselves.
+    if plugin.supports_descriptions:
+        call = "generate_descriptions"
+    elif plugin.supports_tags:
+        call = "tag_images"
+    else:
+        return None, []
+
     image_path = str(Path(image).expanduser().resolve())
     parameters = plugin.default_params()
 
@@ -387,14 +402,6 @@ def _run_over_image(plugin: TaggerPlugin, image: str) -> tuple[Any | None, list[
     except Exception as exc:
         return None, [f"init() raised {type(exc).__name__}: {exc}"]
 
-    if plugin.supports_descriptions:
-        call = "generate_descriptions"
-    elif plugin.supports_tags:
-        call = "tag_images"
-    else:
-        # Already reported by _schema_findings; there is no call to make.
-        return None, []
-
     try:
         result = getattr(plugin, call)([image_path], parameters=parameters)
     except Exception as exc:
@@ -415,14 +422,31 @@ def _run_over_image(plugin: TaggerPlugin, image: str) -> tuple[Any | None, list[
 
 
 def _device() -> str:
-    """Return the device the server would hand a plugin's ``setup()``."""
+    """Return the device the server would hand a plugin's ``setup()``.
+
+    Falls back to ``"cpu"`` if torch cannot be reached at all, which is not a
+    guess about the machine so much as a way of getting out of torch's way: a
+    plugin that needs a device needs torch too, and its own ``init()`` is
+    moments away and will say so in terms of its own dependency. Failing here
+    instead would replace that message with a traceback out of the checker,
+    about a library the plugin author may not even import directly.
+    """
     # Local import: torch is seconds of start-up, and every other verb in this
     # CLI — including `plugins test` without --image — runs without it.
     try:
         import torch
 
         return "cuda" if torch.cuda.is_available() else "cpu"
-    except ImportError:
-        # A plugin needing a device almost certainly needs torch too, and will
-        # say so itself in a moment; guessing "cpu" is how it gets that far.
+    except Exception as exc:
+        # Deliberately not just ImportError. A torch that is installed but
+        # cannot load its shared libraries raises OSError here, and a partial
+        # install can raise almost anything; all of them mean the same thing to
+        # this function. Logged with the exception rather than swallowed, so
+        # the cause survives for whoever reads the log.
+        logger.warning(
+            "Could not ask torch which device to use (%s: %s); telling the "
+            "plugin 'cpu'. If it needs a GPU, this is why it did not get one.",
+            type(exc).__name__,
+            exc,
+        )
         return "cpu"

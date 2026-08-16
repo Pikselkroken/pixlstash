@@ -1044,7 +1044,11 @@ scope here.
   exists, then `init(params)`, then `generate_descriptions` (or `tag_images`)
   with the schema's defaults — and checks the result is a dict keyed by the paths
   it was given, because the workflow looks its results up by path and silently
-  drops anything else. It stops when `needs_download()` is True rather than
+  drops anything else. **Which method to call is decided before any of that**:
+  a plugin with neither capability flag has nothing for this to call and the
+  workflows would never reach it either, so downloading and initialising its
+  model would be work done for a call that is not going to happen. It stops
+  when `needs_download()` is True rather than
   starting a multi-gigabyte fetch from a check command. **That is a courtesy and
   not a guarantee, and no wording may promise otherwise:** `needs_download()` is
   the plugin's own answer about its own files, and a plugin that downloads
