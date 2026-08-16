@@ -6,7 +6,7 @@
 // distinguishable from a chosen one; and `unknown` must never read as a
 // checkpoint.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
@@ -2849,6 +2849,11 @@ describe("Delete", () => {
       refused: [],
     });
   });
+
+  // The `window.confirm` spies below are restored here rather than at the end
+  // of each test: a failed assertion never reaches its own `mockRestore`, and a
+  // leaked spy turns one red test into four.
+  afterEach(() => vi.restoreAllMocks());
 
   it("asks before it deletes, and deletes nothing when the answer is no", async () => {
     // The key opens a prompt, never a deletion: a stray Del with forty rows

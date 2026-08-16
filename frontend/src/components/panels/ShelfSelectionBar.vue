@@ -2,8 +2,10 @@
   <!-- The floating pill, the SAME object the photo grid docks over its tiles:
        bottom-centre, panel surface, pill radius, elevation-4. Nine labelled
        buttons in a docked bar was a sentence to re-read on every selection;
-       seven icons is a chord you learn once, and the words are never gone —
-       hover has them and right-click has all of them (#904). -->
+       a row of icons is a chord you learn once, and the words are never gone —
+       hover has them and right-click has all of them (#904). The last of them
+       is the only one that destroys bytes, which is why it is the only one in
+       the error colour (#933). -->
   <div
     v-if="store.selectedRows.length"
     class="shelf-selbar"
