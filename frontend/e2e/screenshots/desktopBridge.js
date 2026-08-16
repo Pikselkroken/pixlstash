@@ -47,7 +47,9 @@ function installDesktopBridge(overrides) {
       enabled: true,
       port: 9537,
       ssl: false,
-      urls: ['http://192.168.1.24:9537'],
+      // The first host of 192.168.0.0/16 — a LAN-shaped URL for the screenshot
+      // that is nobody's machine. See tests/network_vectors.py.
+      urls: ['http://192.168.0.1:9537'],
     }),
     setServerSettings: val(undefined),
     checkServerPort: val({ available: true }),

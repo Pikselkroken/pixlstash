@@ -2160,3 +2160,121 @@ def test_ml_import_probe_has_teeth():
         "the ML-import probe failed to notice a module that definitely imports "
         f"torch and onnxruntime; it reported {loaded}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: no unsanctioned private-network address literal
+# ---------------------------------------------------------------------------
+# Push-time secret scanning (``lib/secret-scan.js`` in the Piecework
+# repository, which is the authority here) reads every *added* line and stops
+# the push on an RFC 1918 address. That is why this repository has to stay
+# clean rather than merely stop adding literals: merging develop into a branch
+# re-presents everything landed since its base as added lines, so #963 was
+# blocked by a literal it had never touched.
+#
+# The upstream rule exempts six strings and nothing merely shaped like them:
+# the three RFC 1918 blocks, which are a definition rather than a machine and
+# the constant every locality gate is built out of, and the first host of each
+# block, for a test vector that has to be inside RFC 1918 because that is the
+# branch it exercises. Every network has something at ``.1``, so those say
+# nothing about whose network it is; the rest of the octet space does.
+#
+# This is deliberately the stricter of the two: a sanctioned host wearing a
+# prefix length is a subnet plan rather than a stand-in, and is reported.
+_SANCTIONED_PRIVATE_LITERALS = frozenset(
+    {
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "10.0.0.1",
+        "172.16.0.1",
+        "192.168.0.1",
+    }
+)
+
+_PRIVATE_ADDRESS_RE = re.compile(
+    r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|192\.168\.\d{1,3}\.\d{1,3}"
+    r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})"
+    r"(?:/\d{1,2})?"
+)
+
+# Named roots, never a repo-root walk: that is what lets every scan in this
+# file work without a node_modules / dist / .venv exclusion list, and a
+# too-greedy exclusion is a silent pass.
+_PRIVATE_ADDRESS_ROOTS = ("tests", "docs", "pixlstash", "frontend/e2e")
+_PRIVATE_ADDRESS_FILES = ("README.md",)
+_PRIVATE_ADDRESS_SUFFIXES = frozenset(
+    {
+        ".py",
+        ".md",
+        ".js",
+        ".mjs",
+        ".ts",
+        ".vue",
+        ".json",
+        ".yml",
+        ".yaml",
+        ".txt",
+        ".html",
+        ".css",
+    }
+)
+
+
+def _private_address_offenders(root: Path, repo_root: Path) -> list[str]:
+    """Return ``"<path>:<lineno>: <line>"`` for every unsanctioned literal."""
+    offenders: list[str] = []
+    paths = [root] if root.is_file() else sorted(root.rglob("*"))
+    for path in paths:
+        if not path.is_file() or path.suffix not in _PRIVATE_ADDRESS_SUFFIXES:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            for match in _PRIVATE_ADDRESS_RE.finditer(line):
+                if match.group(0) in _SANCTIONED_PRIVATE_LITERALS:
+                    continue
+                rel = path.relative_to(repo_root)
+                offenders.append(f"{rel}:{lineno}: {line.strip()[:120]}")
+                break
+    return offenders
+
+
+def test_no_unsanctioned_private_address_literal():
+    """A bare RFC 1918 literal is somebody's network until proven otherwise."""
+    offenders: list[str] = []
+    for name in _PRIVATE_ADDRESS_ROOTS:
+        offenders += _private_address_offenders(REPO_ROOT / name, REPO_ROOT)
+    for name in _PRIVATE_ADDRESS_FILES:
+        offenders += _private_address_offenders(REPO_ROOT / name, REPO_ROOT)
+    assert not offenders, (
+        "these lines carry a private-network address that push-time secret "
+        "scanning will stop a push over:\n  "
+        + "\n  ".join(sorted(offenders))
+        + "\n\nFix: in a test, import the vector from tests/network_vectors.py "
+        "rather than writing a number — inventing a different one just moves "
+        "the problem. In prose, write a placeholder such as <lan-ip>, or name "
+        "the RFC 1918 block itself."
+    )
+
+
+# Written in two halves so this file does not itself carry the literal it
+# forbids: the scan reads added lines, and this one would be added.
+_TEETH_OFFENDER = "192.168." + "1.50"
+
+
+def test_private_address_guardrail_has_teeth(tmp_path):
+    """Both directions, or the guardrail can pass by being broken."""
+    (tmp_path / "bad.md").write_text(f"the gateway is {_TEETH_OFFENDER}\n")
+    (tmp_path / "good.md").write_text("the gateway is 192.168.0.1 on 192.168.0.0/16\n")
+
+    offenders = _private_address_offenders(tmp_path, tmp_path)
+    assert any(o.startswith("bad.md:") for o in offenders), (
+        f"the guardrail missed an unsanctioned private address: {offenders}"
+    )
+    assert not any(o.startswith("good.md:") for o in offenders), (
+        f"the guardrail reported a sanctioned stand-in: {offenders}"
+    )

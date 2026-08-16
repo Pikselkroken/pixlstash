@@ -48,6 +48,7 @@ from pixlstash.authz.policy import (
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.route_inventory import api_endpoint_set
 from tests.authz_guard import no_spa_fallback  # noqa: F401
+from tests.network_vectors import LAN_IPV4, PRIVATE_10_IPV4
 
 API = "/api/v1"
 
@@ -87,8 +88,8 @@ def test_is_local_ip_not_widened_to_tailscale():
     middleware ALL-token block, the HTTPS-skip carve-out). Tailscale CGNAT is NOT
     private, so it must remain False on the shared predicate."""
     assert is_local_ip("127.0.0.1") is True
-    assert is_local_ip("10.0.0.5") is True
-    assert is_local_ip("192.168.1.9") is True
+    assert is_local_ip(PRIVATE_10_IPV4) is True
+    assert is_local_ip(LAN_IPV4) is True
     assert is_local_ip("100.64.0.5") is False  # Tailscale CGNAT — NOT widened here
     assert is_local_ip("8.8.8.8") is False
 
@@ -104,7 +105,7 @@ def test_is_tailscale_ip_covers_cgnat_and_ula():
     assert is_tailscale_ip("100.63.255.255") is False
     assert is_tailscale_ip("100.128.0.1") is False
     assert is_tailscale_ip("8.8.8.8") is False
-    assert is_tailscale_ip("10.0.0.1") is False
+    assert is_tailscale_ip(PRIVATE_10_IPV4) is False
 
 
 def test_is_local_or_tailscale_ip_is_the_host_ops_predicate():
@@ -112,8 +113,8 @@ def test_is_local_or_tailscale_ip_is_the_host_ops_predicate():
     the union the §16.3 gate uses (and only the gate)."""
     for ip in (
         "127.0.0.1",
-        "10.0.0.5",
-        "192.168.1.9",
+        PRIVATE_10_IPV4,
+        LAN_IPV4,
         "100.64.0.5",
         "fd7a:115c:a1e0::1",
     ):
@@ -126,8 +127,8 @@ def test_is_loopback_ip_rejects_lan_and_tailscale():
     loopback — the flag-immune tier can never be reached from them."""
     assert is_loopback_ip("127.0.0.1") is True
     assert is_loopback_ip("::1") is True
-    assert is_loopback_ip("10.0.0.5") is False
-    assert is_loopback_ip("192.168.1.9") is False
+    assert is_loopback_ip(PRIVATE_10_IPV4) is False
+    assert is_loopback_ip(LAN_IPV4) is False
     assert is_loopback_ip("100.64.0.5") is False
     assert is_loopback_ip("8.8.8.8") is False
 
@@ -331,7 +332,7 @@ def test_local_owner_only_allows_loopback_lan_and_tailscale():
         with _enforcing(server):
             # Loopback (in-process peer, no XFF).
             assert not _is_locality_403(owner.get(_BROWSE)), "loopback must pass"
-            for ip in ("10.0.0.5", "192.168.1.9", "100.64.0.5"):
+            for ip in (PRIVATE_10_IPV4, LAN_IPV4, "100.64.0.5"):
                 r = owner.get(_BROWSE, headers=_xff(ip))
                 assert not _is_locality_403(r), (
                     f"{ip} must count as local for host-ops; got {r.status_code}: {r.text}"
@@ -602,7 +603,7 @@ def test_loopback_owner_only_rfc1918_403_even_with_flag_on():
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
         with _enforcing(server), _remote_host_ops(server, True):
-            r = owner.post(_OPEN_LOCATION, headers=_xff("192.168.1.9"))
+            r = owner.post(_OPEN_LOCATION, headers=_xff(LAN_IPV4))
             assert _is_loopback_403(r), (
                 f"RFC1918 must be 403'd on a LOOPBACK_OWNER_ONLY route even with "
                 f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
@@ -647,7 +648,7 @@ def test_server_config_open_loopback_owner_only_carve_out():
         server, owner = env["server"], env["owner"]
         with _enforcing(server), _remote_host_ops(server, True):
             # NEGATIVE carve-out: none of these may pass even with the flag ON.
-            for ip in ("192.168.1.9", "100.64.0.5", "8.8.8.8"):
+            for ip in (LAN_IPV4, "100.64.0.5", "8.8.8.8"):
                 r = owner.post(_CONFIG_OPEN, headers=_xff(ip))
                 assert _is_loopback_403(r), (
                     f"{ip} must be 403'd on server-config/open even with "
@@ -686,7 +687,7 @@ def test_reverse_proxy_real_lan_client_allowed():
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
         with _enforcing(server):
-            r = owner.get(_BROWSE, headers=_xff("192.168.1.50"))
+            r = owner.get(_BROWSE, headers=_xff(LAN_IPV4))
             assert not _is_locality_403(r), (
                 f"a LAN real client must be admitted; got {r.status_code}: {r.text}"
             )
@@ -797,7 +798,7 @@ def test_test_hooks_non_loopback_owner_is_403_even_with_flag_on():
     with _test_hooks_owner_env() as env:
         server, owner = env["server"], env["owner"]
         with _enforcing(server), _remote_host_ops(server, True):
-            for ip in ("192.168.1.9", "10.0.0.5", "100.64.0.5", "8.8.8.8"):
+            for ip in (LAN_IPV4, PRIVATE_10_IPV4, "100.64.0.5", "8.8.8.8"):
                 r = owner.post(_WS_HOOK, json=_WS_HOOK_BODY, headers=_xff(ip))
                 assert _is_loopback_403(r), (
                     f"{ip} must be 403'd on the test hook even with "

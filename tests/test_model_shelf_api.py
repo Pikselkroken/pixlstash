@@ -52,6 +52,7 @@ from pixlstash.db_models.adapter_attachment import AdapterAttachment
 from pixlstash.routes import model_folders as model_folders_routes
 from pixlstash.routes.model_imports import sample_path_within
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
+from tests.network_vectors import LAN_IPV4
 from pixlstash.server import Server
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.services.model_mover import SHELF_IO_LOCK
@@ -900,7 +901,7 @@ def test_local_owner_reaches_every_folder_mutator(shelf_env):
     Tailscale CGNAT all pass. Over-blocking is its own regression, and the
     Tailscale case is the one that was a false deny before the scoped predicate."""
     for method, path, kwargs in _FOLDER_MUTATORS:
-        for headers in ({}, _xff("192.168.1.9"), _xff("100.64.0.5")):
+        for headers in ({}, _xff(LAN_IPV4), _xff("100.64.0.5")):
             r = shelf_env.owner.request(method, path, headers=headers, **kwargs)
             assert "restricted to local" not in r.text, (
                 f"{method} {path} from {headers or 'loopback'} was refused as "
@@ -1808,7 +1809,7 @@ def test_local_owner_reaches_every_move_route(shelf_env):
     """Over-blocking is its own regression: loopback, RFC1918 LAN and Tailscale
     CGNAT must all pass the locality half."""
     for method, path, kwargs in _MOVE_ROUTES:
-        for headers in ({}, _xff("192.168.1.9"), _xff("100.64.0.5")):
+        for headers in ({}, _xff(LAN_IPV4), _xff("100.64.0.5")):
             r = shelf_env.owner.request(method, path, headers=headers, **kwargs)
             assert "restricted to local" not in r.text, (
                 f"{method} {path} from {headers or 'loopback'} was refused as "
@@ -2189,7 +2190,7 @@ def test_import_routes_refuse_every_share_token(shelf_env):
 
 def test_local_owner_reaches_every_import_route(shelf_env):
     for method, path, kwargs in _IMPORT_ROUTES:
-        for headers in ({}, _xff("192.168.1.9"), _xff("100.64.0.5")):
+        for headers in ({}, _xff(LAN_IPV4), _xff("100.64.0.5")):
             r = shelf_env.owner.request(method, path, headers=headers, **kwargs)
             assert "restricted to local" not in r.text, (
                 f"{method} {path} from {headers or 'loopback'} was refused as "
@@ -2549,7 +2550,7 @@ def test_relocate_is_owner_only_and_local_only(shelf_env, relocatable_store):
     assert "allow_remote_host_ops" in remote.text
 
     # Positive control: the local owner is not blocked.
-    local = shelf_env.owner.post(path, headers=_xff("192.168.1.9"), **body)
+    local = shelf_env.owner.post(path, headers=_xff(LAN_IPV4), **body)
     assert "restricted to local" not in local.text, local.text
     # Accepted, and then waited for. The status code is asserted because
     # `_await_move` cannot tell "the job finished" from "there was never a job":
@@ -3924,7 +3925,7 @@ def test_add_file_refuses_every_share_token(shelf_env):
 def test_add_file_is_reachable_locally_and_refused_remotely(shelf_env):
     """Both directions of the locality half: over-blocking is its own regression."""
     method, path, kwargs = _ADD_FILE_ROUTE
-    for headers in ({}, _xff("192.168.1.9"), _xff("100.64.0.5")):
+    for headers in ({}, _xff(LAN_IPV4), _xff("100.64.0.5")):
         r = shelf_env.owner.request(method, path, headers=headers, **kwargs)
         assert "restricted to local" not in r.text, (
             f"{method} {path} from {headers or 'loopback'} was refused as "

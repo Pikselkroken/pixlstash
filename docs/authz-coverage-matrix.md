@@ -801,7 +801,7 @@ Each claim was attacked against the code, not the description, and reproduced.
 2. **"Cannot weaken the policy when the route IS mounted."** *Upheld.* Reproduced against a
    real `Server(enable_test_hooks=True)` booting with the shipped
    `AUTHZ_GATE_ENFORCING = True`: loopback owner **200** (`emitted: 1`); XFF
-   `192.168.1.9` / `10.0.0.5` / `100.64.0.5` / `8.8.8.8` all **403** with the
+   `192.168.0.1` / `10.0.0.1` / `100.64.0.5` / `8.8.8.8` all **403** with the
    "restricted to loopback" body; `8.8.8.8` with `allow_remote_host_ops=true` still
    **403**. Waiver membership changes nothing about enforcement — the policy map is built
    by iterating `live` and looking up the registry by exact `(method, path)`, so a waived
@@ -842,7 +842,7 @@ an unparseable XFF hop (`is_loopback_ip` fails **open** on unparseable input); a
 appending proxy (`$proxy_add_x_forwarded_for`) blocks all of them.
 
 Container port-mapping is **not** a bypass: Docker bridge / rootless slirp source addresses
-are `172.17.0.0/16` / `10.0.2.x`, not loopback. SSH local port-forwarding *is* (the hop
+sit in `172.16.0.0/12` / `10.0.0.0/8`, not loopback. SSH local port-forwarding *is* (the hop
 originates on the host), but that presupposes shell access.
 
 **Over-blocking checked — no regression.** The e2e topology is loopback end to end:

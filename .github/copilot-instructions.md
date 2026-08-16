@@ -431,6 +431,36 @@ Every file under `tests/` must be either listed in the `backend` job's file list
 
 The deal is time-balanced, not round-robin. `_time_balanced_shard_assignment` (`tests/conftest.py`) seeds every test on its round-robin position and then re-places the ones it has timings for, longest-processing-time-first, over the committed `tests/ci_test_durations.json`; a test missing from the map keeps its seeded position and is charged the median cost. Shards therefore come out level on recorded *time* (max/min 1.000 at N=8), and `tests/test_ci_shards.py::test_recorded_durations_actually_balance_the_gate` fails the build above 1.05, reading N from the workflow so a resize has to re-prove it. CI records the data that feeds this: `PYTEST_FLAGS` carries `--durations=0 --durations-min=0`, and `scripts/record_test_durations.py` turns that output back into the committed map. Adding a test file therefore imposes no obligation on the map: refreshing it is an optimisation chore, never a correctness obligation, and a stale map costs a little balance and never coverage. The guardrail names every gated file it has not timed as a warning rather than a failure, because that failure could only ever land on an unrelated PR — the file is already on `develop` by the time the map is stale. It does fail once the map times less than `MINIMUM_GATE_COVERAGE` (90%) of the gated files, at which point the 1.05 balance figure is describing a shrinking subset rather than the gate. Refresh it by dispatching `.github/workflows/record-test-durations.yml`, which harvests a green `backend` gate run and pushes the regenerated map to a branch.
 
+## Stand-in values: what is safe to write down
+
+Pushes are scanned for secrets and private information, and the scan reads
+**added lines** — which is why a literal already merged to `develop` is not
+somebody else's problem: merging `develop` into a branch re-presents it as an
+added line, and #963 was blocked by a literal it had never touched. The rules
+below are the vocabulary that scan is quiet about. The authority is
+`lib/secret-scan.js` in the Piecework repository (`EXAMPLE_VALUES` there);
+this section is the part that applies here.
+
+| You need | Write | Why |
+|---|---|---|
+| A private IPv4 in a test | `LAN_IPV4`, `PRIVATE_10_IPV4` or `PRIVATE_172_IPV4` from `tests/network_vectors.py` | Three literals — the first host of each RFC 1918 block — identify nobody. Any other quad is read as somebody's network. |
+| RFC 1918 itself | `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` | A definition, not a machine. |
+| A private IP in prose | `<lan-ip>`, `<your-server-ip>`, or name the block | A worked example is where a real address gets copied in. |
+| A non-private example address | `192.0.2.x`, `198.51.100.x`, `203.0.113.x`, `2001:db8::` (RFC 5737 / 3849) | Reserved for documentation; never a finding. |
+| Loopback, wildcard, CGNAT, a public sentinel | `127.0.0.1`, `0.0.0.0`, `100.64.0.x`, `8.8.8.8` | Not private; never a finding. |
+| A fixture password, token or key | A value starting `test-`, `example-`, `dummy-`, `fake-`, `placeholder-`, or `$…`/`os.environ[…]` | The marker records that the value was invented. It is **not** a way to quieten a real one. |
+| An email | `me@example.com`, or any name under `.test` / `.invalid` / `.localhost` | RFC 2606. |
+| A home path | `/home/me/`, `/home/you/`, `~/` | Placeholder logins. A real login is private information. |
+
+Never write another RFC 1918 quad, `/home/<a real login>/`, `/Users/<anybody>/`,
+or a real address of any kind. There is no allowlist and no `# not a secret`
+comment: the answer to a false positive is to change the line, which is only an
+answer because the stand-ins above are named.
+
+`tests/test_architecture_guardrails.py::test_no_unsanctioned_private_address_literal`
+fails the build on a new private-address literal under `tests/`, `docs/`,
+`pixlstash/`, `frontend/e2e/` or `README.md`, so this does not drift back.
+
 ## Tests: reuse the environment, don't rebuild it
 
 The expensive thing in this suite is **not the test, it is the environment
