@@ -1049,6 +1049,32 @@ def test_a_found_repo_keeps_the_correction_its_owner_made(
     assert _capabilities_by_name(server_hub, folder_id) == {}
 
 
+def test_a_repo_we_already_mislabelled_as_ours_is_handed_back(
+    server_hub, tmp_path, monkeypatch
+):
+    """Every existing install has these rows stored as `engine` already, and the
+    rule above deliberately stops restating a found repo's file kind — so
+    without this the fix would only ever reach a cache declared for the first
+    time, and the owner who reported it would still be locked out. Safe to do
+    silently because `engine` is not a value any verb can set."""
+    _hf_cache(monkeypatch, ("krea/Krea-2-Raw",))
+    folder_id = declare_huggingface_cache(server_hub, str(tmp_path))
+    model_id = server_hub.fetchone(
+        "SELECT model_id FROM model_file WHERE model_folder_id = ?", (folder_id,)
+    )["model_id"]
+    # The row as the previous release wrote it.
+    with server_hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET file_kind = ? WHERE id = ?", (FILE_ENGINE, model_id)
+        )
+
+    assert declare_huggingface_cache(server_hub, str(tmp_path)) == folder_id
+
+    assert _file_kinds_by_name(server_hub, folder_id) == {
+        "krea/Krea-2-Raw": FILE_UNKNOWN
+    }
+
+
 def test_our_own_engines_are_still_the_declaration_to_state(
     server_hub, tmp_path, monkeypatch
 ):

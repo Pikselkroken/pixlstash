@@ -730,8 +730,9 @@ def declare_folder(
             # which belongs to ai-toolkit runs and is COALESCE'd by the run
             # importer.
             existing = conn.execute(
-                "SELECT model_id FROM model_file "
-                "WHERE model_folder_id = ? AND relpath = ?",
+                "SELECT mf.model_id AS model_id, m.file_kind AS file_kind "
+                "FROM model_file mf JOIN model m ON m.id = mf.model_id "
+                "WHERE mf.model_folder_id = ? AND mf.relpath = ?",
                 (folder_id, entry.relpath),
             ).fetchone()
             first_declaration = existing is None
@@ -756,7 +757,17 @@ def declare_folder(
                     (model_id, folder_id, entry.relpath, state, now),
                 )
             else:
-                model_id = int(existing[0])
+                model_id = int(existing["model_id"])
+                # The one time a found repo's file kind IS restated: to take
+                # back the `engine` this module used to write over the whole
+                # cache. Unambiguous, which is why it can be done silently —
+                # `engine` is not a value any verb can set (`FILE_KINDS` does
+                # not offer it) and every verb refuses an engine row, so a
+                # stored `engine` on a repo we did not choose can only be our
+                # own old mislabelling and never a choice the owner made.
+                restated_file_kind = entry.restated_file_kind
+                if entry.owner_curatable and existing["file_kind"] == FILE_ENGINE:
+                    restated_file_kind = entry.file_kind
                 # COALESCE'd on the *declared* value throughout, which changes
                 # nothing for an engine: every one declares its kind, its role
                 # and its name, so the declaration still wins outright — and no
@@ -781,7 +792,7 @@ def declare_folder(
                     "display_name = COALESCE(?, display_name), "
                     "file_size = COALESCE(?, file_size) WHERE id = ?",
                     (
-                        entry.restated_file_kind,
+                        restated_file_kind,
                         entry.restated_role,
                         entry.restated_display_name,
                         size,
