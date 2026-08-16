@@ -68,9 +68,11 @@ class BaseTask(ABC):
             self.started_at = datetime.utcnow()
             self.status = TaskStatus.RUNNING
             self.result = self._run_task()
-            self.status = TaskStatus.COMPLETED \
-                          if not self._cancel_event.is_set() else \
-                          TaskStatus.CANCELLED
+            self.status = (
+                TaskStatus.CANCELLED
+                if self._cancel_event.is_set()
+                else TaskStatus.COMPLETED
+            )
             return self.result
         except Exception as exc:
             self.error = str(exc)
