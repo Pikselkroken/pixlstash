@@ -146,6 +146,9 @@ class WsBroadcasterMixin:
                 # leave the clients that happen not to match looking at a stale
                 # library indefinitely.
                 EventType.LIBRARY_SWITCHED,
+                # Machine-level, not view-level: the GPU is full whatever the
+                # client's grid filters are.
+                EventType.VRAM_OOM,
             )
             or event_type in _WS_SNAPSHOT_EVENT_TYPES
         )
@@ -254,6 +257,17 @@ class WsBroadcasterMixin:
                 "type": "plugin_progress",
                 "event": event_type.name,
                 **progress_payload,
+            }
+        elif event_type == EventType.VRAM_OOM:
+            info = data if isinstance(data, dict) else {}
+            payload = {
+                "type": "vram_oom",
+                "event": event_type.name,
+                "task_type": str(info.get("task_type") or ""),
+                "attempt": int(info.get("attempt") or 0),
+                "max_attempts": int(info.get("max_attempts") or 0),
+                "gave_up": bool(info.get("gave_up")),
+                "recovered": bool(info.get("recovered")),
             }
         elif event_type in _WS_SNAPSHOT_EVENT_TYPES:
             info = data if isinstance(data, dict) else {}

@@ -466,206 +466,208 @@ Public guest scoring and shared-link endpoints.
 > Auto-generated from `server.api.openapi()`. Regenerate with `python scripts/render_backend_architecture.py`.
 
 <!-- AUTOGEN:start name="routes" -->
-| Method | Path                                                                          | Tags            | Summary                                                    |
-| ------ | ----------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------- |
-| GET    | /api/v1/adapters                                                              | model_shelf     | List adapters on the shelf                                 |
-| GET    | /api/v1/adapters/{sha256}                                                     | model_shelf     | One adapter by hash                                        |
-| PUT    | /api/v1/adapters/{sha256}/attachments                                         | model_shelf     | Set which characters and sets use an adapter               |
-| GET    | /api/v1/adapters/{sha256}/file                                                | model_shelf     | Download one adapter's bytes                               |
-| GET    | /api/v1/characters                                                            | characters      | List characters                                            |
-| POST   | /api/v1/characters                                                            | characters      | Create character                                           |
-| POST   | /api/v1/characters/likeness-search                                            | characters      | Search characters by face likeness                         |
-| POST   | /api/v1/characters/membership                                                 | characters      | Batch character membership lookup                          |
-| POST   | /api/v1/characters/{character_id}/faces                                       | characters      | Assign faces to character                                  |
-| DELETE | /api/v1/characters/{character_id}/faces                                       | characters      | Unassign faces from character                              |
-| PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                           |
-| DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                           |
-| GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                        |
-| GET    | /api/v1/characters/{id}/faces                                                 | characters      | List character faces                                       |
-| GET    | /api/v1/characters/{id}/reference_pictures                                    | characters      | List reference pictures                                    |
-| GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                             |
-| GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                        |
-| GET    | /api/v1/check-session                                                         | auth            | Check Session                                              |
-| GET    | /api/v1/checkpoints                                                           | model_shelf     | List checkpoints on the shelf                              |
-| POST   | /api/v1/dedup/auto-stack                                                      | dedup           | Bulk auto-stack the exact tier                             |
-| POST   | /api/v1/dedup/counts                                                          | dedup           | Live duplicate counts, global and scoped                   |
-| GET    | /api/v1/dedup/groups                                                          | dedup           | One page of the duplicate queue                            |
-| GET    | /api/v1/dedup/mixed-stacks                                                    | dedup           | Live stacks whose members do not all match                 |
-| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/keep                                    | dedup           | Keep a mixed stack as it is                                |
-| DELETE | /api/v1/dedup/mixed-stacks/{stack_id}/keep                                    | dedup           | Undo a Keep                                                |
-| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/split                                   | dedup           | Split the marked member(s) off a mixed stack               |
-| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/unstack                                 | dedup           | Dissolve a mixed stack                                     |
-| GET    | /api/v1/dedup/policy                                                          | dedup           | Duplicate detection tier defaults                          |
-| POST   | /api/v1/dedup/scan                                                            | dedup           | Queue a duplicate scan                                     |
-| GET    | /api/v1/dedup/stacks/{stack_id}/members                                       | dedup           | One page of an existing stack's members                    |
-| POST   | /api/v1/dedup/sweep/dry-run                                                   | dedup           | Plan a vault-wide near-duplicate sweep                     |
-| GET    | /api/v1/dedup/sweep/policy                                                    | dedup           | Near-duplicate sweep policy defaults                       |
-| POST   | /api/v1/dedup/verdicts/batch                                                  | dedup           | Apply one atomic multi-group duplicate gesture             |
-| POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                      |
-| POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                        |
-| POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                    |
-| GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                  |
-| POST   | /api/v1/libraries/active                                                      | libraries       | Switch the active library                                  |
-| GET    | /api/v1/login                                                                 | auth            | Check Registration                                         |
-| POST   | /api/v1/login                                                                 | auth            | Login                                                      |
-| POST   | /api/v1/logout                                                                | auth            | Logout                                                     |
-| POST   | /api/v1/model-files                                                           | model_shelf     | Add one model file to the shelf                            |
-| POST   | /api/v1/model-files/delete                                                    | model_shelf     | Delete models from disk                                    |
-| GET    | /api/v1/model-folders                                                         | model_shelf     | List registered model folders                              |
-| POST   | /api/v1/model-folders                                                         | model_shelf     | Register a model folder                                    |
-| GET    | /api/v1/model-folders/devices                                                 | model_shelf     | Capacity of the drives the model folders sit on            |
-| PATCH  | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Update a registered model folder                           |
-| DELETE | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Forget a registered model folder                           |
-| POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a folder PixlStash owns to another location           |
-| POST   | /api/v1/model-folders/{folder_id}/rescan                                      | model_shelf     | Rescan a registered model folder                           |
-| GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder      |
-| GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview image from a training run                      |
-| GET    | /api/v1/model-icons/{sha256}                                                  | model_shelf     | Serve one stored icon                                      |
-| POST   | /api/v1/model-imports                                                         | model_shelf     | Import a training run onto the shelf                       |
-| GET    | /api/v1/model-moves                                                           | model_shelf     | How the current or last model move is going                |
-| POST   | /api/v1/model-moves                                                           | model_shelf     | Move model files into another registered folder            |
-| DELETE | /api/v1/model-moves                                                           | model_shelf     | Cancel the running model move                              |
-| POST   | /api/v1/model-stacks                                                          | model_shelf     | Collapse models into one stack                             |
-| GET    | /api/v1/model-stacks/proposals                                                | model_shelf     | Groups of loose adapters that look like one subject        |
-| DELETE | /api/v1/model-stacks/{stack_id}                                               | model_shelf     | Break a stack apart                                        |
-| PATCH  | /api/v1/models                                                                | model_shelf     | Correct what the shelf records about one or more models    |
-| GET    | /api/v1/models/base-models                                                    | model_shelf     | Completion targets for the base-model field                |
-| POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                         |
-| POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                       |
-| POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                         |
-| POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager             |
-| GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                    |
-| POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                 |
-| POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                |
-| POST   | /api/v1/operations/undo                                                       | operations      | Undo the newest reversible operation                       |
-| GET    | /api/v1/operations/undo-state                                                 | operations      | What undo and redo would do next                           |
-| GET    | /api/v1/operations/{operation_id}                                             | operations      | Get one operation including its before/after state         |
-| POST   | /api/v1/operations/{operation_id}/undo                                        | operations      | Undo one specific operation (and its batch)                |
-| GET    | /api/v1/picture_sets                                                          | picture_sets    | List picture sets                                          |
-| POST   | /api/v1/picture_sets                                                          | picture_sets    | Create picture set                                         |
-| GET    | /api/v1/picture_sets/locked-members                                           | picture_sets    | List locked sets and their frozen pictures                 |
-| POST   | /api/v1/picture_sets/membership                                               | picture_sets    | Batch set membership lookup                                |
-| GET    | /api/v1/picture_sets/{id}                                                     | picture_sets    | Get picture set                                            |
-| PATCH  | /api/v1/picture_sets/{id}                                                     | picture_sets    | Update picture set                                         |
-| DELETE | /api/v1/picture_sets/{id}                                                     | picture_sets    | Delete picture set                                         |
-| GET    | /api/v1/picture_sets/{id}/members                                             | picture_sets    | List picture set members                                   |
-| POST   | /api/v1/picture_sets/{id}/members                                             | picture_sets    | Bulk add pictures to set                                   |
-| PUT    | /api/v1/picture_sets/{id}/members                                             | picture_sets    | Bulk replace picture set members                           |
-| POST   | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets    | Add picture to set                                         |
-| DELETE | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets    | Remove picture from set                                    |
-| GET    | /api/v1/picture_sets/{id}/thumbnail                                           | picture_sets    | Get picture set thumbnail                                  |
-| DELETE | /api/v1/pictures                                                              | pictures        | Bulk move pictures to scrapheap                            |
-| GET    | /api/v1/pictures                                                              | pictures        | List pictures                                              |
-| POST   | /api/v1/pictures/apply-scores                                                 | pictures        | Batch apply manual scores                                  |
-| POST   | /api/v1/pictures/character_likeness/batch                                     | pictures        | Batch picture character likeness                           |
-| GET    | /api/v1/pictures/count                                                        | pictures        | Total picture count for a listing filter                   |
-| POST   | /api/v1/pictures/detect                                                       | pictures        | Detect objects in pictures                                 |
-| GET    | /api/v1/pictures/export                                                       | pictures        | Start picture export job                                   |
-| GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures        | Download completed export                                  |
-| GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                      |
-| POST   | /api/v1/pictures/face-search                                                  | pictures        | Search by face likeness                                    |
-| POST   | /api/v1/pictures/import                                                       | pictures        | Import media files                                         |
-| POST   | /api/v1/pictures/import/staging                                               | pictures        | Open an async import staging session                       |
-| DELETE | /api/v1/pictures/import/staging/{staging_id}                                  | pictures        | Cancel a staging session                                   |
-| POST   | /api/v1/pictures/import/staging/{staging_id}/commit                           | pictures        | Hand off a staging session to the background import        |
-| POST   | /api/v1/pictures/import/staging/{staging_id}/files                            | pictures        | Stream files into a staging session                        |
-| GET    | /api/v1/pictures/import/staging/{staging_id}/status                           | pictures        | Get async import staging status                            |
-| GET    | /api/v1/pictures/import/status                                                | pictures        | Get import job status                                      |
-| POST   | /api/v1/pictures/impossible-tags/clear                                        | tags            | Bulk-clear impossible tags                                 |
-| POST   | /api/v1/pictures/impossible-tags/restore                                      | tags            | Undo a bulk impossible-tags clear                          |
-| POST   | /api/v1/pictures/likeness-search                                              | pictures        | Search by image likeness                                   |
-| PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                                   |
-| POST   | /api/v1/pictures/rotate                                                       | pictures        | Rotate pictures in place                                   |
-| POST   | /api/v1/pictures/score_character_likeness                                     | pictures        | Score uploaded images by character likeness                |
-| DELETE | /api/v1/pictures/scrapheap                                                    | pictures        | Permanently delete scrapheap pictures                      |
-| POST   | /api/v1/pictures/scrapheap/delete-preview                                     | pictures        | Preview a scrapheap delete-forever                         |
-| POST   | /api/v1/pictures/scrapheap/restore                                            | pictures        | Restore deleted pictures                                   |
-| GET    | /api/v1/pictures/search                                                       | pictures        | Search pictures by text                                    |
-| GET    | /api/v1/pictures/stream                                                       | pictures        | Stream pictures in batches                                 |
-| POST   | /api/v1/pictures/tags/bulk_fetch                                              | tags            | Fetch tags for multiple pictures                           |
-| POST   | /api/v1/pictures/thumbnails                                                   | pictures        | Get batch thumbnail metadata                               |
-| GET    | /api/v1/pictures/thumbnails/{id}.webp                                         | pictures        | Get picture thumbnail image                                |
-| PATCH  | /api/v1/pictures/{id}                                                         | pictures        | Patch picture fields                                       |
-| DELETE | /api/v1/pictures/{id}                                                         | pictures        | Move picture to scrapheap                                  |
-| GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                                  |
-| GET    | /api/v1/pictures/{id}/anomaly_region                                          | pictures        | Locate an anomaly region                                   |
-| GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                     |
-| GET    | /api/v1/pictures/{id}/faces                                                   | pictures        | List picture faces                                         |
-| GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                       |
-| POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                         |
-| GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                          |
-| DELETE | /api/v1/pictures/{id}/tags                                                    | tags            | Clear all tags on picture                                  |
-| POST   | /api/v1/pictures/{id}/tags/remove_all                                         | tags            | Remove tag everywhere on picture                           |
-| DELETE | /api/v1/pictures/{id}/tags/{tag_id}                                           | tags            | Remove picture tag                                         |
-| GET    | /api/v1/pictures/{picture_id}/stack                                           | stacks          | Get picture's stack                                        |
-| GET    | /api/v1/projects                                                              | projects        | List all projects                                          |
-| POST   | /api/v1/projects                                                              | projects        | Create a project                                           |
-| POST   | /api/v1/projects/membership                                                   | projects        | Batch project membership lookup                            |
-| GET    | /api/v1/projects/{id_or_name}                                                 | projects        | Get a project by ID or name                                |
-| GET    | /api/v1/projects/{id_or_name}/picture_sets                                    | projects        | List picture sets for a project                            |
-| PUT    | /api/v1/projects/{project_id}                                                 | projects        | Update a project                                           |
-| DELETE | /api/v1/projects/{project_id}                                                 | projects        | Delete a project                                           |
-| GET    | /api/v1/projects/{project_id}/attachments                                     | projects        | List attachments for a project                             |
-| POST   | /api/v1/projects/{project_id}/attachments                                     | projects        | Upload an attachment to a project                          |
-| POST   | /api/v1/projects/{project_id}/attachments/url                                 | projects        | Add a URL bookmark to a project                            |
-| GET    | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects        | Download a project attachment                              |
-| DELETE | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects        | Delete a project attachment                                |
-| GET    | /api/v1/projects/{project_id}/export                                          | projects        | Export project as ZIP                                      |
-| GET    | /api/v1/projects/{project_id}/summary                                         | projects        | Get project picture count                                  |
-| GET    | /api/v1/projects/{project_name}/characters/{character_name}                   | characters      | Get character by project name and character name           |
-| GET    | /api/v1/projects/{project_name}/picture_sets/{picture_set_name}               | picture_sets    | Get picture set by project name and set name               |
-| POST   | /api/v1/reviews                                                               | reviews         | Create a review session for one tag                        |
-| GET    | /api/v1/reviews                                                               | reviews         | List review sessions                                       |
-| DELETE | /api/v1/reviews                                                               | reviews         | Bulk-delete review sessions by status (clear all archived) |
-| GET    | /api/v1/reviews/preview                                                       | reviews         | Preview a review's coverage before creating it             |
-| GET    | /api/v1/reviews/{review_id}                                                   | reviews         | Get one review's detail                                    |
-| DELETE | /api/v1/reviews/{review_id}                                                   | reviews         | Delete one review session                                  |
-| POST   | /api/v1/reviews/{review_id}/abort                                             | reviews         | Abort a review (discard the session)                       |
-| POST   | /api/v1/reviews/{review_id}/archive                                           | reviews         | Archive a review (completed)                               |
-| POST   | /api/v1/reviews/{review_id}/refresh                                           | reviews         | Re-scan a review append-only                               |
-| GET    | /api/v1/reviews/{review_id}/suggestions                                       | reviews         | List a review's ranked queue                               |
-| GET    | /api/v1/snapshots                                                             | snapshots       | List Snapshots                                             |
-| POST   | /api/v1/snapshots                                                             | snapshots       | Create Snapshot                                            |
-| GET    | /api/v1/snapshots/status                                                      | snapshots       | Snapshots Status                                           |
-| PATCH  | /api/v1/snapshots/{snapshot_id}                                               | snapshots       | Rename Snapshot                                            |
-| DELETE | /api/v1/snapshots/{snapshot_id}                                               | snapshots       | Delete Snapshot                                            |
-| POST   | /api/v1/snapshots/{snapshot_id}/hash-compare                                  | snapshots       | Hash Compare                                               |
-| POST   | /api/v1/snapshots/{snapshot_id}/restore                                       | snapshots       | Restore Snapshot                                           |
-| POST   | /api/v1/snapshots/{snapshot_id}/restore/batch                                 | snapshots       | Restore Batch                                              |
-| GET    | /api/v1/snapshots/{snapshot_id}/restore/preview                               | snapshots       | Preview Full Restore                                       |
-| POST   | /api/v1/snapshots/{snapshot_id}/restore/preview/batch                         | snapshots       | Preview Batch Restore                                      |
-| POST   | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}         | snapshots       | Restore Resource                                           |
-| GET    | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview | snapshots       | Preview Resource Restore                                   |
-| GET    | /api/v1/sort_mechanisms                                                       | pictures        | List picture sort mechanisms                               |
-| POST   | /api/v1/stacks                                                                | stacks          | Create stack                                               |
-| POST   | /api/v1/stacks/keep-cover-only                                                | stacks          | Collapse stacks to their covers                            |
-| POST   | /api/v1/stacks/keep-cover-only/preview                                        | stacks          | Preview collapsing stacks to their covers                  |
-| GET    | /api/v1/stacks/{stack_id}                                                     | stacks          | Get stack details                                          |
-| POST   | /api/v1/stacks/{stack_id}/members                                             | stacks          | Add stack members                                          |
-| DELETE | /api/v1/stacks/{stack_id}/members                                             | stacks          | Remove stack members                                       |
-| PATCH  | /api/v1/stacks/{stack_id}/members/{picture_id}                                | stacks          | Set member position                                        |
-| PATCH  | /api/v1/stacks/{stack_id}/order                                               | stacks          | Reorder stack                                              |
-| GET    | /api/v1/stacks/{stack_id}/pictures                                            | stacks          | List pictures in stack                                     |
-| GET    | /api/v1/tag_health                                                            | tag_health      | Tag health board rows                                      |
-| POST   | /api/v1/tag_health/rebuild                                                    | tag_health      | Rebuild the tag health cache                               |
-| GET    | /api/v1/tag_suggestions                                                       | tag_suggestions | List ranked tag-fix suggestions                            |
-| POST   | /api/v1/tag_suggestions/bulk-accept                                           | tag_suggestions | Resolve all confident suggestions for a tag                |
-| POST   | /api/v1/tag_suggestions/bulk-reopen                                           | tag_suggestions | Batch-undo a bulk accept                                   |
-| POST   | /api/v1/tag_suggestions/scan                                                  | tag_suggestions | Scan a tag for near-neighbour label disagreements          |
-| POST   | /api/v1/tag_suggestions/{suggestion_id}/accept                                | tag_suggestions | Accept a tag-fix suggestion                                |
-| POST   | /api/v1/tag_suggestions/{suggestion_id}/dismiss                               | tag_suggestions | Dismiss a tag-fix suggestion                               |
-| POST   | /api/v1/tag_suggestions/{suggestion_id}/fix-twin                              | tag_suggestions | Resolve a suggestion in the twin's favour                  |
-| POST   | /api/v1/tag_suggestions/{suggestion_id}/reopen                                | tag_suggestions | Reopen (undo) a reviewed suggestion                        |
-| POST   | /api/v1/tag_suggestions/{suggestion_id}/skip                                  | tag_suggestions | Skip a tag-fix suggestion (no decision)                    |
-| POST   | /api/v1/tag_suggestions/{suggestion_id}/swap                                  | tag_suggestions | Swap a pair's labels (both were wrong, opposite ways)      |
-| POST   | /api/v1/tagger-runs                                                           | tagger_runs     | Ingest a tagger evaluation run from PixlTagger             |
-| GET    | /api/v1/tagger-runs                                                           | tagger_runs     | List ingested tagger runs (newest first)                   |
-| GET    | /api/v1/tags                                                                  | tags            | List all tags                                              |
-| GET    | /api/v1/telemetry/install-id                                                  | telemetry       | Get the anonymous install ID                               |
-| POST   | /api/v1/telemetry/install-id/recreate                                         | telemetry       | Recreate the anonymous install ID                          |
-| GET    | /version                                                                      | server          | Read Version                                               |
-| WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                     |
-| WS     | /api/v1/ws/comfyui                                                            | comfyui         | ComfyUI workflow progress                                  |
+| Method | Path                                                                          | Tags            | Summary                                                     |
+| ------ | ----------------------------------------------------------------------------- | --------------- | ----------------------------------------------------------- |
+| GET    | /api/v1/adapters                                                              | model_shelf     | List adapters on the shelf                                  |
+| GET    | /api/v1/adapters/{sha256}                                                     | model_shelf     | One adapter by hash                                         |
+| PUT    | /api/v1/adapters/{sha256}/attachments                                         | model_shelf     | Set which characters and sets use an adapter                |
+| GET    | /api/v1/adapters/{sha256}/file                                                | model_shelf     | Download one adapter's bytes                                |
+| GET    | /api/v1/characters                                                            | characters      | List characters                                             |
+| POST   | /api/v1/characters                                                            | characters      | Create character                                            |
+| POST   | /api/v1/characters/likeness-search                                            | characters      | Search characters by face likeness                          |
+| POST   | /api/v1/characters/membership                                                 | characters      | Batch character membership lookup                           |
+| POST   | /api/v1/characters/{character_id}/faces                                       | characters      | Assign faces to character                                   |
+| DELETE | /api/v1/characters/{character_id}/faces                                       | characters      | Unassign faces from character                               |
+| PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                            |
+| DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                            |
+| GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                         |
+| GET    | /api/v1/characters/{id}/faces                                                 | characters      | List character faces                                        |
+| GET    | /api/v1/characters/{id}/reference_pictures                                    | characters      | List reference pictures                                     |
+| GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                              |
+| GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                         |
+| GET    | /api/v1/check-session                                                         | auth            | Check Session                                               |
+| GET    | /api/v1/checkpoints                                                           | model_shelf     | List checkpoints on the shelf                               |
+| POST   | /api/v1/dedup/auto-stack                                                      | dedup           | Bulk auto-stack the exact tier                              |
+| POST   | /api/v1/dedup/counts                                                          | dedup           | Live duplicate counts, global and scoped                    |
+| GET    | /api/v1/dedup/groups                                                          | dedup           | One page of the duplicate queue                             |
+| GET    | /api/v1/dedup/mixed-stacks                                                    | dedup           | Live stacks whose members do not all match                  |
+| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/keep                                    | dedup           | Keep a mixed stack as it is                                 |
+| DELETE | /api/v1/dedup/mixed-stacks/{stack_id}/keep                                    | dedup           | Undo a Keep                                                 |
+| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/split                                   | dedup           | Split the marked member(s) off a mixed stack                |
+| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/unstack                                 | dedup           | Dissolve a mixed stack                                      |
+| GET    | /api/v1/dedup/policy                                                          | dedup           | Duplicate detection tier defaults                           |
+| POST   | /api/v1/dedup/scan                                                            | dedup           | Queue a duplicate scan                                      |
+| GET    | /api/v1/dedup/stacks/{stack_id}/members                                       | dedup           | One page of an existing stack's members                     |
+| POST   | /api/v1/dedup/sweep/dry-run                                                   | dedup           | Plan a vault-wide near-duplicate sweep                      |
+| GET    | /api/v1/dedup/sweep/policy                                                    | dedup           | Near-duplicate sweep policy defaults                        |
+| POST   | /api/v1/dedup/verdicts/batch                                                  | dedup           | Apply one atomic multi-group duplicate gesture              |
+| POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                       |
+| POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                         |
+| POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                     |
+| GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                   |
+| POST   | /api/v1/libraries/active                                                      | libraries       | Switch the active library                                   |
+| GET    | /api/v1/login                                                                 | auth            | Check Registration                                          |
+| POST   | /api/v1/login                                                                 | auth            | Login                                                       |
+| POST   | /api/v1/logout                                                                | auth            | Logout                                                      |
+| POST   | /api/v1/model-files                                                           | model_shelf     | Add one model file to the shelf                             |
+| POST   | /api/v1/model-files/delete                                                    | model_shelf     | Delete models from disk                                     |
+| GET    | /api/v1/model-folders                                                         | model_shelf     | List registered model folders                               |
+| POST   | /api/v1/model-folders                                                         | model_shelf     | Register a model folder                                     |
+| GET    | /api/v1/model-folders/devices                                                 | model_shelf     | Capacity of the drives the model folders sit on             |
+| PATCH  | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Update a registered model folder                            |
+| DELETE | /api/v1/model-folders/{folder_id}                                             | model_shelf     | Forget a registered model folder                            |
+| POST   | /api/v1/model-folders/{folder_id}/relocate                                    | model_shelf     | Move a folder PixlStash owns to another location            |
+| POST   | /api/v1/model-folders/{folder_id}/rescan                                      | model_shelf     | Rescan a registered model folder                            |
+| GET    | /api/v1/model-folders/{folder_id}/runs                                        | model_shelf     | List the training runs in an ai-toolkit output folder       |
+| GET    | /api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}          | model_shelf     | One preview image from a training run                       |
+| GET    | /api/v1/model-icons/{sha256}                                                  | model_shelf     | Serve one stored icon                                       |
+| POST   | /api/v1/model-imports                                                         | model_shelf     | Import a training run onto the shelf                        |
+| GET    | /api/v1/model-moves                                                           | model_shelf     | How the current or last model move is going                 |
+| POST   | /api/v1/model-moves                                                           | model_shelf     | Move model files into another registered folder             |
+| DELETE | /api/v1/model-moves                                                           | model_shelf     | Cancel the running model move                               |
+| POST   | /api/v1/model-stacks                                                          | model_shelf     | Collapse models into one stack                              |
+| GET    | /api/v1/model-stacks/proposals                                                | model_shelf     | Groups of loose adapters that look like one subject         |
+| DELETE | /api/v1/model-stacks/{stack_id}                                               | model_shelf     | Break a stack apart                                         |
+| PATCH  | /api/v1/models                                                                | model_shelf     | Correct what the shelf records about one or more models     |
+| GET    | /api/v1/models/base-models                                                    | model_shelf     | Completion targets for the base-model field                 |
+| POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                          |
+| POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                        |
+| POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
+| POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager              |
+| GET    | /api/v1/models/{model_id}/samples                                             | model_shelf     | The training previews stored beside one imported checkpoint |
+| GET    | /api/v1/models/{model_id}/samples/{filename}                                  | model_shelf     | One training preview stored beside an imported checkpoint   |
+| GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                     |
+| POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                  |
+| POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                 |
+| POST   | /api/v1/operations/undo                                                       | operations      | Undo the newest reversible operation                        |
+| GET    | /api/v1/operations/undo-state                                                 | operations      | What undo and redo would do next                            |
+| GET    | /api/v1/operations/{operation_id}                                             | operations      | Get one operation including its before/after state          |
+| POST   | /api/v1/operations/{operation_id}/undo                                        | operations      | Undo one specific operation (and its batch)                 |
+| GET    | /api/v1/picture_sets                                                          | picture_sets    | List picture sets                                           |
+| POST   | /api/v1/picture_sets                                                          | picture_sets    | Create picture set                                          |
+| GET    | /api/v1/picture_sets/locked-members                                           | picture_sets    | List locked sets and their frozen pictures                  |
+| POST   | /api/v1/picture_sets/membership                                               | picture_sets    | Batch set membership lookup                                 |
+| GET    | /api/v1/picture_sets/{id}                                                     | picture_sets    | Get picture set                                             |
+| PATCH  | /api/v1/picture_sets/{id}                                                     | picture_sets    | Update picture set                                          |
+| DELETE | /api/v1/picture_sets/{id}                                                     | picture_sets    | Delete picture set                                          |
+| GET    | /api/v1/picture_sets/{id}/members                                             | picture_sets    | List picture set members                                    |
+| POST   | /api/v1/picture_sets/{id}/members                                             | picture_sets    | Bulk add pictures to set                                    |
+| PUT    | /api/v1/picture_sets/{id}/members                                             | picture_sets    | Bulk replace picture set members                            |
+| POST   | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets    | Add picture to set                                          |
+| DELETE | /api/v1/picture_sets/{id}/members/{picture_id}                                | picture_sets    | Remove picture from set                                     |
+| GET    | /api/v1/picture_sets/{id}/thumbnail                                           | picture_sets    | Get picture set thumbnail                                   |
+| DELETE | /api/v1/pictures                                                              | pictures        | Bulk move pictures to scrapheap                             |
+| GET    | /api/v1/pictures                                                              | pictures        | List pictures                                               |
+| POST   | /api/v1/pictures/apply-scores                                                 | pictures        | Batch apply manual scores                                   |
+| POST   | /api/v1/pictures/character_likeness/batch                                     | pictures        | Batch picture character likeness                            |
+| GET    | /api/v1/pictures/count                                                        | pictures        | Total picture count for a listing filter                    |
+| POST   | /api/v1/pictures/detect                                                       | pictures        | Detect objects in pictures                                  |
+| GET    | /api/v1/pictures/export                                                       | pictures        | Start picture export job                                    |
+| GET    | /api/v1/pictures/export/download/{task_id}                                    | pictures        | Download completed export                                   |
+| GET    | /api/v1/pictures/export/status                                                | pictures        | Get export job status                                       |
+| POST   | /api/v1/pictures/face-search                                                  | pictures        | Search by face likeness                                     |
+| POST   | /api/v1/pictures/import                                                       | pictures        | Import media files                                          |
+| POST   | /api/v1/pictures/import/staging                                               | pictures        | Open an async import staging session                        |
+| DELETE | /api/v1/pictures/import/staging/{staging_id}                                  | pictures        | Cancel a staging session                                    |
+| POST   | /api/v1/pictures/import/staging/{staging_id}/commit                           | pictures        | Hand off a staging session to the background import         |
+| POST   | /api/v1/pictures/import/staging/{staging_id}/files                            | pictures        | Stream files into a staging session                         |
+| GET    | /api/v1/pictures/import/staging/{staging_id}/status                           | pictures        | Get async import staging status                             |
+| GET    | /api/v1/pictures/import/status                                                | pictures        | Get import job status                                       |
+| POST   | /api/v1/pictures/impossible-tags/clear                                        | tags            | Bulk-clear impossible tags                                  |
+| POST   | /api/v1/pictures/impossible-tags/restore                                      | tags            | Undo a bulk impossible-tags clear                           |
+| POST   | /api/v1/pictures/likeness-search                                              | pictures        | Search by image likeness                                    |
+| PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                                    |
+| POST   | /api/v1/pictures/rotate                                                       | pictures        | Rotate pictures in place                                    |
+| POST   | /api/v1/pictures/score_character_likeness                                     | pictures        | Score uploaded images by character likeness                 |
+| DELETE | /api/v1/pictures/scrapheap                                                    | pictures        | Permanently delete scrapheap pictures                       |
+| POST   | /api/v1/pictures/scrapheap/delete-preview                                     | pictures        | Preview a scrapheap delete-forever                          |
+| POST   | /api/v1/pictures/scrapheap/restore                                            | pictures        | Restore deleted pictures                                    |
+| GET    | /api/v1/pictures/search                                                       | pictures        | Search pictures by text                                     |
+| GET    | /api/v1/pictures/stream                                                       | pictures        | Stream pictures in batches                                  |
+| POST   | /api/v1/pictures/tags/bulk_fetch                                              | tags            | Fetch tags for multiple pictures                            |
+| POST   | /api/v1/pictures/thumbnails                                                   | pictures        | Get batch thumbnail metadata                                |
+| GET    | /api/v1/pictures/thumbnails/{id}.webp                                         | pictures        | Get picture thumbnail image                                 |
+| PATCH  | /api/v1/pictures/{id}                                                         | pictures        | Patch picture fields                                        |
+| DELETE | /api/v1/pictures/{id}                                                         | pictures        | Move picture to scrapheap                                   |
+| GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                                   |
+| GET    | /api/v1/pictures/{id}/anomaly_region                                          | pictures        | Locate an anomaly region                                    |
+| GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                      |
+| GET    | /api/v1/pictures/{id}/faces                                                   | pictures        | List picture faces                                          |
+| GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                        |
+| POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                          |
+| GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                           |
+| DELETE | /api/v1/pictures/{id}/tags                                                    | tags            | Clear all tags on picture                                   |
+| POST   | /api/v1/pictures/{id}/tags/remove_all                                         | tags            | Remove tag everywhere on picture                            |
+| DELETE | /api/v1/pictures/{id}/tags/{tag_id}                                           | tags            | Remove picture tag                                          |
+| GET    | /api/v1/pictures/{picture_id}/stack                                           | stacks          | Get picture's stack                                         |
+| GET    | /api/v1/projects                                                              | projects        | List all projects                                           |
+| POST   | /api/v1/projects                                                              | projects        | Create a project                                            |
+| POST   | /api/v1/projects/membership                                                   | projects        | Batch project membership lookup                             |
+| GET    | /api/v1/projects/{id_or_name}                                                 | projects        | Get a project by ID or name                                 |
+| GET    | /api/v1/projects/{id_or_name}/picture_sets                                    | projects        | List picture sets for a project                             |
+| PUT    | /api/v1/projects/{project_id}                                                 | projects        | Update a project                                            |
+| DELETE | /api/v1/projects/{project_id}                                                 | projects        | Delete a project                                            |
+| GET    | /api/v1/projects/{project_id}/attachments                                     | projects        | List attachments for a project                              |
+| POST   | /api/v1/projects/{project_id}/attachments                                     | projects        | Upload an attachment to a project                           |
+| POST   | /api/v1/projects/{project_id}/attachments/url                                 | projects        | Add a URL bookmark to a project                             |
+| GET    | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects        | Download a project attachment                               |
+| DELETE | /api/v1/projects/{project_id}/attachments/{attachment_id}                     | projects        | Delete a project attachment                                 |
+| GET    | /api/v1/projects/{project_id}/export                                          | projects        | Export project as ZIP                                       |
+| GET    | /api/v1/projects/{project_id}/summary                                         | projects        | Get project picture count                                   |
+| GET    | /api/v1/projects/{project_name}/characters/{character_name}                   | characters      | Get character by project name and character name            |
+| GET    | /api/v1/projects/{project_name}/picture_sets/{picture_set_name}               | picture_sets    | Get picture set by project name and set name                |
+| POST   | /api/v1/reviews                                                               | reviews         | Create a review session for one tag                         |
+| GET    | /api/v1/reviews                                                               | reviews         | List review sessions                                        |
+| DELETE | /api/v1/reviews                                                               | reviews         | Bulk-delete review sessions by status (clear all archived)  |
+| GET    | /api/v1/reviews/preview                                                       | reviews         | Preview a review's coverage before creating it              |
+| GET    | /api/v1/reviews/{review_id}                                                   | reviews         | Get one review's detail                                     |
+| DELETE | /api/v1/reviews/{review_id}                                                   | reviews         | Delete one review session                                   |
+| POST   | /api/v1/reviews/{review_id}/abort                                             | reviews         | Abort a review (discard the session)                        |
+| POST   | /api/v1/reviews/{review_id}/archive                                           | reviews         | Archive a review (completed)                                |
+| POST   | /api/v1/reviews/{review_id}/refresh                                           | reviews         | Re-scan a review append-only                                |
+| GET    | /api/v1/reviews/{review_id}/suggestions                                       | reviews         | List a review's ranked queue                                |
+| GET    | /api/v1/snapshots                                                             | snapshots       | List Snapshots                                              |
+| POST   | /api/v1/snapshots                                                             | snapshots       | Create Snapshot                                             |
+| GET    | /api/v1/snapshots/status                                                      | snapshots       | Snapshots Status                                            |
+| PATCH  | /api/v1/snapshots/{snapshot_id}                                               | snapshots       | Rename Snapshot                                             |
+| DELETE | /api/v1/snapshots/{snapshot_id}                                               | snapshots       | Delete Snapshot                                             |
+| POST   | /api/v1/snapshots/{snapshot_id}/hash-compare                                  | snapshots       | Hash Compare                                                |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore                                       | snapshots       | Restore Snapshot                                            |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore/batch                                 | snapshots       | Restore Batch                                               |
+| GET    | /api/v1/snapshots/{snapshot_id}/restore/preview                               | snapshots       | Preview Full Restore                                        |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore/preview/batch                         | snapshots       | Preview Batch Restore                                       |
+| POST   | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}         | snapshots       | Restore Resource                                            |
+| GET    | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview | snapshots       | Preview Resource Restore                                    |
+| GET    | /api/v1/sort_mechanisms                                                       | pictures        | List picture sort mechanisms                                |
+| POST   | /api/v1/stacks                                                                | stacks          | Create stack                                                |
+| POST   | /api/v1/stacks/keep-cover-only                                                | stacks          | Collapse stacks to their covers                             |
+| POST   | /api/v1/stacks/keep-cover-only/preview                                        | stacks          | Preview collapsing stacks to their covers                   |
+| GET    | /api/v1/stacks/{stack_id}                                                     | stacks          | Get stack details                                           |
+| POST   | /api/v1/stacks/{stack_id}/members                                             | stacks          | Add stack members                                           |
+| DELETE | /api/v1/stacks/{stack_id}/members                                             | stacks          | Remove stack members                                        |
+| PATCH  | /api/v1/stacks/{stack_id}/members/{picture_id}                                | stacks          | Set member position                                         |
+| PATCH  | /api/v1/stacks/{stack_id}/order                                               | stacks          | Reorder stack                                               |
+| GET    | /api/v1/stacks/{stack_id}/pictures                                            | stacks          | List pictures in stack                                      |
+| GET    | /api/v1/tag_health                                                            | tag_health      | Tag health board rows                                       |
+| POST   | /api/v1/tag_health/rebuild                                                    | tag_health      | Rebuild the tag health cache                                |
+| GET    | /api/v1/tag_suggestions                                                       | tag_suggestions | List ranked tag-fix suggestions                             |
+| POST   | /api/v1/tag_suggestions/bulk-accept                                           | tag_suggestions | Resolve all confident suggestions for a tag                 |
+| POST   | /api/v1/tag_suggestions/bulk-reopen                                           | tag_suggestions | Batch-undo a bulk accept                                    |
+| POST   | /api/v1/tag_suggestions/scan                                                  | tag_suggestions | Scan a tag for near-neighbour label disagreements           |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/accept                                | tag_suggestions | Accept a tag-fix suggestion                                 |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/dismiss                               | tag_suggestions | Dismiss a tag-fix suggestion                                |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/fix-twin                              | tag_suggestions | Resolve a suggestion in the twin's favour                   |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/reopen                                | tag_suggestions | Reopen (undo) a reviewed suggestion                         |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/skip                                  | tag_suggestions | Skip a tag-fix suggestion (no decision)                     |
+| POST   | /api/v1/tag_suggestions/{suggestion_id}/swap                                  | tag_suggestions | Swap a pair's labels (both were wrong, opposite ways)       |
+| POST   | /api/v1/tagger-runs                                                           | tagger_runs     | Ingest a tagger evaluation run from PixlTagger              |
+| GET    | /api/v1/tagger-runs                                                           | tagger_runs     | List ingested tagger runs (newest first)                    |
+| GET    | /api/v1/tags                                                                  | tags            | List all tags                                               |
+| GET    | /api/v1/telemetry/install-id                                                  | telemetry       | Get the anonymous install ID                                |
+| POST   | /api/v1/telemetry/install-id/recreate                                         | telemetry       | Recreate the anonymous install ID                           |
+| GET    | /version                                                                      | server          | Read Version                                                |
+| WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                      |
+| WS     | /api/v1/ws/comfyui                                                            | comfyui         | ComfyUI workflow progress                                   |
 <!-- AUTOGEN:end name="routes" -->
 
 ---
@@ -845,6 +847,17 @@ Snapshot: id, kind, created_at, relative_path,
 
 **Release is unconditional.** A task's claimed picture ids and its in-flight slot are given back only by the `TaskRunner` completion callbacks, so *every* path that ends a task fires them, not just the worker's `finally`: `TaskRunner._cancel_queued_task` is the single cancel path (used by `cancel_pending_tasks()`, `stop()`'s drain and the worker's post-stop dequeue) and passes a `TaskCancelledError`, and `WorkPlanner._release_unsubmitted` hands back a task the planner found but decided not to submit. Anything that skips this wedges the finder at max in-flight for the life of the process and makes the claimed pictures permanently un-selectable — `start()` does not heal it.
 
+**A GPU out-of-memory failure is retried, not lost.** VRAM pressure is almost always another process (a ComfyUI run, a second model) that gives the card back shortly, so `BaseTask.run()` gives a task `VRAM_OOM_ATTEMPTS` (3) attempts. Two guards keep that narrow, because re-running `_run_task()` from the top is only safe for an inference pass that failed before it wrote anything:
+
+- **GPU-queue tasks only.** The CPU queue's import and purge tasks move and delete files; a blind second pass over one is a second effect, not a retry.
+- **A device out-of-memory only.** `is_vram_oom()` takes `torch.OutOfMemoryError` by type, or a message that says "out of memory" **and** names a device (`cuda`/`gpu`/`hip`/`vram`), walking `__cause__`/`__context__` because a plugin wraps the driver's error in its own class. The device word is what keeps `sqlite3.OperationalError: out of memory` (SQLITE_NOMEM) out.
+
+Between attempts `TaskRunner._pause_and_report_vram_oom` flushes the allocator cache — this returns *our own* cached-but-unused segments to the driver, which is what a fragmented allocation needs; it cannot reclaim what another process holds, and the pause is what covers that — emits `EventType.VRAM_OOM` so the SPA can raise a warning toast counting the attempts used, and waits `VRAM_OOM_RETRY_PAUSE_S` (5 s, kept short because the single GPU worker is parked on it and an interactive `submit_and_wait` queues behind it). A shutdown during the pause abandons the remaining attempts. Every retry sequence ends with a closing frame — `recovered` when a later attempt succeeded, `gave_up` when the task died — and the two counters are read for different jobs: `task.vram_oom_attempts` (how many attempts OOMed) decides *whether* a card is open, so a task that OOMed twice and then died of something else still closes it; `task.attempts_used` (which attempt actually ran) is what the frame reports, so a recovery names the attempt that did the work rather than the last one that failed, and a sequence that ended short of `max_attempts` is visibly an early stop rather than an exhausted retry.
+
+The retry lives in `run()` rather than in the worker loop so a task settles — `_done_event`, `completed_at` — exactly once, after the last attempt; a `submit_and_wait` caller must not be woken by an attempt that is about to be retried. `Vault.notify` deliberately does **not** wake the planner for `VRAM_OOM`: every other event means "there may be work to pick up", and this one means the GPU is full.
+
+**The consequence for callers: an OOM must be allowed to propagate.** `DescriptionWorkflow` and `DescriptionTask` re-raise it instead of falling into their "clear the description" path, because clearing a caption over a transient condition destroys data the retry would have produced; the picture keeps its sentinel and a later sweep picks it up. This only reaches as far as the OOMs that actually surface: a plugin that catches per image internally (JoyCaption) or falls back to CPU inside the service (Florence-2) reports a `None` caption instead, which is indistinguishable from "this image cannot be described" and is still cleared.
+
 **A raising finder costs only its own turn.** The planner catches per finder, not per cycle, so one failing `find_task()` is logged and skipped while the rest of the sweep continues; only shutdown abandons a cycle.
 
 **`on_all_tasks_complete()` fires from either edge.** "Exhausted and idle" can be entered by the last task completing *or* by the finder reporting no more work, whichever happens second. `WorkPlanner._claim_drain` is armed on submit and claimed under `_lock` by whichever edge sees the condition first, so the drain (a GPU session teardown for `MissingTagFinder`) is announced exactly once per burst and is not announced over a task that has just been taken.
@@ -1004,6 +1017,24 @@ Two properties carry over from §8.1 and one is new:
   splitting the sentence. `author` and `license` (issue #961) are read as class
   literals through the existing `_string_attribute`, and shown only where the
   plugin declares them — every plugin published so far predates the header.
+- **`install <name>` takes the name the listing printed, which is the plugin's
+  *declared* name, not the repository's directory slug.** The two differ in the
+  published repository — `plugins/captioning/moondream2_captioner` declares
+  `moondream2` — and matching only on the directory left `plugins available`
+  advertising `moondream2` while `plugins install moondream2` refused it. The
+  declared name is the identity everywhere else too: it is what the plugin
+  installs under, what `plugins list` shows and what `plugins remove` takes. So
+  `_fetch_from_repository` matches the declared name first and the directory
+  name second (that one still works, and was the only one accepted before), and
+  its `Available:` refusal lists declared names, falling back to the directory
+  name only for a folder too broken to read one out of. **Both passes run over
+  the whole set**, not per folder in `sorted()` order: otherwise a declared name
+  would beat only the directory names that happen to sort after it, and which
+  plugin `install` fetched would depend on the kind directory it sat in. **Two
+  folders answering to one name are refused, naming both** — the shape
+  `resolve_removal` already uses for an ambiguous name. Picking one silently
+  would let a string inside downloaded code, which the listing does not show,
+  decide what gets installed.
 
 **`plugins test` is the exception to "nothing is imported", and the reason the
 rest of the group can stay static** ([pixlstash/plugin_check.py](../pixlstash/plugin_check.py),
@@ -2181,6 +2212,64 @@ the shelf when the call returns and the owner never has to rescan.
   discarded and the call is a 400, because the scanner would not have registered
   it either and a file the shelf never lists is not what "added" means.
 
+### A trained model's previews: `<stem>_samples/`
+
+An ai-toolkit run is a directory of `.safetensors` **and** a `samples/` directory
+of the previews the trainer rendered at each step. One measured run was 1.9 GB of
+which `samples/` was 15 MB, so the provenance costs 0.8 % of the bytes and the
+import takes the whole run rather than only the weights
+([`services/run_importer.py`](../pixlstash/services/run_importer.py)).
+
+- **On disk in the destination folder, not in a hub store and not in a new
+  table.** One directory per imported checkpoint, named from that checkpoint's
+  own stem — `JimmyVehicle.safetensors` → `JimmyVehicle_samples/`,
+  `JimmyVehicle_0001500.safetensors` → `JimmyVehicle_0001500_samples/` — holding
+  ai-toolkit's own filenames unchanged. `model_mover.samples_relpath` is the one
+  place that name is derived; nothing else spells the suffix. The cost of this
+  choice is that a person opening the folder sees the previews too, which is
+  also the point: they survive PixlStash not being there.
+- **Which previews go where.** A sample goes to the checkpoint whose step it
+  names. The **bare final takes the highest sample step's** — it carries no step
+  of its own and it is the stack cover, so a rule that left it blank would make
+  the most visible row of a fresh import the only empty one. Importing that same
+  step as well copies its previews twice; that duplication is accepted.
+  `TrainingRun.samples_for` is the whole rule.
+- **Ordered inside the existing crash window, never widening it.** Per
+  checkpoint: after the `model`/`model_file` rows commit and **before**
+  `unlink_source`, so `delete_after_import` can never outrun the copy. That
+  ordering is the reason this was a data-loss fix rather than a feature: before
+  it, a source folder carrying `delete_after_import` destroyed the run's
+  previews outright.
+- **A failed copy is logged and non-fatal**, reported in the outcome's `detail`
+  with `sample_count: 0` while the checkpoint stays `imported`. Losing a preview
+  must not cost the weights. The copy is written to a `.pixlstash-partial`
+  directory and renamed into place, so a failure half-way leaves no
+  half-populated directory to be read as the whole set.
+- **A pre-existing `<stem>_samples/` refuses the whole batch**, in the same pass
+  as the filename collision and before the first byte. It is the sharper of the
+  two refusals: a checkpoint collision refuses a file the owner can see, while
+  merging into an existing directory would write into one they may have put
+  there. There is no undo for shelf operations.
+- **A move carries them** (`model_mover.carry_samples`, on both the same-drive
+  rename and the cross-drive copy paths, in the same position in the ordering
+  and under the same non-fatal rule), and their bytes are counted into
+  `require_space` — 15 MB per run is small against the weights and is not
+  nothing when the destination is nearly full.
+- **Read back over `GET /models/{model_id}/samples`** and its byte sibling
+  (§16.3, `local_owner_only`). Addressed by `model.id` rather than by sha256,
+  because a checkpoint nobody has hashed has no sha256 to be addressed by. Both
+  key on `is_sample_filename` rather than on "an image in a directory whose name
+  matched", so neither can be used to read the owner's own pictures back out of
+  a directory that merely sits at the derived name — the same test the delete
+  verb uses, and the reason all three verbs agree on what a sample is.
+- **Deleted with the model when the directory holds only previews** (see the
+  `Delete` section). The name is inferred, not recorded, so the contents are
+  what decide whether it is the model's.
+
+Deliberately not here: the shelf's Sample view, the sample/icon toggle and the
+promote-a-sample verb (the "Visual identity" ruling's card, which this makes
+buildable and stops at), and any persistence of `rank` or `config.yaml`.
+
 ### `Delete`: models off the shelf and off the disk (#933)
 
 `POST /api/v1/model-files/delete`
@@ -2214,6 +2303,36 @@ longer wants was a file manager and then a rescan.
   here by `kind` rather than by `movable` because the managed store is
   `root_only` — the *folder* moves as a unit — while the files in it are
   individually the owner's.
+- **A directory of nothing but previews goes with the model; anything else
+  stays.** An imported checkpoint carries a `<stem>_samples/` directory beside
+  it, and the delete closes the lifecycle the import opens and a move carries:
+  skipping it leaves a directory no route lists and no rescan registers, and one
+  that then refuses the owner's *whole* re-import of that run, with the only
+  remedy outside the app. But **the model is a thing the caller named and this
+  directory is only inferred from its filename**, so removing it on the name
+  alone would destroy an owner's own folder of renders on a Shift+Delete they
+  meant for a `.safetensors`. What licenses it is the contents: ai-toolkit names
+  every preview `<timestamp>__<step>_<index>`, so a directory holding only those
+  is the model's whoever wrote them, and one file that is not — a favourite
+  render, a note, a subdirectory, a symlink — means it is the owner's and stays.
+  That is the same test `GET /models/{id}/samples` uses to decide what to list,
+  so all three verbs agree on what a sample is.
+
+  Deliberately **not** keyed on `model.provenance`. That is a fact about
+  *content* — one value shared by every copy of a model — while the risk is per
+  *copy*: a trained model with a second copy a rescan registered elsewhere would
+  have taken that folder with it, and an import onto an existing sha256 leaves
+  the row `external` (`_register`'s `ON CONFLICT` deliberately does not overwrite
+  provenance) while still writing the previews, so the gate would have been wrong
+  in both directions. Both were found by adversarial review of a draft that used
+  it.
+
+  Unlike the file it is **non-fatal**: the weights are what was asked for, so
+  previews that will not go are a warning and some occupied disk rather than a
+  failed deletion, and they are removed *after* the file for the same reason.
+  Both gestures remove it, by the call each uses — `send2trash` for the trash,
+  `shutil.rmtree` for a permanent delete — and a symlinked directory is refused
+  explicitly rather than left to whichever of those two happens to decline it.
 - **A model is deleted whole or not at all.** Every copy goes, so a model with
   one copy in a user folder and another in the cache is refused rather than
   half-deleted: unlinking the reachable half would leave the row the owner
@@ -2531,6 +2650,7 @@ a promise that Tailscale is local for every authentication mechanism.
 | `RESTORE_COMPLETED`    | ✗ internal  |
 | `RESTORE_FAILED`       | ✗ internal  |
 | `LIBRARY_SWITCHED`     | ✓ broadcast |
+| `VRAM_OOM`             | ✓ broadcast |
 <!-- AUTOGEN:end name="events" -->
 
 - Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans the filtered subset out to **owner-level** connected clients (see WebSocket authentication below).
@@ -2766,6 +2886,8 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
   - **Updated 2026-08-16 (#933, `Open in file manager`) — the locality total is now `35 = 29 local + 6 loopback`, and this is the first route added to the loopback tier since the e2e test hook in 2026-07-23.** `POST /api/v1/models/{model_id}/open-location` shows the folder holding a model's file in the file manager of the machine PixlStash runs on. It is the **fourth** file-manager spawn on this tier, not the fifth: `reference-folders/{folder_id}/open`, `pictures/{id}/open-location` and `server-config/open` are the other three, and `POST /server/restart` re-execs the process rather than spawning a GUI — a miscount this section has carried since 2026-07-21 and which the fourth route is the occasion to correct. It is the first to live in a shared helper (`pixlstash/utils/host_open.py`) rather than inline, and the helper is not merely a fourth copy moved: it **reads the POSIX opener's exit status**, which the three inline copies discard with `check=False`. That matters exactly here, because a headless or containerised host usually has `xdg-open` and it exits non-zero when there is no desktop to hand the path to — so discarding the status would report a window that never opened. The three that predate it are left where they are for now, since each wraps the spawn in different error handling and each has tests patching `subprocess.run` in its own module. The tier needs no new argument: the authority is the host's own shell, which is what the red line exists for, so `allow_remote_host_ops` is not consulted and a LAN or Tailscale owner is refused as firmly as a public one. **It is on this tier for the spawn, not for an input** — the request has no body, the id is a hub `model.id`, and the path is the scanner's own `model_folder.path` joined to `model_file.relpath` and contained with `path_is_within` — literally the same `_present_copy` call `GET /adapters/{sha256}/file` makes, so a `..` cannot escape and a symlinked component is followed exactly as it is for the bytes that route already streams. It is **not** the stricter `_contained_path` the delete verb added, and deliberately: what is at stake here is which window opens on the owner's own screen, not which file is unlinked. Two handler narrowings that are not the tier: only a `present` copy is opened, so a model that is `missing` or on an unplugged drive is **409 rather than 404** — the row exists and the bytes do not — and a headless or containerised host answers 500 with a sentence naming the cause, because a click that silently does nothing is the failure this route is easiest to ship. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_29_local_6_loopback`. Arithmetic, not judgement.
 
+  - **Updated 2026-08-16 (training-run samples) — the locality total is now `37 = 31 local + 6 loopback`.** An ai-toolkit import now takes the run's previews with its weights, into `<stem>_samples/` beside each imported checkpoint, and two routes read them back off the shelf: `GET /api/v1/models/{model_id}/samples` lists the filenames and `GET /api/v1/models/{model_id}/samples/{filename}` serves one image. The byte route is `GET /adapters/{sha256}/file`'s class exactly — **raw bytes out of a registered model folder** — and the shelf-side twin of `model-folders/{folder_id}/runs/{run_name}/samples/{filename}`, which serves the same images before the import. The listing walks one directory inside a registered folder and reports names of files PixlStash never registered (the trainer named them, and anything the owner drops in there is listed too), which is `rescan`'s walk-a-registered-root authority narrowed to a directory. **The plan for this change asked for `owner_only`** on the grounds that both routes are addressed by a hub `model.id` with no host path crossing the wire; that is precisely the reasoning the `/adapters/{sha256}/file` entry above records as *not* the argument, because the tier follows the authority exercised and not what the route accepts, so both are on the locality tier instead. Keeping the listing beside the byte route rather than one tier below it means a caller who may not fetch a preview is not handed a list of them. Containment is two joins, as on the run-sample route and for the same two reasons: the derived directory against the registered `model_folder.path`, because a symlinked `<stem>_samples` would otherwise become its own safe base, then the filename against that resolved directory, because a folder-level join alone would pass `../alice.safetensors`. They are the fourth and fifth members of the templated `READ_BLOCKED_GET_PATHS` gap described above. The loopback count moved under this branch rather than because of it: `POST /models/{model_id}/open-location` joined that tier in the bullet above, and neither route here spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_31_local_6_loopback`. Arithmetic, not judgement.
+
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 
 **Reverse-proxy hardening (required).** Behind a reverse proxy the locality gate depends entirely on `trusted_proxies` being correct:
@@ -2962,7 +3084,7 @@ The refusal is **`400`**, deliberately, and the three properties are asserted ra
 
 Relationship names that a *dedicated* GET route shadows never reach this handler and keep their own contract: `GET /pictures/{id}/faces`, `/detections`, `/tags`, `/tag_predictions`, `/{picture_id}/stack`, and `GET /characters/{id}/faces`.
 
-**Exactly one exception remains, and it is not a relationship.** `PICTURE_EXTRA_SERVABLE_FIELDS` is now **empty**; `CHARACTER_EXTRA_SERVABLE_FIELDS` holds only `thumbnail`, which is synthetic (the handler generates a 64x64 face crop and returns image bytes, it is not a `Character` column) and therefore discloses no related rows. It stays because the SPA calls it (`api/characters.js:193`) and the server hands out `/characters/{id}/thumbnail` URLs itself.
+**Exactly one exception remains, and it is not a relationship.** `PICTURE_EXTRA_SERVABLE_FIELDS` is now **empty**; `CHARACTER_EXTRA_SERVABLE_FIELDS` holds only `thumbnail`, which is synthetic (the handler generates a 256x256 face crop and returns image bytes, it is not a `Character` column) and therefore discloses no related rows. It stays because the SPA calls it (`api/characters.js:193`) and the server hands out `/characters/{id}/thumbnail` URLs itself.
 
 `faces` briefly sat in both sets, because the SPA's face-box overlay and `tests/utils.py::wait_for_faces` read it and no other route served it. **That is now the worked example of the right fix**: instead of keeping a relationship exception, `faces` got dedicated projected routes and the exception was emptied back out.
 

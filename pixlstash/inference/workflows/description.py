@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.florence2 import FLORENCE_PER_IMAGE_VRAM_MB
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.vram_utils import is_vram_oom
 
 if TYPE_CHECKING:
     from pixlstash.inference.engine import InferenceEngine
@@ -107,7 +108,17 @@ class DescriptionWorkflow:
             if hasattr(plugin, "setup"):
                 plugin.setup(self._engine.device)
             plugin.init(params)
-        except Exception:
+        except Exception as exc:
+            if is_vram_oom(exc):
+                # Transient: the card was full this second, not this plugin is
+                # broken. Let it out so the task retries the batch instead of
+                # clearing every caption in it (BaseTask.run).
+                logger.warning(
+                    "Description plugin %r ran out of GPU memory while loading: %s",
+                    plugin_name,
+                    exc,
+                )
+                raise
             logger.exception(
                 "Failed to initialise description plugin %r; %s.",
                 plugin_name,
@@ -139,7 +150,14 @@ class DescriptionWorkflow:
                 pic_id = path_to_id.get(str(path))
                 if pic_id is not None:
                     results[pic_id] = caption
-        except Exception:
+        except Exception as exc:
+            if is_vram_oom(exc):
+                logger.warning(
+                    "Description plugin %r ran out of GPU memory while captioning: %s",
+                    plugin_name,
+                    exc,
+                )
+                raise
             logger.exception(
                 "Description plugin %r raised during generation; results may be partial.",
                 plugin_name,

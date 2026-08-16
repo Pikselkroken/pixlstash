@@ -529,18 +529,31 @@ Right-side statistics panel. Responsibilities:
 
 ### Settings Dialog and Sub-sections
 
-#### `UserSettingsDialog.vue` (363 lines)
-Thin multi-tab settings shell. It now owns only the tab chrome and routing — every tab's content was extracted into its own section component, so the dialog itself holds no inline tab markup. Tabs:
+#### `UserSettingsDialog.vue` (439 lines)
+Thin multi-tab settings shell. It now owns only the tab chrome and routing — every tab's content was extracted into its own section component, so the dialog itself holds no inline tab markup. Rail order, top to bottom (label → component; the label differs from the id where noted):
 - **Appearance** → `<AppearanceSection>`
-- **Behaviour** → `<BehaviourSection>` (`!isReadOnly`)
-- **Smart Score** → `<SmartScoreSection>` (`!isReadOnly`)
+- **Models** (id `behaviour`) → `<BehaviourSection>` (`!isReadOnly`)
+- **Smart Score & Filters** (id `smart-score`) → `<SmartScoreSection>` (`!isReadOnly`)
 - **Workflows** → `<WorkflowsSection>` (`!isReadOnly`)
+- **Libraries** → `<LibrariesSection>` (`!isReadOnly`)
+- **Scrapheap** → `<ScrapheapSection>` (`!isReadOnly`)
 - **Snapshots** → `<SnapshotsSection>` (`!isReadOnly`)
+- **Privacy** → `<PrivacySection>` (`!isReadOnly`)
+- **Compute** → `<ComputeSection view="compute">` (desktop only, `isDesktop && !isReadOnly`)
 - **Backend** → `<ComputeSection>` (desktop only, `isDesktop && !isReadOnly`)
 - **Account Settings** → `<AccountSection>` (`!isReadOnly`)
 
-**Libraries.** The first rail item is owner-only and carries `aria-current` plus
-an explicitly labelled region. `LibrariesSection` reads the shared registry
+**Libraries.** An ordinary rail item ordered next to Scrapheap and Snapshots —
+the open library's bin and its backups — rather than set apart at the top by a
+divider, which read as a section of its own. The rail is one flat list with no
+rendered grouping: adjacency is the only cue, and nothing may style an item by
+its position. The divider was `.settings-nav-item:first-child::after`, which
+targeted whatever came first, so it landed under Appearance in any session that
+hides Libraries. It is owner-only and carries `aria-current` plus an explicitly
+labelled region; every rail item's `aria-controls` resolves to such a region,
+asserted in `UserSettingsDialog.test.js`.
+
+`LibrariesSection` reads the shared registry
 store, shows host paths and deployment-specific CLI commands only when the
 server supplied them, and always offers the public documentation link as the
 remote-safe fallback. The switch confirmation is the global
@@ -1436,6 +1449,7 @@ The one deliberate exception is `api/imageUrls.test.js`, which is neither co-loc
 | `characters_changed` | Immediate `refreshSidebar()`. |
 | `tags_changed` | Emits `wsTagUpdate` with the affected picture IDs **and an `external` flag** (`origin_client_id !== this tab`) so `ImageOverlay` can refresh tags for any origin, while `ImageGrid` only refreshes a tag-filtered grid in place for this tab's **own** edits; an external tag change (background tagging, another tab) raises the "View changed externally" pill instead of reshuffling the filtered view. |
 | `plugin_progress` | Sets `wsPluginProgress` payload forwarded to `ImageGrid` → `ComfyUiRunner`. |
+| `vram_oom` | Pushes a notice keyed `vram-oom` (`vramOomNotice`) naming the attempt and pointing at the likely cause (another program holding the card) — warning while retrying or on give-up, success once a retry lands. A give-up short of `max_attempts` is worded as an early stop and promises no later retry. Keyed so the sequence is one card, with an explicit timeout that outlives the backend's pause between attempts (the 6 s warning default does not). Guarded by `!isReadOnly.value` like the snapshot/restore branches. |
 
 After connecting, and after any filter change, `App.vue` sends a `set_filters` message (carrying the tab's `client_id`) so the backend can scope `pictures_changed` events to the current view.
 
@@ -1720,23 +1734,88 @@ read-only: Assign stays the shelf's verb, so there is one writer of
 `PUT /adapters/{sha256}/attachments` and one place that holds the whole
 attachment set it replaces.
 
-**A row is flex, not a grid, and its columns are FIXED widths.** Grouping makes
+**A row is flex, not a grid, and its columns are STATED ONCE.** Grouping makes
 one `role="treegrid"` list per group, so `auto` tracks would be measured against
 that group's contents alone and the columns would step sideways from one folder
-to the next — which is the alignment #891 exists to hold. The widths
-(`--shelf-col-kind: 64px`, `--shelf-col-base: 84px`, `--shelf-col-size: 74px`)
-are the resolved design's own. The name takes the rest, and the FILENAME takes
-the whole of a second line under it in the mono face: it is what the file is
-actually called — which the name above it often is not — and it is the string
-that gets pasted into a ComfyUI node, so it is drawn rather than parked in a
-tooltip.
+to the next — which is the alignment #891 exists to hold. The three widths are
+custom properties (`--shelf-col-kind`, `--shelf-col-base`, `--shelf-col-size`),
+declared on `.shelf` at the resolved design's own 64/84/74px and **overridden on
+the element from `view.columnWidths`**, so the headings, the rows and a stack's
+member rows all resolve one declaration and cannot drift apart. The name takes
+the rest — it is the flexible track and therefore has no remembered width — and
+the FILENAME takes the whole of a second line under it in the mono face: it is
+what the file is actually called, which the name above it often is not, and it
+is the string that gets pasted into a ComfyUI node, so it is drawn rather than
+parked in a tooltip.
 
-**The column names are announced and never drawn.** Each grid carries a
-`visually-hidden` `role="row"` of `columnheader`s, because a `columnheader` heads
-the grid it is in and nothing else. The resolved design has no visible header
-strip: the kind is a chip, the base is a word and the size is right-aligned,
-which is what makes the columns readable without being named. Rows are **not**
-focus stops while they carry no verb:
+**One visible column strip for the view, and hidden `columnheader`s per grid.**
+`.shelf-head` is sticky at the top of the body scroller and the group headings
+stick under it at `--shelf-head-h`. It is deliberately **not** the grid's header
+row: a `columnheader` heads the grid it is in and nothing else, so a visible one
+would have to be repeated per group, which is eight identical bands of chrome
+down a grouped list. So the strip is a `role="group"` of controls —
+
+- **A heading is a button that sorts.** Pressing the sorted column flips the
+  direction; pressing another starts at that column's OWN end. `Kind` is a
+  heading and not a button: the API's `SortKey` has no member for it, and a
+  control that does nothing is worse than none. The toolbar's `Sort` panel
+  keeps the whole five-key vocabulary, including the two with no column
+  (`Date added`, `File date`).
+
+  **`defaultSortDirection` is applied in `setView`, not in either control.**
+  There are two writers of `view.sortKey` — the headings and `ShelfSortPanel`
+  — and the panel writes it *without* a direction. With the rule in one of
+  them, the panel carried `Newest first` onto `Name` and handed back Z-to-A
+  while the heading beside it gave A-to-Z. `setView` fills the direction in
+  only when the key actually changes and the caller named none, so the
+  direction toggle and a re-pick of the current key are both untouched.
+- **A grip is a `role="separator"` that resizes.** It sits on the column's right
+  edge — 24px of grab area for WCAG 2.5.8 around a 1px drawn hairline, which is
+  the only signal a column is resizable and is therefore a component-grade 0.4
+  alpha rather than the `divider` token (1.4.11 wants 3:1, and `divider` on this
+  canvas is ~1.2:1). It drags with pointer capture and answers the window-
+  splitter keys: Left/Right by 8px, Home/End to the bounds, **Enter to the
+  default** — with a double-click doing the same, because a width is remembered
+  for good once it is dragged and a reset is otherwise the reader's only way out
+  of a mis-drag. It sets no `preventDefault` on `pointerdown`: `.shelf` already
+  suppresses selection and the grip sets `touch-action: none`, and calling it
+  would suppress the compatibility mouse events that focus the grip and that
+  `dblclick` is built on. A `pointermove` arriving with `buttons === 0` ends the
+  drag, so a refused or lost capture cannot leave one live forever.
+
+  Widths are clamped to **48–200px**, and 200 is chosen so three columns at the
+  ceiling *cannot* overflow the panel sideways (~690px of chrome, which fits a
+  1024px window with the stats rail open). Past that the row scrolls
+  horizontally and the strip's background stops at the scrollport, so rows slide
+  through a transparent header. They are written into the same versioned view
+  blob **once per gesture, not per frame** — `rememberView` rebuilds the whole
+  blob synchronously, so `setColumnWidth(key, px, persist)` takes `false` during
+  a drag and is called once on pointerup — and read back per column through
+  `clampColumnWidth`, which takes a **finite number only**: `Number()` coercion
+  would turn a stored `null` into the 48px floor instead of falling through to
+  the default.
+
+  `DEFAULT_COLUMN_WIDTHS` in the store is the *only* declaration of the three
+  figures; `.shelf` deliberately carries no CSS fallback copy, which would be a
+  second literal with nothing keeping it equal.
+
+  Every heading is left-aligned, Size's included, though its figures are not:
+  the heading is a label and the figures are a magnitude, and a right-aligned
+  `SIZE` would sit under its own grip.
+
+— and the per-grid hidden header row stays, now carrying `aria-sort`, so the
+order is readable from inside the treegrid rather than only from the strip
+above it.
+
+The strip draws only where rows do: it lives inside the `v-else` that the
+loading, error, `nothingSelected` and both empty states branch away from, since
+a header for a list that is not there names nothing. It is opaque and pinned, so
+it takes its own rung inside the sticky stratum (`--shelf-head-z`) to stay above
+the group headings, and **`.shelf-dim` — the visible half of the move's `inert`
+— was raised above both**: an opaque band at full brightness over a dimmed list
+reads as usable when it is not, which is the failure the veil exists to prevent.
+
+**Rows are not focus stops while they carry no verb.**
 1,800 empty tab stops would be a trap, so the shelf root takes `tabindex="-1"`
 and receives focus on entry, and roving focus arrives with the first thing a
 focused row can do. The sidebar's Models entry is a real `<button>` with
@@ -2806,6 +2885,16 @@ the deletion only when something actually landed: the server unlinks last and
 only after each row is committed, so "nothing imported" and "the run is gone"
 cannot both be true, and saying it anyway would tell the reader their run was
 destroyed for nothing.
+
+**A checkpoint that landed without its previews gets its own sentence.** The
+import copies each checkpoint's samples into `<stem>_samples/` beside it, and a
+failed copy is deliberately *not* a failed file — losing a preview must not cost
+the weights, so the server leaves the outcome `imported` with `sample_count: 0`
+and a `detail`. That means the status counts the receipt is otherwise built from
+cannot see it, and a receipt built from them alone would call a run whose
+previews were lost a clean import. It is named separately rather than folded
+into the failure count, because the checkpoint is genuinely on the shelf and
+telling someone otherwise is the worse error.
 
 **`Add file` is the same step's loose-file half, and it reuses `FolderBrowser`
 in a file mode rather than an `<input type=file>`.** The file is on the machine

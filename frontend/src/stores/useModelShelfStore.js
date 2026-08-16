@@ -22,6 +22,7 @@ import {
   capabilityIcon,
   capabilityLabel,
   compareGroups,
+  defaultSortDirection,
   locationState,
   trashName,
   modelName,
@@ -83,6 +84,55 @@ export const GROUP_BY_KEYS = ["none", "base_model", "folder", "feature"];
  * and is why the absence of real sorting went unnoticed for so long.
  */
 export const FOLDER_LAYOUTS = ["drive", "alpha"];
+
+/**
+ * The three data columns the reader can resize, and what each starts at.
+ *
+ * The figures are the resolved design's own (ui_kits/app/model-shelf.html, row
+ * anatomy) and were fixed widths in the stylesheet until the header strip gave
+ * them a grip. The Name column is deliberately absent: it is the flexible
+ * track that takes whatever the other three leave, so it has no width of its
+ * own to remember.
+ */
+export const COLUMN_KEYS = ["kind", "base", "size"];
+
+/** @type {Record<string, number>} */
+export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 84, size: 74 };
+
+/**
+ * The bounds a dragged column is held inside.
+ *
+ * The floor is what keeps a column from being dragged to nothing and then
+ * being unfindable to drag back.
+ *
+ * The ceiling is set so that three columns at it CANNOT overflow the panel
+ * sideways: 3 x 200 plus the rail, the identity slot, four gaps and the row's
+ * padding is ~690px, which fits the shelf on a 1024px window with the stats
+ * rail open. Past that the row would scroll horizontally, and the strip's
+ * background and hairline stop at the scrollport — rows sliding through a
+ * transparent header. The name is still the flexible track and still carries
+ * `min-width: 0`, so a genuinely narrow window squeezes it; what this bound
+ * rules out is the reader doing it to themselves with the new grips.
+ */
+export const MIN_COLUMN_WIDTH = 48;
+export const MAX_COLUMN_WIDTH = 200;
+
+/**
+ * Hold a width inside its bounds, or reject it.
+ *
+ * A finite NUMBER and nothing else. `Number()` coercion would take `null`,
+ * `""`, `[]` and `false` as 0 and hand back the floor, so a stored blob
+ * carrying `{"size": null}` would silently come back as a 48px column instead
+ * of falling through to the default — which is the one thing the read-back
+ * loop exists to prevent.
+ *
+ * @returns {number|null} the clamped width, or null if `px` is not one.
+ */
+export function clampColumnWidth(px) {
+  if (typeof px !== "number" || !Number.isFinite(px)) return null;
+  const n = Math.round(px);
+  return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, n));
+}
 
 /**
  * The five ruled sort keys, mirroring `SortKey` in `routes/model_shelf.py`.
@@ -179,21 +229,28 @@ export function editReceipt(count, changes) {
  * is the normal outcome of a selection made a minute ago, and a receipt that
  * reported only the 3 would read as a silent partial failure.
  *
- * The two refusal reasons stay apart. "Still has a copy" is the gate doing its
- * job and the file is fine; "already gone" means the row had been forgotten
- * before this call reached it, which is not the same news and must not be
- * reported as though the file were still on the disk.
+ * The refusal reasons stay apart. "Still has a copy" is the gate doing its job
+ * and the file is fine; "already gone" means the row had been forgotten before
+ * this call reached it; "PixlStash's own" is a row nothing the owner does will
+ * clear. Reporting any of the other two as "still has a copy" sends the reader
+ * looking on the disk for a file that is not there.
  *
  * @param {number} gone - rows the call destroyed.
  * @param {number} kept - rows refused because a copy is still present or
  *   unreachable.
  * @param {number} [vanished=0] - rows that no longer existed to forget.
+ * @param {number} [engines=0] - rows refused as PixlStash's own.
  */
-export function forgetReceipt(gone, kept, vanished = 0) {
+export function forgetReceipt(gone, kept, vanished = 0, engines = 0) {
   const notes = [];
   if (kept) {
     notes.push(
       `${modelCount(kept)} still ${kept === 1 ? "has a copy" : "have copies"} and ${kept === 1 ? "was" : "were"} kept.`,
+    );
+  }
+  if (engines) {
+    notes.push(
+      `${modelCount(engines)} ${engines === 1 ? "is one" : "are ones"} PixlStash downloaded for itself and would fetch again.`,
     );
   }
   if (vanished) {
@@ -348,6 +405,7 @@ function defaultView() {
     sortKey: "added_at",
     sortDirection: "desc",
     folderLayout: "drive",
+    columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
   };
 }
 
@@ -375,6 +433,11 @@ function defaultFilters() {
     // (#927). The box is still there to turn it off.
     unclassified: true,
     engines: true,
+    // The VAEs and text encoders a generation graph loads beside a checkpoint.
+    // On for the same reason as the two above and rather more urgently: until
+    // they had kinds of their own the big ones were counted as checkpoints, so
+    // "what are my base models" answered with a list mostly made of encoders.
+    support: true,
     baseModels: [],
     capabilities: [],
   };
@@ -416,7 +479,9 @@ function storedFilters() {
   // default forward forever.
   if (!parsed || parsed.v !== FILTERS_SCHEMA_VERSION) return null;
   const filters = defaultFilters();
-  for (const key of ["adapters", "checkpoints", "unclassified", "engines"]) {
+  // `support` is absent from every blob an earlier build wrote, which needs no
+  // schema bump: the key simply misses this loop and keeps its default of on.
+  for (const key of BLOCKS) {
     if (typeof parsed[key] === "boolean") filters[key] = parsed[key];
   }
   for (const key of ["adapterKinds", "baseModels", "capabilities"]) {
@@ -456,6 +521,14 @@ function storedView() {
   if (SORT_KEYS.includes(parsed.sortKey)) view.sortKey = parsed.sortKey;
   if (parsed.sortDirection === "asc" || parsed.sortDirection === "desc") {
     view.sortDirection = parsed.sortDirection;
+  }
+  // Per column and clamped on the way in, for the reason the fields above are
+  // read one at a time: a blob written before the columns could be dragged is
+  // still a valid remembered sort, and a width edited by hand in devtools is
+  // not a reason to hand back a shelf whose Size column is 4,000px wide.
+  for (const key of COLUMN_KEYS) {
+    const width = clampColumnWidth(parsed.columnWidths?.[key]);
+    if (width !== null) view.columnWidths[key] = width;
   }
   return view;
 }
@@ -591,14 +664,30 @@ function groupsOf(row, axis) {
   }));
 }
 
-/** The four top-level type checkboxes, each one request and one row bucket. */
-const BLOCKS = ["adapters", "checkpoints", "unclassified", "engines"];
+/** The top-level type checkboxes, each one row bucket. */
+const BLOCKS = [
+  "adapters",
+  "checkpoints",
+  "unclassified",
+  "engines",
+  "support",
+];
 
-/** Which block a row came from, so a fetch only replaces what it asked for. */
+/**
+ * Which block a row came from, so a fetch only replaces what it asked for.
+ *
+ * `support` is the one block that is two kinds. A VAE and a text encoder are
+ * separate answers to "what is this file" and one answer to "what does the
+ * shelf show", so they are separate `file_kind`s and one checkbox — the alt
+ * being two boxes nobody wants to tick separately.
+ */
 function blockOf(row) {
   if (row.file_kind === "checkpoint") return "checkpoints";
   if (row.file_kind === "unknown") return "unclassified";
   if (row.file_kind === "engine") return "engines";
+  if (row.file_kind === "vae" || row.file_kind === "text_encoder") {
+    return "support";
+  }
   return "adapters";
 }
 
@@ -685,6 +774,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // InsightFace packs and every HuggingFace repo in the cache. Same
       // route, same shape, one more `file_kind`.
       if (filters.engines) requests.push(listAdapters({ fileKind: "engine" }));
+      // Two requests for one checkbox: the route takes a single `file_kind`,
+      // and these two kinds are one thing to a reader deciding what to keep.
+      if (filters.support) {
+        requests.push(listAdapters({ fileKind: "vae" }));
+        requests.push(listAdapters({ fileKind: "text_encoder" }));
+      }
       const results = await Promise.all(requests);
       if (startedAt !== epoch) return;
       const refreshed = new Set(BLOCKS.filter((block) => filters[block]));
@@ -1081,8 +1176,49 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    *   `sortDirection`.
    */
   function setView(patch) {
+    // A NEW sort key arrives at its own end unless the caller named one. Here
+    // rather than in the caller, because there are two writers of `sortKey` —
+    // the column headings and the Sort panel — and putting it in one of them
+    // is how the two came to disagree: the panel carried "Newest first" over
+    // onto Name and handed back Z to A, which is exactly what
+    // `defaultSortDirection` exists to stop.
+    if (
+      patch.sortKey !== undefined &&
+      patch.sortKey !== view.sortKey &&
+      patch.sortDirection === undefined
+    ) {
+      patch = { ...patch, sortDirection: defaultSortDirection(patch.sortKey) };
+    }
     Object.assign(view, patch);
     rememberView();
+  }
+
+  /**
+   * Resize one data column, in pixels.
+   *
+   * `persist` is off for the frames of a drag and on for the end of it: a
+   * `pointermove` arrives every frame, and `rememberView` rebuilds the whole
+   * blob, walks four collapsed sets and does a synchronous `setItem`, so
+   * writing per move is ~120 storage writes a second on the main thread for a
+   * value that only matters once the pointer is up. A press of the arrow keys
+   * IS the end of its own gesture and persists.
+   *
+   * Persisting is not conditional on the width having changed: the last frame
+   * of a drag usually sets the same pixel the frame before did, and skipping
+   * the write there would throw the whole drag away.
+   *
+   * @param {string} key - one of {@link COLUMN_KEYS}.
+   * @param {number} px - the requested width, clamped to the bounds.
+   * @param {boolean} [persist=true] - whether to write the view blob.
+   */
+  function setColumnWidth(key, px, persist = true) {
+    if (!COLUMN_KEYS.includes(key)) return;
+    const width = clampColumnWidth(px);
+    if (width === null) return;
+    if (width !== view.columnWidths[key]) {
+      view.columnWidths = { ...view.columnWidths, [key]: width };
+    }
+    if (persist) rememberView();
   }
 
   /**
@@ -1362,18 +1498,20 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       await fetchRows();
       const refused = body?.refused ?? [];
       const gone = body?.forgotten?.length ?? 0;
-      // The two refusal reasons are different news and must not be conflated:
+      // The refusal reasons are different news and must not be conflated:
       // `still_has_a_copy` means the file turned up, `no_such_model` means the
-      // row was already gone (another tab forgot it, or this list is stale).
+      // row was already gone (another tab forgot it, or this list is stale),
+      // `is_a_builtin_engine` means it is ours and the owner has nothing to do.
       // Anything the server may add later counts as "kept", which is the
       // conservative reading — not forgotten, and possibly still there.
-      const vanished = refused.filter(
-        (r) => r.reason === "no_such_model",
-      ).length;
-      const kept = refused.length - vanished;
+      const count = (reason) =>
+        refused.filter((r) => r.reason === reason).length;
+      const vanished = count("no_such_model");
+      const engines = count("is_a_builtin_engine");
+      const kept = refused.length - vanished - engines;
       notices.push({
         level: gone ? "success" : "info",
-        text: forgetReceipt(gone, kept, vanished),
+        text: forgetReceipt(gone, kept, vanished, engines),
       });
       return true;
     } catch (err) {
@@ -1667,5 +1805,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     resetForSession,
     setFilters,
     setView,
+    setColumnWidth,
   };
 });

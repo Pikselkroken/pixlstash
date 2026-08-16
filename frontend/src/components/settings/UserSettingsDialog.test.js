@@ -68,6 +68,42 @@ describe("UserSettingsDialog library navigation", () => {
     );
   });
 
+  it("orders the rail with Libraries ahead of Scrapheap and Snapshots", async () => {
+    sessionContext.value = { scope: "ALL" };
+    const wrapper = mountDialog();
+    await nextTick();
+
+    // The whole order, not an adjacency: an index comparison between two
+    // entries also holds when one of them is missing from the rail entirely.
+    // Compute and Backend are desktop-only and absent under jsdom.
+    expect(
+      wrapper.findAll(".settings-nav-item").map((n) => n.attributes("id")),
+    ).toEqual([
+      "settings-nav-appearance",
+      "settings-nav-behaviour",
+      "settings-nav-smart-score",
+      "settings-nav-workflows",
+      "settings-nav-libraries",
+      "settings-nav-scrapheap",
+      "settings-nav-snapshots",
+      "settings-nav-privacy",
+      "settings-nav-account",
+    ]);
+  });
+
+  it("gives every rail item a pane matching its aria-controls", async () => {
+    sessionContext.value = { scope: "ALL" };
+    const wrapper = mountDialog();
+    await nextTick();
+
+    for (const item of wrapper.findAll(".settings-nav-item")) {
+      const pane = wrapper.find(`#${item.attributes("aria-controls")}`);
+      expect(pane.exists()).toBe(true);
+      expect(pane.attributes("role")).toBe("region");
+      expect(pane.attributes("aria-labelledby")).toBe(item.attributes("id"));
+    }
+  });
+
   it("does not disclose the nav entry or pane in read-only/share mode", async () => {
     sessionContext.value = { scope: "READ", resource_type: "picture_set" };
     const wrapper = mountDialog();

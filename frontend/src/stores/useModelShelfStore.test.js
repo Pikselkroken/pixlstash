@@ -20,6 +20,10 @@ const listEngines = vi.fn();
 // would answer the unclassified request with adapter rows and make every list
 // here look duplicated.
 const listUnclassified = vi.fn();
+// Same split again, for the two support kinds. One double serves both: they are
+// one checkbox and one row bucket, so a test that wants support rows wants them
+// without caring which of the two requests carried them.
+const listSupport = vi.fn();
 
 const editModels = vi.fn();
 const listBaseModelCompletions = vi.fn();
@@ -34,6 +38,9 @@ vi.mock("../api/modelShelf", () => ({
   listAdapters: (...args) => {
     if (args[0]?.fileKind === "engine") return listEngines(...args);
     if (args[0]?.fileKind === "unknown") return listUnclassified(...args);
+    if (args[0]?.fileKind === "vae" || args[0]?.fileKind === "text_encoder") {
+      return listSupport(...args);
+    }
     return listAdapters(...args);
   },
   listCheckpoints: (...args) => listCheckpoints(...args),
@@ -83,6 +90,7 @@ beforeEach(() => {
   listCheckpoints.mockReset().mockResolvedValue([]);
   listEngines.mockReset().mockResolvedValue([]);
   listUnclassified.mockReset().mockResolvedValue([]);
+  listSupport.mockReset().mockResolvedValue([]);
   listBaseModelCompletions.mockReset().mockResolvedValue([]);
 });
 
@@ -370,6 +378,56 @@ describe("the badge", () => {
     await store.setFilters({ engines: false }, { refetch: true });
     expect(store.activeCount).toBe(1);
   });
+
+  it("counts turning support files off, for the same reason", async () => {
+    const store = useModelShelfStore();
+    await store.setFilters({ support: false }, { refetch: true });
+    expect(store.activeCount).toBe(1);
+  });
+});
+
+describe("the support block", () => {
+  it("puts both kinds in one bucket from two requests", async () => {
+    // One checkbox, two `file_kind`s. The route takes a single kind, so the
+    // block is two requests, and a reader deciding what to keep sees one list.
+    const store = useModelShelfStore();
+    listSupport
+      .mockResolvedValueOnce([adapter({ id: 1, file_kind: "vae", kind: null })])
+      .mockResolvedValueOnce([
+        adapter({ id: 2, file_kind: "text_encoder", kind: null }),
+      ]);
+
+    await store.fetchRows();
+
+    expect(store.rows.map((r) => r.id)).toEqual([1, 2]);
+  });
+
+  it("replaces only its own rows when it refetches", async () => {
+    // `blockOf` has to map BOTH kinds to `support`, or a refetch leaves the
+    // kind it forgot about behind as a duplicate.
+    const store = useModelShelfStore();
+    listSupport
+      .mockResolvedValueOnce([adapter({ id: 1, file_kind: "vae", kind: null })])
+      .mockResolvedValueOnce([
+        adapter({ id: 2, file_kind: "text_encoder", kind: null }),
+      ]);
+    await store.fetchRows();
+
+    listSupport
+      .mockResolvedValueOnce([adapter({ id: 3, file_kind: "vae", kind: null })])
+      .mockResolvedValueOnce([
+        adapter({ id: 4, file_kind: "text_encoder", kind: null }),
+      ]);
+    await store.fetchRows();
+
+    expect(store.rows.map((r) => r.id)).toEqual([3, 4]);
+  });
+
+  it("asks for nothing when the box is off", async () => {
+    const store = useModelShelfStore();
+    await store.setFilters({ support: false }, { refetch: true });
+    expect(listSupport).not.toHaveBeenCalled();
+  });
 });
 
 describe("empty states", () => {
@@ -382,6 +440,7 @@ describe("empty states", () => {
         checkpoints: false,
         unclassified: false,
         engines: false,
+        support: false,
       },
       { refetch: true },
     );
@@ -470,6 +529,40 @@ describe("persistence", () => {
 // sorts last in BOTH directions, and collapse is namespaced per axis.
 
 describe("sorting", () => {
+  it("starts a NEW key at its own end, whichever control asked", () => {
+    // The rule lives in `setView` rather than in the column headings, because
+    // the Sort panel writes `sortKey` too and writes it WITHOUT a direction
+    // (`ShelfSortPanel.vue`). With the rule in the heading, the panel carried
+    // "Newest first" onto Name and handed back Z to A while the heading beside
+    // it gave A to Z.
+    const store = useModelShelfStore();
+    expect(store.view.sortKey).toBe("added_at");
+    expect(store.view.sortDirection).toBe("desc");
+
+    store.setView({ sortKey: "name" });
+    expect(store.view.sortDirection).toBe("asc");
+    store.setView({ sortKey: "size" });
+    expect(store.view.sortDirection).toBe("desc");
+    store.setView({ sortKey: "base_model" });
+    expect(store.view.sortDirection).toBe("asc");
+  });
+
+  it("leaves the direction alone when the key is unchanged or given", () => {
+    // Otherwise the direction toggle could never reach the non-default end,
+    // and re-picking the key you are already on would silently reset it.
+    const store = useModelShelfStore();
+    store.setView({ sortKey: "name" });
+    store.setView({ sortDirection: "desc" });
+    expect(store.view.sortDirection).toBe("desc");
+    store.setView({ sortKey: "name" });
+    expect(store.view.sortDirection).toBe("desc");
+    store.setView({ sortKey: "size", sortDirection: "asc" });
+    expect(store.view.sortDirection).toBe("asc");
+    // And a patch that is about something else entirely does not touch it.
+    store.setView({ groupBy: "folder" });
+    expect(store.view.sortDirection).toBe("asc");
+  });
+
   it("never refetches: every sort field is already on the row", async () => {
     // `fetchRows` merges up to three parallel requests, so a server-sorted list
     // per block would be destroyed by the concatenation anyway. Sorting client
@@ -783,6 +876,77 @@ describe("the view is remembered", () => {
     const store = useModelShelfStore();
     expect(store.view.groupBy).toBe("none");
     expect(store.view.sortKey).toBe("added_at");
+  });
+});
+
+describe("the column widths", () => {
+  it("clamps a width to the bounds rather than taking what it is given", () => {
+    const store = useModelShelfStore();
+    store.setColumnWidth("size", 4000);
+    expect(store.view.columnWidths.size).toBe(200);
+    store.setColumnWidth("size", -20);
+    expect(store.view.columnWidths.size).toBe(48);
+  });
+
+  it("ignores a column it does not have and a width that is not one", () => {
+    // Every one of these coerces to 0 through `Number()` and would come back
+    // as the 48px FLOOR rather than being refused — `null` in particular is a
+    // value JSON can carry, so a stored blob would silently hand back a
+    // 48px column where the read-back loop is meant to fall through to the
+    // default.
+    const store = useModelShelfStore();
+    store.setColumnWidth("name", 120);
+    for (const bad of ["wide", null, undefined, "", "64", [], {}, true, NaN]) {
+      store.setColumnWidth("kind", bad);
+    }
+    expect(store.view.columnWidths).toEqual({ kind: 64, base: 84, size: 74 });
+  });
+
+  it("falls through to the default for a stored width that is not a number", () => {
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({
+        v: 1,
+        columnWidths: { kind: null, base: "84", size: 90 },
+      }),
+    );
+    const store = useModelShelfStore();
+    expect(store.view.columnWidths).toEqual({ kind: 64, base: 84, size: 90 });
+  });
+
+  it("restores what was dragged, and clamps that too", () => {
+    // A blob edited by hand — or written by a build with different bounds —
+    // must not hand back a shelf whose Size column is 4,000px wide.
+    const store = useModelShelfStore();
+    store.setColumnWidth("base", 150);
+    const blob = JSON.parse(
+      window.localStorage.getItem("pixlstash:modelShelfView"),
+    );
+    expect(blob.columnWidths).toEqual({ kind: 64, base: 150, size: 74 });
+
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ ...blob, columnWidths: { base: 150, size: 9000 } }),
+    );
+    setActivePinia(createPinia());
+    const restored = useModelShelfStore();
+    expect(restored.view.columnWidths).toEqual({
+      kind: 64,
+      base: 150,
+      size: 200,
+    });
+  });
+
+  it("takes the defaults from a blob written before columns could be dragged", () => {
+    // Per field rather than behind a schema bump, for the reason the folder
+    // layout is: that blob is still a perfectly good remembered sort.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ v: 1, sortKey: "name", sortDirection: "asc" }),
+    );
+    const store = useModelShelfStore();
+    expect(store.view.sortKey).toBe("name");
+    expect(store.view.columnWidths).toEqual({ kind: 64, base: 84, size: 74 });
   });
 });
 
@@ -1217,6 +1381,16 @@ describe("the receipts", () => {
     const text = useNoticeStore().notices.at(-1).text;
     expect(text).toContain("1 model still has a copy");
     expect(text).toContain("1 model was already gone");
+  });
+
+  it("does not report a refused engine as a file that is still on disk", () => {
+    // The reported bug: an engine row whose only copy is gone came back as
+    // "still has a copy", sending the reader to look on the disk for a file
+    // the shelf itself draws as missing.
+    expect(forgetReceipt(0, 0, 0, 1)).toBe(
+      "Nothing was forgotten. 1 model is one PixlStash downloaded for " +
+        "itself and would fetch again.",
+    );
   });
 });
 

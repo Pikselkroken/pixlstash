@@ -12,6 +12,7 @@ from pixlstash.inference.workflows.description import DescriptionWorkflow
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
+from pixlstash.utils.vram_utils import is_vram_oom
 
 if TYPE_CHECKING:
     from pixlstash.inference.engine import InferenceEngine
@@ -193,6 +194,18 @@ class DescriptionTask(BaseTask):
                 pictures, engine_override=self._engine_override
             )
         except Exception as exc:
+            if is_vram_oom(exc):
+                # The GPU was full, so nothing is known about these pictures.
+                # Raising leaves every description exactly as it was and hands
+                # the batch to BaseTask.run's retry; clearing them here would
+                # destroy captions over a transient condition.
+                logger.warning(
+                    "DescriptionTask ran out of GPU memory for ids=%s; "
+                    "descriptions left unchanged: %s",
+                    picture_ids,
+                    exc,
+                )
+                raise
             import traceback
 
             logger.error(

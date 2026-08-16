@@ -18,11 +18,20 @@ happens at all when the source folder carries ``delete_after_import``.
 path is ever taken from the caller. The join is contained: a run name that
 resolves outside its registered output root is refused rather than read.
 
-Authorization: both routes are `LOCAL_OWNER_ONLY`, declared in
+**A run's previews come with it**, into ``<stem>_samples/`` beside each imported
+checkpoint, and ``GET /models/{model_id}/samples`` reads them back off the shelf.
+That pair is addressed by ``model.id`` rather than by sha256, because a
+checkpoint nobody has hashed has no sha256 to be addressed by.
+
+Authorization: every route here is `LOCAL_OWNER_ONLY`, declared in
 ``pixlstash/authz/registry.py``. The listing walks a registered host path and
 reads every run under it, which is the same authority as
 ``model-folders/{id}/rescan``; the import writes files into one registered folder
-and may unlink them from another, which is the ``model-moves`` authority.
+and may unlink them from another, which is the ``model-moves`` authority; and
+both sample routes read inside a registered folder, which is the authority
+``GET /adapters/{sha256}/file`` sits on for the same reason — bytes out of a
+registered root are a capability of their own, and "no host path crosses the
+wire" is not the argument (recorded against that route on 2026-08-11).
 """
 
 from __future__ import annotations
@@ -35,9 +44,14 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.model_mover import SHELF_IO_LOCK, MoveRefused
+from pixlstash.services.model_folder_scanner import STATE_PRESENT
+from pixlstash.services.model_mover import SHELF_IO_LOCK, MoveRefused, samples_relpath
 from pixlstash.services.run_importer import RunImporter
-from pixlstash.utils.aitoolkit_run import SAMPLES_DIRNAME, read_output_root
+from pixlstash.utils.aitoolkit_run import (
+    SAMPLES_DIRNAME,
+    is_sample_filename,
+    read_output_root,
+)
 from pixlstash.utils.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
@@ -120,6 +134,21 @@ class RunListResponse(BaseModel):
     runs: list[RunResponse]
 
 
+class ModelSamplesResponse(BaseModel):
+    """Body of ``GET /models/{model_id}/samples``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    samples: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Filenames in this checkpoint's `<stem>_samples/` directory, sorted, "
+            "carrying the trainer's own names. Empty for a model that was not "
+            "imported from a run, or whose run had no previews."
+        ),
+    )
+
+
 class ImportRequest(BaseModel):
     """Body of ``POST /model-imports``."""
 
@@ -158,7 +187,21 @@ class ImportedFile(BaseModel):
     model_id: Optional[int] = Field(
         default=None, description="The hub `model.id` the file landed on."
     )
-    detail: Optional[str] = Field(default=None, description="Why, when it failed.")
+    detail: Optional[str] = Field(
+        default=None,
+        description=(
+            "Why, when it failed — and, on a file that imported, why its "
+            "previews did not come with it."
+        ),
+    )
+    sample_count: int = Field(
+        default=0,
+        description=(
+            "Previews copied into this checkpoint's `<stem>_samples/` directory. "
+            "Zero for a run with no samples, and for a copy that failed — "
+            "`detail` says which."
+        ),
+    )
 
 
 class ImportResponse(BaseModel):
@@ -229,6 +272,36 @@ def sample_path_within(run_dir: str, filename: str) -> str:
         ValueError: If ``samples/`` or the name resolves outside the run.
     """
     samples_dir = resolve_path_within(run_dir, SAMPLES_DIRNAME)
+    return resolve_path_within(samples_dir, filename)
+
+
+def model_sample_path_within(folder_path: str, relpath: str, filename: str) -> str:
+    """Resolve one imported sample, refusing anything that escapes its folder.
+
+    The shelf-side twin of :func:`sample_path_within`, and it needs **both** of
+    that function's joins for the same two reasons. The samples directory is
+    contained against the registered ``model_folder.path`` first, because
+    ``resolve_path_within`` realpaths the base it is handed and passing the
+    derived directory straight in would make a *symlinked* ``<stem>_samples``
+    its own safe base — an arbitrary-image reader for any allowlisted extension.
+    The filename is then contained against that resolved directory rather than
+    against the folder, because a single folder-level join would let
+    ``../alice.safetensors`` through: it lands inside the registered folder, so
+    a folder-level check passes it, and it is not a file this route serves.
+
+    Args:
+        folder_path: The registered model folder holding the checkpoint.
+        relpath: The checkpoint's ``model_file.relpath`` in that folder.
+        filename: The caller-supplied name, from the URL path.
+
+    Returns:
+        The resolved absolute path to the sample.
+
+    Raises:
+        ValueError: If the samples directory or the name resolves outside the
+            registered folder.
+    """
+    samples_dir = resolve_path_within(folder_path, samples_relpath(relpath))
     return resolve_path_within(samples_dir, filename)
 
 
@@ -377,6 +450,142 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="No such sample.")
         return FileResponse(sample_path, media_type=media_type)
 
+    def _samples_location(model_id: int) -> Optional[dict]:
+        """The first present copy of a model whose samples directory is there.
+
+        A model can hold several ``model_file`` rows — the shelf's whole
+        content/location split — and only one of them need have travelled with
+        its previews. Ordered by ``(model_folder_id, relpath)``, which **is**
+        ``model_file``'s primary key (``hub/schema.py``) — the table has no
+        ``id`` column — so the answer is stable rather than whatever SQLite
+        hands back first. Spelled out because a reviewer read "the location
+        primary key" as ``mf.id`` and called the ordering a mismatch.
+
+        Raises:
+            HTTPException: 404 when no such model row exists. A model that
+                exists and has no samples is not an error; it is an empty list.
+        """
+        if server.hub.fetchone("SELECT 1 FROM model WHERE id = ?", (model_id,)) is None:
+            raise HTTPException(status_code=404, detail="No such model.")
+        for row in server.hub.fetchall(
+            "SELECT mf.relpath, f.path AS folder_path FROM model_file mf "
+            "JOIN model_folder f ON f.id = mf.model_folder_id "
+            "WHERE mf.model_id = ? AND mf.state = ? "
+            "ORDER BY mf.model_folder_id, mf.relpath",
+            (model_id, STATE_PRESENT),
+        ):
+            try:
+                directory = resolve_path_within(
+                    row["folder_path"], samples_relpath(row["relpath"])
+                )
+            except ValueError as exc:
+                # A relpath that escapes its registered folder is a broken row,
+                # not a request to read outside the shelf.
+                logger.error(
+                    "Refusing the samples of model %s at %r in %s: the derived "
+                    "directory resolves outside the registered folder (%s).",
+                    model_id,
+                    row["relpath"],
+                    row["folder_path"],
+                    exc,
+                )
+                continue
+            if os.path.isdir(directory):
+                return {**dict(row), "directory": directory}
+        return None
+
+    @router.get(
+        "/models/{model_id}/samples",
+        summary="The training previews stored beside one imported checkpoint",
+        description=(
+            "Lists the filenames in that model's `<stem>_samples/` directory — "
+            "the previews its training run rendered, copied in with the "
+            "checkpoint and carried along by a later move. Filtered to the "
+            "image extensions the byte route serves, so an unrelated file "
+            "dropped into the directory is not advertised — the filter is on "
+            "the name, so a symlink whose target carries a different extension "
+            "can still be listed and then refused. An empty list for a model "
+            "that was not imported from a run."
+        ),
+        tags=["model_shelf"],
+        response_model=ModelSamplesResponse,
+    )
+    def list_model_samples(model_id: int, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        location = _samples_location(model_id)
+        if location is None:
+            return ModelSamplesResponse(samples=[])
+        try:
+            names = os.listdir(location["directory"])
+        except OSError as exc:
+            logger.warning(
+                "Could not list the samples of model %s in %s: %s",
+                model_id,
+                location["directory"],
+                exc,
+            )
+            raise HTTPException(
+                status_code=409, detail="Could not read this model's samples."
+            ) from exc
+        # `is_sample_filename`, not merely an image extension: it is the same
+        # test the delete verb uses to decide the directory is the model's, so
+        # all three verbs agree on what a sample is. Without it this route
+        # serves any image the owner happened to leave in a directory whose
+        # name matched, and the response would be describing something other
+        # than the run's previews.
+        return ModelSamplesResponse(
+            samples=sorted(name for name in names if is_sample_filename(name))
+        )
+
+    @router.get(
+        "/models/{model_id}/samples/{filename}",
+        summary="One training preview stored beside an imported checkpoint",
+        description=(
+            "Serves one image out of that model's `<stem>_samples/` directory.\n\n"
+            "**`filename` is a name, never a path.** It is joined to the "
+            "directory derived from the model's own registered location and "
+            "contained against it, so a name that resolves outside is refused "
+            "rather than read, and the extension is checked against an allowlist "
+            "so nothing but an image is served from our origin."
+        ),
+        tags=["model_shelf"],
+        response_class=FileResponse,
+        responses={200: {"content": {"image/*": {}}}},
+    )
+    def get_model_sample(model_id: int, filename: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        location = _samples_location(model_id)
+        if location is None:
+            raise HTTPException(status_code=404, detail="No such sample.")
+        try:
+            sample_path = model_sample_path_within(
+                location["folder_path"], location["relpath"], filename
+            )
+        except ValueError as exc:
+            logger.error(
+                "Refusing to serve sample %r of model %s: it resolves outside "
+                "the registered model folder (%s).",
+                filename,
+                model_id,
+                exc,
+            )
+            raise HTTPException(status_code=400, detail="No such sample.") from exc
+
+        media_type = SAMPLE_MEDIA_TYPES.get(os.path.splitext(sample_path)[1].lower())
+        if media_type is None or not is_sample_filename(os.path.basename(sample_path)):
+            # Two tests, and the second is why this route cannot be used to read
+            # the owner's own pictures out of a directory whose name happened to
+            # match: it serves what the listing lists and nothing else.
+            logger.warning(
+                "Refusing to serve %s: it is not one of the previews a training "
+                "run writes.",
+                sample_path,
+            )
+            raise HTTPException(status_code=400, detail="No such sample.")
+        if not os.path.isfile(sample_path):
+            raise HTTPException(status_code=404, detail="No such sample.")
+        return FileResponse(sample_path, media_type=media_type)
+
     @router.post(
         "/model-imports",
         summary="Import a training run onto the shelf",
@@ -453,6 +662,7 @@ def create_router(server) -> APIRouter:
                     status=outcome.status,
                     model_id=outcome.model_id,
                     detail=outcome.detail,
+                    sample_count=outcome.sample_count,
                 )
                 for outcome in report.outcomes
             ],

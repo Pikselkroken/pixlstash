@@ -27,6 +27,15 @@ default. It surfaces on the *adapters* block under an explicit
 is therefore hash-addressable exactly as an adapter is. ``/checkpoints`` never
 returns one.
 
+**Nor is a support file.** ``vae`` and ``text_encoder`` are the two kinds a
+generation graph loads *beside* a checkpoint, and they reach the same block the
+same way (``?file_kind=vae``). Before they existed the classifier had only tensor
+markers and a parameter count to go on, and neither can see a support file: a
+VAE and a CLIP sit below the checkpoint threshold and were stored as ``unknown``,
+a T5-class encoder sits above it and was stored as ``checkpoint``. So
+``/checkpoints`` was answering "what base models do I have" with a list mostly
+made of text encoders, and *"which of these can I delete"* had no answer at all.
+
 **Folding happens on the way out, not in the database.** Every row carries
 ``base_model_folded`` beside its raw ``base_model``. That is where the fold
 belongs: ``base_model`` is free text by rule, and the shelf sorts, filters,
@@ -114,7 +123,9 @@ from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
     FILE_ENGINE,
+    FILE_TEXT_ENCODER,
     FILE_UNKNOWN,
+    FILE_VAE,
 )
 from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.known_base_models import completions, fold
@@ -129,7 +140,20 @@ logger = get_logger(__name__)
 # ``engine`` rides here rather than gaining a fourth route: PixlStash's own
 # taggers and scorers are a *filter* over the same table, not a different shape,
 # and this block already serves a kind that is not an adapter.
-ADAPTER_BLOCK_FILE_KINDS = (FILE_ADAPTER, FILE_UNKNOWN, FILE_ENGINE)
+#
+# ``vae`` and ``text_encoder`` ride here for the same reason plus one of their
+# own: they are hashed by the scanner unless they are large, so they are
+# hash-addressable exactly as an adapter and an ``unknown`` are, which is the
+# property this block's routes are built on. They are emphatically NOT folded
+# into ``/checkpoints`` — filing a text encoder as a base model is the defect
+# this whole kind exists to end.
+ADAPTER_BLOCK_FILE_KINDS = (
+    FILE_ADAPTER,
+    FILE_UNKNOWN,
+    FILE_ENGINE,
+    FILE_VAE,
+    FILE_TEXT_ENCODER,
+)
 
 # Constrained here rather than validated in the handler, so an unknown key is a
 # 422 from FastAPI and never reaches the SQL builder. The values are the five
@@ -463,7 +487,9 @@ class ForgetRefusal(BaseModel):
             "`no_such_model` (the id names no row), `still_has_a_copy` (a "
             "location is `present` or `unreachable`), or `is_a_builtin_engine` "
             "(PixlStash downloaded it for itself and re-declares it on every "
-            "start, so forgetting it would achieve nothing)."
+            "start, so forgetting it would achieve nothing). An engine whose "
+            "every copy is `missing` is forgettable: the declaration has "
+            "stopped naming it, so nothing brings it back."
         )
     )
 
@@ -654,10 +680,12 @@ def create_router(server) -> APIRouter:
         description=(
             "Every adapter registered on this machine, with each copy's location "
             "and the characters/sets in the active library that use it. "
-            "`file_kind=unknown` returns the unclassified files instead — they "
-            "are hashed and addressable exactly as adapters are, and they are "
-            "never folded into /checkpoints. `base_model=UNASSIGNED` selects the "
-            "rows that record no base model."
+            "`file_kind` swaps in the other hash-addressable kinds instead: "
+            "`unknown` for the unclassified files, `vae` and `text_encoder` for "
+            "the support files a generation graph loads beside a checkpoint, "
+            "`engine` for the models PixlStash downloads for itself. None of "
+            "them is ever folded into /checkpoints. `base_model=UNASSIGNED` "
+            "selects the rows that record no base model."
         ),
         tags=["model_shelf"],
         response_model=AdapterListResponse,
@@ -666,7 +694,10 @@ def create_router(server) -> APIRouter:
         request: Request,
         file_kind: str = Query(
             FILE_ADAPTER,
-            description="`adapter` (default) or `unknown`. Checkpoints have their own route.",
+            description=(
+                "`adapter` (default), `unknown`, `vae`, `text_encoder` or "
+                "`engine`. Checkpoints have their own route."
+            ),
         ),
         base_model: Optional[str] = Query(
             None,

@@ -158,7 +158,7 @@ def test_ai_toolkit_output_is_fully_described(tmp_path):
     """The rich case, mirroring a real ai-toolkit file."""
     metadata = {
         "format": "pt",
-        "name": "JimmyCarr",
+        "name": "JimmyVehicle",
         "software": json.dumps(
             {
                 "name": "ai-toolkit",
@@ -168,9 +168,9 @@ def test_ai_toolkit_output_is_fully_described(tmp_path):
         ),
         "training_info": json.dumps({"step": 3000, "epoch": 333}),
         "ss_base_model_version": "zimage",
-        "ss_output_name": "JimmyCarr",
+        "ss_output_name": "JimmyVehicle",
         "ss_tag_frequency": json.dumps(
-            {"1_jimmycarr": {"jimmycarr": 4, "portrait": 9}}
+            {"1_jimmyvehicle": {"jimmyvehicle": 4, "portrait": 9}}
         ),
     }
     path = _write_safetensors(
@@ -186,13 +186,13 @@ def test_ai_toolkit_output_is_fully_described(tmp_path):
     assert info.kind == "lora"
     assert info.tensor_count == 2
     assert info.base_model == "zimage"
-    assert info.display_name == "JimmyCarr"
+    assert info.display_name == "JimmyVehicle"
     assert info.training_step == 3000
     assert info.training_epoch == 333
     assert info.trained_by == "ai-toolkit 0.9.11"
     assert info.has_metadata is True
     # Most frequent tag leads, so the real trigger is not buried.
-    assert info.trigger_words == ["portrait", "jimmycarr"]
+    assert info.trigger_words == ["portrait", "jimmyvehicle"]
 
 
 def test_downloaded_adapter_with_only_format_is_the_normal_case(tmp_path):

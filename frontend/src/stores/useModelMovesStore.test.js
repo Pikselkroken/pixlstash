@@ -209,6 +209,20 @@ describe("the move receipt", () => {
     );
   });
 
+  it("names a file that moved without its training previews", () => {
+    // The server keeps such a file `moved` on purpose — losing a preview must
+    // not cost the weights — so the status tallies cannot see it and a receipt
+    // built from them alone would call this a clean move. `importReceipt` says
+    // the same thing on the import side; a loss visible on one verb and silent
+    // on the other is the half-finished version of this.
+    expect(
+      moveReceipt([
+        { status: "moved" },
+        { status: "moved", detail: "Samples were not carried: …" },
+      ]),
+    ).toBe("Moved 2 files. 1 file moved without its training previews.");
+  });
+
   it("does not claim a move when every file was already there", () => {
     expect(moveReceipt([{ status: "skipped" }, { status: "skipped" }])).toBe(
       "Nothing moved. 2 files were already there.",

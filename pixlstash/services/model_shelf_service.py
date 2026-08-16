@@ -44,7 +44,9 @@ from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
     FILE_ENGINE,
+    FILE_TEXT_ENCODER,
     FILE_UNKNOWN,
+    FILE_VAE,
 )
 
 logger = get_logger(__name__)
@@ -468,7 +470,17 @@ CURATABLE_FIELDS = ("display_name", "base_model", "kind", "file_kind")
 # What a file may be corrected to. Closed, and checked before the UPDATE rather
 # than left to the CHECK constraint: a violation would surface as a 500 naming
 # a constraint, which tells the owner nothing about the file they picked.
-FILE_KINDS = (FILE_ADAPTER, FILE_CHECKPOINT, FILE_UNKNOWN)
+#
+# `vae` and `text_encoder` are correctable like the rest, and they are the two
+# most likely to need it: their kind is read off the folder the file sits in, so
+# a support file kept outside the layout gets the answer the layout gives.
+FILE_KINDS = (
+    FILE_ADAPTER,
+    FILE_CHECKPOINT,
+    FILE_VAE,
+    FILE_TEXT_ENCODER,
+    FILE_UNKNOWN,
+)
 
 # A location state that means the bytes are still out there somewhere, so the
 # row is NOT a candidate for Forget. `unreachable` is in here deliberately: it
@@ -586,10 +598,27 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
         # deletes a row that comes straight back. Refused here rather than at the
         # route because the read belongs inside this transaction — the same
         # critical section the state gate runs in.
+        #
+        # Only while something still declares it, which is what every non-
+        # `missing` state means here: a declared engine nothing has fetched is
+        # `not_downloaded`, and `declare_folder`'s sweep writes `missing` exactly
+        # when the declaration stopped naming the row. That is the DISCOVERED
+        # roots — a repo dropped by `huggingface-cli delete-cache`, a deleted
+        # InsightFace pack — and nothing fetches those back, so refusing them
+        # left the owner a row drawn as a fault that no verb on the shelf could
+        # clear.
+        #
+        # An engine whose copy is `present` or `unreachable` stays refused by
+        # this set rather than falling through to `alive`, which is checked after
+        # it: the reason it reports is `is_a_builtin_engine`, and that is the
+        # more useful of the two answers for a file that is ours. So this only
+        # ever widens Forget to an engine whose every copy is gone.
         builtin = {
             int(row[0])
             for row in conn.execute(
-                f"SELECT id FROM model WHERE id IN ({placeholders}) AND file_kind = ?",
+                f"SELECT id FROM model WHERE id IN ({placeholders}) AND file_kind = ? "
+                "AND EXISTS (SELECT 1 FROM model_file WHERE model_id = model.id "
+                "AND state <> 'missing')",
                 (*ids, FILE_ENGINE),
             ).fetchall()
         }

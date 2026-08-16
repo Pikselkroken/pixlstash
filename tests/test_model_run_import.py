@@ -79,13 +79,14 @@ def write_adapter(path, *, name=None, seed=b""):
 
 @pytest.fixture
 def run_folder(tmp_path):
-    """One ai-toolkit run: two steps, a bare final, a sample, and a config."""
+    """One ai-toolkit run: two steps, a bare final, samples, and a config."""
     output_root = tmp_path / "output"
     run_dir = output_root / "Clementine"
     (run_dir / "samples").mkdir(parents=True)
     write_adapter(run_dir / "Clementine_000000250.safetensors", seed=b"step250")
     write_adapter(run_dir / "Clementine_000000500.safetensors", seed=b"step500")
     write_adapter(run_dir / "Clementine.safetensors", seed=b"final")
+    (run_dir / "samples" / "1712345678901__000000250_0.jpg").write_bytes(b"jpeg-250")
     (run_dir / "samples" / "1712345678901__000000500_0.jpg").write_bytes(b"jpeg")
     (run_dir / "config.yaml").write_text(
         "config:\n"
@@ -297,6 +298,188 @@ def test_a_run_with_no_bare_final_covers_with_its_highest_step(shelf):
     rows = models(shelf["hub"])
     assert rows["Clementine_000000500.safetensors"]["stack_position"] == 0
     assert rows["Clementine_000000250.safetensors"]["stack_position"] == 1
+
+
+# ===========================================================================
+# The samples come with the weights
+# ===========================================================================
+#
+# The one gap in this module that lost data rather than deferring a feature: the
+# importer took the ``.safetensors`` and nothing else, so a source folder
+# carrying ``delete_after_import`` destroyed the run's previews with it.
+
+
+def test_each_checkpoints_samples_land_beside_it_with_the_trainers_names(shelf):
+    report = RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"]
+    )
+
+    final = shelf["destination_dir"] / "Clementine_samples"
+    stepped = shelf["destination_dir"] / "Clementine_000000250_samples"
+    # ai-toolkit's own filenames, unchanged: no renumbering.
+    assert os.listdir(final) == ["1712345678901__000000500_0.jpg"]
+    assert os.listdir(stepped) == ["1712345678901__000000250_0.jpg"]
+    assert (final / "1712345678901__000000500_0.jpg").read_bytes() == b"jpeg"
+    assert {o.filename: o.sample_count for o in report.outcomes} == {
+        "Clementine.safetensors": 1,
+        "Clementine_000000500.safetensors": 1,
+        "Clementine_000000250.safetensors": 1,
+    }
+
+
+def test_the_bare_final_takes_the_highest_steps_samples_even_when_it_is_imported_too(
+    shelf,
+):
+    """The cover rule, at the point it actually costs something: step 500's
+    previews are copied twice, into its own folder and into the final's. That
+    duplication is the accepted price of the most visible row of a fresh import
+    not being the only empty one."""
+    RunImporter(shelf["hub"]).import_run(str(shelf["run_dir"]), shelf["destination_id"])
+
+    final = shelf["destination_dir"] / "Clementine_samples"
+    highest = shelf["destination_dir"] / "Clementine_000000500_samples"
+    assert (
+        os.listdir(final) == os.listdir(highest) == ["1712345678901__000000500_0.jpg"]
+    )
+
+
+def test_a_checkpoint_whose_step_has_no_previews_gets_no_samples_folder(shelf):
+    """Not an empty directory, and not the highest step's either — that rule is
+    the bare final's alone."""
+    write_adapter(shelf["run_dir"] / "Clementine_000000900.safetensors", seed=b"s900")
+    report = RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], steps=[900]
+    )
+    assert [o.sample_count for o in report.outcomes] == [0]
+    assert not (shelf["destination_dir"] / "Clementine_000000900_samples").exists()
+
+
+def test_delete_after_import_unlinks_the_checkpoint_only_after_the_samples_are_copied(shelf):
+    """The ordering that makes this a data-loss fix rather than a feature.
+
+    Asserted at the seam rather than after the fact: an import that copied the
+    previews *after* the unlink would leave exactly the same directory on disk
+    at the end, and would still have had a window where the only copy was gone.
+    """
+    seen: dict = {}
+    real_unlink = importer_module.unlink_source
+
+    def record_then_unlink(path):
+        seen.setdefault(
+            path, sorted(os.listdir(shelf["destination_dir"] / "Clementine_samples"))
+        )
+        return real_unlink(path)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(importer_module, "unlink_source", record_then_unlink)
+    try:
+        RunImporter(shelf["hub"]).import_run(
+            str(shelf["run_dir"]),
+            shelf["destination_id"],
+            steps=[None],
+            delete_source=True,
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert seen == {
+        str(shelf["run_dir"] / "Clementine.safetensors"): [
+            "1712345678901__000000500_0.jpg"
+        ]
+    }, "the run's file was unlinked before its previews were copied"
+    assert not os.path.exists(shelf["run_dir"] / "Clementine.safetensors")
+
+
+def test_an_existing_samples_folder_refuses_the_whole_batch(shelf):
+    """The only path here that can write into a directory the owner put there,
+    and there is no undo. Refused in the same pass as the filename collision and
+    before the first byte, so nothing at all is imported."""
+    squatter = shelf["destination_dir"] / "Clementine_000000500_samples"
+    squatter.mkdir()
+    (squatter / "mine.jpg").write_bytes(b"somebody else's file")
+
+    with pytest.raises(MoveRefused, match="never merged"):
+        RunImporter(shelf["hub"]).import_run(
+            str(shelf["run_dir"]), shelf["destination_id"]
+        )
+
+    assert os.listdir(shelf["destination_dir"]) == ["Clementine_000000500_samples"]
+    assert os.listdir(squatter) == ["mine.jpg"]
+    assert models(shelf["hub"]) == {}
+
+
+def test_a_symlink_at_a_samples_destination_name_is_refused_not_written_through(shelf):
+    """The containment on the samples directory, and *which* check does it.
+
+    The comment in ``_resolve_targets`` used to credit `lexists`; it is the
+    containment call, which realpaths and so refuses the link whether or not it
+    dangles. Asserted here because the existence check runs on the *resolved*
+    path, where a dangling link is simply absent — so `lexists` and `exists`
+    cannot be told apart at that line, and only this proves the guard is real.
+    """
+    outside = shelf["destination_dir"].parent / "outside"
+    outside.mkdir()
+    os.symlink(
+        str(outside / "Clementine_samples"),
+        str(shelf["destination_dir"] / "Clementine_samples"),
+    )
+
+    with pytest.raises(MoveRefused, match="outside the destination folder"):
+        RunImporter(shelf["hub"]).import_run(
+            str(shelf["run_dir"]), shelf["destination_id"], steps=[None]
+        )
+
+    assert not (outside / "Clementine_samples").exists(), (
+        "the import wrote through the link, outside the registered folder"
+    )
+    assert models(shelf["hub"]) == {}
+
+
+def test_a_samples_copy_that_fails_leaves_the_checkpoint_imported(shelf, monkeypatch):
+    """Non-fatal, asserted rather than assumed: losing a preview must not cost
+    the weights. The half-written directory goes with it."""
+
+    def refuse(*args, **kwargs):
+        raise OSError("no room for previews")
+
+    monkeypatch.setattr(importer_module.shutil, "copy2", refuse)
+
+    report = RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], steps=[None], delete_source=True
+    )
+
+    outcome = report.outcomes[0]
+    assert outcome.status == STATUS_IMPORTED
+    assert outcome.sample_count == 0
+    assert "no room for previews" in (outcome.detail or "")
+    assert os.path.exists(shelf["destination_dir"] / "Clementine.safetensors")
+    assert not os.path.exists(shelf["run_dir"] / "Clementine.safetensors")
+    assert os.listdir(shelf["destination_dir"]) == ["Clementine.safetensors"], (
+        "a half-written samples directory was left behind"
+    )
+    assert_no_dangling_rows(shelf["hub"])
+
+
+def test_the_space_check_counts_the_samples(shelf, monkeypatch):
+    """A run measured 1.9 GB of which samples/ was 15 MB. Counting only the
+    weights makes the check wrong by that much, per run."""
+    seen: list[int] = []
+    real_require_space = mover_module.require_space
+
+    def record(destination, byte_count):
+        seen.append(byte_count)
+        return real_require_space(destination, byte_count)
+
+    monkeypatch.setattr(importer_module, "require_space", record)
+    RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], steps=[None]
+    )
+
+    weights = os.path.getsize(shelf["run_dir"] / "Clementine.safetensors")
+    previews = os.path.getsize(
+        shelf["run_dir"] / "samples" / "1712345678901__000000500_0.jpg"
+    )
+    assert seen == [weights + previews]
 
 
 # ===========================================================================
