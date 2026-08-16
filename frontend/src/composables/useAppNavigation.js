@@ -1,3 +1,4 @@
+import { MODEL_SHELF_ROUTES } from "../router/routeNames";
 import { computed, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSelectionStore } from "../stores/useSelectionStore";
@@ -348,7 +349,10 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
 
   // Same reasoning for the model shelf: it lists files on this machine, not
   // pictures in the library, so it is a route rather than a selection.
-  const isModelsView = computed(() => route.name === "models");
+  // Both of the shelf's views. `/models/runs` is the ai-toolkit runs waiting to
+  // be imported — the same destination, a second tab — so the sidebar's Models
+  // entry stays the current page across both and no second destination lights.
+  const isModelsView = computed(() => MODEL_SHELF_ROUTES.includes(route.name));
 
   /** Open the model shelf. */
   function handleSelectModels() {

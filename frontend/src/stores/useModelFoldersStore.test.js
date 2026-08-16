@@ -17,6 +17,7 @@ const rescanModelFolder = vi.fn();
 
 vi.mock("../api/modelFolders", () => ({
   MANAGED_KIND: "managed",
+  SOURCE_KIND: "source",
   CREATABLE_KINDS: ["user", "source"],
   listModelFolders: (...a) => listModelFolders(...a),
   createModelFolder: (...a) => createModelFolder(...a),
@@ -29,7 +30,11 @@ vi.mock("./useModelShelfStore", () => ({
   useModelShelfStore: () => ({ fetchRows }),
 }));
 
-import { useModelFoldersStore, basename, countLabel } from "./useModelFoldersStore";
+import {
+  useModelFoldersStore,
+  basename,
+  countLabel,
+} from "./useModelFoldersStore";
 import { useNoticeStore } from "./useNoticeStore";
 
 /** One row of the shape `GET /model-folders` really returns. */
@@ -111,6 +116,54 @@ describe("scanning", () => {
     await store.refresh();
     await store.scan(1);
     expect(store.scanningIds.size).toBe(0);
+  });
+
+  it("does not even submit a scan when the folder added is an output root", async () => {
+    // The server answers a source folder's scan with `skipped`, so submitting
+    // one spends a task to do nothing — and the toast that promises it would be
+    // describing work that never happens. Its runs are read live instead.
+    createModelFolder.mockResolvedValue(
+      folder({ id: 2, kind: "source", path: "/runs" }),
+    );
+    const store = useModelFoldersStore();
+
+    expect(await store.add({ path: "/runs", kind: "source" })).toBe(true);
+    expect(rescanModelFolder).not.toHaveBeenCalled();
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.text).toContain("ready to import");
+    expect(notice.text).not.toContain("Looking for models");
+  });
+
+  it("still scans an ordinary folder, which is the reason the branch exists", async () => {
+    // The positive control. A branch that skipped the scan for everything would
+    // pass the assertion above and break every other add.
+    rescanModelFolder.mockResolvedValue({ status: "started", id: 2 });
+    const store = useModelFoldersStore();
+
+    await store.add({ path: "/home/g/loras", kind: "user" });
+    expect(rescanModelFolder).toHaveBeenCalled();
+    expect(useNoticeStore().notices.at(-1).text).toContain(
+      "Looking for models",
+    );
+  });
+
+  it("names the one output root, and nothing else", async () => {
+    // What every "is it set yet" control in the UI reads.
+    listModelFolders.mockResolvedValue([
+      folder({ id: 1, kind: "user" }),
+      folder({ id: 2, kind: "source", path: "/runs" }),
+      folder({ id: 3, kind: "managed", path: "/store" }),
+    ]);
+    const store = useModelFoldersStore();
+    await store.refresh();
+    expect(store.sourceFolder?.path).toBe("/runs");
+  });
+
+  it("has no output root until one is registered", async () => {
+    listModelFolders.mockResolvedValue([folder({ id: 1, kind: "user" })]);
+    const store = useModelFoldersStore();
+    await store.refresh();
+    expect(store.sourceFolder).toBeUndefined();
   });
 });
 

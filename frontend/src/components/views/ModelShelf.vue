@@ -9,7 +9,6 @@
     role="region"
     tabindex="-1"
     aria-label="Model shelf"
-    aria-describedby="shelf-help"
   >
     <p id="shelf-help" class="visually-hidden">
       Every adapter and checkpoint PixlStash has found on this machine. Group
@@ -42,7 +41,53 @@
          lives on the row or in the selection pill (#904). -->
     <div class="shelf-toolbar">
       <span class="shelf-title">Models</span>
-      <span class="shelf-sub">{{ countLabel }}</span>
+
+      <!-- Two views of one destination, not two destinations. The runs are
+           models too — still in ai-toolkit's output folder rather than on the
+           shelf, and importing one is the act of moving it from here to there.
+           This sits in the LEFT group because the bar has a flexible spacer
+           after `Model folders`, so anything added here costs the right cluster
+           nothing until they collide.
+
+           Text labels and no glyphs. `AiToolkitIcon` is a brand mark and names
+           ai-toolkit the product; these two name OUR views, and a filled mark
+           on one segment against mdi line art on the other unbalances a control
+           that has to read as symmetric.
+
+           The selected segment FILLS, the way the shipped `.tbm-seg` control
+           does. Not a wash plus a bolder label: a bolder label is a wider
+           label, so the pair resized on every switch and shoved the whole left
+           group sideways. -->
+      <div class="shelf-viewswitch" role="tablist" aria-label="Model view">
+        <button
+          id="shelf-tab-shelf"
+          type="button"
+          role="tab"
+          class="bar-btn shelf-viewseg"
+          :class="{ 'shelf-viewseg--on': isShelfTab }"
+          :aria-selected="isShelfTab"
+          :aria-controls="isShelfTab ? 'shelf-panel-shelf' : undefined"
+          :tabindex="isShelfTab ? 0 : -1"
+          @click="showTab('shelf')"
+          @keydown="onTabKeydown"
+        >
+          Shelf
+        </button>
+        <button
+          id="shelf-tab-runs"
+          type="button"
+          role="tab"
+          class="bar-btn shelf-viewseg"
+          :class="{ 'shelf-viewseg--on': !isShelfTab }"
+          :aria-selected="!isShelfTab"
+          :aria-controls="!isShelfTab ? 'shelf-panel-runs' : undefined"
+          :tabindex="isShelfTab ? -1 : 0"
+          @click="showTab('runs')"
+          @keydown="onTabKeydown"
+        >
+          Training runs
+        </button>
+      </div>
 
       <!-- The one accented, labelled button in the bar, because it is the only
            thing here with a result behind it. Three ways in, one menu: a
@@ -94,21 +139,23 @@
             <v-icon size="16">mdi-file-plus-outline</v-icon>
             <span>Add file…</span>
           </button>
-          <!-- Shown only once an ai-toolkit output root is registered. Hidden
+          <!-- Shown only while the output root is UNSET, because setting it is
+               a once-ever act: ai-toolkit writes every run under one folder.
+               Once it is set the runs have their own tab on this shelf, and
+               there is nothing left for this menu to add. Hidden
                rather than disabled, unlike the selection pill's verbs: those
                are about a selection the reader just made and owe an
-               explanation, and this is about a folder they have not set up,
-               which the folders dialog is the place to say. -->
-          <template v-if="hasSourceFolder">
+               explanation, and this is about a job already done. -->
+          <template v-if="!hasSourceFolder">
             <span class="shelf-mi-sep"></span>
             <button
               class="shelf-mi"
               type="button"
               role="menuitem"
-              @click="openImport"
+              @click="openAddSource"
             >
-              <v-icon size="16">mdi-import</v-icon>
-              <span>Import from ai-toolkit</span>
+              <AiToolkitIcon :size="16" />
+              <span>Set ai-toolkit output folder…</span>
             </button>
           </template>
         </div>
@@ -118,7 +165,11 @@
            proposes over every row. Icon-only beside Add rather than among the
            view controls, because it is a verb and they are not — and it opens a
            dry run, so nothing is written by the press itself. -->
+      <!-- The sweep proposes stacks over the shelf's `model_file` ROWS, so on
+           the training-runs tab it acts on a list the reader is not looking at.
+           Hidden there for the same reason Group, Sort and Show are. -->
       <button
+        v-if="isShelfTab"
         ref="stacksBtnRef"
         class="bar-btn bar-btn--boxed"
         type="button"
@@ -160,6 +211,16 @@
         <v-icon size="19">mdi-folder-multiple-outline</v-icon>
       </button>
 
+      <!-- Reports the list actually on screen, not always the shelf's — and it
+           sits AFTER the verbs, in the gap the spacer opens, for one reason:
+           the two labels are different widths ("1,842 models · 12 copies" vs
+           "8 runs"), so anywhere to their left it shoves Add, the sweep and
+           Model folders sideways every time the tab changes. Here the spacer
+           absorbs the difference and nothing moves. -->
+      <span class="shelf-sub shelf-sub--ingap">{{
+        isShelfTab ? countLabel : runsCountLabel
+      }}</span>
+
       <span class="shelf-spacer"></span>
 
       <!-- The bar's own cluster gap. `.shelf-toolbar` separates the title from
@@ -170,91 +231,99 @@
              their glyphs are abstract and their state is the reason the list
              looks the way it does. Filter keeps the universal funnel and says
              the rest with a count. -->
-        <v-menu
-          v-model="groupMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
-        >
-          <template #activator="{ props: menuProps }">
-            <button
-              v-bind="menuProps"
-              class="bar-btn bar-btn--boxed"
-              :class="{ 'bar-btn--open': groupMenuOpen }"
-              type="button"
-              aria-haspopup="dialog"
-              :aria-expanded="groupMenuOpen"
-              :title="groupButtonTitle"
-            >
-              <v-icon size="19">{{ activeGroup.icon }}</v-icon>
-              <span class="bar-btn-value">{{ activeGroup.label }}</span>
-              <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-            </button>
-          </template>
-          <ShelfSortPanel section="group" />
-        </v-menu>
+        <!-- Group, Sort and Show steer the ROW LIST. On the training-runs tab
+             that list is not on screen, so they are hidden rather than
+             disabled: a disabled control owes an explanation, and these are not
+             about a selection the reader just made — they are about a list that
+             is not in front of them. -->
+        <template v-if="isShelfTab">
+          <v-menu
+            v-model="groupMenuOpen"
+            :close-on-content-click="false"
+            location="bottom end"
+            origin="top end"
+            :offset="8"
+            transition="scale-transition"
+          >
+            <template #activator="{ props: menuProps }">
+              <button
+                v-bind="menuProps"
+                class="bar-btn bar-btn--boxed"
+                :class="{ 'bar-btn--open': groupMenuOpen }"
+                type="button"
+                aria-haspopup="dialog"
+                :aria-expanded="groupMenuOpen"
+                :title="groupButtonTitle"
+              >
+                <v-icon size="19">{{ activeGroup.icon }}</v-icon>
+                <span class="bar-btn-value">{{ activeGroup.label }}</span>
+                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
+              </button>
+            </template>
+            <ShelfSortPanel section="group" />
+          </v-menu>
 
-        <v-menu
-          v-model="sortMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
-        >
-          <!-- The shipped split-button: a direction toggle welded to a menu
+          <v-menu
+            v-model="sortMenuOpen"
+            :close-on-content-click="false"
+            location="bottom end"
+            origin="top end"
+            :offset="8"
+            transition="scale-transition"
+          >
+            <!-- The shipped split-button: a direction toggle welded to a menu
              trigger. `role="group"` names the pair; the two halves keep their
              own accessible names, and v-menu returns focus to the trigger on
              Escape, on an outside click and on a selection. -->
-          <template #activator="{ props: menuProps }">
-            <div
-              class="bar-split-button"
-              :class="{ 'bar-split-button--open': sortMenuOpen }"
-              role="group"
-              aria-label="Sort"
-            >
-              <!-- The accessible name IS the current state and flips on press,
-                 which is what a keyboard user hears when focus returns. -->
-              <button
-                class="bar-btn bar-split-toggle"
-                type="button"
-                :title="directionLabel"
-                :aria-label="directionLabel"
-                @click.stop="toggleDirection"
+            <template #activator="{ props: menuProps }">
+              <div
+                class="bar-split-button"
+                :class="{ 'bar-split-button--open': sortMenuOpen }"
+                role="group"
+                aria-label="Sort"
               >
-                <v-icon size="19">{{ directionIcon }}</v-icon>
-              </button>
-              <!-- `aria-haspopup="dialog"`, not `menu`: the panel is a div of
+                <!-- The accessible name IS the current state and flips on press,
+                 which is what a keyboard user hears when focus returns. -->
+                <button
+                  class="bar-btn bar-split-toggle"
+                  type="button"
+                  :title="directionLabel"
+                  :aria-label="directionLabel"
+                  @click.stop="toggleDirection"
+                >
+                  <v-icon size="19">{{ directionIcon }}</v-icon>
+                </button>
+                <!-- `aria-haspopup="dialog"`, not `menu`: the panel is a div of
                  grouped toggles, and claiming a menu would promise roving
                  arrow keys nothing implements. Matches SearchResultBar. -->
-              <button
-                v-bind="menuProps"
-                class="bar-btn bar-split-menu"
-                type="button"
-                aria-haspopup="dialog"
-                :aria-expanded="sortMenuOpen"
-                :title="sortButtonTitle"
-              >
-                <v-icon size="19">{{ activeSort.icon }}</v-icon>
-                <span class="bar-btn-value">{{ activeSort.label }}</span>
-                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-              </button>
-            </div>
-          </template>
-          <ShelfSortPanel section="sort" />
-        </v-menu>
+                <button
+                  v-bind="menuProps"
+                  class="bar-btn bar-split-menu"
+                  type="button"
+                  aria-haspopup="dialog"
+                  :aria-expanded="sortMenuOpen"
+                  :title="sortButtonTitle"
+                >
+                  <v-icon size="19">{{ activeSort.icon }}</v-icon>
+                  <span class="bar-btn-value">{{ activeSort.label }}</span>
+                  <v-icon size="18" class="bar-btn-chevron"
+                    >mdi-menu-down</v-icon
+                  >
+                </button>
+              </div>
+            </template>
+            <ShelfSortPanel section="sort" />
+          </v-menu>
 
-        <v-menu
-          v-model="showMenuOpen"
-          :close-on-content-click="false"
-          location="bottom end"
-          origin="top end"
-          :offset="8"
-          transition="scale-transition"
-        >
-          <!-- The boxed bar button, its badge and the panel shell are the
+          <v-menu
+            v-model="showMenuOpen"
+            :close-on-content-click="false"
+            location="bottom end"
+            origin="top end"
+            :offset="8"
+            transition="scale-transition"
+          >
+            <!-- The boxed bar button, its badge and the panel shell are the
              toolbar's shipped filter pattern; v-menu is also what returns
              focus to this button on Escape and on an outside click, so none
              of that is hand-rolled.
@@ -262,28 +331,29 @@
              The badge counts ACTIVE FILTERS, never results: it is the answer to
              "why is this list short", and the result counts are already on the
              group headers. -->
-          <template #activator="{ props: menuProps }">
-            <button
-              v-bind="menuProps"
-              class="bar-btn bar-btn--boxed"
-              :class="{
-                'bar-btn--active': store.activeCount > 0 && !showMenuOpen,
-                'bar-btn--open': showMenuOpen,
-              }"
-              type="button"
-              :title="showButtonTitle"
-            >
-              <span class="bar-icon-badge-wrap">
-                <v-icon size="19">mdi-filter-outline</v-icon>
-                <span v-if="store.activeCount > 0" class="bar-filter-badge">{{
-                  store.activeCount
-                }}</span>
-              </span>
-              <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
-            </button>
-          </template>
-          <ShelfShowPanel />
-        </v-menu>
+            <template #activator="{ props: menuProps }">
+              <button
+                v-bind="menuProps"
+                class="bar-btn bar-btn--boxed"
+                :class="{
+                  'bar-btn--active': store.activeCount > 0 && !showMenuOpen,
+                  'bar-btn--open': showMenuOpen,
+                }"
+                type="button"
+                :title="showButtonTitle"
+              >
+                <span class="bar-icon-badge-wrap">
+                  <v-icon size="19">mdi-filter-outline</v-icon>
+                  <span v-if="store.activeCount > 0" class="bar-filter-badge">{{
+                    store.activeCount
+                  }}</span>
+                </span>
+                <v-icon size="18" class="bar-btn-chevron">mdi-menu-down</v-icon>
+              </button>
+            </template>
+            <ShelfShowPanel />
+          </v-menu>
+        </template>
 
         <!-- The tail, minus undo: [separator] [TbGlobalActions]
              (docs/design/toolbar-responsive-decisions.md). The shelf records
@@ -317,7 +387,15 @@
          leaves every row clickable and every one of them in the tab order,
          which is worse than no veil at all. The toolbar stays live: Show and
          Sort still answer correctly while files are in flight. -->
-    <div class="shelf-body" :inert="moves.running || undefined">
+    <div
+      v-if="isShelfTab"
+      id="shelf-panel-shelf"
+      class="shelf-body"
+      role="tabpanel"
+      aria-labelledby="shelf-tab-shelf"
+      aria-describedby="shelf-help"
+      :inert="moves.running || undefined"
+    >
       <!-- The visible half of the same statement. `inert` on the wrapper is
            what actually stops the interaction; this is what says so. -->
       <div v-if="moves.running" class="shelf-dim" aria-hidden="true"></div>
@@ -1054,13 +1132,26 @@
       </template>
     </div>
 
+    <!-- The other view of the same destination. `v-if` and not `v-show`: the
+         runs grid reloads itself on window focus and tears those listeners down
+         in `onBeforeUnmount`, so a hidden-but-mounted panel would keep fetching
+         a list nobody is looking at. -->
+    <TrainingRuns
+      v-else
+      id="shelf-panel-runs"
+      role="tabpanel"
+      aria-labelledby="shelf-tab-runs"
+      @set-folder="openAddSource"
+      @count="runsCount = $event"
+    />
+
     <!-- The pill floats bottom-centre OVER the list, exactly like the photo
          grid's: the list is what the selection was made in, and a docked strip
          between the toolbar and the rows pushed the whole list down every time
          a row was clicked. This wrapper is the float; the pill owns its own
          shape. `pointer-events` is off on the strip and back on for the pill,
          so the rows underneath it stay clickable. -->
-    <div class="shelf-selbar-float">
+    <div v-if="isShelfTab" class="selbar-float">
       <ShelfSelectionBar
         ref="selBarRef"
         @rename="startRenameSelected"
@@ -1085,9 +1176,16 @@
       :destination-folder-id="movePreselected"
       @close="closeMove"
     />
-    <ModelImportDialog :open="importOpen" @close="closeImport" />
     <ShelfStackProposalsDialog :open="stacksOpen" @close="closeStacks" />
-    <ModelFoldersDialog :open="foldersOpen" @close="closeFolders" />
+    <!-- Setting the output root from the registry dialog lands on the runs for
+         the same reason doing it from the Add menu does: the owner set it
+         because they have runs to import, so showing them beats leaving a new
+         tab to be discovered. -->
+    <ModelFoldersDialog
+      :open="foldersOpen"
+      @close="closeFolders"
+      @source-added="showTab('runs')"
+    />
 
     <!-- The shipped host-path picker again, in its file mode. A server-side
          picker rather than an `<input type=file>`: the file is on the machine
@@ -1100,6 +1198,16 @@
       pick-model-file
       @select="onFilePicked"
       @close="closeAddFile"
+    />
+
+    <!-- The same picker in its directory mode, registering what it returns as
+         the ai-toolkit output root rather than as a folder to catalogue. -->
+    <FolderBrowser
+      :open="addSourceOpen"
+      :registered-paths="foldersStore.registeredPaths"
+      already-registered-label="Already a model folder"
+      @select="onSourcePicked"
+      @close="closeAddSource"
     />
 
     <!-- Corner-anchored inside the panel that is busy, never a centred modal:
@@ -1132,6 +1240,7 @@ import {
   shallowRef,
   watch,
 } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
@@ -1139,9 +1248,11 @@ import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
-import ModelImportDialog from "../panels/ModelImportDialog.vue";
 import ShelfStackProposalsDialog from "../panels/ShelfStackProposalsDialog.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
+import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
+import TrainingRuns from "./TrainingRuns.vue";
+import { SOURCE_KIND } from "../../api/modelFolders";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
@@ -1748,9 +1859,14 @@ function onBandDrop(band, event) {
  * FIRST, and a capture-phase listener would take it from them.
  */
 function shelfOwnsTheKey(event) {
+  // The shelf component stays mounted while the runs panel is showing, and this
+  // is a WINDOW listener, so without this line `Delete` would open the delete
+  // confirmation for rows the reader cannot see and `Escape` would silently
+  // clear a selection they did not know they still had.
+  if (!isShelfTab.value) return false;
   if (
     moveOpen.value ||
-    importOpen.value ||
+    addSourceOpen.value ||
     stacksOpen.value ||
     foldersOpen.value ||
     addFileOpen.value ||
@@ -2019,26 +2135,94 @@ function stepLabel(row) {
   return typeof step === "number" ? `Step ${step.toLocaleString()}` : "";
 }
 
-// ── Import from ai-toolkit (shelf plan F6) ──────────────────────────────────
+// ── The two views of this destination (shelf plan F6) ───────────────────────
+//
+// The tab is DERIVED from the route rather than held beside it, so there is no
+// second source of truth to desync: reload and back-navigation land on the same
+// view by construction. `/models/runs` is a path and not `?view=runs` because
+// the query string is reserved here for modifiers layered on a destination
+// (`?overlay=`, `?review=`, the duplicates `?scope=`), and this is a different
+// list of different objects with its own keyboard model.
 
-const importOpen = ref(false);
+const route = useRoute();
+const router = useRouter();
 
-/** Whether any ai-toolkit output root is registered at all. */
-const hasSourceFolder = computed(() =>
-  foldersStore.folders.some((folder) => folder.kind === "source"),
+const isShelfTab = computed(() => route.name !== "models-runs");
+
+/** How many runs the other view is showing, for the count beside the tabs. */
+const runsCount = ref(null);
+const runsCountLabel = computed(() =>
+  runsCount.value == null
+    ? ""
+    : `${runsCount.value.toLocaleString()} ${runsCount.value === 1 ? "run" : "runs"}`,
 );
 
-function openImport() {
-  importOpen.value = true;
+function showTab(which) {
+  const name = which === "runs" ? "models-runs" : "models";
+  if (route.name !== name) router.push({ name });
 }
 
-async function closeImport() {
-  importOpen.value = false;
+/**
+ * Arrow keys move between the tabs and activate on arrival.
+ *
+ * Automatic activation, per the APG: there are two tabs and neither panel is
+ * expensive to show — the runs listing reads filenames and one `config.yaml`
+ * per run and is re-run on every window focus anyway. Focus STAYS on the newly
+ * selected tab, which is what makes Left/Right flickable; moving it into the
+ * panel would strand someone comparing the two lists.
+ */
+function onTabKeydown(event) {
+  const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+  if (!keys.includes(event.key)) return;
+  event.preventDefault();
+  const toRuns =
+    event.key === "End" ||
+    (event.key === "ArrowRight" && isShelfTab.value) ||
+    (event.key === "ArrowLeft" && isShelfTab.value);
+  showTab(toRuns ? "runs" : "shelf");
+  nextTick(() => {
+    document
+      .getElementById(toRuns ? "shelf-tab-runs" : "shelf-tab-shelf")
+      ?.focus();
+  });
+}
+
+// ── Set the ai-toolkit output folder (shelf plan F6) ────────────────────────
+//
+// Setting the folder is all this menu does. The runs inside it are a
+// destination of their own (`/training-runs`), reached from the sidebar, and
+// the sidebar entry appears from the same signal that hides this item: once the
+// output root exists there is nothing left here to add.
+
+const addSourceOpen = ref(false);
+
+/** Whether the ai-toolkit output root has been set. */
+const hasSourceFolder = computed(() => Boolean(foldersStore.sourceFolder));
+
+function openAddSource() {
+  addSourceOpen.value = true;
+}
+
+async function closeAddSource() {
+  addSourceOpen.value = false;
   await nextTick();
-  // The button can unmount under us: the import may have been the last run in
-  // the only source folder, and `delete_after_import` then empties it. Falling
-  // back to the shelf root beats dropping focus to <body>.
+  // The button can unmount under us: this item is the last thing in the menu
+  // when the shelf has no folders at all. Falling back to the shelf root beats
+  // dropping focus to <body>.
   (addBtnRef.value?.isConnected ? addBtnRef.value : rootEl.value)?.focus();
+}
+
+/**
+ * Register the picked folder as the output root, then go straight to its runs.
+ *
+ * Navigating is the point of having set it: the owner asked for this because
+ * they have runs to import, and landing them on the list is one less step than
+ * telling them a new sidebar entry now exists.
+ */
+async function onSourcePicked(path) {
+  const added = await foldersStore.add({ path, kind: SOURCE_KIND });
+  await closeAddSource();
+  if (added) showTab("runs");
 }
 
 // ── Add file (shelf plan F6's remainder) ────────────────────────────────────
@@ -3256,19 +3440,82 @@ watch(
    Bottom-centre over the list, the same object the photo grid docks over its
    tiles. The strip takes no pointer events so the rows it crosses stay
    clickable; the pill inside it takes them back. */
-.shelf-selbar-float {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: var(--space-5);
-  display: flex;
-  justify-content: center;
-  pointer-events: none;
-  z-index: var(--z-sticky);
+
+/* ── The view switcher ─────────────────────────────────────────────────────
+   A welded pair of `.bar-btn`s: gap 0, and the outer corners rounded the way
+   `.bar-split-toggle`/`.bar-split-menu` already do it. NO container border —
+   `--v-theme-border` against this chrome measures 1.28:1 light / 1.35:1 dark,
+   which is a box with no job. Adjacency at gap 0 is what groups them. */
+/* The shipped segmented control's vocabulary (`.tbm-seg`, `App.css`): a track
+   in `--v-theme-input-background` with a `--v-theme-border` hairline, holding
+   equal segments. The track fill is only 1.17:1 light / 1.13:1 dark against the
+   toolbar, so the HAIRLINE is what separates it — which is why the shipped
+   control carries one and why a track without it reads as nothing.
+
+   Welded rather than gapped, and pill rather than `--radius-md`: the outer
+   corners are fully round and the seam between the two is a straight line, so
+   the pair reads as one object with a division in it rather than as two
+   controls that happen to touch. */
+.shelf-viewswitch {
+  display: inline-flex;
+  gap: 0;
+  background: rgb(var(--v-theme-input-background));
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-pill);
 }
 
-.shelf-selbar-float > :deep(*) {
-  pointer-events: auto;
+.shelf-viewseg {
+  border-radius: 0;
+  color: rgba(var(--v-theme-on-panel), 0.7);
+}
+
+/* Round outwards, straight between. */
+/* No padding on the track, so a filled segment reaches the border rather than
+   floating inside a ring of track colour — which is what read as a wide inset
+   around the pair. The caps nest exactly because both are `--radius-pill`. */
+.shelf-viewseg:first-child {
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+
+.shelf-viewseg:last-child {
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+}
+
+.shelf-viewseg:not(.shelf-viewseg--on):hover {
+  color: rgb(var(--v-theme-on-panel));
+  background: var(--hover-wash);
+}
+
+/* The selected segment FILLS, exactly as `.tbm-seg-btn--on` does, and carries
+   no weight change. A bolder label is a wider label, so the pair resized on
+   every switch and the whole left group jumped — the fill says the same thing
+   and costs no layout. `on-primary` on `primary` measures 4.86:1 in both
+   themes, so the label clears the text floor on the fill. */
+.shelf-viewseg--on {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+
+.shelf-viewseg--on:hover {
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+
+/* Raised so the focus ring is not clipped by the welded sibling. */
+.shelf-viewseg:focus-visible {
+  position: relative;
+  z-index: var(--z-raised);
+}
+
+/* The gap the count sits in is the bar's cluster gap, not a hair. */
+.shelf-sub--ingap {
+  margin-left: var(--space-4);
+}
+
+/* Raised so the focus ring is not clipped by the welded sibling. */
+.shelf-viewseg:focus-visible {
+  position: relative;
+  z-index: var(--z-raised);
 }
 
 /* ── Banners ───────────────────────────────────────────────────────────────

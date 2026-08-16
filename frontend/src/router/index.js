@@ -20,6 +20,7 @@ import App from "../App.vue";
 //   /duplicates                             → Duplicate triage queue
 //   /duplicates?scope=set&scope_id=12       → …scoped to one collection object
 //   /models                                 → Model shelf (adapters/checkpoints)
+//   /models/runs                            → ai-toolkit training runs, the shelf's second view
 //   /ref-folder/:id                         → Reference folder view (id = numeric)
 //   /import-folder/:id                      → Import folder view (id = numeric)
 //
@@ -37,11 +38,19 @@ const routes = [
   { path: "/character/:id", name: "character", component: App },
   { path: "/set/:id", name: "set", component: App },
   { path: "/project/:id", name: "project", component: App },
-  { path: "/project/:projectId/character/:id", name: "project-character", component: App },
+  {
+    path: "/project/:projectId/character/:id",
+    name: "project-character",
+    component: App,
+  },
   { path: "/project/:projectId/set/:id", name: "project-set", component: App },
   { path: "/scrapheap", name: "scrapheap", component: App },
   { path: "/duplicates", name: "duplicates", component: App },
   { path: "/models", name: "models", component: App },
+  { path: "/models/runs", name: "models-runs", component: App },
+  // The runs were briefly a destination of their own. They are a view of the
+  // shelf, so the old path redirects rather than 404s — it was published.
+  { path: "/training-runs", redirect: "/models/runs" },
   { path: "/ref-folder/:id", name: "ref-folder", component: App },
   { path: "/import-folder/:id", name: "import-folder", component: App },
   // Catch-all: redirect unknown paths to home

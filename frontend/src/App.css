@@ -346,6 +346,123 @@ button:focus:not(:focus-visible) {
   color: rgb(var(--v-theme-secondary)) !important;
 }
 
+
+/* -- The selection pill: the floating contextual-action dialect -------------
+   Moved here from `ShelfSelectionBar.vue`'s scoped block, unchanged apart from
+   the name. `<style scoped>` compiles these to `.selbar[data-v-hash]`, which
+   matches only that component's own elements -- so a SECOND consumer of the
+   same object (the ai-toolkit training runs, which dock their own pill in the
+   same strip) renders a bare `<div>`. This is the identical trap the `.bar-btn`
+   family was moved here to escape, for the identical reason; see the note above
+   it. Selectors stay `selbar-`-prefixed, so global scope is contained.
+
+   `.shelf-selbar` became `.selbar` in the move: the object is not the shelf's,
+   it is the product's, and two views now dock one. `.selbar-float` came with it
+   from `ModelShelf.vue` for the same reason -- only the CONTAINER knows where
+   its list ends, which is why it is `position: absolute` against a positioned
+   ancestor and not fixed.
+   ------------------------------------------------------------------------ */
+/* ── The pill ──────────────────────────────────────────────────────────────
+   Positioned by the shelf, which is the only thing that knows where its list
+   ends; this owns the object and not its place. `--elevation-4` and the pill
+   radius are what make it read as floating ABOVE the rows rather than as a
+   docked strip the list stops at. */
+.selbar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  border: 1px solid rgb(var(--v-theme-divider));
+  border-radius: var(--radius-pill);
+  box-shadow: var(--elevation-4);
+}
+
+.selbar-count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.selbar-size {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.selbar-chevron {
+  margin-left: calc(var(--space-1) * -1);
+}
+
+/* Round, 34px, and the hover wash is the only thing that draws a box: a border
+   per verb would make seven of them into a fence. */
+.selbar-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.selbar-btn:hover:not(:disabled) {
+  background: var(--hover-wash);
+}
+
+/* The only verb in the pill that destroys bytes. Colour is the whole signal —
+   no border, no fill — so it reads as one of the row rather than as a second
+   kind of control, and the hover wash is the error colour at the same weight
+   the neutral one uses. */
+.selbar-btn--danger {
+  color: rgb(var(--v-theme-error));
+}
+
+.selbar-btn--danger:hover:not(:disabled) {
+  background: rgba(var(--v-theme-error), 0.08);
+}
+
+/* Shown and dimmed rather than hidden, so the row of verbs never reflows under
+   the pointer as the selection grows. The reason is in the `title`. */
+.selbar-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.selbar-sep {
+  width: 1px;
+  height: 22px;
+  background: rgb(var(--v-theme-divider));
+}
+
+.selbar-float {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: var(--space-5);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: var(--z-sticky);
+}
+
+.selbar-float > * {
+  pointer-events: auto;
+}
+
 /* Keyboard shortcuts FAB */
 .shortcuts-fab {
   position: fixed;

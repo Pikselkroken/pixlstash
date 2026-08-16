@@ -8,6 +8,8 @@
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { setActivePinia, createPinia } from "pinia";
 
 const listAdapters = vi.fn();
@@ -86,8 +88,35 @@ vi.mock("../../api/modelStacks", () => ({
   listStackProposals: vi.fn(),
 }));
 
+// The shelf reads `route.name` to decide which of its two views is showing, so
+// the suite drives the tab by writing `nav.route.name`. REACTIVE, not a plain
+// object with a getter: the tab is a `computed`, and a non-reactive source
+// simply never re-evaluates — which reads in a test exactly like the panel
+// failing to swap. Mocked rather than given a real router, because these tests
+// mount the view alone and a router would have to carry every app route.
+const nav = vi.hoisted(() => ({ route: null, push: null }));
+vi.mock("vue-router", async () => {
+  const { reactive } = await vi.importActual("vue");
+  const { vi: vitest } = await import("vitest");
+  nav.route = reactive({
+    name: "models",
+    query: {},
+    params: {},
+    path: "/models",
+  });
+  nav.push = vitest.fn(({ name }) => {
+    nav.route.name = name;
+  });
+  return {
+    useRoute: () => nav.route,
+    useRouter: () => ({ push: nav.push, replace: vitest.fn() }),
+  };
+});
+
+const createModelFolder = vi.fn();
 vi.mock("../../api/modelFolders", async (importOriginal) => ({
   ...(await importOriginal()),
+  createModelFolder: (...args) => createModelFolder(...args),
   listModelFolderDevices: (...args) => listModelFolderDevices(...args),
   listModelFolders: (...args) => listModelFolders(...args),
 }));
@@ -132,7 +161,6 @@ const globalOpts = {
       ModelFoldersDialog: true,
       ShelfEditDialog: true,
       ShelfMoveDialog: true,
-      ModelImportDialog: true,
       // The host-path picker `Add file` opens. Real, it would drag Vuetify's
       // dialog provider into a suite that installs none; stubbed, it still
       // emits `select`, which is the whole of what this view listens for.
@@ -197,6 +225,14 @@ beforeEach(() => {
   listModelFolderDevices.mockResolvedValue([]);
   listModelFolders.mockReset();
   listModelFolders.mockResolvedValue([]);
+  nav.route.name = "models";
+  nav.push.mockClear();
+  createModelFolder.mockReset();
+  createModelFolder.mockResolvedValue({
+    id: 7,
+    path: "/home/g/ai-toolkit/output",
+    kind: "source",
+  });
   // `idle` is what a machine with no move in flight reports, and `adopt()`
   // adopts nothing from it — so the mount path stays silent instead of warning
   // from an unawaited promise.
@@ -803,7 +839,12 @@ describe("the shelf's own accessible name", () => {
     const root = wrapper.find(".shelf");
     expect(root.attributes("role")).toBe("region");
     expect(root.attributes("aria-label")).toBe("Model shelf");
-    expect(root.attributes("aria-describedby")).toBe("shelf-help");
+    // The description hangs on the shelf PANEL rather than the region: every
+    // sentence in it is about the row list, and the region now also contains
+    // the training-runs panel, which has none of those controls.
+    const panel = wrapper.find("#shelf-panel-shelf");
+    expect(panel.attributes("role")).toBe("tabpanel");
+    expect(panel.attributes("aria-describedby")).toBe("shelf-help");
     expect(wrapper.find("#shelf-help").exists()).toBe(true);
   });
 
@@ -3823,5 +3864,248 @@ describe("Delete", () => {
     await pressDelete();
     expect(confirmSpy).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
+  });
+});
+
+describe("setting the ai-toolkit output folder", () => {
+  const SOURCE = {
+    id: 7,
+    path: "/home/g/ai-toolkit/output",
+    kind: "source",
+    movable: "external",
+    file_count: 0,
+    present_bytes: 0,
+  };
+
+  const addItems = (wrapper) =>
+    wrapper.findAll(".shelf-mi").map((b) => b.text());
+
+  it("offers to set it while none is registered", async () => {
+    const wrapper = await mountShelf([]);
+    expect(addItems(wrapper).some((t) => t.includes("Set ai-toolkit"))).toBe(
+      true,
+    );
+    wrapper.unmount();
+  });
+
+  it("stops offering once it is set, because the runs get their own destination", async () => {
+    // Not replaced by an Import item: what is INSIDE the folder is a view now,
+    // reached from the sidebar. This menu adds things, and once the one output
+    // root exists there is nothing here left to add.
+    listModelFolders.mockResolvedValue([SOURCE]);
+    const wrapper = await mountShelf([]);
+    const items = addItems(wrapper);
+    expect(items.some((t) => t.includes("Set ai-toolkit"))).toBe(false);
+    expect(items.some((t) => t.includes("Import from ai-toolkit"))).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("registers the picked folder as the output root and goes to its runs", async () => {
+    // Navigating is the point of setting it: the owner set it because they have
+    // runs to import, so landing them on the list beats announcing a new
+    // sidebar entry.
+    const wrapper = await mountShelf([]);
+    const setItem = wrapper
+      .findAll(".shelf-mi")
+      .find((b) => b.text().includes("Set ai-toolkit"));
+    await setItem.trigger("click");
+    await wrapper.vm.$nextTick();
+
+    const browsers = wrapper.findAllComponents({ name: "FolderBrowser" });
+    await browsers.at(-1).vm.$emit("select", "/home/g/ai-toolkit/output");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    expect(createModelFolder).toHaveBeenCalledWith({
+      path: "/home/g/ai-toolkit/output",
+      kind: "source",
+    });
+    // Navigating is the point of setting it: the owner set it because they have
+    // runs to import, so landing them on the list beats announcing a new tab.
+    expect(nav.push).toHaveBeenCalledWith({ name: "models-runs" });
+    wrapper.unmount();
+  });
+});
+
+describe("the two views of the shelf", () => {
+  const rowAt = (wrapper, i) => wrapper.findAll(".shelf-row")[i];
+  const SOURCE = {
+    id: 7,
+    path: "/home/g/ai-toolkit/output",
+    kind: "source",
+    movable: "external",
+    file_count: 0,
+    present_bytes: 0,
+  };
+
+  it("shows the runs panel on /models/runs and the rows on /models", async () => {
+    listModelFolders.mockResolvedValue([SOURCE]);
+    const wrapper = await mountShelf([adapter()]);
+    expect(wrapper.find("#shelf-panel-shelf").exists()).toBe(true);
+    expect(wrapper.find("#shelf-panel-runs").exists()).toBe(false);
+
+    nav.route.name = "models-runs";
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find("#shelf-panel-shelf").exists()).toBe(false);
+    expect(wrapper.find("#shelf-panel-runs").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("keeps a shelf selection across a switch, but takes its keys away", async () => {
+    // The shelf component stays mounted behind the runs panel and its key
+    // handler is on the WINDOW, so without the tab guard `Delete` would open a
+    // confirmation for rows nobody can see and `Escape` would silently clear a
+    // selection the reader does not know they still have. Keeping the selection
+    // is deliberate: losing forty deliberately-clicked rows because someone
+    // glanced at a run would be the worse error.
+    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+    await rowAt(wrapper, 0).trigger("click");
+    expect(store.selectedRows).toHaveLength(1);
+
+    nav.route.name = "models-runs";
+    await wrapper.vm.$nextTick();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(1);
+
+    nav.route.name = "models";
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(1);
+    // …and the keys come back with the rows.
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("does not dock the shelf's pill over the runs grid", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    await rowAt(wrapper, 0).trigger("click");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".selbar").exists()).toBe(true);
+
+    nav.route.name = "models-runs";
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".selbar").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("hides the row-list controls on the runs tab", async () => {
+    // Group, Sort, Show and the stack sweep all act on the shelf's rows. On the
+    // runs tab that list is not on screen, so they are gone rather than
+    // disabled — a disabled control owes an explanation, and these are not
+    // about a selection the reader just made.
+    const wrapper = await mountShelf([adapter()]);
+    const labels = () =>
+      wrapper
+        .findAll(".shelf-toolbar button")
+        .map((b) =>
+          [b.attributes("aria-label"), b.attributes("title"), b.text()]
+            .filter(Boolean)
+            .join(" "),
+        );
+    expect(labels().some((l) => l.includes("Stack training runs"))).toBe(true);
+    expect(labels().some((l) => l.includes("Group"))).toBe(true);
+
+    nav.route.name = "models-runs";
+    await wrapper.vm.$nextTick();
+
+    expect(labels().some((l) => l.includes("Stack training runs"))).toBe(false);
+    expect(labels().some((l) => l.includes("Group"))).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("keeps Add and Model folders on both tabs", async () => {
+    // These open something, write nothing on the press, and have no selection
+    // to hang on, so they are view-independent — and keeping them fixed is what
+    // stops the left group reflowing on every switch.
+    const wrapper = await mountShelf([adapter()]);
+    const has = (needle) =>
+      wrapper
+        .findAll(".shelf-toolbar button")
+        .some((b) =>
+          [b.attributes("aria-label"), b.attributes("title"), b.text()]
+            .filter(Boolean)
+            .join(" ")
+            .includes(needle),
+        );
+    expect(has("Add models to the shelf")).toBe(true);
+    expect(has("Model folders")).toBe(true);
+
+    nav.route.name = "models-runs";
+    await wrapper.vm.$nextTick();
+
+    expect(has("Add models to the shelf")).toBe(true);
+    expect(has("Model folders")).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("moves between the tabs on Left and Right", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    await wrapper.find("#shelf-tab-shelf").trigger("keydown", {
+      key: "ArrowRight",
+    });
+    expect(nav.push).toHaveBeenCalledWith({ name: "models-runs" });
+    wrapper.unmount();
+  });
+});
+
+describe("the view switcher does not resize when you switch", () => {
+  // Twice now the tabs have shoved the whole left group of the toolbar sideways
+  // on every switch, because the selected state changed something that costs
+  // layout — first `font-weight`, which makes the label wider. The selected
+  // segment may change COLOUR all it likes; it may not change its box.
+  // Read from the project root rather than via `import.meta.url`: this suite
+  // runs in the jsdom environment, where `import.meta.url` is an http: URL and
+  // `fileURLToPath` refuses it.
+  const source = readFileSync(
+    resolve(process.cwd(), "src/components/views/ModelShelf.vue"),
+    "utf8",
+  );
+  const styles = source.slice(source.lastIndexOf("<style"));
+  const bodyOf = (selector) =>
+    styles
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("}")
+      .filter((rule) => {
+        const [sel] = rule.split("{");
+        return sel
+          .split(",")
+          .some((s) => s.replace(/\s+/g, " ").trim() === selector);
+      })
+      .map((rule) => rule.split("{")[1] || "");
+
+  const LAYOUT = [
+    /(^|\s|;)font-weight\s*:/,
+    /(^|\s|;)font-size\s*:/,
+    /(^|\s|;)padding[^:]*:/,
+    /(^|\s|;)margin[^:]*:/,
+    /(^|\s|;)border-width\s*:/,
+    /(^|\s|;)letter-spacing\s*:/,
+  ];
+
+  it("has a selected rule at all, so this is not asserting nothing", () => {
+    expect(bodyOf(".shelf-viewseg--on").length).toBeGreaterThan(0);
+  });
+
+  it("changes no property that costs layout when a segment is selected", () => {
+    for (const body of bodyOf(".shelf-viewseg--on")) {
+      for (const banned of LAYOUT) {
+        expect(body, `.shelf-viewseg--on must not set ${banned}`).not.toMatch(
+          banned,
+        );
+      }
+    }
+  });
+
+  it("keeps both segments on one type ramp step", () => {
+    // A per-segment font-size would resize the pair for the same reason.
+    for (const body of bodyOf(".shelf-viewseg")) {
+      expect(body).not.toMatch(/(^|\s|;)font-weight\s*:/);
+    }
   });
 });
