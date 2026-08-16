@@ -427,6 +427,30 @@ class _FakeResponse:
         pass
 
 
+# A published plugin as the repository actually ships one: a header declaring
+# author and licence (issue #961) and a README whose first prose line says what
+# it does. `plugins available` reads both, so the fixture has to carry both.
+CREDITED_FILTER = IMAGE_PLUGIN.replace(
+    'display_name = "My Filter"',
+    'display_name = "My Filter"\n'
+    '    author = "Ada <ada@example.com>"\n'
+    '    license = "MIT"',
+)
+
+# Hard-wrapped exactly as the published READMEs are: the first *line* of the
+# summary paragraph is a fragment, so anything reading line-by-line prints
+# "...so it" and stops. The summary is the first sentence of the joined
+# paragraph, never the first line.
+FILTER_README = """\
+# My Filter
+
+Stamps every picture with a magenta watermark, so it
+needs no model. Second sentence nobody needs.
+
+A longer explanation nobody needs in a listing.
+"""
+
+
 @pytest.fixture
 def fake_repository(monkeypatch, tmp_path):
     """Serve a zip shaped like a codeload download of the plugins repository."""
@@ -435,7 +459,11 @@ def fake_repository(monkeypatch, tmp_path):
     with zipfile.ZipFile(archive, "w") as bundle:
         bundle.writestr("PixlStash-plugins-main/README.md", "hi")
         bundle.writestr(
-            "PixlStash-plugins-main/plugins/image/my_filter/my_filter.py", IMAGE_PLUGIN
+            "PixlStash-plugins-main/plugins/image/my_filter/my_filter.py",
+            CREDITED_FILTER,
+        )
+        bundle.writestr(
+            "PixlStash-plugins-main/plugins/image/my_filter/README.md", FILTER_README
         )
         bundle.writestr(
             "PixlStash-plugins-main/plugins/captioning/my_captioner/__init__.py",
@@ -500,6 +528,147 @@ def test_a_ref_cannot_steer_the_download_at_another_repository(
     assert _install("my_filter", "--ref", ref) == cli.EXIT_REFUSED
     assert "url" not in fake_repository
     assert not (plugin_root / "image-plugins").exists()
+
+
+# ----------------------------------------------------------------------
+# The published catalogue: `plugins available`
+# ----------------------------------------------------------------------
+
+
+def _available(*extra: str) -> int:
+    return cli.main(["plugins", "available", *extra])
+
+
+def test_available_lists_both_kinds_with_what_the_repository_declares(
+    plugin_root, fake_repository, capsys
+):
+    assert _available() == cli.EXIT_OK
+    out = capsys.readouterr().out
+
+    assert "my_filter" in out and "my_captioner" in out
+    assert "My Filter" in out
+    # The first sentence of the joined paragraph: not the title, not the
+    # hard-wrapped first line, not the second sentence, not the next paragraph.
+    assert "Stamps every picture with a magenta watermark, so it needs no model." in out
+    assert "Second sentence" not in out
+    assert "A longer explanation" not in out
+    assert "Ada <ada@example.com>" in out and "MIT" in out
+    # It downloads the same archive `install` does, at the same default ref.
+    assert fake_repository["url"].endswith("/zip/main")
+
+
+def test_available_takes_the_same_ref_as_install(plugin_root, fake_repository):
+    assert _available("--ref", "v1.2.3") == cli.EXIT_OK
+    assert fake_repository["url"].endswith("/zip/v1.2.3")
+
+
+@pytest.mark.parametrize("ref", ["../../../someone-else/evil/zip/main", ".."])
+def test_available_refuses_a_ref_that_steers_the_download(
+    plugin_root, fake_repository, ref
+):
+    """Listing shares the installer's download, so it shares its one guard."""
+    assert _available("--ref", ref) == cli.EXIT_REFUSED
+    assert "url" not in fake_repository
+
+
+def test_a_search_word_matches_the_summary_not_just_the_name(
+    plugin_root, fake_repository, capsys
+):
+    """A reader searches for the word they can see, wherever it appeared."""
+    assert _available("watermark") == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "my_filter" in out
+    assert "my_captioner" not in out
+
+
+def test_a_search_word_matches_the_author(plugin_root, fake_repository, capsys):
+    assert _available("ada") == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "my_filter" in out and "my_captioner" not in out
+
+
+def test_a_word_matching_nothing_says_so_and_says_how_many_there_are(
+    plugin_root, fake_repository, capsys
+):
+    """Distinct from an empty repository: one is "try again", one is "broken"."""
+    assert _available("nosuchthing") == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "nosuchthing" in out
+    assert "all 2" in out
+
+
+def test_an_empty_repository_is_not_reported_as_a_failed_search(
+    plugin_root, monkeypatch, capsys
+):
+    monkeypatch.setattr(plugin_install, "catalogue", lambda _ref: [])
+    assert _available("anything") == cli.EXIT_OK
+    assert "publishes no plugins" in capsys.readouterr().out
+
+
+def test_available_marks_what_is_already_installed(
+    plugin_root, fake_repository, capsys
+):
+    assert _install("my_filter") == cli.EXIT_OK
+    capsys.readouterr()
+
+    assert _available() == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "* my_filter" in out
+    assert "already installed" in out
+    assert "* my_captioner" not in out
+
+
+def test_one_broken_published_plugin_does_not_empty_the_listing(
+    plugin_root, monkeypatch, capsys
+):
+    """The reader is choosing between the others; naming none of them is useless."""
+    broken = plugin_install.CataloguePlugin(
+        kind=plugin_install.IMAGE,
+        name="bad_one",
+        display_name="-",
+        problem="no plugin class found",
+    )
+    good = plugin_install.CataloguePlugin(
+        kind=plugin_install.IMAGE, name="good_one", display_name="Good One"
+    )
+    monkeypatch.setattr(plugin_install, "catalogue", lambda _ref: [broken, good])
+
+    assert _available() == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "good_one" in out
+    assert "bad_one" in out and "no plugin class found" in out
+
+
+def test_the_catalogue_never_imports_a_published_plugin(
+    plugin_root, fake_repository, monkeypatch
+):
+    """It reads code straight off the network, so ast is the whole safety story."""
+    import importlib
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError("plugins available must not import anything published")
+
+    monkeypatch.setattr(importlib.util, "module_from_spec", explode)
+    monkeypatch.setattr(importlib.util, "spec_from_file_location", explode)
+
+    assert _available() == cli.EXIT_OK
+
+
+def test_matches_searches_every_field_the_listing_shows(plugin_root):
+    entry = plugin_install.CataloguePlugin(
+        kind=plugin_install.IMAGE,
+        name="stamper",
+        display_name="The Stamper",
+        summary="Draws a mark",
+        author="Ada",
+        license="MIT",
+    )
+    for word in ("stamp", "STAMPER", "the stamper", "mark", "ada", "mit"):
+        assert plugin_install.matches(entry, word), word
+    assert not plugin_install.matches(entry, "captioning")
+    # An empty query is a listing, not a search that matches nothing.
+    assert plugin_install.matches(entry, "")
+    assert plugin_install.matches(entry, "   ")
 
 
 # ----------------------------------------------------------------------

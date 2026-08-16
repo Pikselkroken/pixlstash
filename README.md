@@ -455,6 +455,8 @@ PixlStash supports built-in plugins and user-created plugins.
 ### With the CLI (recommended)
 
 ```bash
+pixlstash-cli plugins available                     # what is published
+pixlstash-cli plugins available caption             # ...matching a word
 pixlstash-cli plugins install hello_world_stamp     # from the plugins repository
 pixlstash-cli plugins install ./my_captioner.zip    # a zip of a plugin folder
 pixlstash-cli plugins install ./my_captioner/       # an extracted folder
@@ -463,6 +465,14 @@ pixlstash-cli plugins test ./my_captioner.py       # does it load and render?
 pixlstash-cli plugins list
 pixlstash-cli plugins remove my_captioner
 ```
+
+`plugins available` lists what
+[PixlStash-plugins](https://github.com/Pikselkroken/PixlStash-plugins) publishes,
+with each plugin's name, title, one-line summary and (where declared) author and
+licence; `*` marks one you already have. Add a word to search, and it matches
+any of those fields, so anything you can see in the listing you can search for.
+It downloads the same archive `install` does and reads it without importing
+anything, so it needs no token and runs no published code.
 
 The destination differs by kind (captioning plugin or image filter) and by
 shape, so `install` works it out from the source instead of asking you to type

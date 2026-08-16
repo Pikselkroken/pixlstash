@@ -313,7 +313,7 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | [pixlstash/stacking.py](../pixlstash/stacking.py) | Picture stacking (duplicates / variants). |
 | [pixlstash/image_loading_dataset_prepper.py](../pixlstash/image_loading_dataset_prepper.py) | Dataset preparation utilities for offline training scripts. |
 | [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (list/create/attach/detach/relocate/backup/prepare-legacy-identity/rename) and `plugins` (install/test/list/remove). Only the `libraries` group opens the hub — see §8.1. |
-| [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins install/list/remove`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it. See §8.1. |
+| [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins available/install/list/remove`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it; also lists what the plugins repository publishes. See §8.1. |
 | [pixlstash/plugin_check.py](../pixlstash/plugin_check.py) | Backs `pixlstash-cli plugins test`. The one plugin verb that *does* import, through the server's own loader, and the only place the parameter schema is checked against what the UI renders. See §8.1. |
 
 ---
@@ -906,7 +906,7 @@ User-supplied image plugins are loaded from `user_data_dir("pixlstash")/image-pl
 
 ### 8.1 Installing and checking plugins from the CLI (issue #958)
 
-`pixlstash-cli plugins install|list|remove` ([pixlstash/plugin_install.py](../pixlstash/plugin_install.py))
+`pixlstash-cli plugins available|install|list|remove` ([pixlstash/plugin_install.py](../pixlstash/plugin_install.py))
 puts a plugin in the right directory instead of asking the user to. The
 destination differs by kind *and* by shape, and getting it wrong fails silently:
 a folder in the image directory is skipped without a message, and a single
@@ -975,6 +975,34 @@ dot segments before sending, so an unchecked ref (`../../../someone/evil/zip/mai
 walks out of `PLUGINS_REPO` entirely and installs code this CLI then runs
 unsandboxed in the server process. `_REF_RE` plus an explicit `..` component
 check is what keeps "a named plugin from one repository" true.
+
+**`plugins available` lists that repository, and shares its download.** Until it
+existed, `install <name>` was the only thing that knew what `PLUGINS_REPO`
+contained, and the catalogue leaked out only on the failure path — the
+`Available: ...` line of the "no plugin called X" refusal. Guessing a name wrong
+was the documented way to discover the right one. The listing reuses that same
+archive rather than adding a second source: `_download_repository` and
+`_published_dirs` were split out of `_fetch_from_repository`, so the layout
+(`plugins/<kind>/<slug>`) and the `--ref` validation above have one definition
+each, and a listing can never show a set that installing cannot reach. It needs
+no API token and no second host, because codeload serves the zip unauthenticated.
+
+Two properties carry over from §8.1 and one is new:
+
+- **Still nothing is imported.** This reads plugin source that has just come off
+  the network, so the ast-only rule is not a preference here but the whole of the
+  safety story; `test_the_catalogue_never_imports_a_published_plugin` fails the
+  build if `importlib` is reached at all.
+- **One broken published plugin does not empty the listing.** `_catalogue_entry`
+  records the problem on the entry rather than raising, because the reader is
+  choosing between the others and a refusal naming none of them is useless. This
+  is the same shape as `_describe` for installed plugins.
+- **The summary comes from the README's first *sentence*, not its first line.**
+  The published READMEs hard-wrap their opening paragraph, so a line-wise read
+  prints a fragment ("...so it runs"). `_summary` joins the paragraph before
+  splitting the sentence. `author` and `license` (issue #961) are read as class
+  literals through the existing `_string_attribute`, and shown only where the
+  plugin declares them — every plugin published so far predates the header.
 
 **`plugins test` is the exception to "nothing is imported", and the reason the
 rest of the group can stay static** ([pixlstash/plugin_check.py](../pixlstash/plugin_check.py),

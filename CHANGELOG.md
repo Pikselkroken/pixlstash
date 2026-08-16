@@ -1,5 +1,10 @@
 # [Unreleased]
 
+- `pixlstash-cli plugins available` lists what the plugins repository publishes,
+  with each plugin's name, title, one-line summary and, where declared, its
+  author and licence; `*` marks one you already have installed. Add a word to
+  search across all of those fields. Until now the only way to learn a plugin's
+  name was to guess one wrong and read the error.
 - The desktop app can now run the PixlStash CLI: `PixlStash.AppImage cli
   libraries list` works whether or not the app is open, and targets the desktop
   app's own library registry. Turn on Settings → Backend → Desktop → Shell
