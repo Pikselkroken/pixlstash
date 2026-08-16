@@ -373,8 +373,9 @@ def _analyse(source: str, path: Path, *, strict: bool) -> list[PluginClass]:
 
     image_classes = [entry for entry in found if entry.kind == IMAGE]
     if len(image_classes) > 1:
-        # _find_plugin_class returns the first ImagePlugin subclass in the
-        # module namespace and checks nothing else, so which one ships is a
+        # _find_plugin_class returns the first *concrete* ImagePlugin subclass
+        # the module itself defines (#968), so an abstract base or an imported
+        # class no longer wins — but between two concrete ones it is still a
         # dict-ordering accident. Nothing downstream reports this.
         image_classes[0].warnings.append(
             f"{path.name} defines {len(image_classes)} ImagePlugin subclasses "
@@ -600,8 +601,8 @@ def plan_install(root: Path, *, strict: bool = False) -> InstallPlan:
         if kind == IMAGE:
             raise PluginError(
                 f"an image filter named {primary.name!r} ships with PixlStash, "
-                "and a user plugin replaces a built-in with no message "
-                "anywhere. Rename the plugin's `name` before installing it."
+                "and a user plugin replaces a built-in, with only a server log "
+                "line to say so. Rename the plugin's `name` before installing it."
             )
         raise PluginError(
             f"a captioning plugin named {primary.name!r} ships with PixlStash, "

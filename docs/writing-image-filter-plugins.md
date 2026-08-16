@@ -75,12 +75,17 @@ class MyFilter(ImagePlugin):
 built-in**, because the user folder is scanned first and the first registration of a name
 wins. This is the opposite of the tagger system, where the built-in wins — so naming a
 plugin `rotate`, `scaling`, `pixelate`, `blur_sharpen`, `colour_filter` or
-`brightness_contrast` silently takes over that menu entry rather than being rejected.
+`brightness_contrast` takes over that menu entry rather than being rejected. The server
+log says so, naming *your* file as the one replacing the built-in, and that log line is
+the only place you will see it — the registry also records it as a load error, but that
+list is served nowhere (§9). `pixlstash-cli plugins list` marks such a file
+`(replaces the built-in)` without loading anything, which is the easier place to check.
 
-**Only the first `ImagePlugin` subclass in the module is registered**, and the search does
-not check where the class was defined. A subclass you `import` at the top of your file is
-found before the class you wrote below it, and the import wins. Do not import other
-plugins into a plugin.
+**Only one `ImagePlugin` subclass per file is registered** — the first *concrete* one the
+file itself defines. A subclass you merely `import` at the top of your file is skipped
+(it belongs to whoever defined it), and so is an abstract intermediate base you put above
+your real class. A file that defines two concrete plugins still registers only the first;
+give each plugin its own file.
 
 `supports_images` and `supports_videos` decide where the plugin is offered: the grid
 context menu, the selection bar and the overlay each hide a plugin that does not claim the
@@ -252,12 +257,12 @@ Honest gaps, not things to design around:
 ## 10. Differences from tagger plugins
 
 If you have written one of the other kind, these are the ones that will catch you out —
-the first three silently, which is why they are first.
+the first three go no further than the server log, which is why they are first.
 
 | | Image filter plugins | Tagger / captioner plugins |
 |---|---|---|
-| **Name collision** | **User plugin wins**, replacing the built-in | **Built-in wins**; the user plugin is rejected and listed as an error |
-| **Classes per file** | **Only the first** `ImagePlugin` subclass found, including one merely imported | **Every** concrete class the module *defines*; imported ones are excluded |
+| **Name collision** | **User plugin wins**, replacing the built-in; logged against the user file | **Built-in wins**; the user plugin is rejected and listed as an error |
+| **Classes per file** | **Only the first** concrete `ImagePlugin` subclass the file *defines* | **Every** concrete class the module *defines* |
 | **Load errors** | Server log only | Listed in Settings → Auto-tagging (local owner only) |
 | Plugin shape | Single `.py` file | Single `.py` file **or** a package folder with `__init__.py` |
 | Reload | Re-scanned on every list and every run | Start-up only; a restart is required |
