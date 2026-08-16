@@ -14,6 +14,7 @@ property that an *untrusted* peer cannot spoof loopback/local via `X-Forwarded-F
 import pytest
 
 from pixlstash.auth import get_real_client_ip, is_local_ip, is_loopback_ip
+from tests.network_vectors import LAN_IPV4, PRIVATE_10_IPV4
 
 
 @pytest.mark.parametrize("bogus", ["garbage", "", "not-an-ip", "999.999.999.999"])
@@ -32,8 +33,8 @@ def test_real_addresses_classified_correctly():
     assert is_loopback_ip("127.0.0.1") is True
     assert is_local_ip("127.0.0.1") is True
     # LAN (RFC1918) is local but NOT loopback
-    assert is_loopback_ip("192.168.1.5") is False
-    assert is_local_ip("192.168.1.5") is True
+    assert is_loopback_ip(LAN_IPV4) is False
+    assert is_local_ip(LAN_IPV4) is True
     # public is neither
     assert is_loopback_ip("8.8.8.8") is False
     assert is_local_ip("8.8.8.8") is False
@@ -71,9 +72,9 @@ class _FakeRequest:
 def test_xff_from_trusted_proxy_resolves_to_real_client():
     # A LAN client behind a trusted proxy resolves to the client and is judged
     # local (not loopback) — the legitimate reverse-proxy path still works.
-    req = _FakeRequest(host="10.0.0.1", xff="192.168.1.50")
-    ip = get_real_client_ip(req, trusted_proxies=["10.0.0.1"])
-    assert ip == "192.168.1.50"
+    req = _FakeRequest(host=PRIVATE_10_IPV4, xff=LAN_IPV4)
+    ip = get_real_client_ip(req, trusted_proxies=[PRIVATE_10_IPV4])
+    assert ip == LAN_IPV4
     assert is_local_ip(ip) is True
     assert is_loopback_ip(ip) is False
 
@@ -82,7 +83,7 @@ def test_xff_from_untrusted_peer_cannot_spoof_loopback():
     # An untrusted direct peer setting X-Forwarded-For: 127.0.0.1 must NOT be
     # admitted as loopback — the direct (untrusted) peer stands.
     req = _FakeRequest(host="8.8.8.8", xff="127.0.0.1")
-    ip = get_real_client_ip(req, trusted_proxies=["10.0.0.1"])
+    ip = get_real_client_ip(req, trusted_proxies=[PRIVATE_10_IPV4])
     assert ip == "8.8.8.8"
     assert is_loopback_ip(ip) is False
     assert is_local_ip(ip) is False

@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.network_vectors import LAN_IPV4, PRIVATE_10_IPV4, PRIVATE_172_IPV4
+
 REPO_ROOT = Path(__file__).parent.parent
 PIXLSTASH_DIR = REPO_ROOT / "pixlstash"
 ROUTES_DIR = REPO_ROOT / "pixlstash" / "routes"
@@ -2163,4 +2165,261 @@ def test_ml_import_probe_has_teeth():
     assert "torch" in loaded and "onnxruntime" in loaded, (
         "the ML-import probe failed to notice a module that definitely imports "
         f"torch and onnxruntime; it reported {loaded}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: no unsanctioned private-network address literal
+# ---------------------------------------------------------------------------
+# Push-time secret scanning reads every *added* line and stops the push on an
+# RFC 1918 address. That is why this repository has to stay clean rather than
+# merely stop adding literals: merging develop into a branch re-presents
+# everything landed since its base as added lines, so #963 was blocked by a
+# literal it had never touched.
+#
+# Six strings are exempt and nothing merely shaped like them: the three RFC
+# 1918 blocks, which are a definition rather than a machine and the constant
+# every locality gate is built out of, and the first host of each block, for a
+# test vector that has to be inside RFC 1918 because that is the branch it
+# exercises. Every network has something at ``.1``, so those say nothing about
+# whose network it is; the rest of the octet space does.
+#
+# The exemption is a *prefix* test rather than a whole-match one, which is what
+# keeps this rule the same shape as the scan it mirrors in both directions: a
+# sanctioned host wearing a prefix length is not reported, while an address
+# that merely begins with one and carries a further octet is.
+_SANCTIONED_PRIVATE_LITERALS = (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "10.0.0.1",
+    "172.16.0.1",
+    "192.168.0.1",
+)
+
+_PRIVATE_ADDRESS_RE = re.compile(
+    r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|192\.168\.\d{1,3}\.\d{1,3}"
+    r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})"
+)
+
+# Named roots, never a repo-root walk: that is what lets every scan in this
+# file work without a node_modules / dist / .venv exclusion list, and a
+# too-greedy exclusion is a silent pass. The list is wide because the scan it
+# mirrors reads the whole diff — a literal in a workflow, an installer script
+# or the website blocks a push exactly as one in a test does.
+_PRIVATE_ADDRESS_ROOTS = (
+    ".github",
+    "docs",
+    "electron",
+    "frontend/e2e",
+    "frontend/src",
+    "installer",
+    "pixlstash",
+    "scripts",
+    "tests",
+    "website",
+)
+# Directories whose *immediate* files are read whatever they are called —
+# Dockerfiles, docker-entrypoint.sh, .env.example, the frontend's build and
+# Playwright configs. Derived rather than listed on purpose: a hand-kept file
+# list is how three Dockerfiles came to be named here and then filtered
+# straight back out by the suffix set below, and it would have gone on missing
+# every root file added after it. Nothing walks *into* these, so node_modules
+# is still never opened.
+_PRIVATE_ADDRESS_FLAT_DIRS = (".", "frontend")
+# docs/reviews/ is gitignored and machine-local, so a fresh checkout is not
+# guaranteed to have it and nothing CI-enforced may read it (CLAUDE.md, and
+# the same rule that keeps the authz coverage matrix in docs/ proper).
+_PRIVATE_ADDRESS_SKIP = ("docs/reviews",)
+_PRIVATE_ADDRESS_SUFFIXES = frozenset(
+    {
+        ".cfg",
+        ".css",
+        ".html",
+        ".js",
+        ".json",
+        ".md",
+        ".mjs",
+        ".bat",
+        ".iss",
+        ".ps1",
+        ".py",
+        ".sh",
+        ".toml",
+        ".ts",
+        ".txt",
+        ".vue",
+        ".yaml",
+        ".yml",
+    }
+)
+
+
+# A digit extends the last octet; a dot starts another one. End of line is
+# neither, which is why this is a set of characters and not a substring test —
+# ``"" in "0123"`` is True in Python, so the string spelling reports every line
+# that happens to end on a sanctioned address.
+_ADDRESS_CONTINUES = frozenset("0123456789.")
+
+
+def _address_continues_after(line: str, at: int) -> bool:
+    """Whether the address ending at *at* carries on past that point.
+
+    A digit does, because it extends the last octet. So does a dot, and that
+    is the deliberately blunt half: a dot followed by a digit is genuinely a
+    further octet, and a dot followed by a space is the end of a sentence — but
+    the scan this mirrors treats both the same and reports the second, so a
+    rule that quietly permitted it would pass a line the push then blocks. Over
+    -strict here costs one reworded sentence; loose costs a blocked push, which
+    is the failure this whole guardrail exists to prevent. Ending a sentence on
+    the literal is therefore reported, and the way out is to not end it there.
+
+    End of line is not a continuation, and neither is a quote, a comma, a
+    bracket or the ``/`` of a prefix length.
+    """
+    return line[at : at + 1] in _ADDRESS_CONTINUES
+
+
+def _is_sanctioned_private_literal(line: str, start: int) -> bool:
+    """Whether the address at *start* is one of the six exempt strings.
+
+    Read as a prefix, and rejected only when what follows genuinely continues
+    the address: a trailing ``/24`` is the sanctioned host wearing a prefix
+    length, a further octet is a different address that merely begins with one.
+    """
+    for literal in _SANCTIONED_PRIVATE_LITERALS:
+        if line.startswith(literal, start) and not _address_continues_after(
+            line, start + len(literal)
+        ):
+            return True
+    return False
+
+
+def _private_address_offenders(root: Path, repo_root: Path) -> list[str]:
+    """Return ``"<path>:<lineno>: <line>"`` for every unsanctioned literal.
+
+    A file named directly is read whatever it is called; the suffix list only
+    decides what to open when walking a directory. Naming a file and then
+    filtering it out by extension is how ``Dockerfile``, ``Dockerfile.demo``
+    and ``Dockerfile.gpu`` sat in the list unscanned.
+    """
+    offenders: list[str] = []
+    named = root.is_file()
+    paths = [root] if named else sorted(root.rglob("*"))
+    for path in paths:
+        if not path.is_file():
+            continue
+        if not named and path.suffix not in _PRIVATE_ADDRESS_SUFFIXES:
+            continue
+        rel = path.relative_to(repo_root)
+        if rel.as_posix().startswith(_PRIVATE_ADDRESS_SKIP):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            # Every match on the line, not the first: a line carrying a
+            # sanctioned vector *and* a real address must still be reported.
+            for match in _PRIVATE_ADDRESS_RE.finditer(line):
+                if _is_sanctioned_private_literal(line, match.start()):
+                    continue
+                offenders.append(f"{rel}:{lineno}: {line.strip()[:120]}")
+                break
+    return offenders
+
+
+def test_no_unsanctioned_private_address_literal():
+    """A bare RFC 1918 literal is somebody's network until proven otherwise."""
+    roots = [REPO_ROOT / name for name in _PRIVATE_ADDRESS_ROOTS]
+    flat = [REPO_ROOT / name for name in _PRIVATE_ADDRESS_FLAT_DIRS]
+    missing = sorted(
+        str(d.relative_to(REPO_ROOT)) for d in (*roots, *flat) if not d.is_dir()
+    )
+    assert not missing, (
+        "these scan targets no longer exist, so the guardrail silently stopped "
+        f"covering them: {missing}. Re-point or remove the entry."
+    )
+
+    offenders: list[str] = []
+    for root in roots:
+        offenders += _private_address_offenders(root, REPO_ROOT)
+    for directory in flat:
+        # Files only. A subdirectory here would be walked, and the one sitting
+        # in frontend/ is node_modules.
+        for path in sorted(p for p in directory.iterdir() if p.is_file()):
+            offenders += _private_address_offenders(path, REPO_ROOT)
+    assert not offenders, (
+        "these lines carry a private-network address that push-time secret "
+        "scanning will stop a push over:\n  "
+        + "\n  ".join(sorted(offenders))
+        + "\n\nFix: in a test, import the vector from tests/network_vectors.py "
+        "rather than writing a number — inventing a different one just moves "
+        "the problem. In prose, write a placeholder such as <lan-ip>, or name "
+        "the RFC 1918 block itself — with its prefix length, since a bare "
+        "network address is not one of the six exempt strings."
+    )
+
+
+# Derived from the sanctioned vector rather than written out, because this file
+# is scanned by its own guardrail and by the push-time scan, and a literal here
+# would stop the push that carries the rule forbidding it. Deriving it also
+# pins the constant: if LAN_IPV4 stops being the first host of its block, the
+# neighbour below stops being a neighbour and the teeth test says so.
+_TEETH_OFFENDER = LAN_IPV4.replace(".0.1", ".1.50")
+
+
+def test_private_address_guardrail_has_teeth(tmp_path):
+    """Both directions, or the guardrail can pass by being broken."""
+    assert _TEETH_OFFENDER != LAN_IPV4, (
+        f"the teeth fixture is no longer a neighbour of {LAN_IPV4}"
+    )
+    (tmp_path / "bad.md").write_text(f"the gateway is {_TEETH_OFFENDER}\n")
+    (tmp_path / "good.md").write_text(
+        f"the gateway is {LAN_IPV4} on 192.168.0.0/16, and {LAN_IPV4}/24\n"
+        # Ending the *line* on the literal is its own case: "nothing" is not
+        # another octet, and reading it as one reported every such line.
+        f"the gateway is {LAN_IPV4}\n"
+    )
+    (tmp_path / "mixed.md").write_text(
+        f"{LAN_IPV4} is fine but {_TEETH_OFFENDER} is not\n"
+    )
+    # A digit straight after a sanctioned prefix is a different host, and this
+    # is the half a continuation set of "." alone would exempt in silence.
+    (tmp_path / "digit.md").write_text(
+        f"{LAN_IPV4}0 and {PRIVATE_10_IPV4}0 and {PRIVATE_172_IPV4}0\n"
+    )
+    # Ending a *sentence* on a sanctioned literal is reported, because the scan
+    # this mirrors reports it. Built rather than written out, since writing it
+    # here would block the push carrying the rule. Reword the sentence.
+    (tmp_path / "sentence.md").write_text(
+        "".join(f"the block is {literal}. " for literal in _SANCTIONED_PRIVATE_LITERALS)
+        + "\n"
+    )
+    (tmp_path / "longer.md").write_text(f"the gateway is {LAN_IPV4}.7\n")
+
+    offenders = _private_address_offenders(tmp_path, tmp_path)
+    caught = {o.split(":", 1)[0] for o in offenders}
+    assert caught == {"bad.md", "mixed.md", "longer.md", "digit.md", "sentence.md"}, (
+        f"the guardrail reported the wrong set of files: {offenders}"
+    )
+
+
+def test_private_address_guardrail_reads_a_named_file_of_any_kind(tmp_path):
+    """The selection half, which the regex teeth above cannot reach.
+
+    A file reached through ``_PRIVATE_ADDRESS_FLAT_DIRS`` is opened because it
+    was named, not because of its extension — the bug this pins is three
+    Dockerfiles that were listed and then filtered back out by the suffix set.
+    """
+    dockerfile = tmp_path / "Dockerfile.demo"
+    dockerfile.write_text(f"EXPOSE 9537  # was {_TEETH_OFFENDER}\n")
+
+    walked = _private_address_offenders(tmp_path, tmp_path)
+    assert not walked, f"a directory walk must still go by extension, but read {walked}"
+
+    named = _private_address_offenders(dockerfile, tmp_path)
+    assert [o.split(":", 1)[0] for o in named] == ["Dockerfile.demo"], (
+        f"a named file must be read whatever it is called; got {named}"
     )

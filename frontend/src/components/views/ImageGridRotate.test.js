@@ -9,9 +9,9 @@
 // The 180° case is where a half-refresh shows. A rotate rewrites the file's EXIF
 // orientation tag and leaves every pixel — and both dimensions — where they
 // were, so nothing derived locally can tell the browser its cached bitmap is now
-// upside down. Only the server's own token can, and only if the client actually
+// upside down. Only the server's own version can, and only if the client actually
 // re-reads it. That is what the first test asserts: before vs after, same
-// picture id, and the dimensions in the token back where they started.
+// picture id, and the dimensions in the version back where they started.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -68,9 +68,9 @@ vi.mock("vue-router", () => ({
 
 import ImageGrid from "./ImageGrid.vue";
 
-// The server's token for picture 42, as the thumbnails endpoint reports it.
+// The server's version for picture 42, as the thumbnails endpoint reports it.
 // Only the endpoint moves it; nothing in the client may construct one.
-let thumbnailToken = "1600x1200";
+let thumbnailVersion = "1600x1200";
 
 function mountGrid() {
   const selectionStore = useSelectionStore();
@@ -127,7 +127,7 @@ function rotateCalls() {
 
 beforeEach(() => {
   setActivePinia(createPinia());
-  thumbnailToken = "1600x1200";
+  thumbnailVersion = "1600x1200";
   apiGet.mockReset();
   apiPost.mockReset();
   apiPatch.mockReset();
@@ -151,7 +151,7 @@ beforeEach(() => {
       return {
         data: {
           42: {
-            thumbnail: `/pictures/thumbnails/42.webp?v=${thumbnailToken}`,
+            thumbnail: `/pictures/thumbnails/42.webp?v=${thumbnailVersion}`,
             thumbnail_width: 1600,
             thumbnail_height: 1200,
           },
@@ -163,7 +163,7 @@ beforeEach(() => {
 });
 
 describe("ImageGrid — rotate in place", () => {
-  it("re-reads the thumbnail token when 180° leaves the shape alone", async () => {
+  it("re-reads the thumbnail version when 180° leaves the shape alone", async () => {
     const wrapper = mountGrid();
     await wrapper.vm.$nextTick();
     seedCard(wrapper);
@@ -171,9 +171,9 @@ describe("ImageGrid — rotate in place", () => {
 
     // Two quarter-turns the same way. The dimensions are identical either side
     // of them — the server's orientation component is the only thing that moved.
-    thumbnailToken = "1200x1600o6";
+    thumbnailVersion = "1200x1600o6";
     await wrapper.vm.rotateSelectedPictures("cw");
-    thumbnailToken = "1600x1200o3";
+    thumbnailVersion = "1600x1200o3";
     await wrapper.vm.rotateSelectedPictures("cw");
 
     const after = thumbnailOf(wrapper);
@@ -183,14 +183,14 @@ describe("ImageGrid — rotate in place", () => {
     ]);
     // The card's URL genuinely differs, so the browser cannot serve the tile it
     // painted before the rotate. The dimensions in it are back where they
-    // started, which is exactly why the token cannot be built from them.
+    // started, which is exactly why the version cannot be built from them.
     expect(after).not.toBe(before);
     expect(after).toContain("1600x1200o3");
 
     wrapper.unmount();
   });
 
-  it("takes the server's token verbatim rather than stamping one", async () => {
+  it("takes the server's version verbatim rather than stamping one", async () => {
     // A client-side buster would work here and defeat thumbnail caching for
     // every other picture in the library. The URL must be the one the server
     // handed over, with nothing appended.
@@ -198,7 +198,7 @@ describe("ImageGrid — rotate in place", () => {
     await wrapper.vm.$nextTick();
     seedCard(wrapper);
 
-    thumbnailToken = "1200x1600o6";
+    thumbnailVersion = "1200x1600o6";
     await wrapper.vm.rotateSelectedPictures("ccw");
 
     expect(thumbnailOf(wrapper)).toBe(
@@ -257,7 +257,7 @@ describe("ImageGrid — rotate in place", () => {
     seedCard(wrapper);
     const before = thumbnailOf(wrapper);
 
-    thumbnailToken = "1200x1600o6";
+    thumbnailVersion = "1200x1600o6";
     wrapper.vm.handleOverlayChange({ imageId: 42, fields: { pixels: true } });
     // The handler fans out two awaited reads; let both settle.
     await new Promise((r) => setTimeout(r, 0));

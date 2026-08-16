@@ -867,7 +867,7 @@
     "tests/test_dedup_tiers_api.py::test_decided_page_paging_is_stable_across_seams": 4.85,
     "tests/test_dedup_tiers_api.py::test_decided_rows_carry_the_display_ready_decision_stamp": 5.16,
     "tests/test_dedup_tiers_api.py::test_enabling_the_embedding_tier_alone_is_rejected": 4.52,
-    "tests/test_dedup_tiers_api.py::test_every_candidate_carries_a_thumbnail_cache_token": 4.58,
+    "tests/test_dedup_tiers_api.py::test_every_candidate_carries_a_thumbnail_cache_version": 4.58,
     "tests/test_dedup_tiers_api.py::test_expanding_a_deck_pages_and_clamps": 4.41,
     "tests/test_dedup_tiers_api.py::test_expanding_a_stack_with_no_live_members_is_a_404": 4.38,
     "tests/test_dedup_tiers_api.py::test_keep_separate_then_reopen_round_trips_through_the_api": 4.86,

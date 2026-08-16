@@ -11,7 +11,7 @@
 // was general and much larger than any one feature: no regenerated thumbnail
 // ever repaints in the grid. Not the upgrade NULL-reset in
 // `thumbnail_generation_task.py`, not a reference-folder source swap, not an
-// in-place rotate. `ImageUtils.thumbnail_cache_token` is documented as the
+// in-place rotate. `ImageUtils.thumbnail_cache_version` is documented as the
 // single source of truth that makes a regenerated bitmap refetch, and the grid
 // was discarding it.
 //
@@ -76,8 +76,8 @@ vi.mock("vue-router", () => ({
 
 import ImageGrid from "./ImageGrid.vue";
 
-// The server's cache token for picture 7. Only the endpoint moves it.
-let thumbnailToken = "1600x1200";
+// The server's cache version for picture 7. Only the endpoint moves it.
+let thumbnailVersion = "1600x1200";
 // When true the thumbnails POST hangs until the test resolves it, which is how
 // "the tile painted before the answer arrived" is observable at all.
 let heldThumbnailPost = null;
@@ -90,7 +90,7 @@ function thumbnailsPayload() {
   if (!serverHasThumbnail) return {};
   return {
     7: {
-      thumbnail: `/pictures/thumbnails/7.webp?v=${thumbnailToken}`,
+      thumbnail: `/pictures/thumbnails/7.webp?v=${thumbnailVersion}`,
       thumbnail_width: 1600,
       thumbnail_height: 1200,
     },
@@ -152,7 +152,7 @@ function thumbnailOf(wrapper, id = 7) {
 
 beforeEach(() => {
   setActivePinia(createPinia());
-  thumbnailToken = "1600x1200";
+  thumbnailVersion = "1600x1200";
   heldThumbnailPost = null;
   holdThumbnailPost = false;
   serverHasThumbnail = true;
@@ -195,8 +195,8 @@ describe("ImageGrid — the server owns the thumbnail URL", () => {
     wrapper.unmount();
   });
 
-  it("repaints when the server's token moves under a card that already has one", async () => {
-    // The regeneration case, which is what the token exists for: a rebuilt
+  it("repaints when the server's version moves under a card that already has one", async () => {
+    // The regeneration case, which is what the version exists for: a rebuilt
     // bitmap (upgrade NULL-reset, source swap, in-place rotate) keeps the same
     // id and the same URL path, and only `?v=` says the bytes changed.
     const wrapper = mountGrid();
@@ -206,7 +206,7 @@ describe("ImageGrid — the server owns the thumbnail URL", () => {
     await wrapper.vm.fetchThumbnailsBatch(0, 1);
     const before = thumbnailOf(wrapper);
 
-    thumbnailToken = "1200x1600o6";
+    thumbnailVersion = "1200x1600o6";
     await wrapper.vm.fetchThumbnailsBatch(0, 1, { force: true });
 
     expect(thumbnailOf(wrapper)).not.toBe(before);

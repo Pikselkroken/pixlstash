@@ -1312,7 +1312,7 @@ const rotateRightTitle = computed(() => rotateTitle("right", "]"));
  *     rebuilds the `<img>`'s cache-buster. A rotate leaves the pixels (and
  *     therefore `pixel_sha`) exactly where they were, so this read is the ONLY
  *     thing that can tell the browser the file it decoded is now sideways;
- *   * the **grid card behind us**, whose thumbnail URL carries a token only the
+ *   * the **grid card behind us**, whose thumbnail URL carries a version only the
  *     server can recompute. `overlay-change` is the existing channel, and
  *     `fields.pixels` is what tells the grid this was a bitmap change rather
  *     than a metadata one.
@@ -2982,7 +2982,7 @@ function buildFullImageSrc(data) {
  * it was, so the sampled content hash does not move — and the browser, which
  * applies the orientation tag itself, would go on painting the bytes it had
  * already decoded. Folding the orientation into the buster is the same decision
- * the thumbnail token makes on the server (`ImageUtils.thumbnail_cache_token`),
+ * the thumbnail version makes on the server (`ImageUtils.thumbnail_cache_version`),
  * for the same reason and in the same shape.
  *
  * Orientation 1 — and an orientation nobody has read yet — contributes nothing,

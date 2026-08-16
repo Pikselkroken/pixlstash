@@ -3413,8 +3413,8 @@ re-derives, per picture:
 - `thumbnail_width` / `thumbnail_height`, NULLed so `MissingThumbnailFinder`
   regenerates the bitmap.
 
-**The thumbnail cache token had to grow an orientation component.**
-`ImageUtils.thumbnail_cache_token` was `"<W>x<H>"`, and thumbnails are served
+**The thumbnail cache version had to grow an orientation component.**
+`ImageUtils.thumbnail_cache_version` was `"<W>x<H>"`, and thumbnails are served
 `Cache-Control: private, max-age=3600, must-revalidate`. A 180° rotate leaves W
 and H unchanged, as does a 90° rotate of a square picture — so the regenerated
 bitmap would have arrived at a byte-identical URL and the browser would have gone
@@ -3635,7 +3635,7 @@ as a string.
 |---|---|
 | `member_count` | the stack's **real live member count**, its depth. NOT the count within the group, and routinely larger: measured on a 17k-picture library, 36 of 116 stack-touching groups name only ONE member of a stack. |
 | `leader_picture_id` | the member at `stack_position` 0, ranked by exactly the window function in `Picture._get_stack_leader_ids`, so the deck's face is the same picture the grid leads that stack with. |
-| `leader_thumbnail_version` | the leader's `?v=` token (`ImageUtils.thumbnail_cache_token`), so the face renders from the queue payload alone. |
+| `leader_thumbnail_version` | the leader's `?v=` version (`ImageUtils.thumbnail_cache_version`), so the face renders from the queue payload alone. |
 | `matched_picture_ids` | which of the stack's members are in this group. |
 | `stackable` / `blocked_by_sets` | the **unit-level rollup** of the per-candidate values: false when ANY member is frozen, because a stack cannot be partially stacked. |
 
