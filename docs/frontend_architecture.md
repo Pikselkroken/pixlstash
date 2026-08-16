@@ -1746,11 +1746,13 @@ which is a filed gap rather than a pattern to copy.
 **The toolbar changes the VIEW, and almost nothing else (#904).** The resolved
 design consolidates it: one accented, labelled `+ Add ▾` menu holding the three
 ways a model gets onto the shelf (a folder, a loose file, an ai-toolkit import),
-the stack-detection sweep beside it as an icon, then the view controls on the
-right. Add and the sweep are the only two things there that are not view
-controls, and they sit together apart from them because neither has a selection
-to hang on — Add makes a row that does not exist yet and the sweep proposes over
-the whole shelf — and both open something before they write anything. **Every
+the stack-detection sweep beside it as an icon, the `Model folders` registry
+button beside that, then the view controls on the right. Those three are the
+only things there that are not view controls, and they sit together apart from
+them because each passes the same test: **it opens something, it writes nothing
+on the press, and it has no selection to hang on** — Add makes a row that does
+not exist yet, the sweep proposes over the whole shelf, and `Model folders`
+edits the registry the shelf reads rather than anything in it. **Every
 other verb lives on the row's context menu or in the selection pill**, so a
 mutation is never one stray click from a view switch.
 
@@ -2168,15 +2170,27 @@ collapse a folder of the same name.
 **Everything that changes a file lives on the row or in the selection bar,
 never in the toolbar** (#896). The toolbar is where the view is switched, so a
 mutating control beside `Sort` and `Show` would be one stray click from a
-different question. The four toolbar buttons are audited against that rule and
-all four hold: `Show` and `Sort` write only view state; `Model folders` and
-`Import from ai-toolkit` open a dialog and write nothing on the press, and the
-import is confirmed against a listing of the runs it found. `Group training
-runs` is the same shape — it opens the dry run, and the applying half is behind
-the dialog's own confirmation. Import and detection stay in the toolbar because
-neither has a selection to act on: their subject is a source folder full of
-files the shelf does not list yet, so there is no row and no selection to hang
-them off.
+different question. The audit is over a **named set, not a judgement**, and the
+set is counted in **focusable controls**, because a tab stop is a stray-press
+target whatever it is grouped with visually. The shelf puts **seven** in its own
+bar: `+ Add ▾`, `Stack training runs`, `Model folders`, `Group`, the `Sort`
+direction toggle, the `Sort` menu, and `Show`. All seven hold. `Group`, both
+halves of `Sort`, and `Show` write only view state. The other three each open
+something and write nothing on the press:
+`+ Add ▾` opens a menu, and its `Import from ai-toolkit` item is confirmed
+against a listing of the runs it found; `Stack training runs` opens the dry run,
+with the applying half behind the dialog's own confirmation; `Model folders`
+opens the registry dialog. Those three stay in the toolbar because none has a
+selection to act on — their subject is a source folder full of files the shelf
+does not list yet, or the list of such folders itself, so there is no row and no
+selection to hang them off.
+
+The **app-wide tail is outside this set and outside the rule**: `UndoControl`
+writes on the press by design, and it, `Settings` and the stats toggle are not
+the shelf's controls at all — they are the canonical tail every view carries,
+ruled off by a separator (see the toolbar section above). Adding a control to
+the shelf's own bar means adding it to the seven and re-running this audit;
+adding one to the tail is a different document.
 
 **The bar states the count AND what the selection weighs**, `40 models selected
 · 12.4 GB`, in the `·` separator the grid's own `SelectionBar` uses. The size is
@@ -2702,10 +2716,12 @@ front of you. Both stores are refreshed afterwards, for the reason the import
 refreshes both: the shelf gained a row and the destination folder's file count
 and `shelf_bytes` moved with it, so the drive bands are stale too.
 
-**The toolbar button is hidden, not disabled, when no `source` folder is
-registered** — unlike the selection bar's verbs, which are about a selection the
-reader just made and therefore owe an explanation in a tooltip. This is about a
-folder they have not set up, which the folders dialog is the place to say.
+**The `Import from ai-toolkit` item is hidden, not disabled, when no `source`
+folder is registered** — unlike the selection bar's verbs, which are about a
+selection the reader just made and therefore owe an explanation in a tooltip.
+This is about a folder they have not set up, which the folders dialog is the
+place to say. Since #904 it is an item inside `+ Add ▾` behind a
+`v-if="hasSourceFolder"`, not a toolbar button of its own.
 
 **Receipts are notices, not `useActionReceipt`.** That composable is built on
 `useOperationStore`, which is the vault-only operation log with undo keycaps —
@@ -2747,11 +2763,35 @@ its own overrides (the container-query fold, the icon-trigger accent) and
 #### Registering the folders the shelf reads
 
 `ModelFoldersDialog.vue` (`components/panels/`) is the registry surface,
-opened from a `bar-btn--boxed` beside `Show` and from the empty state's own
-button. The empty state is the moment the folder list matters, so the fix must
-not be two navigations away in Settings. `FolderBrowser.vue` is reused whole as
-the host-path picker, and `registeredPaths` is what stops the API's duplicate
-409 rather than reporting it.
+opened from three doors: the toolbar's `bar-btn--boxed` `Model folders` button
+beside the stack sweep, the `+ Add ▾` menu's `Add folder…` item, and the empty
+state's own button. The empty state is the moment the folder list matters, so
+the fix must not be two navigations away in Settings — and the toolbar button is
+what keeps it reachable once the empty state has unmounted, which is exactly
+when rescan, relocate and forget start to matter. Because more than one control
+opens it, `ModelShelf.vue` holds a `folderInvoker` and `openFolders(invoker)`
+takes the control to return focus to. **Every door names one**, and names the
+control that will still be there rather than the element pressed: the
+`Add folder…` item names the **Add button behind it**, because the item itself
+unmounts with the menu. The fallback is the always-mounted toolbar button, and
+it exists for exactly one case — the empty-state button unmounting underneath
+its own dialog when the first scan finds something. That case is asserted, along
+with the two ordinary ones, against a real `document.activeElement`; drop the
+`isConnected` check and the suite goes red. The earlier `event.currentTarget`
+version of all this was dead code: no call site ever passed an event.
+
+Neither this button nor the stack sweep takes **`bar-btn--open`**. `App.css`
+declares that class for "the toolbar button while its MENU is open", and both
+open an `AppDialog`, which sets `:scrim="true"` — so the highlight is painted
+under the scrim for exactly as long as it applies, and neither button has the
+chevron the rule rotates. `Group`, `Sort` and `Show` keep it because they really
+are menus. Both carry `aria-haspopup="dialog"` and neither carries
+`aria-expanded`: focus moves into the dialog rather than into anything the
+button owns.
+
+`FolderBrowser.vue` is reused whole as the host-path picker, and
+`registeredPaths` is what stops the API's duplicate 409 rather than reporting
+it.
 
 Four states are designed rather than left to fail on click:
 
@@ -2814,9 +2854,10 @@ the row's fields are captured *before* the request that destroys them.
 
 Rows are a plain `<ul role="list">` of real `<button>`s, deliberately **not**
 `role="listbox"` / `role="option"`: nothing here is selected, and interactive
-controls inside an `option` are unreachable to a screen reader. Both openers
-restore focus to the control that was pressed, falling back to the toolbar
-button when the empty-state button has unmounted underneath the dialog.
+controls inside an `option` are unreachable to a screen reader. All **three**
+openers restore focus to the control that was pressed — see the folder-registry
+section above for how, and for the one case (the empty-state button unmounting
+underneath its own dialog) that the fallback exists to catch.
 
 ---
 

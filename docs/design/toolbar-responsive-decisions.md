@@ -22,13 +22,20 @@ container queries today**):
 **Model shelf toolbar** (`ModelShelf.vue`, `.shelf-toolbar`, container
 `shelfbar toolbar`) — added 2026-08-15, after this record was written:
 
-- Left: title → count → Add (accent) → stack sweep
+- Left: title → count → Add (accent) → stack sweep → Model folders
 - Right: Group → Sort split-button → Show → separator → TbGlobalActions
   (no UndoControl — see Amendment #4)
 
 It was shipped without the tail at all, so both app-wide controls simply
 vanished on `/models`; it then followed Decision 1 as written rather than
 inventing a third arrangement.
+
+`Model folders` rejoined the left group on 2026-08-16, having been dropped by
+the #904 consolidation. **The shelf bar still has no ladder**: it declares
+`container-name: shelfbar toolbar` and writes no `@container` rule, and there is
+no `TbOverflowMenu` on it, so Decision 2 is unimplemented here and the bar now
+carries seven focusable controls plus the tail with nothing to fold. Writing
+that ladder is open work, not something this record already decided.
 
 So undo/redo sits mid-left in the grid and right-adjacent-to-TbGlobalActions in
 Duplicates. A user who learns one position loses it in the other view. That is
@@ -300,7 +307,13 @@ are the unrecoverable ones.
 list above still holds, the boundary between this view's controls and the
 app's needs the rule. The shelf has no ⋯ overflow, so there is no "History…"
 row to remove, and undo stays exactly where Decision 1 put it in the grid and
-Duplicates bars, which do write the log.
+Duplicates bars, which do write the log. One knock-on for whoever writes the
+shelf ladder that "Current state" above calls open work: the bar wrote no
+`@container` rule of its own before this, and `UndoControl` was the one control
+on it that wrote any against the shared `toolbar` name — so `shelfbar toolbar`
+now has no consumer at all. The declaration stays for the next shared control
+(and `container-type: inline-size` earns its place regardless), but nothing on
+this bar responds to width today.
 
 **And the chord goes with the button**, which is the part it would have been
 easy to skip. `useGlobalKeydown` is route-agnostic, so `Ctrl+Z` on `/models`
