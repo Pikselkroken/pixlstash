@@ -249,6 +249,45 @@ export function capabilityLabel(capability) {
 }
 
 /**
+ * What each non-adapter `file_kind` is called on screen.
+ *
+ * Named as roles rather than as file types, because the reader deciding what to
+ * keep is asking what the file DOES beside a checkpoint. `checkpoint` repeats
+ * the word `CAPABILITY_LABELS` uses, deliberately: a scanned checkpoint records
+ * no capability and a DECLARED one records `checkpoint`, and the two are one
+ * heading on the feature axis rather than a group of one beside a bucket of
+ * eighty.
+ *
+ * `adapter` and `engine` are absent, and that is what {@link fileKindLabel}
+ * returning "" means: an adapter is named by its algorithm and an engine by the
+ * features it declares, both of which say more than the word "Adapter".
+ *
+ * Not exported, for `ADAPTER_KIND_LABELS`' reason one table down: `file_kind`
+ * is owner-correctable over `PATCH /models` and carries no CHECK, so a caller
+ * indexing this raw with a row storing `constructor` gets `Object`'s
+ * constructor FUNCTION — truthy, so a `|| ""` fallback never fires, and it
+ * lands in a group label where `localeCompare` throws and takes the whole
+ * `groups` computed with it. `fileKindLabel` is the only way in.
+ */
+const FILE_KIND_LABELS = {
+  checkpoint: "Checkpoint",
+  vae: "VAE",
+  text_encoder: "Text encoder",
+  unknown: "Unclassified",
+};
+
+/**
+ * Name one `file_kind` for display.
+ *
+ * @param {string} fileKind - a stored `model.file_kind`.
+ * @returns {string} e.g. `Checkpoint`, or `""` for a kind named some other way.
+ */
+export function fileKindLabel(fileKind) {
+  const key = String(fileKind || "");
+  return Object.hasOwn(FILE_KIND_LABELS, key) ? FILE_KIND_LABELS[key] : "";
+}
+
+/**
  * Look a free-text value up in a label table, falling through to itself.
  *
  * `Object.hasOwn` rather than a plain index, because both tables are keyed by
@@ -1222,6 +1261,86 @@ export function deletableModels(rows, foldersById = null) {
       });
     });
   });
+}
+
+/**
+ * Why this selection cannot be deleted, in the reader's own terms.
+ *
+ * The three gates {@link deletableModels} checks, said back. The sentence it
+ * replaced claimed PixlStash "only removes files from your own model folders,
+ * and never from a drive that is not plugged in", which was two thirds of one
+ * gate and untrue on its face: the shelf deletes from the managed store and
+ * from PixlStash's own download folder, neither of which is a folder the owner
+ * registered. It also named no folder, so the one thing the reader wanted — WHY
+ * this file and what to do instead — was the thing it left out.
+ *
+ * The folder is named by its PATH rather than by a kind, because the path is
+ * the answer: `~/.cache/huggingface/hub` explains itself, and no vocabulary of
+ * ours explains it better. A folder another tool owns (`movable: fixed`, which
+ * is what the HuggingFace cache carries and what the column means) gets the one
+ * clause that is actually actionable, since the tool that put the file there is
+ * the one that can take it away.
+ *
+ * Every reason present is reported, not the first: a selection of forty can be
+ * blocked three different ways, and a reader who fixes the drive only to hit
+ * the folder rule has been sent round twice.
+ *
+ * @param {Array<Object>} rows - the selected rows, none of them deletable.
+ * @param {Map<number, Object>|null} foldersById - `model_folder.id` to folder.
+ * @returns {string} one to three sentences, or "" for an empty selection.
+ */
+export function undeletableNotice(rows, foldersById = null) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return "";
+  if (!foldersById) {
+    // The registry has not loaded or could not be read, which is the one case
+    // where the honest answer is that we do not know yet.
+    return "The folder list has not loaded yet, so nothing can be deleted.";
+  }
+  let engine = false;
+  let unreachable = false;
+  const folders = new Set();
+  let anotherToolOwns = false;
+  for (const row of list) {
+    for (const part of row?.members?.length ? row.members : [row]) {
+      if (part?.file_kind === "engine") engine = true;
+      for (const loc of part?.locations || []) {
+        if (loc?.state === "unreachable") {
+          unreachable = true;
+          continue;
+        }
+        const folder = foldersById.get(Number(loc?.folder_id));
+        if (folder && !folder.deletable) {
+          folders.add(String(folder.path || ""));
+          if (folder.movable === "fixed") anotherToolOwns = true;
+        }
+      }
+    }
+  }
+  const notes = [];
+  if (folders.size) {
+    // One path is named; several are counted. A notice listing six paths is one
+    // nobody finishes reading.
+    const where =
+      folders.size === 1
+        ? [...folders][0]
+        : `${folders.size} folders PixlStash does not delete from`;
+    notes.push(
+      `PixlStash does not delete from ${where}. It removes files from folders you registered, its own managed store and the folder it downloads engines into.`,
+    );
+    if (anotherToolOwns) {
+      notes.push("Another tool owns that folder, so remove them with that.");
+    }
+  }
+  if (engine) {
+    notes.push(
+      "PixlStash downloaded some of these for itself and would fetch them again.",
+    );
+  }
+  if (unreachable) {
+    notes.push("Some sit on a drive that is not plugged in.");
+  }
+  return notes.join(" ");
 }
 
 /**

@@ -3802,7 +3802,13 @@ describe("Delete", () => {
     await wrapper.vm.$nextTick();
 
     await pressDelete();
-    expect(useNoticeStore().notices.at(-1).text).toContain("own model folders");
+    // And says WHICH folder. The sentence this replaced claimed PixlStash
+    // "only removes files from your own model folders", which is untrue — the
+    // managed store and PixlStash's own download folder are neither — and
+    // named nothing the reader could go and act on.
+    const said = useNoticeStore().notices.at(-1).text;
+    expect(said).toContain("/hf");
+    expect(said).toContain("Another tool owns that folder");
     expect(deleteModels).not.toHaveBeenCalled();
     wrapper.unmount();
   });

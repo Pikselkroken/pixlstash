@@ -6,6 +6,7 @@ import os
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.builtin_models import BUILTIN_OWNER
 from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
 from pixlstash.tasks.checkpoint_hash_task import CheckpointHashTask
@@ -26,6 +27,16 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
     checkpoint, and this finder would hand a 339 MB tagger and a pile of ONNX to
     the hash worker to read, then write a digest onto a row that never wanted
     one.
+
+    **A folder PixlStash declared is excluded too**, and that is not the same
+    exclusion wearing a second hat. A declared root is described by an index
+    rather than walked, so its ``relpath`` is whatever the index calls one
+    entry — for the HuggingFace cache that is ``models--org--name``, a
+    DIRECTORY. Now that a repo the owner downloaded themselves is theirs to
+    reclassify (``builtin_caches``), any such row they correct to ``checkpoint``
+    would match on ``file_kind`` and send the worker to open a directory, fail,
+    and defer it — every start, forever. ``owner`` is the same marker that makes
+    the folder scanner skip these roots.
 
     The query is left as the plain ``sha256 IS NULL`` all the same, so it
     matches ``ix_model_hash_queue`` exactly and cannot silently strand a row.
@@ -87,7 +98,10 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
             "WHERE (m.sha256 IS NULL OR m.file_kind = 'checkpoint') "
             "AND m.file_kind <> 'engine' "
             "AND EXISTS (SELECT 1 FROM model_file mf "
-            "WHERE mf.model_id = m.id AND mf.state = 'present')"
+            "JOIN model_folder f ON f.id = mf.model_folder_id "
+            "WHERE mf.model_id = m.id AND mf.state = 'present' "
+            "AND (f.owner IS NULL OR f.owner <> ?))",
+            (BUILTIN_OWNER,),
         )
         if row is None:
             return 0, 0
@@ -108,8 +122,9 @@ class MissingCheckpointHashFinder(BaseTaskFinder):
             "JOIN model_folder f ON f.id = mf.model_folder_id "
             "WHERE m.sha256 IS NULL AND m.file_kind <> 'engine' "
             "AND mf.state = 'present' "
+            "AND (f.owner IS NULL OR f.owner <> ?) "
             "GROUP BY m.id ORDER BY m.id LIMIT ?",
-            (limit,),
+            (BUILTIN_OWNER, limit),
         )
         batch = [
             (row["id"], os.path.join(row["folder_path"], row["relpath"]))

@@ -101,6 +101,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_shelf_service import (
+    CURATABLE_CAPABILITIES,
     CURATABLE_FIELDS,
     MAX_MODELS_PER_EDIT,
     DEFAULT_DIRECTION,
@@ -432,6 +433,23 @@ class ModelEditRequest(BaseModel):
             "What the file IS: `adapter`, `checkpoint` or `unknown`. This is "
             "the correction `unknown` exists for. Never null, and never "
             "re-derived away by a later scan."
+        ),
+    )
+    capabilities: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "What these weights are FOR, from "
+            f"{list(CURATABLE_CAPABILITIES)} — the shelf's `Feature` axis. The "
+            "**complete** set for every id sent, so `[]` clears it; sets are "
+            "small and closed, and a merge would leave no way to remove one.\n\n"
+            "A different question from `file_kind`, which is what the file *is*: "
+            "one repo can caption AND detect, which is why this is a list and "
+            "why it lives in its own table. PixlStash classifies what it "
+            "declares, and a guess it got wrong about a model it does not load "
+            "is the owner's to correct — a repo they downloaded themselves is "
+            "not something we get the last word on. `checkpoint` and `other` "
+            "are not offered: the first is a `file_kind` and the second is the "
+            "classifier's shrug, which an empty list already says."
         ),
     )
 
@@ -989,9 +1007,9 @@ def create_router(server) -> APIRouter:
             "Three of the shelf's five verbs on one route, because all three "
             "write a curated column and differ only in which one: **Rename** "
             "(`display_name`, one id), **Set base model** (`base_model`) and "
-            "**Set kind** (`kind`, `file_kind`). Only the fields present in "
-            "the body are written, so setting a base model across a selection "
-            "cannot blank the names in it.\n\n"
+            "**Set kind** (`kind`, `file_kind`, `capabilities`). Only the "
+            "fields present in the body are written, so setting a base model "
+            "across a selection cannot blank the names in it.\n\n"
             "Every column here is upserted with `COALESCE` by the folder "
             "scanner, so a correction made through this route survives every "
             "later scan rather than being re-derived away."
@@ -1004,15 +1022,36 @@ def create_router(server) -> APIRouter:
         payload: ModelEditRequest = Body(...),
     ):
         server.auth.ensure_secure_when_required(request)
-        sent = [
-            field for field in CURATABLE_FIELDS if field in payload.model_fields_set
-        ]
+        # `capabilities` rides with the columns and is not one: it is the
+        # complete set for a second table, and `update_models` splits it back
+        # out. Named here rather than added to `CURATABLE_FIELDS`, which is what
+        # the UPDATE's column list is built from.
+        writable = (*CURATABLE_FIELDS, "capabilities")
+        sent = [field for field in writable if field in payload.model_fields_set]
         if not sent:
             raise HTTPException(
                 status_code=400,
-                detail=f"Name at least one of {list(CURATABLE_FIELDS)} to write.",
+                detail=f"Name at least one of {list(writable)} to write.",
             )
         changes = {field: getattr(payload, field) for field in sent}
+
+        if changes.get("capabilities") is not None:
+            unknown = [
+                capability
+                for capability in changes["capabilities"]
+                if capability not in CURATABLE_CAPABILITIES
+            ]
+            if unknown:
+                # Closed and checked here, like `file_kind`: `model_capability`
+                # carries no CHECK, and a typo stored silently would head a
+                # feature group nothing else in the app has ever heard of.
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{unknown} is not a feature; use "
+                        f"{list(CURATABLE_CAPABILITIES)}."
+                    ),
+                )
 
         if "display_name" in changes and len(payload.ids) > 1:
             # A name is a fact about one file. Applying one across a selection

@@ -188,6 +188,7 @@ class DeclaredEntry:
     present: bool
     capabilities: tuple[str, ...] = field(default_factory=tuple)
     file_kind: str = FILE_ENGINE
+    owner_curatable: bool = False
 
     @property
     def declared_capabilities(self) -> tuple[str, ...]:
@@ -195,6 +196,21 @@ class DeclaredEntry:
         if self.capabilities:
             return self.capabilities
         return (self.role,) if self.role else ()
+
+    @property
+    def restated_role(self) -> Optional[str]:
+        """The ``kind`` a re-declaration asserts, or None to leave it alone."""
+        return None if self.owner_curatable else self.role
+
+    @property
+    def restated_display_name(self) -> Optional[str]:
+        """The name a re-declaration asserts, or None to leave it alone.
+
+        The first declaration still names the row — ``models--krea--Krea-2-Raw``
+        is a cache directory, not a name anyone wants to read — but a Rename is
+        the owner's and the next start-up must not take it back.
+        """
+        return None if self.owner_curatable else self.display_name
 
     @property
     def restated_file_kind(self) -> Optional[str]:
@@ -208,7 +224,13 @@ class DeclaredEntry:
         real adapter. Restating ``unknown`` onto that row on the next start would
         drop the adapter out of ``/adapters`` for its own folder too, over a
         second copy the owner happened to leave here.
+
+        A row the owner may curate is the same answer for the plainer reason:
+        the correction they just made is the whole point, and restating our
+        guess over it every start would make the edit look like it never landed.
         """
+        if self.owner_curatable:
+            return None
         return self.file_kind if self.file_kind == FILE_ENGINE else None
 
 
@@ -708,10 +730,12 @@ def declare_folder(
             # which belongs to ai-toolkit runs and is COALESCE'd by the run
             # importer.
             existing = conn.execute(
-                "SELECT model_id FROM model_file "
-                "WHERE model_folder_id = ? AND relpath = ?",
+                "SELECT mf.model_id AS model_id, m.file_kind AS file_kind "
+                "FROM model_file mf JOIN model m ON m.id = mf.model_id "
+                "WHERE mf.model_folder_id = ? AND mf.relpath = ?",
                 (folder_id, entry.relpath),
             ).fetchone()
+            first_declaration = existing is None
             if existing is None:
                 cursor = conn.execute(
                     "INSERT INTO model (file_kind, kind, display_name, filename, "
@@ -733,7 +757,17 @@ def declare_folder(
                     (model_id, folder_id, entry.relpath, state, now),
                 )
             else:
-                model_id = int(existing[0])
+                model_id = int(existing["model_id"])
+                # The one time a found repo's file kind IS restated: to take
+                # back the `engine` this module used to write over the whole
+                # cache. Unambiguous, which is why it can be done silently —
+                # `engine` is not a value any verb can set (`FILE_KINDS` does
+                # not offer it) and every verb refuses an engine row, so a
+                # stored `engine` on a repo we did not choose can only be our
+                # own old mislabelling and never a choice the owner made.
+                restated_file_kind = entry.restated_file_kind
+                if entry.owner_curatable and existing["file_kind"] == FILE_ENGINE:
+                    restated_file_kind = entry.file_kind
                 # COALESCE'd on the *declared* value throughout, which changes
                 # nothing for an engine: every one declares its kind, its role
                 # and its name, so the declaration still wins outright — and no
@@ -745,15 +779,22 @@ def declare_folder(
                 # class here they are allowed to curate — and `restated_file_kind`
                 # covers the sharper case above, where the row is no longer the
                 # leftover's alone.
+                #
+                # The `restated_*` properties are the same rule for a row we
+                # merely FOUND: a repo in the shared HuggingFace cache that
+                # PixlStash did not choose is the owner's model, and what this
+                # module knows about it is a classification, not a fact. It
+                # names the row on the way in and then stops asserting, or the
+                # owner's correction would be reverted by the next start-up.
                 conn.execute(
                     "UPDATE model SET file_kind = COALESCE(?, file_kind), "
                     "kind = COALESCE(?, kind), "
                     "display_name = COALESCE(?, display_name), "
                     "file_size = COALESCE(?, file_size) WHERE id = ?",
                     (
-                        entry.restated_file_kind,
-                        entry.role,
-                        entry.display_name,
+                        restated_file_kind,
+                        entry.restated_role,
+                        entry.restated_display_name,
                         size,
                         model_id,
                     ),
@@ -779,6 +820,14 @@ def declare_folder(
             # Ordered by `rowid` so the comparison sees the stored ORDER too:
             # primary-first is what `model.kind` agrees with and what the shelf
             # renders, so a reordered set is a real difference, not a no-op.
+            #
+            # A found repo's capabilities are stated once and then left alone,
+            # for `restated_file_kind`'s reason: correcting the file kind is
+            # what clears them (`update_models`), and a declaration that put
+            # them straight back would leave the Feature axis filing the row
+            # under the guess the owner had just overruled.
+            if entry.owner_curatable and not first_declaration:
+                continue
             declared = list(entry.declared_capabilities)
             stored = [
                 row[0]
