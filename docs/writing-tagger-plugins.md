@@ -144,9 +144,6 @@ as it stands, not things to design around:
   charges the VRAM budget for Florence-2 only. Overriding it is harmless and forward-
   looking, but it will not currently stop PixlStash scheduling another model alongside
   yours, so keep your own footprint modest.
-- **`stop_event` is always `None` for `generate_descriptions`.** `DescriptionWorkflow`
-  does not pass one (the tag path does). Honour it if present — the signature is the
-  contract — but do not rely on it to cancel a long batch today.
 
 ## 5. Inference
 
@@ -163,8 +160,11 @@ def tag_images(self, image_paths, parameters, preloaded=None, stop_event=None):
 - `parameters` arrives already merged over your `default_params()`.
 - **Map a path to `None` to report a per-image failure.** That is the documented signal;
   the rest of the batch is still stored. Raising instead loses the whole batch.
-- `stop_event` is a `threading.Event` set when the user cancels — but see §4: it is
-  currently always `None` on the description path. Guard the access.
+- `stop_event` is a `threading.Event` set when the user cancels or the server shuts
+  down. Both the tag and the description path pass one. **Check it between images and
+  return what you have** — a batch that runs to the end regardless holds up shutdown
+  for as long as your slowest image takes. It may still be `None` if something calls
+  your plugin directly, so guard the access.
 - `TagResult.confidence` may be `None` for models that do not produce probabilities.
 
 ## 6. Downloads
