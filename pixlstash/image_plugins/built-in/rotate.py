@@ -15,6 +15,9 @@ class RotatePlugin(ImagePlugin):
     name = "rotate"
     display_name = "Rotate"
     description = "Rotate images or videos by 90° left, 90° right, or 180°."
+    author = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license = "GPL-3.0-only"
+    models = []
     supports_images = True
     supports_videos = True
 

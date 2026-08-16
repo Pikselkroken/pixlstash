@@ -84,6 +84,37 @@ class TaggerPluginManager:
         """Return the plugin directories the manager scans, by source."""
         return {"user": self.user_dir} if self.user_dir else {}
 
+    def load_plugin_from_path(self, path: str) -> None:
+        """Import the plugin at *path* and register the classes it defines.
+
+        One plugin, loaded exactly as directory discovery loads it: same module
+        namespacing, same containment of a failing import, same registration
+        rules. ``pixlstash-cli plugins test`` calls this so its verdict is the
+        server's behaviour rather than a second loader that resembles it.
+
+        This adds to the registry rather than declaring it complete — the
+        directory-level decisions (which entries are eligible, and the fact
+        that first-party plugins were loaded first and so win a name
+        collision) belong to :meth:`reload`, which callers still owe.
+
+        Args:
+            path: A ``*.py`` file, or a folder holding ``__init__.py``.
+        """
+        entry = os.path.basename(os.path.normpath(path))
+        stem = entry[: -len(".py")] if entry.endswith(".py") else entry
+        with self._lock:
+            try:
+                module = self._import_user_module(entry, path)
+                self._register_module_plugins(stem, module)
+            # SystemExit as well as Exception: a stray sys.exit() in a plugin
+            # module body would otherwise take the caller down, which is
+            # exactly the failure this containment exists to prevent.
+            # KeyboardInterrupt is deliberately still allowed through.
+            except (Exception, SystemExit) as exc:
+                message = f"Failed to load plugin: {exc}"
+                logger.warning("%s (%s)", message, path, exc_info=True)
+                self._errors.append(PluginLoadError(name=stem, message=message))
+
     def reload(self) -> None:
         """(Re)load all first-party plugins, then user plugins.
 
@@ -327,23 +358,10 @@ class TaggerPluginManager:
             if os.path.isdir(path):
                 if not os.path.isfile(os.path.join(path, "__init__.py")):
                     continue
-                stem = entry
-            elif entry.endswith(".py"):
-                stem = entry[: -len(".py")]
-            else:
+            elif not entry.endswith(".py"):
                 continue
 
-            try:
-                module = self._import_user_module(entry, path)
-                self._register_module_plugins(stem, module)
-            # SystemExit as well as Exception: a stray sys.exit() in a plugin
-            # module body would otherwise take the server down at boot, which
-            # is exactly the failure this containment exists to prevent.
-            # KeyboardInterrupt is deliberately still allowed through.
-            except (Exception, SystemExit) as exc:
-                message = f"Failed to load plugin: {exc}"
-                logger.warning("%s (%s)", message, path, exc_info=True)
-                self._errors.append(PluginLoadError(name=stem, message=message))
+            self.load_plugin_from_path(path)
 
     @staticmethod
     def _import_user_module(entry: str, path: str) -> ModuleType:

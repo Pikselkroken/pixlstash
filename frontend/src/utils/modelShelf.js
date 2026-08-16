@@ -830,6 +830,88 @@ export function locationState(locations) {
 }
 
 /**
+ * What a copy's own state adds to its path, per {@link copyPathsTitle}.
+ *
+ * A path with nothing after it is a claim that the file is THERE. Three of the
+ * four states are the claim that it is not, and the shelf spends a rail, a
+ * glyph and a word telling them apart on the row (#898) — a tooltip that
+ * rendered all four as bare identical lines would be the one place they read
+ * the same. `present` adds nothing, because that is what a path already says.
+ *
+ * Read through `copyStateNote` and never indexed raw, for the reason
+ * `ADAPTER_KIND_LABELS` is not exported: `state` comes off the wire, and
+ * `constructor` indexes a FUNCTION off `Object.prototype` that is truthy and
+ * would be pasted into the tooltip.
+ */
+const COPY_STATE_NOTE = {
+  missing: "not where it was",
+  unreachable: "out of reach",
+  not_downloaded: "not downloaded yet",
+};
+
+/**
+ * What one copy's state adds to its path, or nothing.
+ *
+ * Unlike {@link labelFrom} an unknown state falls through to NOTHING rather
+ * than to itself: the fallthrough there shows a value a human chose, and this
+ * one is machine vocabulary that would read as a fault ("/x/a.st · sundered").
+ * A state this build has never seen is not a claim it may make.
+ *
+ * @param {string} state - a stored `model_file.state`.
+ * @returns {string} the note, or `""`.
+ */
+function copyStateNote(state) {
+  const key = String(state || "");
+  return Object.hasOwn(COPY_STATE_NOTE, key) ? COPY_STATE_NOTE[key] : "";
+}
+
+/**
+ * Where a row's copies sit, one path per line, each saying what is there.
+ *
+ * The folder is only on screen under `groupBy: 'folder'`, where the header
+ * names it. Group by base model or by feature — or not at all, which is the
+ * default — and the shelf stops saying where anything is, which is the first
+ * question of a reader with the same adapter on two disks. So the file line
+ * carries the answer as its tooltip on every axis, including `folder`, where
+ * the header names the folder but nothing names the SUBDIRECTORY under it.
+ *
+ * Every copy, not the first: a model registered in two folders is one row, and
+ * naming one of its homes would read as naming its only one. Under `folder` the
+ * store hands this ONE copy, because that draw stands for one copy.
+ *
+ * The separator is taken from the registered folder rather than assumed, and a
+ * Windows folder takes the relpath's separators with it: the two halves come
+ * from different places (`model_folder.path` as registered, `relpath` as the
+ * scanner wrote it), so joining them without a rule is how a path comes back
+ * half-slashed. A POSIX folder leaves the relpath alone, where a backslash is a
+ * legal character in a filename rather than a separator.
+ *
+ * A copy missing either half is skipped rather than half-named: both are
+ * NOT NULL on the wire, so this is a broken row, and `a.st` on its own answers
+ * "where is this file" with the one thing that is not a location.
+ *
+ * @param {Array<Object>} locations - the row's `locations` array.
+ * @returns {string} the paths, newline-separated, or `""` when there are none —
+ *   which the caller must bind as no tooltip at all rather than an empty one.
+ */
+export function copyPathsTitle(locations) {
+  return (Array.isArray(locations) ? locations : [])
+    .map((loc) => {
+      const folder = String(loc?.folder_path || "");
+      const relpath = String(loc?.relpath || "");
+      if (!folder || !relpath) return "";
+      const windows = folder.includes("\\") && !folder.includes("/");
+      const sep = windows ? "\\" : "/";
+      const tail = windows ? relpath.replace(/\//g, "\\") : relpath;
+      const path = `${folder.replace(/[/\\]+$/, "")}${sep}${tail.replace(/^[/\\]+/, "")}`;
+      const note = copyStateNote(loc?.state);
+      return note ? `${path} · ${note}` : path;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
  * The registered folders whose every copy is out of reach, and how many rows
  * each one takes with it.
  *

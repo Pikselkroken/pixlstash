@@ -788,6 +788,7 @@ class Florence2Plugin(TaggerPlugin):
         name: Plugin identifier used in ``tagger_settings``.
         display_name: Human-readable label shown in the UI.
         description: Short description.
+        author, license, models: Header fields, see :class:`TaggerPlugin`.
         supports_tags: Florence-2 does not produce tags.
         supports_descriptions: Florence-2 generates captions.
         requires_download: Model must be downloaded on first use.
@@ -799,6 +800,14 @@ class Florence2Plugin(TaggerPlugin):
         "Microsoft Florence-2 — generates natural-language image descriptions. "
         "The selected checkpoint also drives the Segment action."
     )
+    author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
+    license: str = "GPL-3.0-only"
+    # One entry per selectable checkpoint (FLORENCE_MODEL_VARIANTS) — the user
+    # picks which one is downloaded.
+    models: list[dict[str, str]] = [
+        {"name": "florence-community/Florence-2-base", "license": "MIT"},
+        {"name": "florence-community/Florence-2-large-ft", "license": "MIT"},
+    ]
     supports_tags: bool = False
     supports_descriptions: bool = True
     requires_download: bool = True

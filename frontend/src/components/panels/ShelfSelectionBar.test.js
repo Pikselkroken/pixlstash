@@ -468,3 +468,64 @@ describe("the delete verb", () => {
     expect(wrapper.emitted("delete")).toEqual([[true]]);
   });
 });
+
+describe("Open in file manager", () => {
+  // The verb acts on the machine PixlStash runs on rather than on the library,
+  // so what this file can assert is the gate and the emit: whether the item is
+  // offered, and that pressing it hands the decision to the view.
+  const item = (wrapper) =>
+    wrapper
+      .findAll(".shelf-mi")
+      .find((mi) => mi.text().includes("Open in file manager"));
+
+  it("is offered for one model whose file is actually there", () => {
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(item(wrapper).attributes("disabled")).toBeUndefined();
+  });
+
+  it("is offered when ONE of several copies is there", () => {
+    // A model catalogued in two folders, one of them on a drive that is not
+    // plugged in: the present copy is what opens, so the verb is live. `every`
+    // rather than `some` would refuse it and there would be no way to reach a
+    // file that is sitting right there.
+    selectRows([
+      row(1, "present", {
+        locations: [
+          {
+            state: "unreachable",
+            folder_id: 2,
+            folder_path: "/nas",
+            relpath: "x",
+          },
+          { state: "present", folder_id: 1, folder_path: "/m", relpath: "x" },
+        ],
+      }),
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(item(wrapper).attributes("disabled")).toBeUndefined();
+  });
+
+  it("is refused when the copy is missing or its drive is unplugged", async () => {
+    for (const state of ["missing", "unreachable"]) {
+      setActivePinia(createPinia());
+      selectRows([row(1, state)]);
+      const wrapper = mount(ShelfSelectionBar, globalOpts);
+      expect(item(wrapper).attributes("disabled")).toBeDefined();
+      expect(item(wrapper).attributes("title")).toContain("no copy of this");
+    }
+  });
+
+  it("is a single-selection verb: forty rows would be forty windows", () => {
+    selectRows([row(1, "present"), row(2, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(item(wrapper)).toBeUndefined();
+  });
+
+  it("emits rather than calling, like every other verb here", async () => {
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    await item(wrapper).trigger("click");
+    expect(wrapper.emitted("open-location")).toHaveLength(1);
+  });
+});

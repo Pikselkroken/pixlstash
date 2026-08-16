@@ -51,6 +51,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.adapter_attachment import AdapterAttachment
 from pixlstash.routes import model_files as model_files_routes
 from pixlstash.routes import model_folders as model_folders_routes
+from pixlstash.routes import model_shelf as model_shelf_routes
 from pixlstash.routes.model_imports import (
     model_sample_path_within,
     sample_path_within,
@@ -5025,3 +5026,163 @@ def test_a_copy_registered_while_the_files_went_keeps_its_model_alive(
         "the model row was purged while a registered copy was still on disk"
     )
     assert (spare / "alice.safetensors").exists()
+
+
+# ===========================================================================
+# Open in file manager (#933) — the shelf's one host-shell verb
+# ===========================================================================
+#
+# `POST /models/{model_id}/open-location` changes nothing, which is exactly why
+# its tests are about the gate and the refusals rather than about an effect:
+# what it does is hand a path to the machine's own desktop, and a test that let
+# that spawn run would open a file manager window on whoever's box the suite is
+# running on. So the opener is stubbed everywhere below and what is asserted is
+# WHICH path reaches it, and when it is not reached at all.
+
+_OPEN_ROUTE = ("POST", "/api/v1/models/{model_id}/open-location")
+
+
+@pytest.fixture
+def opener(monkeypatch):
+    """The host spawn, replaced by a list of the paths it was asked to open."""
+    opened: list[str] = []
+
+    def fake(path):
+        opened.append(path)
+        return True
+
+    monkeypatch.setattr(model_shelf_routes, "open_in_file_manager", fake)
+    return opened
+
+
+def _open_location(shelf_env, model_id):
+    return shelf_env.owner.post(f"{API}/models/{model_id}/open-location")
+
+
+def test_open_location_hands_the_containing_folder_to_the_file_manager(
+    shelf_env, real_files, opener
+):
+    """The folder holding a present copy, and not the file itself: opening the
+    directory is the one gesture every platform answers in a single call."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+
+    r = _open_location(shelf_env, alice)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "ok"
+    assert opener == [str(real_files)], opener
+
+
+def test_open_location_refuses_a_model_with_no_readable_copy(
+    shelf_env, opener, tmp_path
+):
+    """409, not 404: the shelf row is real and the bytes are not.
+
+    The folder is repointed at a directory that is *known* not to exist rather
+    than relying on the seed's `/models/loras`: an ML box or a container may
+    well have `/models` mounted, and this assertion would then be measuring the
+    host's disk instead of the route.
+    """
+    _seeded_folder_at(shelf_env.server, str(tmp_path / "never-registered"))
+    alice = shelf_env.model_ids["alice.safetensors"]
+
+    r = _open_location(shelf_env, alice)
+    assert r.status_code == 409, r.text
+    assert opener == [], "a folder that is not there was handed to the desktop"
+
+
+def test_open_location_404s_a_model_that_is_not_on_the_shelf(shelf_env, opener):
+    r = _open_location(shelf_env, 999999)
+    assert r.status_code == 404, r.text
+    assert opener == []
+
+
+def test_a_host_with_no_file_manager_says_so_rather_than_answering_ok(
+    shelf_env, real_files, monkeypatch
+):
+    """A headless or containerised server has nothing to open. The click has no
+    visible result either way, so a 200 there would be indistinguishable from
+    success and the reader would press it again."""
+    monkeypatch.setattr(model_shelf_routes, "open_in_file_manager", lambda path: False)
+    alice = shelf_env.model_ids["alice.safetensors"]
+
+    r = _open_location(shelf_env, alice)
+    assert r.status_code == 500, r.text
+
+
+def test_the_open_location_route_is_declared_loopback_owner_only():
+    """The red line is a declaration, not a check in the handler: the route
+    spawns a process on the host's desktop, so LAN and Tailscale are as far
+    outside it as the open internet, and `allow_remote_host_ops` never applies.
+    The locality halves themselves are asserted against a real gate in
+    tests/test_authz_host_capability_16_3.py."""
+    declared = ROUTE_POLICIES.get(_OPEN_ROUTE)
+    assert declared is not None, f"{_OPEN_ROUTE} has no ROUTE_POLICIES entry"
+    assert declared.policy is AccessPolicy.LOOPBACK_OWNER_ONLY, (
+        f"POST /models/{{model_id}}/open-location declares {declared.policy}, "
+        "not LOOPBACK_OWNER_ONLY"
+    )
+    assert declared.justification, "a red-line route with no reason written down"
+
+
+def test_open_location_refuses_every_share_token(shelf_env, real_files, opener):
+    """Both belts, in the direction that matters: a token that is not the owner
+    may not drive the owner's desktop. The owner's own 200 is the positive
+    control beside it, so this cannot pass by the route being dead."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    for description, restriction in (
+        ("open scoped probe", {"resource_type": "character", "resource_id": 1}),
+        ("open unscoped probe", {}),
+    ):
+        token = _mint(shelf_env.owner, description, **restriction)
+        client = _bearer(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"{description} is dead; the refusal below would prove nothing"
+        )
+        refused = client.post(f"{API}/models/{alice}/open-location")
+        assert refused.status_code == 403, (
+            f"{description} reached the host file manager: {refused.status_code}"
+        )
+    assert opener == [], "a share token spawned something on the host"
+    assert _open_location(shelf_env, alice).status_code == 200, (
+        "the owner lost a verb they are meant to have"
+    )
+
+
+def test_the_spawn_helper_reports_a_path_that_is_not_there(tmp_path):
+    """A path that does not exist must never reach the shell, on any platform."""
+    from pixlstash.utils import host_open
+
+    assert host_open.open_in_file_manager(str(tmp_path / "gone")) is False
+    assert host_open.open_in_file_manager("") is False
+
+
+@pytest.mark.skipif(
+    sys.platform.startswith("win"), reason="the exit status is a POSIX opener's"
+)
+def test_the_spawn_helper_reads_the_openers_exit_status(tmp_path):
+    """The whole reason this helper exists rather than a fourth inline copy.
+
+    A headless or containerised Linux host normally *has* `xdg-open` — it is a
+    shell script — and it exits non-zero when there is no desktop session to
+    hand the path to. The three inline copies pass `check=False` and discard
+    that, so they report success for precisely the deployment where nothing
+    opened; this one must not, or the route's 500 branch is unreachable and
+    every sentence written about it is false.
+    """
+    from unittest import mock
+
+    from pixlstash.utils import host_open
+
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    with mock.patch.object(host_open.subprocess, "run") as run:
+        run.return_value = SimpleNamespace(returncode=0)
+        assert host_open.open_in_file_manager(str(tmp_path)) is True
+        run.assert_called_once_with([opener, str(tmp_path)], check=False)
+
+        run.return_value = SimpleNamespace(returncode=3)
+        assert host_open.open_in_file_manager(str(tmp_path)) is False, (
+            "a refusing opener was reported as a window that opened"
+        )
+
+        run.side_effect = FileNotFoundError(opener)
+        assert host_open.open_in_file_manager(str(tmp_path)) is False

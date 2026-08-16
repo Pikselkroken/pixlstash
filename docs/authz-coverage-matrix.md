@@ -73,11 +73,13 @@ declared.** #950 itself adds exactly **+1 `picture_scoped`**
 the re-derivation above, and are written down here rather than carried forward.
 
 **Re-derived again 2026-08-16 (training-run samples), counted from
-`ROUTE_POLICIES`: 283 declared.** This change itself adds exactly **+2
-`local_owner_only`** (`GET /api/v1/models/{model_id}/samples` and
-`GET /api/v1/models/{model_id}/samples/{filename}`); the remaining movement
-(`local_owner_only` 28 → 29, total 280 → 281) was already drift on the base
-branch, written down here rather than carried forward.
+`ROUTE_POLICIES` after merging `develop`: 284 declared.** This change itself adds
+exactly **+2 `local_owner_only`** (`GET /api/v1/models/{model_id}/samples` and
+`GET /api/v1/models/{model_id}/samples/{filename}`). The other movements are the
+base branch's, written down here rather than carried forward: `local_owner_only`
+28 → 29 was already drift, and `loopback_owner_only` 5 → 6 is
+`POST /api/v1/models/{model_id}/open-location`, which landed on `develop` while
+this branch was open and did not re-derive these aggregates.
 
 | Policy | Count |
 |---|---|
@@ -90,7 +92,7 @@ branch, written down here rather than carried forward.
 | `character_scoped` | 6 |
 | `project_scoped` | 6 |
 | `local_owner_only` | 31 |
-| `loopback_owner_only` | 5 |
+| `loopback_owner_only` | 6 |
 
 > **Updated for Step 3 (2026-07-21).** The §16.3 host-capability retarget moved 16
 > rows `owner_only` → the host-capability tiers, and the F-c rider tightened
@@ -571,6 +573,7 @@ and the declarations themselves are pinned by
 | PUT | `/api/v1/adapters/{sha256}/attachments` | owner_only |  | The assignment path: replaces which characters and sets in the **active library** use one adapter. Same default library pin as the shelf reads, and for a stronger reason — it *writes* vault rows, so a token stamped for another library must not reach it. Not `local_owner_only`: it names a hash and two row ids, never a host path, so it is outside the §16.3 filesystem-authority class. Every entity id is checked against this library before anything is written, because `adapter_attachment` carries no foreign key (its other end is in the hub) and nothing else would ever notice a dangling id |
 | PATCH | `/api/v1/models` | owner_only |  | The verb layer's write path (F3): Rename, Set base model and Set kind, which differ only in which curated column they set. `owner_only` on the same default library pin as the shelf reads. Deliberately **not** `local_owner_only`: the body is a list of hub `model.id`s and a value to write, it names no host path, and nothing here touches the filesystem — so it is outside the §16.3 class that `POST /model-folders` and the rescan sit in. The handler's own guards are data checks, not scope checks: `display_name` is refused for more than one id (a name is a fact about one file), and a correction that would violate the hub's `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` is refused by name rather than left to surface as a 500 |
 | POST | `/api/v1/models/forget` | owner_only |  | The verb layer's destructive path (F3): drops the `model` row and its `model_file` rows, taking the name, base model, kind and trigger words with it. Still `owner_only` and still not §16.3, because it deletes **database rows and never unlinks a file** — the files are already gone, which is the precondition for the call. Gated on row state rather than on caller: a model with a `present` or `unreachable` copy is refused (with a reason, not an error), so the we-could-not-look state cannot be turned into a deletion. Vault `adapter_attachment` rows are deliberately left alone; they are keyed by content hash, unreachable for libraries that are not open, and re-link if the file returns |
+| POST | `/api/v1/models/{model_id}/open-location` | **loopback_owner_only** |  | §16.3.1 RED LINE (#933): shows a model's folder in the file manager of the machine PixlStash runs on, which is the shelf's `Open in file manager` verb. It is the **fourth** file-manager spawn on this tier — `reference-folders/{folder_id}/open`, `pictures/{id}/open-location` and `server-config/open` are the other three; `server/restart` re-execs the process and spawns no GUI at all — and it carries their tier: loopback only, and `allow_remote_host_ops` is never consulted, so a LAN or Tailscale owner is refused as firmly as a public one. It is also the first of the four to read the opener's exit status (`pixlstash/utils/host_open.py`) rather than discard it. The tier is about the **spawn**, not the input — the body is empty and the path comes from the hub: a `present` copy, joined to the folder the scanner recorded and contained with `path_is_within` through the same `_present_copy` as `GET /adapters/{sha256}/file`, so a `..` from a faulty scan or a restored hub cannot point the file manager outside a registered folder. That containment is **lexical first** by design, so a symlinked directory component recorded in `model_file` would be followed — the deliberate weakening that lets a symlinked model be served at all (`path_utils`), and it opens a window on bytes the route beside this one would already stream over the network, to a caller who by then has to be sitting at the machine. The **folder** is opened rather than the file selected, because that is the one gesture every platform answers in a single call. Handler narrowings, neither of them the tier: an unknown id is 404 and a model whose copies are all `missing` or on an unplugged drive is **409, not 404** (the shelf row exists; the bytes do not), and a host with no desktop at all — headless, containerised — is a 500 that says so rather than a click that silently does nothing |
 | GET | `/api/v1/models/base-models` | owner_only |  | Completion targets for the free-text `base_model` field: the labels `known_base_models` ships plus every distinct `base_model` string recorded on this machine's `model` rows. `owner_only` on the same default library pin as the rest of the shelf, and deliberately not the any-authenticated-principal tier: that tier's contract is that a route returns no per-object data, and the distinct half of this list is exactly that — it is derived from `model` rows, so it names what this machine holds even though the shipped half beside it is a compile-time constant. Reads only; the field it completes stays free text, so nothing here constrains what can be stored |
 | GET | `/api/v1/checkpoints` | owner_only |  | The same `model` query filtered to `file_kind='checkpoint'`. No by-hash detail sibling: a checkpoint registers with `sha256` NULL until `MissingCheckpointHashFinder` reads it, so `model.id` is its only identifier. `unknown` is never returned here |
 

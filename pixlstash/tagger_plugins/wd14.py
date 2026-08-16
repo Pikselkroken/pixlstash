@@ -502,6 +502,7 @@ class WD14Plugin(TaggerPlugin):
         name: Plugin identifier used in ``tagger_settings``.
         display_name: Human-readable label shown in the UI.
         description: Short description.
+        author, license, models: Header fields, see :class:`TaggerPlugin`.
         supports_tags: WD14 produces tags.
         supports_descriptions: WD14 does not produce captions.
         requires_download: Model must be downloaded on first use.
@@ -510,6 +511,15 @@ class WD14Plugin(TaggerPlugin):
     name: str = "wd14"
     display_name: str = "WD14 Tagger"
     description: str = "WD14 ONNX tagger (SmilingWolf/wd-convnext-tagger-v3) — broad anime/illustration tag coverage."
+    author: str = "Gaute Lindkvist <lindkvis@gmail.com>"
+    # Dual: this file adapts Kohya_ss (see the Apache-2.0 attribution at the
+    # top of the module) into the GPL-3.0 backend, and Apache-2.0 §4
+    # attribution survives that. A header claiming GPL alone would drop
+    # Kohya_ss out of any attribution report built from it.
+    license: str = "GPL-3.0-only AND Apache-2.0"
+    models: list[dict[str, str]] = [
+        {"name": "SmilingWolf/wd-convnext-tagger-v3", "license": "Apache-2.0"},
+    ]
     supports_tags: bool = True
     supports_descriptions: bool = False
     requires_download: bool = True

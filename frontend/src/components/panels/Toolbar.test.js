@@ -254,9 +254,11 @@ describe("Toolbar — Recently changed stacks", () => {
 });
 
 describe("Toolbar — the canonical app-wide tail", () => {
-  // The decision record: EVERY toolbar ends [separator][UndoControl]
-  // [TbGlobalActions]; the ⋯ (amendment #2) is NOT part of the tail — a
-  // burger stands at the end of the group it collapses, the left action run.
+  // The decision record: every toolbar that writes the operation log ends
+  // [separator][UndoControl][TbGlobalActions] (the model shelf does not write
+  // it and carries no undo, amendment #4); the ⋯ (amendment #2) is NOT part of
+  // the tail — a burger stands at the end of the group it collapses, the left
+  // action run.
   it("orders the tail separator → UndoControl → TbGlobalActions", () => {
     const wrapper = mountToolbar();
     const undo = wrapper.findComponent({ name: "UndoControl" }).element;

@@ -57,12 +57,17 @@ API = "/api/v1"
 # absent-route probe below asserts 404/405 and is unaffected (non-2xx only).
 pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
-# The 5 red-line routes on the stricter loopback-only tier. Four spawn a host GUI
-# process (os.startfile / open / xdg-open); server-config/open was a
+# The 6 red-line routes on the stricter loopback-only tier. FOUR of them spawn a
+# host GUI process (os.startfile / open / xdg-open); server/restart re-execs the
+# process and spawns nothing, which the comment here counted as a GUI spawn from
+# 2026-07-21 until #933 came to add a real one. server-config/open was a
 # byte-identical sibling that shipped owner_only with no locality check (CSO
-# Condition 1, 2026-07-21) and is reclassified here.
+# Condition 1) and is reclassified here; the model shelf's `Open in file manager`
+# (#933) is the fourth spawn and the first to reach it through the shared
+# pixlstash/utils/host_open.py, which reads the opener's exit status where the
+# three inline copies discard it.
 #
-# The fifth is the e2e test hook. It spawns nothing, but it synthesises arbitrary
+# The sixth is the e2e test hook. It spawns nothing, but it synthesises arbitrary
 # WebSocket grid events broadcast to every connected client — a capability over
 # OTHER clients' state rather than over the caller's own data — and it is mounted
 # only by the e2e backend, which binds 127.0.0.1 and is driven from the same
@@ -72,6 +77,7 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/server/restart"),
     ("POST", "/api/v1/reference-folders/{folder_id}/open"),
     ("POST", "/api/v1/pictures/{id}/open-location"),
+    ("POST", "/api/v1/models/{model_id}/open-location"),
     ("POST", "/api/v1/server-config/open"),
     ("POST", "/api/v1/test-hooks/ws-event"),
 }
@@ -157,10 +163,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_31_local_5_loopback():
-    """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 36 routes carry a
-    locality tier = 31 local + 5 loopback.
+def test_host_capability_tier_split_is_31_local_6_loopback():
+    """The loopback tier is the 4 file-manager spawns, the process restart and
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 37
+    routes carry a locality tier = 31 local + 6 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -254,7 +260,19 @@ def test_host_capability_tier_split_is_31_local_5_loopback():
     thing the shelf does to a disk and is not made weaker by the ids being ours
     rather than the caller's.
 
-    36 = 31 + 5 with the two ``GET /models/{model_id}/samples`` routes, which
+    35 = 29 + 6 with ``POST /models/{model_id}/open-location``, the shelf's
+    ``Open in file manager`` (#933) and the **first addition to the loopback
+    tier since the e2e test hook**. It is the same host-GUI spawn as the three
+    file-manager routes before it — ``server/restart``, the fourth member, drives
+    the host shell without spawning a GUI — reached through the shared
+    ``pixlstash/utils/host_open.py`` rather than inline, so it needs no new
+    argument for the tier: the authority is the host's own shell. It is here for
+    the *spawn* and not for an input — there is no body, the id is a hub
+    ``model.id``, and the path is the scanner's own folder joined to its relpath
+    and contained, exactly as ``GET /adapters/{sha256}/file`` contains the same
+    join. The local count is unchanged.
+
+    37 = 31 + 6 with the two ``GET /models/{model_id}/samples`` routes, which
     read a training run's previews back off the shelf after the import copied
     them into ``<stem>_samples/`` beside the checkpoint. The byte route is
     ``GET /adapters/{sha256}/file`` again — raw bytes out of a registered model
@@ -266,7 +284,8 @@ def test_host_capability_tier_split_is_31_local_5_loopback():
     ``/adapters/{sha256}/file`` entry above records as *not* the argument, since
     the tier follows the authority exercised rather than what the route accepts.
     The listing is kept beside the byte route rather than one tier below it, so
-    a caller who may not fetch a preview is not handed a list of them.
+    a caller who may not fetch a preview is not handed a list of them. The
+    loopback count is unchanged: both are reads, and neither spawns anything.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -280,7 +299,7 @@ def test_host_capability_tier_split_is_31_local_5_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 5, sorted(loopback)
+    assert len(loopback) == 6, sorted(loopback)
     assert len(local) == 31, sorted(local)
 
 
@@ -676,6 +695,39 @@ def test_loopback_owner_only_public_403():
             r = owner.post(_OPEN_LOCATION, headers=_xff("8.8.8.8"))
             assert _is_loopback_403(r), (
                 f"public owner must be 403'd on the red line; got {r.status_code}: {r.text}"
+            )
+
+
+_SHELF_OPEN = f"{API}/models/999999/open-location"  # the #933 red-line route
+
+
+def test_the_shelf_open_location_is_on_the_red_line_too():
+    """#933: the model shelf's `Open in file manager` spawns the same host GUI
+    process as its four predecessors, so it gets the same carve-out proof —
+    RFC1918, Tailscale and public all 403 EVEN with ``allow_remote_host_ops``
+    on, and a loopback owner passes the gate.
+
+    The positive half runs on an id no shelf holds, so the handler answers 404
+    and nothing is spawned: what is under test is the gate in front of it, and
+    a test that reached the spawn would open a file manager window on whichever
+    machine ran the suite."""
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            for ip in (LAN_IPV4, PRIVATE_10_IPV4, "100.64.0.5", "8.8.8.8"):
+                r = owner.post(_SHELF_OPEN, headers=_xff(ip))
+                assert _is_loopback_403(r), (
+                    f"{ip} must be 403'd on the shelf's open-location even with "
+                    f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
+                )
+            r = owner.post(_SHELF_OPEN)
+            assert not _is_loopback_403(r), (
+                f"loopback owner must reach the shelf's open-location; "
+                f"got {r.status_code}: {r.text}"
+            )
+            assert r.status_code == 404, (
+                f"expected the handler's no-such-model 404 past the gate, "
+                f"got {r.status_code}: {r.text}"
             )
 
 

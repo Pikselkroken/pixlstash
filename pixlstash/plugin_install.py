@@ -91,6 +91,11 @@ class PluginClass:
     kind: str
     file: Path
     warnings: list[str] = field(default_factory=list)
+    # Declared on the base classes (issue #961). Read here as literals rather
+    # than off an instance, because everything in this module has to work on a
+    # plugin it has deliberately not imported.
+    author: str = ""
+    license: str = ""
 
 
 @dataclass
@@ -360,6 +365,8 @@ def _analyse(source: str, path: Path, *, strict: bool) -> list[PluginClass]:
                 f"{class_name} sets neither supports_tags nor "
                 "supports_descriptions, so it appears in no table."
             )
+        _, author = _string_attribute(node, "author")
+        _, license_id = _string_attribute(node, "license")
         found.append(
             PluginClass(
                 name=name,
@@ -368,6 +375,8 @@ def _analyse(source: str, path: Path, *, strict: bool) -> list[PluginClass]:
                 kind=kind,
                 file=path,
                 warnings=warnings,
+                author=author or "",
+                license=license_id or "",
             )
         )
 
@@ -462,8 +471,8 @@ def _extract_zip(archive: Path, target: Path) -> Path:
     return root
 
 
-def _fetch_from_repository(slug: str, ref: str, workdir: Path) -> Path:
-    """Download *slug* from the plugins repository and return its folder."""
+def _download_repository(ref: str, workdir: Path) -> Path:
+    """Download the plugins repository at *ref* and return the extracted root."""
     # The ref goes into a URL path, and requests collapses dot segments before
     # sending: an unchecked `--ref ../../../someone-else/evil/zip/main` walks
     # straight out of PLUGINS_REPO and installs code that this CLI then runs
@@ -488,11 +497,24 @@ def _fetch_from_repository(slug: str, ref: str, workdir: Path) -> Path:
 
     archive = workdir / "repository.zip"
     archive.write_bytes(response.content)
-    root = _extract_zip(archive, workdir / "repository")
+    return _extract_zip(archive, workdir / "repository")
 
-    candidates = sorted(
-        path for path in (root / "plugins").glob("*/*") if path.is_dir()
-    )
+
+def _published_dirs(root: Path) -> list[Path]:
+    """Return every published plugin folder in an extracted repository.
+
+    The repository lays them out as ``plugins/<kind>/<slug>``, so the parent
+    directory names the kind and the directory itself names the slug. One
+    definition of that layout, shared by installing a named plugin and by
+    listing the catalogue, so the two cannot come to disagree about what the
+    repository contains.
+    """
+    return sorted(path for path in (root / "plugins").glob("*/*") if path.is_dir())
+
+
+def _fetch_from_repository(slug: str, ref: str, workdir: Path) -> Path:
+    """Download *slug* from the plugins repository and return its folder."""
+    candidates = _published_dirs(_download_repository(ref, workdir))
     for candidate in candidates:
         if candidate.name == slug:
             return candidate
@@ -793,6 +815,134 @@ def _describe(kind: str, path: Path, builtins: set[str]) -> InstalledPlugin:
         problem=problem,
         shadows_builtin=primary.name in builtins,
     )
+
+
+# ----------------------------------------------------------------------
+# The published catalogue
+# ----------------------------------------------------------------------
+
+
+@dataclass
+class CataloguePlugin:
+    """One plugin published in the repository, as ``plugins available`` shows it."""
+
+    kind: str
+    name: str
+    display_name: str
+    summary: str = ""
+    author: str = ""
+    license: str = ""
+    installed: bool = False
+    problem: str | None = None
+
+
+def _summary(folder: Path) -> str:
+    """Return the one-line summary from a published plugin's README.
+
+    The repository writes each README as a title, a blank line, then a paragraph
+    saying what the plugin does. That paragraph is *hard-wrapped*, so the first
+    line of it is a fragment ("...so it runs") rather than a sentence: the lines
+    are joined back up before the first sentence is taken. A plugin without a
+    README, or with a shape this does not fit, simply has no summary — guessing
+    harder would put the wrong sentence in a listing people read to choose what
+    to install.
+    """
+    try:
+        text = (folder / "README.md").read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return ""
+
+    paragraph: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("#", "<!--", "![", "[!")):
+            continue
+        if not stripped:
+            if paragraph:
+                break
+            continue
+        paragraph.append(stripped)
+    if not paragraph:
+        return ""
+
+    joined = " ".join(paragraph)
+    sentence = re.split(r"(?<=[.!?])\s", joined, maxsplit=1)[0]
+    # ponytail: a plain length clamp, not word-aware wrapping. A README whose
+    # first sentence runs past this is already unusual; wrap properly if the
+    # catalogue ever grows entries that genuinely need it.
+    return sentence if len(sentence) <= 200 else sentence[:197] + "..."
+
+
+def _catalogue_entry(folder: Path, installed: set[str]) -> CataloguePlugin:
+    """Read one published plugin folder, recording problems rather than raising.
+
+    One unparseable plugin in the repository must not empty the whole listing:
+    the reader is choosing between the others, and a refusal that names none of
+    them is useless. Nothing here imports the plugin — this is the same ast-only
+    read the installer does, on code that has just come off the network.
+    """
+    kind = CAPTIONING if folder.parent.name == "captioning" else IMAGE
+    try:
+        found: list[PluginClass] = []
+        for source in _python_files(folder):
+            found.extend(_analyse(read_source(source), source, strict=False))
+    except (PluginError, OSError) as exc:
+        return CataloguePlugin(
+            kind=kind,
+            name=folder.name,
+            display_name="-",
+            installed=folder.name in installed,
+            problem=str(exc),
+        )
+    if not found:
+        return CataloguePlugin(
+            kind=kind,
+            name=folder.name,
+            display_name="-",
+            installed=folder.name in installed,
+            problem="no plugin class found",
+        )
+    primary = found[0]
+    return CataloguePlugin(
+        kind=primary.kind,
+        name=primary.name,
+        display_name=primary.display_name,
+        summary=_summary(folder),
+        author=primary.author,
+        license=primary.license,
+        installed=primary.name in installed,
+    )
+
+
+def catalogue(ref: str = DEFAULT_REF) -> list[CataloguePlugin]:
+    """Return every plugin published in the repository at *ref*.
+
+    One download of the same archive ``plugins install <name>`` uses, so
+    listing needs no API token, no second host and no rate-limited endpoint —
+    and shows exactly the set that installing can reach.
+    """
+    installed = {
+        entry.name for entries in list_installed().values() for entry in entries
+    }
+    with TemporaryDirectory(prefix="pixlstash-catalogue-") as scratch:
+        root = _download_repository(ref, Path(scratch))
+        return [_catalogue_entry(folder, installed) for folder in _published_dirs(root)]
+
+
+def matches(entry: CataloguePlugin, query: str) -> bool:
+    """Return whether *entry* matches a case-insensitive *query*.
+
+    Searched across everything the listing shows — name, display name, summary,
+    author and licence — because a reader who can see a word in the output will
+    expect to be able to search for it. An empty query matches everything.
+    """
+    needle = query.strip().lower()
+    if not needle:
+        return True
+    haystack = " ".join(
+        (entry.name, entry.display_name, entry.summary, entry.author, entry.license)
+    )
+    return needle in haystack.lower()
 
 
 def resolve_removal(name: str, kind: str | None = None) -> tuple[str, Path]:

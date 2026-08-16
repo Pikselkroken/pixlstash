@@ -18,7 +18,7 @@
 5. [Routes / HTTP API](#5-routes--http-api)
 6. [Database Models](#6-database-models)
 7. [Task System](#7-task-system)
-8. [Image Plugins](#8-image-plugins) — incl. [8.1 Installing plugins from the CLI](#81-installing-plugins-from-the-cli-issue-958)
+8. [Image Plugins](#8-image-plugins) — incl. [8.1 Installing and checking plugins from the CLI](#81-installing-and-checking-plugins-from-the-cli-issue-958)
 9. [Tagger Plugins](#9-tagger-plugins)
 10. [Services Layer](#10-services-layer)
 11. [Utility Modules](#11-utility-modules)
@@ -312,8 +312,9 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | [pixlstash/pixl_logging.py](../pixlstash/pixl_logging.py) | Uvicorn log config + coloured formatter. |
 | [pixlstash/stacking.py](../pixlstash/stacking.py) | Picture stacking (duplicates / variants). |
 | [pixlstash/image_loading_dataset_prepper.py](../pixlstash/image_loading_dataset_prepper.py) | Dataset preparation utilities for offline training scripts. |
-| [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (list/create/attach/detach/relocate/backup/prepare-legacy-identity/rename) and `plugins` (install/list/remove). Only the `libraries` group opens the hub — see §8.1. |
-| [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it. See §8.1. |
+| [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (list/create/attach/detach/relocate/backup/prepare-legacy-identity/rename) and `plugins` (install/test/list/remove). Only the `libraries` group opens the hub — see §8.1. |
+| [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins available/install/list/remove`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it; also lists what the plugins repository publishes. See §8.1. |
+| [pixlstash/plugin_check.py](../pixlstash/plugin_check.py) | Backs `pixlstash-cli plugins test`. The one plugin verb that *does* import, through the server's own loader, and the only place the parameter schema is checked against what the UI renders. See §8.1. |
 
 ---
 
@@ -531,6 +532,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                          |
 | POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                        |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
+| POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager              |
 | GET    | /api/v1/models/{model_id}/samples                                             | model_shelf     | The training previews stored beside one imported checkpoint |
 | GET    | /api/v1/models/{model_id}/samples/{filename}                                  | model_shelf     | One training preview stored beside an imported checkpoint   |
 | GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                     |
@@ -894,8 +896,8 @@ Most finders still fetch the full ORM row; only `MissingThumbnailFinder` and `Mi
 
 Located in [pixlstash/image_plugins/](../pixlstash/image_plugins/).
 
-- **`base.ImagePlugin`** — abstract base. Each plugin declares `name`, `display_name`, `parameter_schema()` and implements `run(images, parameters, progress_callback, error_callback)`.
-- **`registry.PluginRegistry`** — discovers plugins (built-in + user-supplied), exposes lookup by name.
+- **`base.ImagePlugin`** — abstract base. Each plugin declares `name`, `display_name`, `description`, the `author`/`license`/`models` header (see §9's `TaggerPlugin` entry — the two base classes carry the same three, defaulting to empty), `parameter_schema()` and implements `run(images, parameters, progress_callback, error_callback)`.
+- **`registry.PluginRegistry`** — discovers plugins (built-in + user-supplied), exposes lookup by name. **It probes `plugin_schema()` once at load**, so a plugin that raises there — or declares a `models` header that is not a list of dicts — is rejected with a recorded reason instead of taking `GET /pictures/plugins` down for every plugin at request time. `TaggerPluginManager._register_user_plugin` does the same.
 - **`service.apply_plugin_to_pictures`** — batch entry point invoked by `POST /pictures/{id}/plugin/{name}`; emits `PLUGIN_PROGRESS` events.
 
 Built-in plugins: `brightness_contrast`, `blur_sharpen`, `colour_filter`, `pixelate`, `rotate`, `scaling`, plus `plugin_template.py` as a starter for custom plugins.
@@ -904,9 +906,9 @@ User-supplied image plugins are loaded from `user_data_dir("pixlstash")/image-pl
 
 [docs/writing-image-filter-plugins.md](writing-image-filter-plugins.md) is the contract, and its §10 tabulates every divergence from the tagger system. Three of those are quiet rather than loud, and all three are the image side being the looser of the two: a **user plugin replaces a built-in of the same name** (taggers reject it), **only the first `ImagePlugin` subclass in a module is registered** so a file defining two concrete plugins ships one (taggers register every class the module *defines*), and the **parameter schema is a different schema** — a dropdown is `type: "string"` plus `enum`, with no `select` branch in `PluginParametersUI.vue` at all. The other two halves of the class-selection divergence were closed in #968: `_find_plugin_class` now excludes classes the module merely imported (as `TaggerPluginManager._register_module_plugins` does; its extra `__module__` prefix clause covers the package shape, which this loader does not accept), so a plugin that imports a built-in for reference can no longer be shipped in place of the class its author wrote. An abstract class is demoted to a *fallback* rather than skipped: an intermediate base above the real class no longer wins, while a file whose only plugin class is abstract still produces `Can't instantiate abstract class X with abstract method run`, which names the class and the missing method — the reason not to copy the tagger's outright skip here. The shadowing itself is still user-wins, but it is now recorded: a `PluginLoadError` on the manager's own error list, and — since that list is served nowhere (above) — a log line, which is the only place a user will see it. Both name the **user** file as the one taking over, where the log used to name the built-in as "the duplicate" and so point away from the cause. `ImagePlugin.parameter_schema`'s docstring and the shipped template both described the `select`/`options` form that does not render; both were corrected when the guide was written.
 
-### 8.1 Installing plugins from the CLI (issue #958)
+### 8.1 Installing and checking plugins from the CLI (issue #958)
 
-`pixlstash-cli plugins install|list|remove` ([pixlstash/plugin_install.py](../pixlstash/plugin_install.py))
+`pixlstash-cli plugins available|install|list|remove` ([pixlstash/plugin_install.py](../pixlstash/plugin_install.py))
 puts a plugin in the right directory instead of asking the user to. The
 destination differs by kind *and* by shape, and getting it wrong fails silently:
 a folder in the image directory is skipped without a message, and a single
@@ -975,6 +977,133 @@ dot segments before sending, so an unchecked ref (`../../../someone/evil/zip/mai
 walks out of `PLUGINS_REPO` entirely and installs code this CLI then runs
 unsandboxed in the server process. `_REF_RE` plus an explicit `..` component
 check is what keeps "a named plugin from one repository" true.
+
+**`plugins available` lists that repository, and shares its download.** Until it
+existed, `install <name>` was the only thing that knew what `PLUGINS_REPO`
+contained, and the catalogue leaked out only on the failure path — the
+`Available: ...` line of the "no plugin called X" refusal. Guessing a name wrong
+was the documented way to discover the right one. The listing reuses that same
+archive rather than adding a second source: `_download_repository` and
+`_published_dirs` were split out of `_fetch_from_repository`, so the layout
+(`plugins/<kind>/<slug>`) and the `--ref` validation above have one definition
+each, and a listing can never show a set that installing cannot reach. It needs
+no API token and no second host, because codeload serves the zip unauthenticated.
+
+Two properties carry over from §8.1 and one is new:
+
+- **Still nothing is imported.** This reads plugin source that has just come off
+  the network, so the ast-only rule is not a preference here but the whole of the
+  safety story; `test_the_catalogue_never_imports_a_published_plugin` fails the
+  build if `importlib` is reached at all.
+- **One broken published plugin does not empty the listing.** `_catalogue_entry`
+  records the problem on the entry rather than raising, because the reader is
+  choosing between the others and a refusal naming none of them is useless. This
+  is the same shape as `_describe` for installed plugins.
+- **The summary comes from the README's first *sentence*, not its first line.**
+  The published READMEs hard-wrap their opening paragraph, so a line-wise read
+  prints a fragment ("...so it runs"). `_summary` joins the paragraph before
+  splitting the sentence. `author` and `license` (issue #961) are read as class
+  literals through the existing `_string_attribute`, and shown only where the
+  plugin declares them — every plugin published so far predates the header.
+
+**`plugins test` is the exception to "nothing is imported", and the reason the
+rest of the group can stay static** ([pixlstash/plugin_check.py](../pixlstash/plugin_check.py),
+issue Pikselkroken/pixlstash-plugins#4). Discovery runs once, at start-up, so
+without it the loop for finding a typo in a plugin is edit → restart → boot →
+read the error row under Settings › Auto-tagging. Here the user has named a
+plugin and asked for it to be run, so importing it is the request rather than a
+side effect of classifying it.
+
+**It is a development aid and must never be presented as a security check**, and
+that is a wording constraint on the code as much as on the docs. Running the
+plugin *is* the mechanism, so the command has no way to tell a user whether a
+plugin is safe — it has already executed the module body by the time it prints
+anything, unsandboxed, with the caller's permissions, which is why the caveat is
+printed *before* the load rather than after it. Everything it reports is about
+the plugin's contract, never its intent. A report a user reads as a safety
+verdict is worse than no report, and would also be the second time a
+"reassuring" plugin surface got the trust boundary wrong (the `plugins list`
+listing already has to say out loud that it imports nothing and therefore cannot
+see an import-time failure). Observing what a plugin *reaches for* — an audit
+hook over `socket.connect` / `subprocess.Popen` / writes — is tracked separately
+and is disclosure, not containment; real containment is OS-level and out of
+scope here.
+
+- **The load is `TaggerPluginManager.load_plugin_from_path`, the server's own
+  loader** — extracted from the body of `_load_user_plugins`, which now calls
+  it, rather than reimplemented. Module namespacing, the package's
+  `submodule_search_locations`, the `sys.modules` registration *before*
+  `exec_module` (so `from . import helper` resolves) and the containment of a
+  failing import are therefore the same by construction, not by resemblance. A
+  second implementation that got the package case wrong would fail plugins that
+  work in the server, which is worse than no check at all.
+- **Sharing the loader is not sharing discovery, and the gap is where the
+  silent failures live.** `_load_user_plugins` filters the directory listing
+  *above* the extracted method (`.`/`_`-prefixed entries are skipped without a
+  message) and the registry refuses a duplicate name *after* it — and the
+  checker's manager deliberately scans no directory, so neither fires. Both are
+  therefore restated in `plugin_check`: `_ineligible` on the entry name, and
+  `_installed_names`, which reads the installed captioners' names statically
+  through `plugin_install.list_installed()` (no import, nobody else's plugin
+  code run) and excludes the target itself so checking an already-installed
+  plugin does not report it colliding with its own copy. Without these a plugin
+  passes here and never loads there, which is the exact failure the command
+  exists to remove.
+- **What it adds is the schema shape**, which nothing else checks. The registry
+  exercises `plugin_schema()` at registration so a raising plugin cannot take
+  out the boot, but a schema that *renders* wrong raises nowhere, and the three
+  ways of getting it wrong land in different places: an unknown `type` falls
+  through `TaggerParametersUI.vue`'s `v-else` to a text box, a `select` with no
+  `options`/`enum` key fails that branch's `Array.isArray` guard and becomes a
+  text box too, while `options: []` **satisfies** the guard and renders a real
+  dropdown with nothing in it. A missing `default` or `name` is worse —
+  `default_params()` and `fill_defaults()` read both unguarded, on every library
+  open — as is a name a first-party plugin already holds, which loses that
+  collision silently. **Missing `label` and neither capability flag being set
+  are warnings, not failures**: the UI renders `field.label || field.name` and a
+  flagless plugin registers exactly as written, so refusing them would make this
+  less useful than the restart it replaces, and `plugins install` already only
+  warns about the second.
+- **`plugin_check.SCHEMA_TYPES` is a hand-copy of a `v-else-if` chain in a Vue
+  component**, which this repository does not otherwise allow (cf. `_SUBDIRS`
+  pinned to the registries). `test_schema_types_match_the_component_that_renders_them`
+  parses `TaggerParametersUI.vue` and pins the two together; it is what makes
+  the list `bool` (an undocumented alias for `boolean`) and `enum` (an alias for
+  a select's `options`) appear in, since the checker mirrors what renders rather
+  than what the guide recommends writing.
+- **`--image` runs the plugin the way the workflows do** — `setup(device)` if it
+  exists, then `init(params)`, then `generate_descriptions` (or `tag_images`)
+  with the schema's defaults — and checks the result is a dict keyed by the paths
+  it was given, because the workflow looks its results up by path and silently
+  drops anything else. **Which method to call is decided before any of that**:
+  a plugin with neither capability flag has nothing for this to call and the
+  workflows would never reach it either, so downloading and initialising its
+  model would be work done for a call that is not going to happen. It stops
+  when `needs_download()` is True rather than
+  starting a multi-gigabyte fetch from a check command. **That is a courtesy and
+  not a guarantee, and no wording may promise otherwise:** `needs_download()` is
+  the plugin's own answer about its own files, and a plugin that downloads
+  inside `init()` — which is where `from_pretrained_local_first` does it, and so
+  where an author copying the shipped captioners will do it — is already past
+  that gate.
+- **Only captioning plugins.** Image filters have a different base class and a
+  different parameter schema (`string` + `enum`, no `select`), so `plugins test`
+  says so and stops rather than reporting "No TaggerPlugin subclass found",
+  which is true and useless to the person who pointed it at the other kind.
+
+`tests/test_plugin_install.py` drives this off the shipped
+`tagger_plugins/plugin_template.py`: the pass case guards the starter we hand
+contributors, and every failure case is one mistake spliced into a copy of it,
+each anchored on a string that must appear exactly once so a mutation that
+matched a docstring instead of the code cannot read as coverage. **The `--image`
+test splices sentinels into its copy rather than running the template as
+shipped**, because as shipped the template cannot fail it: it seeds
+`self._device = "cpu"` in `__init__` and falls back to `max_tokens or 128`, so
+the caption a working run produces is character-for-character the caption you
+get with `setup()`, `init()` and the merged defaults *all* skipped. That
+assertion was dead on arrival and was found by deleting each of the three from
+`plugin_check` in turn; with the sentinels in place all three deletions fail the
+test and the unmutated file passes.
 
 **There is deliberately no manifest.** An optional `pixlstash-plugin.toml` was
 considered and dropped: static detection already answers what the thing is and
@@ -1065,7 +1194,10 @@ are load-bearing:
   the same two shapes; nothing about discovery changes.
 - **Start-up scan only.** There is no reload endpoint: re-instantiating a plugin whose model
   is resident would orphan the model and make `is_loaded()` lie. Adding a plugin requires a
-  restart, which the guide and the Auto-tagging settings section both say. The directory is
+  restart, which the guide and the Auto-tagging settings section both say. **The author's
+  way out is `pixlstash-cli plugins test`** (§8.1), which calls the one-plugin entry point
+  `load_plugin_from_path` that the scan below now loops over — same loader, in a process
+  that is not the server. The directory is
   not created at boot; **`GET /taggers/plugin-diagnostics`** returns its path so the UI can
   tell the user where to make it. That is a route of its own, on the §16.3 locality tier,
   and not a field on `GET /taggers`: the list route was `ANY_TOKEN` at the time, so a field there handed
@@ -1127,7 +1259,8 @@ No migration is needed: the value is read from `tagger_settings` with a `base` f
 ### `TaggerPlugin` ABC
 
 Every plugin declares:
-- **Class attributes**: `name`, `display_name`, `description`, `supports_tags`, `supports_descriptions`, `requires_download`, `default_enabled`.
+- **Class attributes**: `name`, `display_name`, `description`, `author`, `license`, `models`, `supports_tags`, `supports_descriptions`, `requires_download`, `default_enabled`.
+- **The header — `author`, `license`, `models`** — is declared as plain literals so a tool can read it off the source with `ast` instead of importing the plugin and running its module body. `models` lists every model or remote service the plugin loads (`{"name": ..., "license": ...}` per entry), because the plugin's own license says nothing about the weights it downloads. All three default to empty on both base classes, so a plugin that omits them loads unchanged and a caller shows nothing for it; `plugin_schema()` forwards them either way. `ImagePlugin` carries the same three. `tests/test_plugin_install.py::test_every_shipped_plugin_declares_a_readable_header` holds every shipped plugin *and both templates* to a literal header.
 - **`parameter_schema()`** — list of JSON-serialisable parameter definitions (same shape as `ImagePlugin.parameter_schema()`).
 - **Lifecycle**: `needs_download()`, `download()`, `init(parameters)`, `unload()`, `is_loaded()`.
 - **Inference**: `tag_images(...)` (when `supports_tags`) returns `{path: list[TagResult]}`; `generate_descriptions(...)` (when `supports_descriptions`) returns `{path: caption_str}`. `TagResult` carries `tag` and `confidence` (may be `None` for LLM-based plugins).
@@ -2669,7 +2802,7 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
     **Two disclosures these review rounds surfaced are deliberately NOT fixed here, and neither is this change's doing.** First, a picture-scoped token reads absolute host paths out of the picture row itself — `import_source_folder` and `tags_file` are documented columns (`pixlstash/db_models/picture.py`), served by `GET /pictures/{id}/{field}`, `GET /pictures/search`, `GET /stacks/{id}/pictures` and `GET /picture_sets/{id}`. That is a per-object disclosure behind a membership check, not a global one behind none, and deciding what a share viewer may see of a picture's provenance is a product call rather than a bug fix. Second, `GET /api/v1/network/info` (`any_token`) returns the server's LAN IP. Both predate #326 and both want their own issue; the regression test's comment is scoped to what it actually checks so that neither is implied to be closed. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_27_local_5_loopback` and by `test_tagger_diagnostics_is_local_and_the_any_token_routes_carry_no_host_path`. That test does two things a hand-written check would not: it greps each serialised body for the owner's **home directory** rather than checking a field name is absent (the weaker assertion passed while `load_error` still carried the folder, and an assertion anchored on the plugin folder would pass any leak one directory over), and it **derives** the routes to probe from `ROUTE_POLICIES` — every parameterless `GET` declared `any_token` or `public` — rather than naming them, because a written-down list is exactly what let two review rounds each miss a sibling. It runs them as the stated threat: a resource-scoped share token.
 
-    **Both tagger routes are also on the second belt**, `READ_BLOCKED_GET_PATHS` in `pixlstash/auth.py` — the middleware list that refuses a READ token a GET outright, where `GET /filesystem/browse` already sits. The gate alone is enough while it is enforcing, and that is the point: `AUTHZ_GATE_ENFORCING = False` is a documented one-line rollback, and with the gate off the diagnostics route served the owner's home directory to a share token. The review reproduced exactly that. `tests/test_authz_host_capability_16_3.py::test_the_plugin_routes_survive_the_documented_gate_rollback` turns the gate off deliberately and asserts both routes stay 403 for a share token while the owner still reaches them. The membership is **derived** rather than written down — `test_every_untemplated_locality_get_is_on_the_read_blocked_belt` asserts that every untemplated locality-tier GET is on the belt, so the next one fails the build instead of waiting for a review. Running that derivation for the first time found `GET /api/v1/model-moves` off it, which is fixed here: it serves the move queue's source and destination folders, so the rollback handed those to a READ token. `GET /pictures/plugins` is deliberately **not** on the belt: it is `owner_only` at the gate for the third-party text it serves, but `ImagePluginManager.list_plugins()` returns `plugin_schema()` and nothing else — no host path, no user settings — so it is not what this list is for. **What stays open** is the templated half: the frozenset matches literal paths, so `GET /model-folders/{folder_id}/runs` and its `samples/{filename}` sibling cannot join it at all. They are pinned as a known pair by the same test (a third fails it), and closing the gap needs prefix matching rather than another frozenset line. The follow-up is recorded in `tests/test_model_shelf_api.py`. Arithmetic, not judgement.
+    **Both tagger routes are also on the second belt**, `READ_BLOCKED_GET_PATHS` in `pixlstash/auth.py` — the middleware list that refuses a READ token a GET outright, where `GET /filesystem/browse` already sits. The gate alone is enough while it is enforcing, and that is the point: `AUTHZ_GATE_ENFORCING = False` is a documented one-line rollback, and with the gate off the diagnostics route served the owner's home directory to a share token. The review reproduced exactly that. `tests/test_authz_host_capability_16_3.py::test_the_plugin_routes_survive_the_documented_gate_rollback` turns the gate off deliberately and asserts both routes stay 403 for a share token while the owner still reaches them. The membership is **derived** rather than written down — `test_every_untemplated_locality_get_is_on_the_read_blocked_belt` asserts that every untemplated locality-tier GET is on the belt, so the next one fails the build instead of waiting for a review. Running that derivation for the first time found `GET /api/v1/model-moves` off it, which is fixed here: it serves the move queue's source and destination folders, so the rollback handed those to a READ token. `GET /pictures/plugins` is deliberately **not** on the belt: it is `owner_only` at the gate for the third-party text it serves, but `ImagePluginManager.list_plugins()` returns `plugin_schema()` and nothing else — no host path, no user settings — so it is not what this list is for. **The `author` header (#961) is the one identifying string in that payload**: it is a literal from a shipped or user-dropped class body, not derived from the host, and the route's existing `OWNER_ONLY` policy already keeps it away from a share token. It is on this route's ledger deliberately — a plugin list whose whole job is saying who wrote a plugin cannot also promise to name nobody. **What stays open** is the templated half: the frozenset matches literal paths, so `GET /model-folders/{folder_id}/runs` and its `samples/{filename}` sibling cannot join it at all. They are pinned as a known pair by the same test (a third fails it), and closing the gap needs prefix matching rather than another frozenset line. The follow-up is recorded in `tests/test_model_shelf_api.py`. Arithmetic, not judgement.
 
   - **Updated 2026-08-15 (the ComfyUI adapter loader's server half) — the locality total is now `33 = 28 local + 5 loopback`.** `GET /api/v1/adapters/{sha256}/file` streams one registered adapter's bytes, so a generator on another machine can *use* what this one catalogues. Without it the interop story stops at metadata: `GET /adapters` serves `locations[].folder_path` and `relpath`, but those are **this** host's paths and name nothing on the machine that asked, so a ComfyUI elsewhere on the network could see every LoRA and load none of them.
 
@@ -2683,7 +2816,9 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
   - **Updated 2026-08-16 (#933, `Delete from disk`) — the locality total is now `34 = 29 local + 5 loopback`.** `POST /api/v1/model-files/delete` removes every registered copy of the named models — to the OS trash by default, permanently on request — and then drops their hub rows. It is the **unlink half of `POST /model-moves` standing alone**, without the copy that justifies it, and it is the first route on this tier for *destruction* alone. It takes **no host path**: the body is a list of hub `model.id`, and every path it touches is contained against the folder the scanner recorded, so a row that escapes its folder is refused rather than unlinked. The containment is `_contained_path` rather than the mover's `resolve_path_within`, and deliberately: that one returns a `realpath`, so on a symlinked model it would delete the bytes the link points at and leave the link. This contains the file lexically and `realpath`s the *directory* holding it, so a `..` cannot escape, a symlinked directory component cannot redirect the unlink, and what is removed is the name the shelf catalogues. Two narrowings inside the handler are not the authz tier and are worth reading beside it: only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; and a model with an `unreachable` copy is refused, because an unplugged drive is not a deletion. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_29_local_5_loopback`. Arithmetic, not judgement.
 
-  - **Updated 2026-08-16 (training-run samples) — the locality total is now `36 = 31 local + 5 loopback`.** An ai-toolkit import now takes the run's previews with its weights, into `<stem>_samples/` beside each imported checkpoint, and two routes read them back off the shelf: `GET /api/v1/models/{model_id}/samples` lists the filenames and `GET /api/v1/models/{model_id}/samples/{filename}` serves one image. The byte route is `GET /adapters/{sha256}/file`'s class exactly — **raw bytes out of a registered model folder** — and the shelf-side twin of `model-folders/{folder_id}/runs/{run_name}/samples/{filename}`, which serves the same images before the import. The listing walks one directory inside a registered folder and reports names of files PixlStash never registered (the trainer named them, and anything the owner drops in there is listed too), which is `rescan`'s walk-a-registered-root authority narrowed to a directory. **The plan for this change asked for `owner_only`** on the grounds that both routes are addressed by a hub `model.id` with no host path crossing the wire; that is precisely the reasoning the `/adapters/{sha256}/file` entry above records as *not* the argument, because the tier follows the authority exercised and not what the route accepts, so both are on the locality tier instead. Keeping the listing beside the byte route rather than one tier below it means a caller who may not fetch a preview is not handed a list of them. Containment is two joins, as on the run-sample route and for the same two reasons: the derived directory against the registered `model_folder.path`, because a symlinked `<stem>_samples` would otherwise become its own safe base, then the filename against that resolved directory, because a folder-level join alone would pass `../alice.safetensors`. They are the fourth and fifth members of the templated `READ_BLOCKED_GET_PATHS` gap described above. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_31_local_5_loopback`. Arithmetic, not judgement.
+  - **Updated 2026-08-16 (#933, `Open in file manager`) — the locality total is now `35 = 29 local + 6 loopback`, and this is the first route added to the loopback tier since the e2e test hook in 2026-07-23.** `POST /api/v1/models/{model_id}/open-location` shows the folder holding a model's file in the file manager of the machine PixlStash runs on. It is the **fourth** file-manager spawn on this tier, not the fifth: `reference-folders/{folder_id}/open`, `pictures/{id}/open-location` and `server-config/open` are the other three, and `POST /server/restart` re-execs the process rather than spawning a GUI — a miscount this section has carried since 2026-07-21 and which the fourth route is the occasion to correct. It is the first to live in a shared helper (`pixlstash/utils/host_open.py`) rather than inline, and the helper is not merely a fourth copy moved: it **reads the POSIX opener's exit status**, which the three inline copies discard with `check=False`. That matters exactly here, because a headless or containerised host usually has `xdg-open` and it exits non-zero when there is no desktop to hand the path to — so discarding the status would report a window that never opened. The three that predate it are left where they are for now, since each wraps the spawn in different error handling and each has tests patching `subprocess.run` in its own module. The tier needs no new argument: the authority is the host's own shell, which is what the red line exists for, so `allow_remote_host_ops` is not consulted and a LAN or Tailscale owner is refused as firmly as a public one. **It is on this tier for the spawn, not for an input** — the request has no body, the id is a hub `model.id`, and the path is the scanner's own `model_folder.path` joined to `model_file.relpath` and contained with `path_is_within` — literally the same `_present_copy` call `GET /adapters/{sha256}/file` makes, so a `..` cannot escape and a symlinked component is followed exactly as it is for the bytes that route already streams. It is **not** the stricter `_contained_path` the delete verb added, and deliberately: what is at stake here is which window opens on the owner's own screen, not which file is unlinked. Two handler narrowings that are not the tier: only a `present` copy is opened, so a model that is `missing` or on an unplugged drive is **409 rather than 404** — the row exists and the bytes do not — and a headless or containerised host answers 500 with a sentence naming the cause, because a click that silently does nothing is the failure this route is easiest to ship. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_29_local_6_loopback`. Arithmetic, not judgement.
+
+  - **Updated 2026-08-16 (training-run samples) — the locality total is now `37 = 31 local + 6 loopback`.** An ai-toolkit import now takes the run's previews with its weights, into `<stem>_samples/` beside each imported checkpoint, and two routes read them back off the shelf: `GET /api/v1/models/{model_id}/samples` lists the filenames and `GET /api/v1/models/{model_id}/samples/{filename}` serves one image. The byte route is `GET /adapters/{sha256}/file`'s class exactly — **raw bytes out of a registered model folder** — and the shelf-side twin of `model-folders/{folder_id}/runs/{run_name}/samples/{filename}`, which serves the same images before the import. The listing walks one directory inside a registered folder and reports names of files PixlStash never registered (the trainer named them, and anything the owner drops in there is listed too), which is `rescan`'s walk-a-registered-root authority narrowed to a directory. **The plan for this change asked for `owner_only`** on the grounds that both routes are addressed by a hub `model.id` with no host path crossing the wire; that is precisely the reasoning the `/adapters/{sha256}/file` entry above records as *not* the argument, because the tier follows the authority exercised and not what the route accepts, so both are on the locality tier instead. Keeping the listing beside the byte route rather than one tier below it means a caller who may not fetch a preview is not handed a list of them. Containment is two joins, as on the run-sample route and for the same two reasons: the derived directory against the registered `model_folder.path`, because a symlinked `<stem>_samples` would otherwise become its own safe base, then the filename against that resolved directory, because a folder-level join alone would pass `../alice.safetensors`. They are the fourth and fifth members of the templated `READ_BLOCKED_GET_PATHS` gap described above. The loopback count moved under this branch rather than because of it: `POST /models/{model_id}/open-location` joined that tier in the bullet above, and neither route here spawns anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_31_local_6_loopback`. Arithmetic, not judgement.
 
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 

@@ -756,7 +756,7 @@ The transient undo pill, built to the owner's "Undo / Redo System" design. One i
 **The second sentence.** The server's `summary` says what an operation *did*; an action that deliberately left something alone can add one sentence about what it did **not** do, by calling `useOperationStore.noteNextReceipt(opType, note)` immediately before the `refresh()` that will narrate it. `useActionReceipt` appends it to `text` (and therefore to the announcement) on both surfaces, and drops it once the pill flips to "Undone", where it would describe work that has just been taken back. The note is armed for one op type and consumed by the **first** receipt built afterwards, matching or not, so it can never drift onto an unrelated action. This exists so a skip belongs on the same pill as the move it qualifies: split across a pill and a notice, the half that needed a decision gets dismissed along with the half that did not. First and only consumer: `stack.keep_cover_only`'s skipped stacks.
 
 #### `UndoControl.vue` (`panels/`)
-The toolbar undo/redo pair plus a chevron opening the History popover. Mounted in the **right-side app-wide cluster of every toolbar** — the canonical tail `[separator] [UndoControl] [TbGlobalActions]`, identical in the grid bar and the Duplicates bar (see `docs/design/toolbar-responsive-decisions.md`), and the same position in the Electron shell and in the browser, which is why it is not in the breadcrumb. Under the shared `toolbar` container it collapses in steps: ≤480px the chevron hides (the hosts' ⋯ overflow "History…" row calls the exposed `openHistory()` instead), ≤420px redo hides; **undo itself never folds or hides** — the recovery control stays a single visible target, which also keeps the "Changed elsewhere" warning surfaced. Buttons use `aria-disabled` + a guarded handler rather than the native `disabled`, so they stay tabbable and keep naming the step ("Nothing to undo"), and carry `aria-keyshortcuts`. The popover reuses the shared `.tbm*` menu chrome and is labelled `role="dialog"` (not `menu`): it is a list of ordinary tab-order buttons with no roving arrow-key navigation, so claiming a menu would promise a contract it does not honour. Rows are newest-first, undone steps struck through and inert; hovering **or focusing** a row previews how far back you would go (`--active-wash` + an `--active-bar` inset rail across the whole range), and activating it walks the stack via `undoTo`. Enter is handled explicitly because Vuetify's menu `preventDefault`s it. Focus returns to the chevron on a programmatic close. Exposes `openHistory()`.
+The toolbar undo/redo pair plus a chevron opening the History popover. Mounted in the **right-side app-wide cluster of every toolbar that writes the operation log** — the canonical tail `[separator] [UndoControl] [TbGlobalActions]`, identical in the grid bar and the Duplicates bar (see `docs/design/toolbar-responsive-decisions.md`; the model shelf is the one documented exception and mounts no undo), and the same position in the Electron shell and in the browser, which is why it is not in the breadcrumb. Under the shared `toolbar` container it collapses in steps: ≤480px the chevron hides (the hosts' ⋯ overflow "History…" row calls the exposed `openHistory()` instead), ≤420px redo hides; **undo itself never folds or hides in a host that mounts it** — the recovery control stays a single visible target at every width, which also keeps the "Changed elsewhere" warning surfaced. (Whether a host mounts it at all is a separate question, answered per view: the model shelf does not, and `useGlobalKeydown` declines the chord there for the same reason.) Buttons use `aria-disabled` + a guarded handler rather than the native `disabled`, so they stay tabbable and keep naming the step ("Nothing to undo"), and carry `aria-keyshortcuts`. The popover reuses the shared `.tbm*` menu chrome and is labelled `role="dialog"` (not `menu`): it is a list of ordinary tab-order buttons with no roving arrow-key navigation, so claiming a menu would promise a contract it does not honour. Rows are newest-first, undone steps struck through and inert; hovering **or focusing** a row previews how far back you would go (`--active-wash` + an `--active-bar` inset rail across the whole range), and activating it walks the stack via `undoTo`. Enter is handled explicitly because Vuetify's menu `preventDefault`s it. Focus returns to the chevron on a programmatic close. Exposes `openHistory()`.
 
 #### `OverlayActionReceipt.vue` (`widgets/`)
 The lightbox's own narration of the same single receipt, mounted by `ImageOverlay` as the last child of `.overlay-main`. The owner ruled that undo must work in the lightbox and that the affordance may be fitted differently there, because the lightbox has its own GUI — so this is not the grid pill promoted above the modal layer. Everything the receipt *means* comes from the shared `useActionReceipt` composable, so the two surfaces cannot drift; only the chrome differs: `dark-surface`/`on-dark-surface` at 0.9 (the exact fill `.overlay-topbar` and `.overlay-rail` carry), `--elevation-4` (the rung `visual-language.md` §7 names for lightbox chrome, and the reason the grid pill takes -3), a `0.2` border matching `.overlay-nav`, and its own 64px transient-status lane inset by `--filmstrip-rail-width` / `--sidebar-width` so it centres on the visible image. Three deliberate differences beyond the material: **no live region** (the grid's still speaks from underneath, so a second one would double-speak); **no History popover** (choosing a step is a browsing task whose preview has no referent on a surface showing one picture); and a **scope clause** above one target ("Across 2,700 pictures, not just this one"), derived from the count alone so navigating to the next picture cannot falsify it. Nothing on this surface ever says "this picture". Exposes `containsFocus()` / `dismiss()` for the overlay's Escape guard.
@@ -1532,15 +1532,26 @@ express that. Like Duplicates it is excluded from `selectionOwnsHighlight` in
 destination in the rail.
 
 **And like Duplicates its bar carries the shell chrome.** Replacing the grid
-also replaces the grid's toolbar, so `.shelf-toolbar` ends in the canonical tail
-whole — `[separator] [UndoControl] [TbGlobalActions]`, the same components the
-grid and the queue mount, with `TbGlobalActions` emitting `open-settings` up to
-`App.vue`. The shelf writes nothing to the operation log itself, but
-`useOperationStore` is a read model over the backend's app-wide log, so undo
-here is live for whatever library work preceded the visit — which is the point
-of a recovery control that survives a change of destination. `.shelf-toolbar`
-declares `container-name: shelfbar toolbar` for the same reason both other
-hosts do: the shared chrome's scoped `@container toolbar` rules must reach it.
+also replaces the grid's toolbar, so `.shelf-toolbar` ends in
+`[separator] [TbGlobalActions]`, with `TbGlobalActions` emitting `open-settings`
+up to `App.vue`. **`UndoControl` is the documented exception to the canonical
+tail** (`docs/design/toolbar-responsive-decisions.md`): nothing the shelf does
+is an operation-log entry, so every step its History popover listed belonged to
+a screen the reader was not on, and the pair sat permanently at "Nothing to
+undo" or else offered to revert a library edit made elsewhere — a recovery
+control that never answers for what is in front of it, next to shelf actions
+that say in as many words that they cannot be undone. **`Ctrl+Z` declines here
+too** (`useGlobalKeydown`, the `.shelf` check beside the existing modal guard):
+the shelf mounts no `ActionReceipt` either, and `UndoControl` is the app's only
+renderer of the "Changed elsewhere" warning, so the chord would otherwise
+revert a library action with nothing on screen to say it happened — the same
+"every undo raises a receipt" invariant the modal guard protects. It declines
+*out loud*: one `info` notice under the coalescing key `SHELF_NO_UNDO_KEY`, so
+a held or repeated chord updates a single card instead of stacking (notice spec
+§9.1). A silent no-op would leave the reader pressing it again. `.shelf-toolbar`
+still declares `container-name: shelfbar toolbar` — the convention both other
+hosts follow, so a shared control mounted here degrades by the same scoped
+rules — though after this change nothing queries either name on this bar.
 
 These rules come from measurement against real adapter folders and are easy to
 undo by accident:
@@ -1735,11 +1746,13 @@ which is a filed gap rather than a pattern to copy.
 **The toolbar changes the VIEW, and almost nothing else (#904).** The resolved
 design consolidates it: one accented, labelled `+ Add ▾` menu holding the three
 ways a model gets onto the shelf (a folder, a loose file, an ai-toolkit import),
-the stack-detection sweep beside it as an icon, then the view controls on the
-right. Add and the sweep are the only two things there that are not view
-controls, and they sit together apart from them because neither has a selection
-to hang on — Add makes a row that does not exist yet and the sweep proposes over
-the whole shelf — and both open something before they write anything. **Every
+the stack-detection sweep beside it as an icon, the `Model folders` registry
+button beside that, then the view controls on the right. Those three are the
+only things there that are not view controls, and they sit together apart from
+them because each passes the same test: **it opens something, it writes nothing
+on the press, and it has no selection to hang on** — Add makes a row that does
+not exist yet, the sweep proposes over the whole shelf, and `Model folders`
+edits the registry the shelf reads rather than anything in it. **Every
 other verb lives on the row's context menu or in the selection pill**, so a
 mutation is never one stray click from a view switch.
 
@@ -2010,6 +2023,57 @@ groups with `tier`, `icon`, `chip`, `drive`, `offline` and `nested`.
   accessible name and a hue has none either, so the header's `aria-label` states
   the tier, the drive and the offline state alongside the path and the count.
 
+#### Where the file is, on every axis
+
+A folder header is drawn only under `groupBy: 'folder'`. Group by base model, by
+feature, or not at all — the default — and the shelf stopped saying where
+anything was, which is the first question of anyone keeping the same adapter on
+two disks. `copyPathsTitle()` (pure, in `utils/modelShelf.js`) joins each
+`locations[]` entry into one full path and the **file line carries them as its
+tooltip**, one per line, on covers and on expanded stack members alike.
+
+- **Every copy, not the first.** A model registered in two folders is one row,
+  and naming one of its homes would read as naming its only one.
+- **Except under `folder`, where a draw stands for ONE copy** and the store
+  hands it exactly that one. `groups` narrows the drawn row's `locations` beside
+  the `locState` override it already made, and for the same reason: a row under
+  the `/media/…` header reading "file is not where it was" whose tooltip's first
+  line is a path under `/home/…`, where the file is present, is that override
+  undone one attribute at a time. Narrowing is safe because nothing else reads a
+  *drawn* row's locations — `selectedRows` and every verb read `visibleRows`,
+  which still carries all of them. That axis still gains the *subdirectory*
+  under the header, which no header states.
+- **Each line says what is at it.** A bare path is a claim that the file is
+  there, and three of the four states are the claim that it is not, so
+  `COPY_STATE_NOTE` appends "not where it was" / "out of reach" / "not
+  downloaded yet". `present` appends nothing, because that is what a path
+  already says. Rendering all four alike is the one place the section below
+  would be contradicted.
+- **No copies, no tooltip** rather than an empty one: the file line already says
+  "every registered copy forgotten" in words. A copy missing either half of its
+  path is skipped rather than half-named — both are NOT NULL on the wire, so
+  that is a broken row, and `a.st` alone answers "where is this file" with the
+  one thing that is not a location.
+- **The separator comes from the registered folder, and takes the relpath with
+  it.** The two halves come from different places — `model_folder.path` as
+  registered, `relpath` as the scanner wrote it — so a backslashed folder
+  rewrites the relpath's slashes and a POSIX one leaves them alone, where a
+  backslash is a legal filename character rather than a separator.
+
+A tooltip and not a column: the path is long, it is the same on most rows, and
+the shelf's columns are for what a reader *scans*. The words that must be
+scannable are already on the line (`LOC_NOTE`).
+
+**It is hover-only, and that is a floor rather than the finished answer.** A
+`title` on a non-focusable span reaches neither the keyboard nor touch, and the
+row is a single roving tab stop with nothing inside it to focus. The accessible
+shape already exists in this codebase (`HelpTip.vue`, `ScrapheapSection.vue` —
+`v-tooltip` with `open-on-focus`), and moving the file line onto it, or naming
+the folder in the row's accessible name, is the follow-up. It is not free: it
+adds a tab stop per row to a list whose keyboard model is deliberately one stop
+per row (§ the roving grid), which is a `ui-ux-expert` decision rather than a
+rendering one.
+
 #### The two kinds of absence (#898)
 
 `locationState()` reduces a row's copies to one word, and the shelf renders
@@ -2157,15 +2221,27 @@ collapse a folder of the same name.
 **Everything that changes a file lives on the row or in the selection bar,
 never in the toolbar** (#896). The toolbar is where the view is switched, so a
 mutating control beside `Sort` and `Show` would be one stray click from a
-different question. The four toolbar buttons are audited against that rule and
-all four hold: `Show` and `Sort` write only view state; `Model folders` and
-`Import from ai-toolkit` open a dialog and write nothing on the press, and the
-import is confirmed against a listing of the runs it found. `Group training
-runs` is the same shape — it opens the dry run, and the applying half is behind
-the dialog's own confirmation. Import and detection stay in the toolbar because
-neither has a selection to act on: their subject is a source folder full of
-files the shelf does not list yet, so there is no row and no selection to hang
-them off.
+different question. The audit is over a **named set, not a judgement**, and the
+set is counted in **focusable controls**, because a tab stop is a stray-press
+target whatever it is grouped with visually. The shelf puts **seven** in its own
+bar: `+ Add ▾`, `Stack training runs`, `Model folders`, `Group`, the `Sort`
+direction toggle, the `Sort` menu, and `Show`. All seven hold. `Group`, both
+halves of `Sort`, and `Show` write only view state. The other three each open
+something and write nothing on the press:
+`+ Add ▾` opens a menu, and its `Import from ai-toolkit` item is confirmed
+against a listing of the runs it found; `Stack training runs` opens the dry run,
+with the applying half behind the dialog's own confirmation; `Model folders`
+opens the registry dialog. Those three stay in the toolbar because none has a
+selection to act on — their subject is a source folder full of files the shelf
+does not list yet, or the list of such folders itself, so there is no row and no
+selection to hang them off.
+
+The **app-wide tail is outside this set and outside the rule**: `UndoControl`
+writes on the press by design, and it, `Settings` and the stats toggle are not
+the shelf's controls at all — they are the canonical tail every view carries,
+ruled off by a separator (see the toolbar section above). Adding a control to
+the shelf's own bar means adding it to the seven and re-running this audit;
+adding one to the tail is a different document.
 
 **The bar states the count AND what the selection weighs**, `40 models selected
 · 12.4 GB`, in the `·` separator the grid's own `SelectionBar` uses. The size is
@@ -2360,9 +2436,30 @@ and at the pointer with them.
   (`trash_name`, the SERVER's platform) rather than from the browser: where the
   bytes went is the difference between recoverable and not. Only the pre-action
   label falls back to the browser's own guess, which is cosmetic.
-- **`Open in file manager` is the design's and is NOT built.** It has no route
-  behind it and is a host-capability operation, so it stays tracked rather than
-  rendered dead.
+- **`Open in file manager` is built (#933), and it is the one verb here that
+  acts on the machine rather than on the library.** `POST
+  /models/{model_id}/open-location` shows the row's folder in the file manager
+  of the host PixlStash runs on, which is a host-shell capability and therefore
+  loopback-only at the gate (`docs/backend_architecture.md` §16.3.1) — a shelf
+  opened from a phone on the same LAN cannot drive that desktop, and no setting
+  loosens it. Three consequences for this surface: it is **single-selection
+  only** (forty rows would be forty windows, so it renders in the row context
+  menu and never in the `⋯` menu, which is always drawn with `single: false`);
+  it is **disabled without a `present` copy**, which is the recorded half of the
+  route's gate, so a `missing` row or an unplugged drive says why instead of
+  spending a request — the other half is `os.path.isfile` and only the server
+  can answer it, so a row whose file went since the list was drawn still comes
+  back 409; and each failure gets **its own notice sentence** (403 "you are not
+  sitting at that machine", 409 "rescan the folder", anything else "that machine
+  has no desktop"), because nothing visible happens on this screen when it
+  succeeds either — silence would read as success, and the wrong reason sends
+  the reader to fix the wrong thing.
+  The id posted is the row's own, which for a collapsed stack is the cover's:
+  one press opens one window, on the file that was right-clicked. The shelf's
+  own Stack verb refuses to group across folders, so a run it built shares one
+  — but the route behind `POST /model-stacks` takes an arbitrary id list and
+  enforces nothing of the sort, which is why this is documented as the cover's
+  folder rather than the run's.
 
 **Assign reuses the grid's picker rather than a shelf-local one.** Two
 instances, `type="character"` and `type="set"`, so the search, the tri-state and
@@ -2701,10 +2798,12 @@ front of you. Both stores are refreshed afterwards, for the reason the import
 refreshes both: the shelf gained a row and the destination folder's file count
 and `shelf_bytes` moved with it, so the drive bands are stale too.
 
-**The toolbar button is hidden, not disabled, when no `source` folder is
-registered** — unlike the selection bar's verbs, which are about a selection the
-reader just made and therefore owe an explanation in a tooltip. This is about a
-folder they have not set up, which the folders dialog is the place to say.
+**The `Import from ai-toolkit` item is hidden, not disabled, when no `source`
+folder is registered** — unlike the selection bar's verbs, which are about a
+selection the reader just made and therefore owe an explanation in a tooltip.
+This is about a folder they have not set up, which the folders dialog is the
+place to say. Since #904 it is an item inside `+ Add ▾` behind a
+`v-if="hasSourceFolder"`, not a toolbar button of its own.
 
 **Receipts are notices, not `useActionReceipt`.** That composable is built on
 `useOperationStore`, which is the vault-only operation log with undo keycaps —
@@ -2746,11 +2845,35 @@ its own overrides (the container-query fold, the icon-trigger accent) and
 #### Registering the folders the shelf reads
 
 `ModelFoldersDialog.vue` (`components/panels/`) is the registry surface,
-opened from a `bar-btn--boxed` beside `Show` and from the empty state's own
-button. The empty state is the moment the folder list matters, so the fix must
-not be two navigations away in Settings. `FolderBrowser.vue` is reused whole as
-the host-path picker, and `registeredPaths` is what stops the API's duplicate
-409 rather than reporting it.
+opened from three doors: the toolbar's `bar-btn--boxed` `Model folders` button
+beside the stack sweep, the `+ Add ▾` menu's `Add folder…` item, and the empty
+state's own button. The empty state is the moment the folder list matters, so
+the fix must not be two navigations away in Settings — and the toolbar button is
+what keeps it reachable once the empty state has unmounted, which is exactly
+when rescan, relocate and forget start to matter. Because more than one control
+opens it, `ModelShelf.vue` holds a `folderInvoker` and `openFolders(invoker)`
+takes the control to return focus to. **Every door names one**, and names the
+control that will still be there rather than the element pressed: the
+`Add folder…` item names the **Add button behind it**, because the item itself
+unmounts with the menu. The fallback is the always-mounted toolbar button, and
+it exists for exactly one case — the empty-state button unmounting underneath
+its own dialog when the first scan finds something. That case is asserted, along
+with the two ordinary ones, against a real `document.activeElement`; drop the
+`isConnected` check and the suite goes red. The earlier `event.currentTarget`
+version of all this was dead code: no call site ever passed an event.
+
+Neither this button nor the stack sweep takes **`bar-btn--open`**. `App.css`
+declares that class for "the toolbar button while its MENU is open", and both
+open an `AppDialog`, which sets `:scrim="true"` — so the highlight is painted
+under the scrim for exactly as long as it applies, and neither button has the
+chevron the rule rotates. `Group`, `Sort` and `Show` keep it because they really
+are menus. Both carry `aria-haspopup="dialog"` and neither carries
+`aria-expanded`: focus moves into the dialog rather than into anything the
+button owns.
+
+`FolderBrowser.vue` is reused whole as the host-path picker, and
+`registeredPaths` is what stops the API's duplicate 409 rather than reporting
+it.
 
 Four states are designed rather than left to fail on click:
 
@@ -2813,9 +2936,10 @@ the row's fields are captured *before* the request that destroys them.
 
 Rows are a plain `<ul role="list">` of real `<button>`s, deliberately **not**
 `role="listbox"` / `role="option"`: nothing here is selected, and interactive
-controls inside an `option` are unreachable to a screen reader. Both openers
-restore focus to the control that was pressed, falling back to the toolbar
-button when the empty-state button has unmounted underneath the dialog.
+controls inside an `option` are unreachable to a screen reader. All **three**
+openers restore focus to the control that was pressed — see the folder-registry
+section above for how, and for the one case (the empty-state button unmounting
+underneath its own dialog) that the fallback exists to catch.
 
 ---
 

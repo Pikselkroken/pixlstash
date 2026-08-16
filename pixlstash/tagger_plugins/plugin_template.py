@@ -36,7 +36,14 @@ Quick-start
    its LAN; a share link or a remote browser is shown no folder at all.
 2. Rename it and give the class a unique ``name``.
 3. Fill in the parameters and ``generate_descriptions`` (and/or ``tag_images``).
-4. **Restart PixlStash Server** — discovery only runs at start-up.
+4. Check it without a restart::
+
+       pixlstash-cli plugins test ./my_captioner.py [--image sample.jpg]
+
+   It loads the file the way the server does and says what would register, so a
+   typo costs a command rather than a boot.  It is a development aid and not a
+   security scanner: it *runs* the plugin, unsandboxed, as you.
+5. **Restart PixlStash Server** — discovery only runs at start-up.
 
 Your plugin then appears in the Description plugin (and/or Tag plugin) table,
 with the settings UI built automatically from ``parameter_schema()``.
@@ -77,6 +84,18 @@ class MyCaptioner(TaggerPlugin):
     display_name = "My Captioner"
 
     description = "Describe what your captioner does."
+
+    # Who wrote it and under what terms.  Keep these plain literals: tools read
+    # the header straight off the source with ``ast``, without importing you.
+    author = "Your Name <you@example.com>"  # an email address or a URL
+    license = "MIT"  # your *code*, an SPDX identifier where there is one
+
+    # One entry per model or remote service you load, empty when you load none.
+    # This is the one a user actually needs — your code's license says nothing
+    # about the weights you download.
+    models = [
+        {"name": "microsoft/Florence-2-base", "license": "MIT"},
+    ]
 
     # Capability flags decide which table the plugin appears in.  Implement
     # tag_images() as well if you set supports_tags.
