@@ -13,6 +13,7 @@ import pytest
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.services.stack_detector import (
+    MAX_MEMBERS_PER_STACK,
     StackRefused,
     apply_stack,
     propose_stacks,
@@ -861,3 +862,44 @@ def test_a_fused_stack_can_be_unstacked_back_to_loose_files(hub, tmp_path):
     loose = hub.fetchone("SELECT COUNT(*) AS n FROM model WHERE stack_id IS NULL")
     assert loose["n"] == 4
     assert first != fused
+
+
+def test_fusing_cannot_walk_past_the_member_ceiling(hub, tmp_path):
+    """Reported in review of #999, and reproduced before it was fixed.
+
+    The route counts the ids it was SENT. Fusing then widens that set to every
+    member of every stack absorbed, so two stacks of 150 arrive as two ids and
+    would have left as a 300-member stack — measured at 300 against a ceiling of
+    200. A limit the widening step can walk past is not a limit, so the count is
+    repeated by the function that does the widening.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    half = MAX_MEMBERS_PER_STACK // 2 + 10
+    first = [_adapter(hub, folder, f"Big_{i:09d}.safetensors") for i in range(half)]
+    second = [_adapter(hub, folder, f"Other_{i:09d}.safetensors") for i in range(half)]
+    left = apply_stack(hub, first, "Big")
+    right = apply_stack(hub, second, "Other")
+
+    # Two ids submitted, which is what makes the route's own check useless here.
+    with pytest.raises(StackRefused) as exc:
+        apply_stack(hub, [first[0], second[0]], "Fused", fuse=True)
+    assert exc.value.reason == "too_many_models"
+
+    # And nothing was written on the way to refusing: both stacks are intact.
+    assert len(_members(hub, left)) == half
+    assert len(_members(hub, right)) == half
+
+
+def test_fusing_up_to_the_ceiling_still_works(hub, tmp_path):
+    """The positive control. Over-blocking is its own regression, and a check
+    written on the wrong side of the comparison would refuse everything."""
+    folder = _folder(hub, str(tmp_path / "loras"))
+    half = MAX_MEMBERS_PER_STACK // 2
+    first = [_adapter(hub, folder, f"Fits_{i:09d}.safetensors") for i in range(half)]
+    second = [_adapter(hub, folder, f"Also_{i:09d}.safetensors") for i in range(half)]
+    apply_stack(hub, first, "Fits")
+    apply_stack(hub, second, "Also")
+
+    fused = apply_stack(hub, [first[0], second[0]], "Fused", fuse=True)
+
+    assert len(_members(hub, fused)) == MAX_MEMBERS_PER_STACK

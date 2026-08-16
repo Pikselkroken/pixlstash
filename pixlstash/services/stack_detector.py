@@ -59,6 +59,18 @@ TIER_VERSION_GROUP = "version_group"
 # smallest thing worth collapsing; one file is just a file.
 MIN_GROUP_SIZE = 2
 
+# Ceiling on one stack. A subject has a few versions of tens of steps each, not
+# thousands, and a caller sending more is confused rather than lucky.
+#
+# **It lives here, not on the route, because fusing widens the set after the
+# route has counted it.** The route checks what it was sent; `apply_stack` then
+# pulls in every member of every stack absorbed, so two stacks of 150 arrive as
+# two ids and leave as 300 members. Measured, not reasoned: with the ceiling
+# enforced only at the route, that call produced a 300-member stack. A limit
+# that the widening step can walk past is not a limit, so the check is repeated
+# on the widened set by the function that does the widening.
+MAX_MEMBERS_PER_STACK = 200
+
 
 @dataclass
 class ProposedMember:
@@ -335,6 +347,18 @@ def apply_stack(
                         ]
                     )
                 )
+
+        # Counted AFTER the widening, which is the only place it means anything:
+        # the route counted what the caller sent, and fusing is exactly the step
+        # that turns two ids into two whole stacks. Raised inside the
+        # transaction, so nothing is written on the way to refusing.
+        if len(ids) > MAX_MEMBERS_PER_STACK:
+            raise StackRefused(
+                f"That would make a stack of {len(ids)} models; the ceiling is "
+                f"{MAX_MEMBERS_PER_STACK}. A subject has a few versions of tens "
+                "of steps, not thousands.",
+                reason="too_many_models",
+            )
 
         placeholders = ",".join("?" for _ in ids)
         # The gate. `stack_id IS NULL` is dropped only when fusing, and even then

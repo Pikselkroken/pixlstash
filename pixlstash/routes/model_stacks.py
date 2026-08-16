@@ -37,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.stack_detector import (
+    MAX_MEMBERS_PER_STACK,
     MIN_GROUP_SIZE,
     StackRefused,
     apply_stack,
@@ -46,10 +47,9 @@ from pixlstash.services.stack_detector import (
 
 logger = get_logger(__name__)
 
-# Ceiling on one apply. A stack is a subject: a handful of versions with tens of
-# steps each, not thousands, and a caller sending more is confused rather than
-# lucky.
-MAX_MEMBERS_PER_STACK = 200
+# The ceiling is imported, not redeclared: `apply_stack` widens the set when
+# fusing, so it owns the only count that is authoritative. This route's check
+# below is the cheap early one on what the caller actually sent.
 
 
 class ProposedMemberResponse(BaseModel):

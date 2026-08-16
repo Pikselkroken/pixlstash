@@ -1321,7 +1321,12 @@ const VERSION_SUFFIX_RE = /^v(\d+)(?:\.(\d+))?$/i;
  *
  * Mirrors `split_model_version`: runs on top of {@link deriveModelName}, so
  * training bookkeeping is already gone and `Foxglove_v2_000000500` answers the
- * same as `Foxglove_v2`. Lower-cased as written, so it can be shown verbatim.
+ * same as `Foxglove_v2`.
+ *
+ * **Returned exactly as the file wrote it**, `V2.1` and all, because this token
+ * is shown to a reader. Never compare two of these as strings — put them
+ * through {@link versionSortKey}, which is what agrees with the server about
+ * `v2` and `V2.0` being one version.
  *
  * @param {string} filename
  * @returns {string|null}
