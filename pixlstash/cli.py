@@ -255,7 +255,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     restore_parser.add_argument("archive", help="Backup archive written by `backup`.")
     restore_parser.add_argument(
-        "folder", help="New folder for the restored library. Must not exist yet."
+        "folder",
+        help=("Folder for the restored library. Must be empty, or not exist yet."),
     )
     restore_parser.add_argument(
         "--yes", action="store_true", help="Do not ask for confirmation."

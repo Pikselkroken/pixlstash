@@ -1369,6 +1369,7 @@
     "tests/test_library_restore_cli.py::test_restore_refuses_while_the_hub_is_locked": 0.52,
     "tests/test_library_restore_cli.py::test_restore_round_trip_publishes_library_and_preserves_the_old_pair": 0.04,
     "tests/test_library_restore_cli.py::test_restore_warns_that_the_archive_supplies_the_credentials": 0.02,
+    "tests/test_library_restore_cli.py::test_restored_files_are_owner_only": 0.02,
     "tests/test_library_settings.py::TestCatchingUpADormantLibrary::test_a_missing_salt_is_skipped_rather_than_hashed_unkeyed": 2.92,
     "tests/test_library_settings.py::TestCatchingUpADormantLibrary::test_a_weights_change_while_closed_invalidates_on_open": 2.39,
     "tests/test_library_settings.py::TestCatchingUpADormantLibrary::test_no_change_leaves_scores_alone": 2.62,

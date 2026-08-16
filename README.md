@@ -141,8 +141,8 @@ Notes worth knowing before you need them:
   outside it and are *not* included, so back those up separately.
 - Backing up finishes any outstanding one-time snapshot cleanup first, so the
   archive never carries credentials from before your upgrade.
-- `restore` needs PixlStash stopped, and names a folder that does not exist
-  yet — it never writes over a library. Because the archive holds the hub,
+- `restore` needs PixlStash stopped, and names a folder that is empty or does
+  not exist yet — it never writes over a library. Because the archive holds the hub,
   restoring also brings back the password and API tokens that library was
   using, so your current ones are replaced.
 - **`restore` does not delete your current setup.** It *moves*

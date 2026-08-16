@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import stat
 import tarfile
 import tempfile
 
@@ -142,7 +143,10 @@ def test_restore_round_trip_publishes_library_and_preserves_the_old_pair(
     assert _backup(source, archive) == 0
     capsys.readouterr()
 
-    original_hub_bytes = open(source["hub_path"], "rb").read()
+    # Read through a context manager: the restore MOVES hub.db, and on Windows
+    # an open handle blocks the rename, which would fail here and nowhere else.
+    with open(source["hub_path"], "rb") as handle:
+        original_hub_bytes = handle.read()
     destination = os.path.join(temp_root, "round-trip-restored")
     assert _restore(source, archive, destination) == 0
     out = capsys.readouterr().out
@@ -167,9 +171,8 @@ def test_restore_round_trip_publishes_library_and_preserves_the_old_pair(
     ]
     assert len(preserved) == 1
     preserved_dir = preserved[0]
-    assert open(os.path.join(preserved_dir, "hub.db"), "rb").read() == (
-        original_hub_bytes
-    )
+    with open(os.path.join(preserved_dir, "hub.db"), "rb") as handle:
+        assert handle.read() == original_hub_bytes
     preserved_active = _active_library(os.path.join(preserved_dir, "hub.db"))
     assert preserved_active is not None
     assert preserved_active.path == os.path.realpath(source["library_dir"])
@@ -189,6 +192,29 @@ def test_restore_round_trip_publishes_library_and_preserves_the_old_pair(
         config = json.load(handle)
     assert config["image_root"] == destination
     assert config["port"] == 9999
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_restored_files_are_owner_only(temp_root, capsys):
+    """Extraction must not widen what the backup kept private.
+
+    hub.db is 0600 by contract and snapshot archives are chmodded 0600 on the
+    way in, so writing them back at the process umask would undo that for the
+    files that carry credentials.
+    """
+    source = _install(temp_root, "modes")
+    archive = os.path.join(temp_root, "modes.tar.zst")
+    assert _backup(source, archive) == 0
+    capsys.readouterr()
+
+    destination = os.path.join(temp_root, "modes-restored")
+    assert _restore(source, archive, destination) == 0
+
+    for entry in sorted(os.listdir(destination)):
+        mode = stat.S_IMODE(os.stat(os.path.join(destination, entry)).st_mode)
+        assert mode == 0o600, f"{entry} is {oct(mode)}, not owner-only"
+    hub_mode = stat.S_IMODE(os.stat(source["hub_path"]).st_mode)
+    assert hub_mode == 0o600, f"restored hub is {oct(hub_mode)}"
 
 
 def test_restore_refuses_a_destination_with_contents(temp_root, capsys):

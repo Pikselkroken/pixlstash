@@ -55,6 +55,15 @@ logger = get_logger(__name__)
 # in to learn one filename.
 SERVER_CONFIG_FILENAME = "server-config.json"
 
+# Every extracted file, not just the databases. Writing them at the process
+# umask would be looser than what came out of the library: `hub.db` is 0600 by
+# contract (``hub/db.py``) and snapshot archives are chmodded 0600 on the way in
+# (``snapshot_service``), so an extract at 0644 would silently *undo* that
+# hardening for the exact files that carry credentials. Applied to pictures too
+# rather than classifying members — the restored folder is 0700 either way, so
+# uniform owner-only costs nothing and leaves no member to get wrong.
+RESTORED_FILE_MODE = 0o600
+
 # zstd's frame magic, so a renamed archive is still read correctly. The CLI's
 # `--no-compress` writes a plain tar and users rename backups.
 _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
@@ -229,6 +238,7 @@ def _extract(archive: str, scratch: str) -> int:
                         )
                     with source, open(target, "wb") as out:
                         shutil.copyfileobj(source, out)
+                    os.chmod(target, RESTORED_FILE_MODE)
                     count += 1
     except RestoreError:
         raise
