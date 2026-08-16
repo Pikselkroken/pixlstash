@@ -467,6 +467,7 @@ jobs:
           tests/test_characters_api.py
           tests/test_checkpoint_hash_finder.py
           tests/test_ci_shards.py
+          tests/test_cli_documentation.py
           tests/test_clip_text_embedding_similarity.py
           tests/test_comfyui_api_prompt_extraction.py
           tests/test_comfyui_pixlstash_saver.py
