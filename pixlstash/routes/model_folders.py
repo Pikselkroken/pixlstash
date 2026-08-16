@@ -291,6 +291,23 @@ class ModelFolderDeviceResponse(BaseModel):
             "moving a 24 GB checkpoint onto it. Null if unmeasurable."
         ),
     )
+    kind: Optional[str] = Field(
+        default=None,
+        description=(
+            "What kind of storage this is: `local`, `network`, `removable` or "
+            "`ramdisk`. The CONNECTION, not the medium — it says whether the "
+            "bytes are on another machine, on a stick, or in memory, which is "
+            "what changes how fast a move runs and whether it survives a "
+            "reboot. Null where the platform will not say (macOS always, and "
+            "any filesystem type we do not recognise), and null is a normal "
+            "answer: the drive band then draws its plain disk glyph rather "
+            "than claiming the drive is unknown. Deliberately does NOT "
+            "distinguish an SSD from a platter — the flags that would are "
+            "wrong in a VM, behind LVM or LUKS, and in a USB enclosure, and a "
+            "band that mislabels a slow disk as fast is worse than one that "
+            "says nothing."
+        ),
+    )
     shelf_bytes: int = Field(
         default=0,
         description=(
@@ -562,6 +579,7 @@ def create_router(server) -> APIRouter:
                     label=device.label,
                     total_bytes=device.total_bytes,
                     free_bytes=device.free_bytes,
+                    kind=device.kind,
                     shelf_bytes=0,
                     folder_ids=[],
                 )

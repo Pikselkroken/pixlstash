@@ -2033,6 +2033,36 @@ for.
   returns null when there is none, which a root partition usually has not. The
   fallback chain is label → mount point → the folder's own path, so the header
   is never empty and never invented.
+- **The row is two halves, and the split is what makes the meters comparable.**
+  `.shelf-band-id` (glyph, name, path) is the flexible one and
+  `.shelf-band-usage` (meter, figures) never shrinks, so every band's meter
+  begins at the same x however long the drive's name is. One gap between five
+  peers had the meter starting ~400px apart on two bands of the same list, and
+  two meters that do not share a left edge cannot be read down the column —
+  which is the only reason to draw the meter more than once. The path is drawn
+  **only when it differs from the name**: with no volume label the name IS the
+  mount point, and a band with both rendered `/` twice, which reads as a
+  rendering fault rather than as detail.
+- **The figure line is an anchor and its context, not a sentence.**
+  `meterLabel` returns `{ lead, rest }`: `190.1 GB free` at `--text-xs`
+  semibold in full-strength ink, then `of 897.3 GB · 51.6 GB on the shelf` at
+  the `--text-2xs`/0.7 the whole line used to be. One number decides whether
+  the next checkpoint fits and three at identical weight made the reader parse
+  English to find it. Both halves live in **one** flex item: the gap would draw
+  the space between them but a gap is not a character, and as two items the
+  accessible name ran together as "GB freeof", so `rest` carries its own
+  leading space.
+- **The kind rides the glyph, and null draws the plain disk.** `kind` on the
+  device response is one of `local`, `network`, `removable`, `ramdisk` or null,
+  and `DRIVE_KINDS` maps it to the mark the band already wears plus a `title`.
+  It is never drawn as a word: the row has no horizontal room, which is the
+  whole reason for the split above, and a chip would be a fourth
+  variable-width item ahead of the meter as well as a second dialect of the
+  `Locked`/`Managed` chips one level down. **Null is a normal answer** — macOS
+  says nothing at all and so does any filesystem type the backend will not
+  vouch for — so the band must render the plain disk and never the word
+  "Unknown". What the value deliberately does not carry is SSD-versus-platter;
+  see `device_kind` in `system_utils.py` for why that evidence lies.
 - **The band is a drive, never a path prefix.** `bandGroups` keys on the
   `device_id` the server measured (`GET /model-folders/devices`), because a bind
   mount and a symlinked folder look like different drives by path and are one,
