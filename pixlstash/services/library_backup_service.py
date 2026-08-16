@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
 import stat
 import tarfile
 import tempfile
@@ -39,6 +40,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import zstandard
+from tqdm import tqdm
 
 from pixlstash.hub.registry import VAULT_FILENAME, Library
 from pixlstash.pixl_logging import get_logger
@@ -53,6 +55,20 @@ from pixlstash.trusted_sqlite import (
 )
 
 logger = get_logger(__name__)
+
+
+def progress_disabled() -> bool:
+    """Whether to suppress progress bars, decided here rather than by tqdm.
+
+    ``disable=None`` looks like it means "auto-detect a terminal", but tqdm
+    wraps ``file`` in ``DisableOnWriteError`` *before* testing ``isatty``, so
+    what it actually does depends on that wrapper forwarding the call. Deciding
+    it from ``sys.stderr`` directly is one line, says what it means, and is
+    testable — which matters because the failure mode is silent either way: a
+    bar that never draws, or a cron log full of redrawn ones.
+    """
+    return not (hasattr(sys.stderr, "isatty") and sys.stderr.isatty())
+
 
 # Only the owner may read a backup: it carries the hub.
 BACKUP_FILE_MODE = 0o600
@@ -626,6 +642,42 @@ def _fsync_directory(path: str) -> None:
         ) from exc
 
 
+def _add_payload(tar: tarfile.TarFile, payload: list[tuple[str, str]]) -> None:
+    """Add every payload file to *tar*, reporting progress while it happens.
+
+    Measured in bytes rather than files. A library is a 6 GB checkpoint sitting
+    next to ten thousand thumbnails, so "file 300 of 10000" can read 97% done
+    with most of the work left; bytes track the wait the user is actually
+    having.
+
+    Suppressed off a terminal (see :func:`progress_disabled`), which is what
+    keeps a cron backup's mail from being a wall of redrawn bars. It draws on
+    stderr, so the report on stdout stays clean and pipeable.
+    """
+    total = 0
+    for absolute, _ in payload:
+        try:
+            total += os.lstat(absolute).st_size
+        except OSError:
+            # Sized only to draw a bar. A file that has gone missing is the
+            # payload validation's business, a line below, where it is an error
+            # with a path in it rather than a silently wrong denominator.
+            continue
+    with tqdm(
+        total=total,
+        unit="B",
+        unit_scale=True,
+        unit_divisor=1024,
+        desc="Archiving",
+        disable=progress_disabled(),
+        leave=False,
+    ) as bar:
+        for absolute, arcname in payload:
+            info = _validate_regular_file(absolute, label="backup payload")
+            tar.add(absolute, arcname=arcname)
+            bar.update(info.st_size)
+
+
 def _write_archive(
     payload: list[tuple[str, str]], destination: str, compress: bool
 ) -> int:
@@ -645,9 +697,7 @@ def _write_archive(
             with os.fdopen(temp_fd, "wb") as raw:
                 temp_fd = -1
                 with tarfile.open(fileobj=raw, mode="w") as tar:
-                    for absolute, arcname in payload:
-                        _validate_regular_file(absolute, label="backup payload")
-                        tar.add(absolute, arcname=arcname)
+                    _add_payload(tar, payload)
                 raw.flush()
                 os.fsync(raw.fileno())
         else:
@@ -656,9 +706,7 @@ def _write_archive(
                 temp_fd = -1
                 with compressor.stream_writer(raw, closefd=False) as stream:
                     with tarfile.open(mode="w|", fileobj=stream) as tar:
-                        for absolute, arcname in payload:
-                            _validate_regular_file(absolute, label="backup payload")
-                            tar.add(absolute, arcname=arcname)
+                        _add_payload(tar, payload)
                 raw.flush()
                 os.fsync(raw.fileno())
         completed = os.lstat(temp_path)

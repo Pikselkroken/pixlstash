@@ -14,6 +14,7 @@ temp root, which keeps them independent without rebuilding anything expensive.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sqlite3
@@ -192,6 +193,45 @@ def test_restore_round_trip_publishes_library_and_preserves_the_old_pair(
         config = json.load(handle)
     assert config["image_root"] == destination
     assert config["port"] == 9999
+
+
+class _FakeTerminal(io.StringIO):
+    """A stderr that claims to be a terminal, so the bar is not auto-suppressed."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+def test_progress_is_drawn_on_a_terminal_and_silent_off_one(temp_root, monkeypatch):
+    """Both directions, because either failure is invisible.
+
+    A bar that never draws looks like a hung command; one that draws into a cron
+    log fills the mail with redraw escapes. Neither shows up in a test that only
+    checks the command succeeded.
+    """
+    from pixlstash.services import library_restore_service as restore
+
+    source = _install(temp_root, "progress")
+    archive = os.path.join(temp_root, "progress.tar.zst")
+    assert _backup(source, archive) == 0
+
+    terminal = _FakeTerminal()
+    monkeypatch.setattr("sys.stderr", terminal)
+    assert restore.progress_disabled() is False
+    restore._extract(archive, restore.restore_scratch(os.path.join(temp_root, "p1")))
+    assert "Restoring" in terminal.getvalue(), "no progress bar on a terminal"
+
+    # Backup draws one too, from the same decision.
+    backup_terminal = _FakeTerminal()
+    monkeypatch.setattr("sys.stderr", backup_terminal)
+    assert _backup(source, os.path.join(temp_root, "progress-2.tar.zst")) == 0
+    assert "Archiving" in backup_terminal.getvalue(), "no progress bar on backup"
+
+    quiet = io.StringIO()  # a plain buffer is not a tty
+    monkeypatch.setattr("sys.stderr", quiet)
+    assert restore.progress_disabled() is True
+    restore._extract(archive, restore.restore_scratch(os.path.join(temp_root, "p2")))
+    assert quiet.getvalue() == "", "progress bar drawn into a non-terminal"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")

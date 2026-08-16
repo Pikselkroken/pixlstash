@@ -1364,6 +1364,7 @@
     "tests/test_library_restore_cli.py::test_archive_symlink_members_are_refused": 0.01,
     "tests/test_library_restore_cli.py::test_containment_backstop_refuses_a_target_outside_the_root": 0.01,
     "tests/test_library_restore_cli.py::test_declining_the_prompt_changes_nothing": 0.02,
+    "tests/test_library_restore_cli.py::test_progress_is_drawn_on_a_terminal_and_silent_off_one": 0.05,
     "tests/test_library_restore_cli.py::test_restore_refuses_a_destination_with_contents": 0.02,
     "tests/test_library_restore_cli.py::test_restore_refuses_an_archive_it_did_not_write": 0.01,
     "tests/test_library_restore_cli.py::test_restore_refuses_while_the_hub_is_locked": 0.52,

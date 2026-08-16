@@ -37,6 +37,7 @@ import ntpath
 import os
 import shutil
 import sqlite3
+import sys
 import tarfile
 import tempfile
 from dataclasses import dataclass
@@ -44,11 +45,26 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import zstandard
+from tqdm import tqdm
 
 from pixlstash.hub.registry import VAULT_FILENAME
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def progress_disabled() -> bool:
+    """Whether to suppress progress bars, decided here rather than by tqdm.
+
+    ``disable=None`` looks like it means "auto-detect a terminal", but tqdm
+    wraps ``file`` in ``DisableOnWriteError`` *before* testing ``isatty``, so
+    what it actually does depends on that wrapper forwarding the call. Deciding
+    it from ``sys.stderr`` directly is one line, says what it means, and is
+    testable — which matters because the failure mode is silent either way: a
+    bar that never draws, or a cron log full of redrawn ones.
+    """
+    return not (hasattr(sys.stderr, "isatty") and sys.stderr.isatty())
+
 
 # `pixlstash.app.SERVER_CONFIG_PATH`'s basename. Spelled out rather than
 # imported: importing `pixlstash.app` from the CLI would pull the whole server
@@ -224,10 +240,33 @@ def _extract(archive: str, scratch: str) -> int:
     os.makedirs(staged, exist_ok=True)
     count = 0
     try:
+        archive_size = os.path.getsize(archive)
         with open(archive, "rb") as handle:
-            with _open_archive_stream(handle) as tar:
+            # Measured against the *archive* rather than the extracted files:
+            # the tar is read as a stream, so the member count is not known
+            # until the end, but how far into the file we have read is known
+            # exactly and maps to the wait. Suppressed off a terminal (see
+            # `progress_disabled`), keeping scripted restores quiet; it draws
+            # on stderr, so stdout stays the report.
+            with (
+                _open_archive_stream(handle) as tar,
+                tqdm(
+                    total=archive_size,
+                    unit="B",
+                    unit_scale=True,
+                    unit_divisor=1024,
+                    desc="Restoring",
+                    disable=progress_disabled(),
+                    leave=False,
+                ) as bar,
+            ):
                 for member in tar:
                     target = _safe_member_target(member, scratch)
+                    # Advance by however much of the archive that member cost,
+                    # including the ones skipped above. `update` with a delta
+                    # keeps tqdm's own redraw throttling, which `n = ...` plus
+                    # `refresh()` would defeat on an archive of small files.
+                    bar.update(max(0, min(handle.tell(), archive_size) - bar.n))
                     if target is None:
                         continue
                     os.makedirs(os.path.dirname(target), exist_ok=True)
