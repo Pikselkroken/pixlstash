@@ -1084,6 +1084,78 @@ describe("stacks are atomic", () => {
     store.selectVisible();
     expect([...store.selectedIds].sort()).toEqual([1, 2, 3, 4]);
   });
+
+  it("hands the verbs one member when one member is what was picked", () => {
+    // The exception the expanded strip added (#1005). A member is not in
+    // `visibleRows` — the run is one row there — so without this the selection
+    // resolves to nothing and every verb gates on a phantom.
+    const store = shelfWithARun();
+    store.selectFromClick(3, {}, [1, 3, 4]);
+    expect(store.selectedRows.map((r) => r.id)).toEqual([3]);
+    expect(store.selectedModelIds).toEqual([3]);
+  });
+
+  it("keeps a Shift range inside the strip it was aimed at", () => {
+    // An OPEN run is in the drawn order member by member, so its cover must
+    // stand for itself inside a range — expanding it as well reaches past the
+    // row the reader clicked and takes the steps below it.
+    const store = shelfWithARun();
+    const drawn = [4, 1, 2, 3];
+    store.selectFromClick(4, {}, drawn);
+    store.selectFromClick(2, { shift: true }, drawn);
+    expect([...store.selectedIds].sort()).toEqual([1, 2, 4]);
+  });
+
+  it("still takes whole runs in a range over CLOSED rows", () => {
+    // The other half: with the strip shut, the cover is the only thing drawn
+    // for the run, so it has to stand for all of it.
+    const store = shelfWithARun();
+    store.selectFromClick(4, {}, [1, 4]);
+    store.selectFromClick(1, { shift: true }, [1, 4]);
+    expect([...store.selectedIds].sort()).toEqual([1, 2, 3, 4]);
+  });
+
+  it("narrows a member's copies to the folder it is drawn under", () => {
+    // The row is narrowed so the file line answers "where is this" with a path
+    // in the folder it is under; an expanded strip has to follow, or the steps
+    // answer with a path from the folder above.
+    const store = useModelShelfStore();
+    const twoFolders = (id, position) =>
+      adapter({
+        id,
+        sha256: String(id).repeat(64).slice(0, 64),
+        stack_id: 7,
+        stack_position: position,
+        locations: [
+          { state: "present", folder_id: 1, folder_path: "/a", relpath: "x" },
+          { state: "present", folder_id: 2, folder_path: "/b", relpath: "x" },
+        ],
+      });
+    store.rows = [twoFolders(1, 0), twoFolders(2, 1)];
+    store.setView({ groupBy: "folder" });
+
+    for (const group of store.groups) {
+      for (const row of group.rows) {
+        for (const member of row.members) {
+          expect(member.locations.map((l) => l.folder_id)).toEqual([
+            group.folderId,
+          ]);
+        }
+      }
+    }
+  });
+
+  it("counts a part of a run as its parts, not as the run", () => {
+    // Ctrl-clicking one file out of a selected run leaves two files, and the
+    // bar has to say two. Reading the cover's presence as "the run" instead
+    // would let a verb write the file the reader just unticked.
+    const store = shelfWithARun();
+    store.selectFromClick(1, {}, [1, 4]);
+    expect(store.selectedRows).toHaveLength(1);
+    store.selectFromClick(2, { ctrl: true }, [1, 2, 3, 4]);
+    expect(store.selectedRows.map((r) => r.id)).toEqual([1, 3]);
+    expect(store.selectedModelIds).toEqual([1, 3]);
+  });
 });
 
 describe("the verbs", () => {

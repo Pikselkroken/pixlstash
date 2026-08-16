@@ -1098,6 +1098,23 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   });
 
   /**
+   * A stack's members as this folder's draw sees them, one copy each.
+   *
+   * The per-member half of the narrowing the drawn row gets; see the comment at
+   * the push below.
+   */
+  function narrow(members, group) {
+    return members.map((member) => {
+      const here = (member.locations ?? []).filter(
+        (loc) => loc.folder_id === group.location.folder_id,
+      );
+      return here.length
+        ? { ...member, locations: here, locState: locationState(here) }
+        : member;
+    });
+  }
+
+  /**
    * The shown rows, sorted and cut into groups.
    *
    * Always at least one group, so the list has ONE shape to render: with
@@ -1176,6 +1193,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         // Narrowing here is safe because nothing else reads a DRAWN row's
         // locations — `selectedRows` and the verbs all read `visibleRows`,
         // which still carries every copy.
+        //
+        // A stack's `members` are narrowed with it, for the reason the row
+        // itself is: an expanded strip under `/models` would otherwise answer
+        // "where is this step" with a path in the folder above. Members with no
+        // copy in this folder keep their own — the run is drawn here because
+        // the run is here, and inventing an absence for one step would be worse
+        // than a merged tooltip.
         bucket.rows.push(
           group.location
             ? {
@@ -1183,6 +1207,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
                 rowKey: `${row.id}:${group.key}`,
                 locState: locationState([group.location]),
                 locations: [group.location],
+                ...(row.members ? { members: narrow(row.members, group) } : {}),
               }
             : { ...row, rowKey: `${row.id}:${group.key}` },
         );
@@ -1364,9 +1389,35 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * all. With no undo behind any of this, "you cannot act on what is off
    * screen" is the safer half of the trade.
    */
-  const selectedRows = computed(() =>
-    visibleRows.value.filter((row) => selectedIds.value.has(row.id)),
-  );
+  /**
+   * A run counts as one row while the whole of it is selected; the moment part
+   * of it is, the parts count for themselves. `visibleRows` holds one row per
+   * stack, so a member picked out of an expanded strip is not in it and has to
+   * be contributed from `members` — otherwise selecting a step gives the bar an
+   * empty selection and every verb a phantom to gate on.
+   */
+  const selectedRows = computed(() => {
+    const chosen = selectedIds.value;
+    const out = [];
+    for (const row of visibleRows.value) {
+      if (!row.members || row.members.length < 2) {
+        if (chosen.has(row.id)) out.push(row);
+        continue;
+      }
+      if (row.memberIds.every((id) => chosen.has(id))) {
+        out.push(row);
+        continue;
+      }
+      // Part of a run: the members stand on their own, cover included. A verb
+      // then writes the files that are actually ticked rather than the run
+      // they happen to belong to, which is the whole point of being able to
+      // pick one out of the strip.
+      for (const member of row.members) {
+        if (chosen.has(member.id)) out.push(member);
+      }
+    }
+    return out;
+  });
 
   /**
    * Every selected model, stack members included.
@@ -1376,6 +1427,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * writes. A verb must act on the whole run or a Forget would destroy a run's
    * cover and leave its five steps on the shelf, which is precisely the partial
    * state `services/stack_membership` exists to forbid.
+   *
+   * A member picked out of an expanded strip is its own row and carries no
+   * `memberIds`, so it expands to itself. That is the deliberate exception: the
+   * reader opened the run and pointed at one file inside it, which is a
+   * different gesture from selecting the run.
    */
   const selectedModelIds = computed(() =>
     selectedRows.value.flatMap((row) => row.memberIds ?? [row.id]),
@@ -1435,6 +1491,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * grouping mutation to every member "so state can never go partial". Selecting
    * the cover alone would let Move take one step of six and leave the rest, and
    * Forget destroy a run's cover while its steps stayed on the shelf.
+   *
+   * A **member** of an expanded strip stands for itself: it is not in
+   * `visibleRows`, so the lookup misses and the id comes back alone. That is
+   * the intent rather than a gap — opening a run and pointing at one file
+   * inside it is how that file is taken out of the run, or made its cover.
    */
   function modelsBehind(id) {
     const row = visibleRows.value.find((candidate) => candidate.id === id);
@@ -1460,10 +1521,24 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const to = sequence.indexOf(id);
     if (shift && from >= 0 && to >= 0) {
       const [start, end] = from <= to ? [from, to] : [to, from];
+      // An OPEN run is in the sequence member by member, so its cover must
+      // stand for itself inside a range or the range reaches past the row the
+      // reader aimed at: ending on a run's second file would otherwise pull in
+      // its third, through the cover. A CLOSED run has only its cover in the
+      // sequence and still expands to the whole thing, which is what makes a
+      // range over collapsed rows take whole runs.
+      const drawn = new Set(sequence);
+      const withinRange = (rowId) => {
+        const behind = modelsBehind(rowId);
+        return behind.length > 1 &&
+          behind.some((m) => m !== rowId && drawn.has(m))
+          ? [rowId]
+          : behind;
+      };
       // The anchor stays where it was: dragging a range out and back with
       // repeated Shift+clicks has to measure from the same end each time.
       selectedIds.value = new Set(
-        sequence.slice(start, end + 1).flatMap(modelsBehind),
+        sequence.slice(start, end + 1).flatMap(withinRange),
       );
       return;
     }

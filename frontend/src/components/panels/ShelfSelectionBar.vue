@@ -295,6 +295,8 @@ const emit = defineEmits([
   "set-kind",
   "stack",
   "unstack",
+  "make-cover",
+  "remove-from-stack",
   "set-icon",
   "clear-icons",
   "move",
@@ -640,19 +642,36 @@ const stackTitle = computed(() => {
 });
 
 /**
+ * The selection's rows that are ONE member of a run rather than a whole run.
+ *
+ * The two are told apart by `members`: {@link collapseStacks} gives every
+ * stacked row in `visibleRows` that array, and a member picked out of an
+ * expanded strip is a raw shelf row without it. That distinction is the whole
+ * basis of the two verbs below — both act *inside* a run, which is exactly what
+ * selecting the collapsed row cannot express.
+ */
+const selectedMembers = computed(() =>
+  store.selectedRows.filter((row) => row.stack_id != null && !row.members),
+);
+
+/**
  * Why this selection cannot be ungrouped, or `""` when it can.
  *
  * The undo the shelf never had, and the reason the grouping dialog could once
- * only warn that nothing takes a stack back. Whole stacks only: a shelf row IS
- * a stack here (selecting a collapsed row selects the run), so "ungroup this
- * row" is unambiguous, and releasing part of a stack is not offered because a
- * stack is atomic everywhere else in this view.
+ * only warn that nothing takes a stack back. **Whole runs only**, and that has
+ * to be checked rather than assumed now that a single member can be selected:
+ * `stack_id != null` is true of a member too, so on its own it would let a
+ * reader who picked one checkpoint break up the whole run of six. Taking one
+ * file out is the verb below, and this one says so.
  */
 const unstackRefusal = computed(() => {
   const rows = store.selectedRows;
   if (!rows.length) return "Select a stack to break it up";
   if (rows.some((row) => row.stack_id == null)) {
     return "Something here is not part of a stack";
+  }
+  if (selectedMembers.value.length) {
+    return "That is one file of a run — select the run itself to break it up";
   }
   return "";
 });
@@ -675,6 +694,60 @@ const unstackTitle = computed(() => {
   return n === 1
     ? "Break this stack up, leaving its files on the shelf"
     : `Break these ${n.toLocaleString()} stacks up, leaving their files on the shelf`;
+});
+
+/**
+ * Why this selection cannot be made the cover, or `""` when it can.
+ *
+ * One file, and one that is not already the face of its run. The cover is what
+ * the shelf draws for the whole stack — its name, its kind, its base — and the
+ * filenames pick it when the stack is built; this is the owner saying the
+ * heuristic chose the wrong checkpoint.
+ */
+const coverRefusal = computed(() => {
+  const members = selectedMembers.value;
+  if (store.selectedRows.length !== 1 || members.length !== 1) {
+    return "Open a run and pick one file inside it — a run has one cover";
+  }
+  if (members[0].stack_position === 0) {
+    return "This file already stands for its run";
+  }
+  return "";
+});
+
+const coverable = computed(() => !coverRefusal.value);
+
+const coverTitle = computed(
+  () => coverRefusal.value || "Draw the run from this file instead",
+);
+
+/**
+ * Why these files cannot be taken out of their runs, or `""` when they can.
+ *
+ * The single-file counterpart to Ungroup, and gated the opposite way round: a
+ * whole run selected is Ungroup's business, and a loose row is in no run to
+ * leave.
+ */
+const releaseRefusal = computed(() => {
+  const rows = store.selectedRows;
+  if (!rows.length) return "Open a run and pick a file inside it";
+  if (rows.some((row) => row.stack_id == null)) {
+    return "Something here is not part of a run";
+  }
+  if (rows.length !== selectedMembers.value.length) {
+    return "That is a whole run — use Ungroup to break it up";
+  }
+  return "";
+});
+
+const releasable = computed(() => !releaseRefusal.value);
+
+const releaseTitle = computed(() => {
+  if (releaseRefusal.value) return releaseRefusal.value;
+  const n = selectedMembers.value.length;
+  return n === 1
+    ? "Take this file out of its run, leaving it on the shelf"
+    : `Take these ${n.toLocaleString()} files out of their runs, leaving them on the shelf`;
 });
 
 /**
@@ -776,6 +849,14 @@ const verbHandlers = computed(() => ({
   stackTitle: stackTitle.value,
   unstackable: unstackable.value,
   unstackTitle: unstackTitle.value,
+  coverable: coverable.value,
+  coverTitle: coverTitle.value,
+  releasable: releasable.value,
+  releaseTitle: releaseTitle.value,
+  releaseLabel:
+    selectedMembers.value.length > 1
+      ? "Take out of their runs"
+      : "Take out of this run",
   movable: movable.value.length > 0 && !moves.busy,
   moveTitle: moveTitle.value,
   openable: openable.value,
@@ -888,6 +969,20 @@ const VerbMenu = (props) => {
       disabled: !props.unstackable,
       title: props.unstackTitle,
     }),
+    // The two verbs that act INSIDE a run. Always listed, and disabled with
+    // their reason on a selection that is not a run's member: this is where a
+    // reader who has never opened a stack finds out that opening one is a
+    // gesture, which a hidden item could never tell them.
+    item("mdi-arrow-collapse-up", "Make this the cover", {
+      on: () => props.onVerb("make-cover"),
+      disabled: !props.coverable,
+      title: props.coverTitle,
+    }),
+    item("mdi-layers-minus", props.releaseLabel, {
+      on: () => props.onVerb("remove-from-stack"),
+      disabled: !props.releasable,
+      title: props.releaseTitle,
+    }),
     item("mdi-folder-move-outline", "Move to…", {
       on: () => props.onVerb("move"),
       disabled: !props.movable,
@@ -953,6 +1048,9 @@ defineExpose({
   stackable,
   stackFuses,
   unstackable,
+  coverable,
+  releasable,
+  selectedMembers,
   selectedStackIds,
   withIcons,
 });

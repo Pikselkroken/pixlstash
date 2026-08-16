@@ -1,12 +1,18 @@
-"""Collapse loose adapters into stacks: propose, apply, fuse, undo.
+"""Collapse loose adapters into stacks: propose, apply, fuse, undo, curate.
 
-Three routes. ``GET`` reads the shelf and returns groups it believes belong
+Five routes. ``GET`` reads the shelf and returns groups it believes belong
 together; it writes nothing, so the whole dry run can be drawn before the owner
 decides. ``POST`` is the half that writes, and it is reached only after they
 have seen that — or from the shelf directly, where it also **fuses**: given
 models that are already stacked it absorbs their stacks whole, which is how
 stacking two stacks yields one. ``DELETE`` is the undo, and the shelf's first:
 it breaks a stack up and leaves every file exactly where it sits on disk.
+
+The last two curate a stack that already exists, and both are the owner
+overruling the filename heuristic. ``PATCH .../cover`` chooses which member the
+shelf draws for the run, which ``POST`` deliberately will not let a caller do;
+``DELETE .../members/{model_id}`` takes one file back out of a run it does not
+belong to. Like the unstack, neither touches a byte on disk.
 
 **Detection proposes, it never applies** — the house rule this module is the
 third instance of, after folder monitoring and the ai-toolkit run scan.
@@ -20,12 +26,12 @@ token is read as a version, and the ambiguous case needs per-group
 adjudication with counter-evidence, which is a design question rather than
 missing code.
 
-Authorization: all three routes are ``OWNER_ONLY``, declared in
+Authorization: all five routes are ``OWNER_ONLY``, declared in
 ``pixlstash/authz/registry.py`` and never inline. None touches the host
 filesystem — detection reads `model` rows the scan already wrote, and applying,
-fusing and unstacking write hub columns — so none belongs on the §16.3 locality
-tier that ``model-moves`` and the import block sit on. They surface folder ids,
-not paths.
+fusing, unstacking, covering and releasing write hub columns — so none belongs
+on the §16.3 locality tier that ``model-moves`` and the import block sit on.
+They surface folder ids, not paths.
 """
 
 from __future__ import annotations
@@ -42,6 +48,8 @@ from pixlstash.services.stack_detector import (
     StackRefused,
     apply_stack,
     propose_stacks,
+    remove_member,
+    set_cover,
     unstack,
 )
 
@@ -173,6 +181,49 @@ class UnstackResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     released: int = Field(description="How many models are loose on the shelf again.")
+
+
+class SetCoverRequest(BaseModel):
+    """Body of ``PATCH /model-stacks/{stack_id}/cover``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: int = Field(
+        description=(
+            "The member to promote to the cover, by hub `model.id`. It must "
+            "already be in this stack. Example: `101`."
+        )
+    )
+
+
+class SetCoverResponse(BaseModel):
+    """Body of ``PATCH /model-stacks/{stack_id}/cover``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int
+    model_ids: list[int] = Field(
+        description=(
+            "The stack's members in their new order, cover first. Example: "
+            "`[101, 102]`."
+        )
+    )
+
+
+class RemoveMemberResponse(BaseModel):
+    """Body of ``DELETE /model-stacks/{stack_id}/members/{model_id}``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    released: int = Field(
+        description=(
+            "How many models are loose on the shelf again — one, or both when "
+            "the removal left a stack of one and it dissolved."
+        )
+    )
+    dissolved: bool = Field(
+        description="Whether the stack itself is gone, because one file is not a run."
+    )
 
 
 def create_router(server) -> APIRouter:
@@ -315,5 +366,72 @@ def create_router(server) -> APIRouter:
             # moved under a well-aimed request.
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return UnstackResponse(released=released)
+
+    @router.patch(
+        "/model-stacks/{stack_id}/cover",
+        summary="Choose which member covers a stack",
+        description=(
+            "Moves one member to `stack_position` 0, which is what the shelf "
+            "draws for the whole run. The other members keep their relative "
+            "order and close the gap behind it, exactly as "
+            "`PATCH /stacks/{stack_id}/members/{picture_id}` does for a picture "
+            "stack.\n\n"
+            "**This is the only way a cover is chosen by hand.** `POST "
+            "/model-stacks` recomputes the order from the filenames and ignores "
+            "the order it was given, which is right for a heuristic and wrong "
+            "once the owner knows the run's best checkpoint is step 1500 rather "
+            "than the file the trainer wrote last.\n\n"
+            "**The choice sticks.** Nothing recomputes a stack's order after it "
+            "is built — detection only ever looks at *loose* adapters, and the "
+            "run importer's upsert keeps an existing `stack_position` — so a "
+            "chosen cover survives a re-scan and a re-import.\n\n"
+            "Nothing on disk is touched. A `model_id` that is not in this stack "
+            "is a 404 and nothing is written."
+        ),
+        tags=["model_shelf"],
+        response_model=SetCoverResponse,
+    )
+    def set_stack_cover(
+        request: Request, stack_id: int, payload: SetCoverRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        try:
+            model_ids = set_cover(server.hub, stack_id, payload.model_id)
+        except StackRefused as exc:
+            # 404 for both refusals this can raise: "no such stack" and "that
+            # model is not in it" are each a wrong address rather than a shelf
+            # that moved under a well-aimed request.
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return SetCoverResponse(stack_id=stack_id, model_ids=model_ids)
+
+    @router.delete(
+        "/model-stacks/{stack_id}/members/{model_id}",
+        summary="Take one model out of a stack",
+        description=(
+            "The single-member counterpart to breaking the whole stack up. "
+            "Clears `stack_id` and `stack_position` on that one model, leaving "
+            "it loose on the shelf as the individual adapter it always was, and "
+            "renumbers the survivors so the stack keeps a cover — removing the "
+            "cover promotes whichever member was behind it.\n\n"
+            "**A stack of one is not a stack.** Removing the second-to-last "
+            "member dissolves the whole thing: both files go loose and the "
+            "`adapter_stack` row is deleted, which the response reports as "
+            "`dissolved`.\n\n"
+            "**Nothing on disk is touched** — no file is moved, renamed or "
+            "unlinked. The released model becomes *loose*, so "
+            "`GET /model-stacks/proposals` may offer to regroup it, exactly as "
+            "after an unstack. A `model_id` that is not in this stack is a 404 "
+            "and nothing is written."
+        ),
+        tags=["model_shelf"],
+        response_model=RemoveMemberResponse,
+    )
+    def delete_stack_member(request: Request, stack_id: int, model_id: int):
+        server.auth.ensure_secure_when_required(request)
+        try:
+            released, dissolved = remove_member(server.hub, stack_id, model_id)
+        except StackRefused as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RemoveMemberResponse(released=released, dissolved=dissolved)
 
     return router

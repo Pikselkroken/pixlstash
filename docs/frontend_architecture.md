@@ -2941,7 +2941,7 @@ run half-hidden by a base-model filter is still a run.
 reading 6 over a strip that opens to 2 would be describing rows the reader
 cannot reach.
 
-**Stacks are atomic, exactly as they are for pictures.**
+**A collapsed run is atomic, exactly as it is for pictures.**
 `services/stack_membership` applies a grouping mutation to *every* member "so
 state can never go partial", and the shelf follows it: clicking a collapsed row
 selects the whole run, Ctrl-click toggles it as a unit, a Shift range takes
@@ -2950,12 +2950,28 @@ write. Selecting the cover alone would let Move take one step of six and leave
 the rest, or Forget destroy a run's cover while its steps stayed on the shelf.
 `selectedRows` still counts one row per *shown* row, which is what the bar says.
 
+**Opening a run is the second gesture, and it is what "inside a run" means.**
+Atomicity is a property of the *collapsed* row, not a ban on ever touching a
+member: with the strip open, a member row is picked, focused and right-clicked
+like any other, and it stands for itself. `selectedRows` is what encodes the
+distinction — a run contributes one row while **every** member of it is
+selected, and the moment part of it is, the members count for themselves
+(`useModelShelfStore`). Reading the cover's id as "the run" instead would let a
+verb write a file the reader had just un-ticked. Members are not in
+`visibleRows` at all, which is why they have to be contributed from `members`,
+and `modelsBehind` returning a member id alone is the intent rather than a gap.
+`drawnRows` includes an open strip's members, so the cursor walks into it and a
+Shift range spans it; a closed strip contributes nothing, because a range must
+never sweep up files nobody can see.
+
 **`StackEdgeTicks` and `StackBadge` are reused; `StackExpansionStrip` is not.**
 The first two are count-only glyphs and fit unchanged. The strip draws picture
 thumbnails for the dedup queue, and a model file has no thumbnail — so a run's
-other steps render as ordinary shelf rows, indented and not individually
-selectable. They *are* shelf rows; drawing them as anything else would be a
-second row idiom. The badge carries `aria-expanded` and is the disclosure, so
+other steps render as ordinary shelf rows, indented and carrying the same three
+click gestures, the same roving tab stop and the same verb menu. They *are*
+shelf rows; drawing them as anything else would be a second row idiom, and
+leaving them inert — which is how F5 shipped — left a run the reader could open
+and nothing they could do inside it. The badge carries `aria-expanded` and is the disclosure, so
 the count and the control are one thing rather than a number beside a chevron.
 Members are labelled by **step, and by version when the stack spans versions** —
 not by filename: every member shares a name by construction, so repeating it six
@@ -2993,7 +3009,9 @@ which was precisely the gesture people wanted: pick two stacks, get one. It now
 passes `fuse`, the confirm says *Fuse* rather than *Group* so the bigger claim is
 not described in the smaller sentence, and the route absorbs the selected stacks
 whole. **Ungroup** (`DELETE /model-stacks/{stack_id}`) sits beside it, gated on
-every selected row being in a stack, and acts per *stack* rather than per row
+every selected row being **a whole run** — `stack_id != null` is true of a
+single member too, so on its own that gate would let a reader who picked one
+checkpoint break up the run of six — and it acts per *stack* rather than per row
 because a stack is what the verb is about. Its confirm deliberately carries **no
 warning styling**: no file is moved, renamed or deleted, and spending the
 danger vocabulary here would teach the reader to ignore it where it matters. The
@@ -3001,6 +3019,31 @@ receipt says where the files went — "the files are still on the shelf" — sin
 "Ungrouped 2 stacks" alone is the one sentence in this view that could be read as
 "deleted". Because Ungroup exists, Group no longer warns that nothing takes a
 stack back; that warning was true when it was written and is not any more.
+
+**Two verbs act INSIDE a run, and both need the strip open.** *Make this the
+cover* (`PATCH /model-stacks/{id}/cover`) is the owner overruling the filename
+heuristic — the run's row draws its name, kind and base from the cover, and only
+the owner knows step 1500 is the good checkpoint. It takes **no confirmation**:
+nothing is moved, renamed or regrouped, and the old cover is still in the strip,
+one gesture from taking the role back. *Take out of this run*
+(`DELETE /model-stacks/{id}/members/{model_id}`) is the single-file counterpart
+to Ungroup and *is* confirmed for the same reason Ungroup is, plus one of its
+own — a run left with a single file dissolves entirely, which the prompt says
+and `releaseReceipt` reports. Both are gated on the selection being members
+rather than a whole run (a whole run is Ungroup's business), both are listed
+**disabled with their reason** on a selection that is neither, and the cover
+verb refuses the cover itself with *"This file already stands for its run"*.
+While a run is open its cover row carries a `Cover` chip — a word, not a colour
+or a position, so it survives greyscale and a screen reader can hear it.
+
+**The choice sticks, with no column recording it.** `stack_position` is the only
+state: nothing *renumbers* a stack after it is built (detection looks at *loose*
+adapters only, and the run importer's upsert `COALESCE`s an existing position),
+so a chosen cover survives a re-scan and a re-import. A member's row can still
+disappear — Delete, Forget, or the checkpoint-hash task merging a duplicate away
+— and the backend's `repair_stacks` closes the gap that leaves, renumbering the
+survivors and dissolving a run left with one file. That is why a member Delete
+is safe to offer at all.
 
 **Prefix grouping is absent from the UI because it is absent from the backend.**
 `JimmyVehicle` beside `JimmyVehicle2` needs per-group adjudication with

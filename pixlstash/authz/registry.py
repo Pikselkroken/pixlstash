@@ -461,9 +461,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     # ── model_stacks.py (shelf plan F5) ────────────────────────────────────
     # OWNER_ONLY and deliberately NOT the §16.3 locality tier its shelf
-    # neighbours sit on: neither route touches the host filesystem. Detection
-    # reads `model` rows the scan already wrote and applying writes hub columns,
-    # so there is no host path taken, walked, written or unlinked. They surface
+    # neighbours sit on: not one of these routes touches the host filesystem.
+    # Detection reads `model` rows the scan already wrote, and applying, fusing,
+    # unstacking, covering and releasing a member write hub columns, so there is
+    # no host path taken, walked, written or unlinked. They surface
     # folder ids, never paths — the same reason the shelf's other read routes
     # stayed owner_only while the folder mutators moved to the locality tier.
     ("GET", "/api/v1/model-stacks/proposals"): RoutePolicy(
@@ -477,6 +478,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("DELETE", "/api/v1/model-stacks/{stack_id}"): RoutePolicy(
         _OWNER,
         justification="Breaks up one of the owner's own stacks; clears two hub columns and deletes the adapter_stack row, touching no file on disk; DELETE blocked for READ tokens; owner only",
+    ),
+    ("PATCH", "/api/v1/model-stacks/{stack_id}/cover"): RoutePolicy(
+        _OWNER,
+        justification="Chooses which member covers one of the owner's own stacks; renumbers stack_position in the hub, touching no file on disk; PATCH blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/model-stacks/{stack_id}/members/{model_id}"): RoutePolicy(
+        _OWNER,
+        justification="Releases one member of one of the owner's own stacks; clears two hub columns and may delete the emptied adapter_stack row, touching no file on disk; DELETE blocked for READ tokens; owner only",
     ),
     # ── model_imports.py (shelf plan B7; §16.3 host-capability) ────────────
     # The listing walks a registered output root; the import writes into one

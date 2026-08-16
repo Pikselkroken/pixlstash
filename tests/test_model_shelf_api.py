@@ -3995,6 +3995,8 @@ def test_every_stack_route_is_declared_owner_only():
         ("GET", "/api/v1/model-stacks/proposals"),
         ("POST", "/api/v1/model-stacks"),
         ("DELETE", "/api/v1/model-stacks/{stack_id}"),
+        ("PATCH", "/api/v1/model-stacks/{stack_id}/cover"),
+        ("DELETE", "/api/v1/model-stacks/{stack_id}/members/{model_id}"),
     ):
         declared = ROUTE_POLICIES.get((method, path))
         assert declared is not None, f"({method}, {path}) has no ROUTE_POLICIES entry"
@@ -4164,6 +4166,216 @@ def test_unstacking_an_unknown_stack_is_a_404(shelf_env):
     apply's 409, and nothing is written on the way to saying so."""
     r = shelf_env.owner.delete(f"{API}/model-stacks/999999")
     assert r.status_code == 404, r.text
+
+
+def test_choosing_a_cover_over_http_reorders_the_run(shelf_env):
+    """The owner overruling the filenames, end to end.
+
+    The seeded stack covers with `alice` because that is where the fixture put
+    position 0; this asks for `dana` instead and reads the order back off the
+    listing the shelf actually draws from.
+    """
+    alice = shelf_env.model_ids["alice.safetensors"]
+    dana = shelf_env.model_ids["dana.safetensors"]
+
+    r = shelf_env.owner.patch(
+        f"{API}/model-stacks/{STACK_ID}/cover", json={"model_id": dana}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["model_ids"] == [dana, alice]
+
+    rows = {
+        row["id"]: row
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }
+    assert rows[dana]["stack_position"] == 0
+    assert rows[alice]["stack_position"] == 1
+
+
+def test_choosing_a_cover_that_is_not_in_the_stack_is_a_404(shelf_env):
+    """A member of somebody else's run is a wrong address, and writes nothing."""
+    bob = shelf_env.model_ids["bob.safetensors"]
+    alice = shelf_env.model_ids["alice.safetensors"]
+
+    r = shelf_env.owner.patch(
+        f"{API}/model-stacks/{STACK_ID}/cover", json={"model_id": bob}
+    )
+    assert r.status_code == 404, r.text
+
+    rows = {
+        row["id"]: row
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }
+    assert rows[alice]["stack_position"] == 0
+    assert rows[bob]["stack_id"] is None
+
+
+def test_taking_the_last_pair_apart_dissolves_the_run(shelf_env):
+    """Removing one of two leaves a stack of one, which is not a stack.
+
+    Both files come loose and the `adapter_stack` row goes, which is what the
+    `dissolved` flag in the receipt is for.
+    """
+    alice = shelf_env.model_ids["alice.safetensors"]
+    dana = shelf_env.model_ids["dana.safetensors"]
+
+    r = shelf_env.owner.delete(f"{API}/model-stacks/{STACK_ID}/members/{dana}")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"released": 2, "dissolved": True}
+
+    rows = {
+        row["id"]: row
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }
+    for model_id in (alice, dana):
+        assert rows[model_id]["stack_id"] is None
+        assert rows[model_id]["stack_position"] is None
+    assert (
+        shelf_env.server.hub.fetchone(
+            "SELECT id FROM adapter_stack WHERE id = ?", (STACK_ID,)
+        )
+        is None
+    )
+
+
+def test_taking_a_member_out_of_a_bigger_run_keeps_the_rest(shelf_env):
+    """The ordinary case: one file leaves, the run keeps a cover.
+
+    Built by fusing a pair onto the seeded stack, because the fixture's own
+    stack has exactly two members and the interesting path needs three.
+    """
+    alice = shelf_env.model_ids["alice.safetensors"]
+    dana = shelf_env.model_ids["dana.safetensors"]
+    bob = shelf_env.model_ids["bob.safetensors"]
+    fused = shelf_env.owner.post(
+        f"{API}/model-stacks",
+        json={"model_ids": [alice, bob], "fuse": True},
+    )
+    assert fused.status_code == 200, fused.text
+    stack_id = fused.json()["stack_id"]
+
+    r = shelf_env.owner.delete(f"{API}/model-stacks/{stack_id}/members/{bob}")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"released": 1, "dissolved": False}
+
+    rows = {
+        row["id"]: row
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }
+    assert rows[bob]["stack_id"] is None
+    # Contiguous from 0, so the run still has exactly one cover.
+    assert sorted(rows[model_id]["stack_position"] for model_id in (alice, dana)) == [
+        0,
+        1,
+    ]
+
+
+def test_the_two_curating_routes_are_owner_only_in_both_directions(shelf_env):
+    """A READ token is refused and the owner is not, on the same two calls.
+
+    The declaration test above reads `ROUTE_POLICIES`; this one issues the
+    requests, which is the half that proves the gate is wired to the routes
+    rather than merely described beside them.
+    """
+    alice = shelf_env.model_ids["alice.safetensors"]
+    dana = shelf_env.model_ids["dana.safetensors"]
+    calls = (
+        (
+            "PATCH",
+            f"{API}/model-stacks/{STACK_ID}/cover",
+            {"json": {"model_id": dana}},
+        ),
+        ("DELETE", f"{API}/model-stacks/{STACK_ID}/members/{alice}", {}),
+    )
+
+    token = _mint(shelf_env.owner, "curate probe")
+    client = _bearer(shelf_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the READ token is dead; the refusals below would prove nothing"
+    )
+
+    for method, path, kwargs in calls:
+        # A renamed route 403s through the middleware exactly as a refusal
+        # does, so the path is proved to resolve before the refusal is read.
+        assert_real_route(shelf_env.server.api, method, path)
+        assert client.request(method, path, **kwargs).status_code == 403, (
+            f"{method} {path} served a scoped READ token"
+        )
+        # Positive control: the owner is not blocked on the same call.
+        assert shelf_env.owner.request(method, path, **kwargs).status_code == 200
+
+
+def test_forgetting_one_member_renumbers_the_run_behind_it(shelf_env):
+    """A member can leave a run without this module being asked.
+
+    Forget deletes the `model` row through `_purge`, which knows nothing about
+    stacks — so the repair is what stops the run being left numbered 0, 2, 3,
+    or with no cover at all when the cover is what went.
+    """
+    alice = shelf_env.model_ids["alice.safetensors"]
+    dana = shelf_env.model_ids["dana.safetensors"]
+    bob = shelf_env.model_ids["bob.safetensors"]
+    # A three-member run, so removing one leaves a run rather than dissolving.
+    fused = shelf_env.owner.post(
+        f"{API}/model-stacks", json={"model_ids": [alice, bob], "fuse": True}
+    )
+    assert fused.status_code == 200, fused.text
+    stack_id = fused.json()["stack_id"]
+    # Forget refuses anything with a copy on disk, so the cover's copy has to
+    # be recorded as gone first — which is the state the verb exists for.
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_id = ?", (alice,)
+        )
+
+    r = shelf_env.owner.post(f"{API}/models/forget", json={"ids": [alice]})
+    assert r.status_code == 200, r.text
+    assert r.json()["forgotten"] == [alice]
+
+    rows = shelf_env.server.hub.fetchall(
+        "SELECT id, stack_position FROM model WHERE stack_id = ? "
+        "ORDER BY stack_position",
+        (stack_id,),
+    )
+    assert [int(row["stack_position"]) for row in rows] == [0, 1]
+    assert {int(row["id"]) for row in rows} == {bob, dana}
+
+
+def test_forgetting_down_to_one_member_dissolves_the_run(shelf_env):
+    """One file is not a run, however it came to be the last one."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    dana = shelf_env.model_ids["dana.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_id = ?", (alice,)
+        )
+
+    r = shelf_env.owner.post(f"{API}/models/forget", json={"ids": [alice]})
+    assert r.status_code == 200, r.text
+
+    survivor = shelf_env.server.hub.fetchone(
+        "SELECT stack_id, stack_position FROM model WHERE id = ?", (dana,)
+    )
+    assert survivor["stack_id"] is None
+    assert survivor["stack_position"] is None
+    assert (
+        shelf_env.server.hub.fetchone(
+            "SELECT id FROM adapter_stack WHERE id = ?", (STACK_ID,)
+        )
+        is None
+    )
+
+
+def test_taking_out_a_model_that_is_not_in_that_stack_is_a_404(shelf_env):
+    bob = shelf_env.model_ids["bob.safetensors"]
+    r = shelf_env.owner.delete(f"{API}/model-stacks/{STACK_ID}/members/{bob}")
+    assert r.status_code == 404, r.text
+    assert (
+        shelf_env.server.hub.fetchone(
+            "SELECT COUNT(*) AS n FROM model WHERE stack_id = ?", (STACK_ID,)
+        )["n"]
+        == 2
+    )
 
 
 # ── The icon verb over HTTP (shelf plan, the sixth verb) ────────────────────

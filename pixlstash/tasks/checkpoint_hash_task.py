@@ -23,6 +23,13 @@ path stored inline on the content row there was nowhere to put the second one,
 so the merge silently forgot it, the next scan re-registered it unhashed, this
 task read all 24 GB again, and the merge dropped it again — forever, once per
 scan cycle.
+
+**A merge can also take a file out of a run.** The losing row is deleted, and
+if it was in an ``adapter_stack`` that leaves the same hole Forget and Delete
+leave, so the merge calls
+:func:`~pixlstash.services.stack_detector.repair_stacks` for it. The stack is
+not inherited by the survivor: that row may be in a run of its own, and a model
+belongs to one.
 """
 
 from __future__ import annotations
@@ -34,6 +41,7 @@ from datetime import datetime, timezone
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_folder_scanner import sha256_file
+from pixlstash.services.stack_detector import repair_stacks
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 
 logger = get_logger(__name__)
@@ -149,7 +157,7 @@ class CheckpointHashTask(BaseTask):
         """
         columns = (
             "id, filename, display_name, base_model, trigger_words, "
-            "training_step, param_count, file_size"
+            "training_step, param_count, file_size, stack_id"
         )
         holder = conn.execute(
             f"SELECT {columns} FROM model WHERE sha256 = ?", (digest,)
@@ -200,6 +208,14 @@ class CheckpointHashTask(BaseTask):
         )
         conn.execute("DELETE FROM model_capability WHERE model_id = ?", (doomed["id"],))
         conn.execute("DELETE FROM model WHERE id = ?", (doomed["id"],))
+        # A duplicate can be one file of a run, and the row that loses the merge
+        # leaves it without asking the stack module — the same hole Forget and
+        # Delete leave, and the same repair: the survivors are renumbered, and a
+        # run left with one file stops being a run. Not inherited by the
+        # survivor: it may be in a run of its own, and a member cannot be in
+        # two.
+        if doomed["stack_id"] is not None:
+            repair_stacks(conn, [doomed["stack_id"]])
         conn.execute(
             "UPDATE model SET sha256 = ?, hashed_at = ?, file_size = ?, "
             "filename = COALESCE(filename, ?), "
