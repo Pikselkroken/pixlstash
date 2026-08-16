@@ -178,6 +178,78 @@ def derive_model_name(filename: str) -> str:
     return " ".join(tokens)
 
 
+# A trailing version token. Unlike a training suffix this is a *person's*
+# revision of a subject rather than a point inside one run: `Foxglove_v2` is a
+# second attempt at Foxglove, trained separately, and `Foxglove_000000500` is a
+# checkpoint of one attempt. Both belong on one shelf row, which is why the
+# stack detector groups on the name with this token removed.
+#
+# Only an explicit `v<digits>` counts, optionally with one decimal (`v2.1`,
+# which Civitai-style names use). A bare trailing `2` is deliberately NOT a
+# version: `JimmyVehicle` beside `JimmyVehicle2` is the ambiguous prefix case that
+# needs counter-evidence, and reading it as a version here would silently merge
+# two unrelated subjects.
+#
+# ``re.ASCII`` is not decoration. Python's ``\d`` matches every Unicode decimal
+# — `v٢` would parse as version 2 — while JavaScript's does not, and
+# `modelVersion` in `frontend/src/utils/modelShelf.js` mirrors this rule. Two
+# halves that disagree about what a version is would put a member under a
+# version the server never assigned it.
+_VERSION_SUFFIX_RE = re.compile(r"^v(\d+)(?:\.(\d+))?$", re.IGNORECASE | re.ASCII)
+
+
+def split_model_version(filename: str) -> tuple[str, str | None]:
+    """Split a derived name into its subject and its trailing version token.
+
+    Runs on top of :func:`derive_model_name`, so training bookkeeping is already
+    gone by the time the version is looked for and ``Foxglove_v2_000000500``
+    answers the same as ``Foxglove_v2``.
+
+    Args:
+        filename: File name or path.
+
+    Returns:
+        ``(subject, version)``, the version **exactly as the file wrote it** or
+        ``None`` when the name carries no version token. Case is preserved
+        because this token is put back into a stack's name, and folding it would
+        silently rename every ``_V2`` run on the shelf to ``v2``. Comparison is
+        never done on this string — :func:`version_sort_key` parses it, and that
+        is what makes the case irrelevant everywhere it matters.
+
+    Examples:
+        >>> split_model_version("Foxglove_v2.safetensors")
+        ('Foxglove', 'v2')
+        >>> split_model_version("Foxglove_V2.1_000000500.safetensors")
+        ('Foxglove', 'V2.1')
+        >>> split_model_version("Foxglove.safetensors")
+        ('Foxglove', None)
+    """
+    tokens = derive_model_name(filename).split()
+    if tokens and _VERSION_SUFFIX_RE.match(tokens[-1]):
+        return " ".join(tokens[:-1]), tokens[-1]
+    return " ".join(tokens), None
+
+
+def version_sort_key(version: str | None) -> tuple[int, int]:
+    """Order two version tokens, newest highest.
+
+    An unversioned file reads as ``v1``: ``Foxglove`` exists before
+    ``Foxglove_v2`` does, so it is the first version rather than an unknown one,
+    and treating it as unknown would make the cover of a two-version stack a
+    coin toss.
+
+    Args:
+        version: A token from :func:`split_model_version`, or ``None``.
+
+    Returns:
+        ``(major, minor)``, comparable with ``<``.
+    """
+    match = _VERSION_SUFFIX_RE.match(version or "")
+    if not match:
+        return (1, 0)
+    return (int(match.group(1)), int(match.group(2) or 0))
+
+
 def trim_process_memory() -> None:
     """Best-effort RSS trim for Linux/glibc allocators."""
     if not platform.system().lower().startswith("linux"):

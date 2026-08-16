@@ -1,4 +1,4 @@
-"""Propose which loose adapters are steps of one training run.
+"""Propose which loose adapters are steps or versions of one subject.
 
 **Detection proposes, it never applies.** The house rule, arrived at
 independently three times (folder monitoring detects missing files and refuses
@@ -7,16 +7,26 @@ is free, silent and continuous; rearranging somebody's shelf takes a click. So
 this module returns groups and writes nothing, and :func:`apply_stack` is a
 separate call the UI makes only after the owner has seen the dry run.
 
-**Two tiers, two treatments — not two numbers.** The dedup work already argued
-this out for pictures and the shelf follows it exactly:
+**A stack is a subject, not a training run.** It started as one — six files
+differing only by a step — but a person retrains a character and calls the
+result ``Foxglove_v2``, and that is the same subject on the shelf even though it
+shares no training run with ``Foxglove``. So grouping is on the name with both
+the step *and* the version token removed, and a group is proposed when its
+members differ by a step (one run), by a version (several runs of one subject),
+or by both.
 
-* **Tier 1, step grouping.** Six files whose names differ only by a training
-  step really are one run; there is nothing for a person to weigh, so this tier
-  gets one dry run and one confirmation for the whole batch.
-* **Tier 2, prefix grouping** (``JimmyVehicle`` beside ``JimmyVehicle2``) needs a
-  person and gets per-group adjudication with counter-evidence. It is NOT in
-  this module yet, deliberately: shipping tier 1 alone is a usable increment,
-  and tier 2's evidence model is the part that needs design rather than code.
+* **``step_group``.** Every member is the same version; the names differ only by
+  a training step. One run, nothing for a person to weigh.
+* **``version_group``.** The members carry two or more versions, so the group
+  spans training runs. The newest version covers it, and expanding the strip
+  reads backwards through the versions and then through each one's steps.
+
+**Prefix grouping** (``JimmyVehicle`` beside ``JimmyVehicle2``) is still NOT
+here, and that is what the version rule is careful about: only an explicit ``v<digits>``
+token counts, because a bare trailing digit could as easily be part of the name
+and merging on it would invent a subject. That case needs per-group
+adjudication with counter-evidence, which is a design question rather than
+missing code.
 
 Only *unstacked* adapters are considered. A run imported from ai-toolkit is
 already a stack (:mod:`pixlstash.services.run_importer` builds one), and a
@@ -36,16 +46,30 @@ from pixlstash.utils.adapter_header import FILE_ADAPTER
 from pixlstash.utils.model_utils import (
     _TRAINING_SUFFIX_RE,
     clean_asset_name,
-    derive_model_name,
+    split_model_version,
+    version_sort_key,
 )
 
 logger = get_logger(__name__)
 
 TIER_STEP_GROUP = "step_group"
+TIER_VERSION_GROUP = "version_group"
 
 # A group of one is not a stack. Two files that differ only by step are the
 # smallest thing worth collapsing; one file is just a file.
 MIN_GROUP_SIZE = 2
+
+# Ceiling on one stack. A subject has a few versions of tens of steps each, not
+# thousands, and a caller sending more is confused rather than lucky.
+#
+# **It lives here, not on the route, because fusing widens the set after the
+# route has counted it.** The route checks what it was sent; `apply_stack` then
+# pulls in every member of every stack absorbed, so two stacks of 150 arrive as
+# two ids and leave as 300 members. Measured, not reasoned: with the ceiling
+# enforced only at the route, that call produced a 300-member stack. A limit
+# that the widening step can walk past is not a limit, so the check is repeated
+# on the widened set by the function that does the widening.
+MAX_MEMBERS_PER_STACK = 200
 
 
 @dataclass
@@ -56,6 +80,11 @@ class ProposedMember:
     filename: str
     step: int | None
     file_size: int | None
+    # Deliberately NOT defaulted. The cover sort reads this, and a missing
+    # version silently sorts as v1 — so a future construction that forgets it
+    # would pick the wrong cover with nothing to show for it. Required here
+    # makes that a TypeError at the call site instead.
+    version: str | None
 
 
 @dataclass
@@ -89,7 +118,7 @@ def _step_of(filename: str) -> int | None:
 
 
 def propose_stacks(hub: HubDatabase) -> list[StackProposal]:
-    """Group loose adapters that differ only by their training step.
+    """Group loose adapters that are steps or versions of one subject.
 
     Reads only. The caller shows the result and asks; nothing here writes.
 
@@ -99,9 +128,10 @@ def propose_stacks(hub: HubDatabase) -> list[StackProposal]:
     and collapsing across folders would invent a run that never existed and
     would put one stack's members on two drives.
 
-    A group needs at least one member carrying a step suffix. Without that the
-    shared key is just two files with the same name in one folder, which is a
-    duplicate or a coincidence and is not a training run.
+    A group needs a difference the name can account for: at least one member
+    carrying a step suffix, or two members carrying different versions. Without
+    either, the shared key is just two files with the same name in one folder,
+    which is a duplicate or a coincidence and is not a subject with a history.
 
     Args:
         hub: The hub database holding the model shelf.
@@ -134,20 +164,20 @@ def propose_stacks(hub: HubDatabase) -> list[StackProposal]:
     groups: dict[tuple[int, str], StackProposal] = {}
     for row in rows:
         filename = row["filename"] or ""
-        derived = derive_model_name(filename)
-        if not derived:
-            # Nothing survived the strip (a file called `000002750.safetensors`).
-            # Grouping every such file together would collapse unrelated runs
-            # under the empty string.
+        subject, version = split_model_version(filename)
+        if not subject:
+            # Nothing survived the strip (a file called `000002750.safetensors`,
+            # or a bare `v2.safetensors`). Grouping every such file together
+            # would collapse unrelated subjects under the empty string.
             continue
         folder_id = int(row["folder_id"])
-        key = (folder_id, derived.casefold())
+        key = (folder_id, subject.casefold())
         proposal = groups.get(key)
         if proposal is None:
             proposal = StackProposal(
                 tier=TIER_STEP_GROUP,
-                key=f"{folder_id}:{derived.casefold()}",
-                name=derived,
+                key=f"{folder_id}:{subject.casefold()}",
+                name=subject,
                 folder_id=folder_id,
             )
             groups[key] = proposal
@@ -157,17 +187,29 @@ def propose_stacks(hub: HubDatabase) -> list[StackProposal]:
                 filename=os.path.basename(filename),
                 step=_step_of(filename),
                 file_size=row["file_size"],
+                version=version,
             )
         )
 
-    proposals = [
-        proposal
-        for proposal in groups.values()
-        if len(proposal.members) >= MIN_GROUP_SIZE
-        and any(member.step is not None for member in proposal.members)
-    ]
-    for proposal in proposals:
+    proposals = []
+    for proposal in groups.values():
+        if len(proposal.members) < MIN_GROUP_SIZE:
+            continue
+        # Compared on the sort key rather than the token, so `Foxglove` and
+        # `Foxglove_v1` count as one version: they are a duplicate or a
+        # coincidence, which is exactly what the no-step refusal is for.
+        versions = {version_sort_key(m.version) for m in proposal.members}
+        if len(versions) < 2 and not any(m.step is not None for m in proposal.members):
+            continue
+        proposal.tier = TIER_VERSION_GROUP if len(versions) > 1 else TIER_STEP_GROUP
         proposal.members.sort(key=_cover_first_key)
+        if len(versions) == 1 and proposal.members[0].version:
+            # One version throughout, so it belongs in the name: a run of
+            # `portrait_mix_v2` checkpoints is called "portrait mix v2", not
+            # "portrait mix". Only dropped when the group spans versions, where
+            # naming it after one of them would be false.
+            proposal.name = f"{proposal.name} {proposal.members[0].version}"
+        proposals.append(proposal)
     proposals.sort(key=lambda p: (-len(p.members), p.name.casefold()))
     # DEBUG, not INFO: this writes nothing, so it has no audit value, and the
     # module's whole framing is that reading is "free, silent and continuous".
@@ -188,8 +230,34 @@ class StackRefused(ValueError):
         self.reason = reason
 
 
-def apply_stack(hub: HubDatabase, model_ids: list[int], name: str | None) -> int:
+def apply_stack(
+    hub: HubDatabase,
+    model_ids: list[int],
+    name: str | None,
+    *,
+    fuse: bool = False,
+) -> int:
     """Collapse the given models into one stack, in cover-first order.
+
+    The names are only *read* here, never gated on: the caller may stack any
+    loose adapters that share a folder, whether or not detection would have
+    proposed them. What the names decide is the cover — newest version first,
+    then the bare final of that version, then its highest step.
+
+    **``fuse`` is what lets a stack be stacked.** Without it a model that is
+    already in a stack is refused, which is right for the proposals flow: that
+    caller is confirming a dry run over *loose* files, so a row stacked in the
+    meantime must be left where it is rather than torn out. Fusing is the
+    opposite intent — the owner picked two stacks on the shelf and asked for one
+    — so it is a separate flag rather than a relaxed gate, and the default stays
+    the strict one.
+
+    **Fusing absorbs whole stacks, never part of one.** Every member of every
+    stack touched comes along, even the ones the caller did not name. The shelf
+    already treats stacks atomically (selecting a collapsed row selects the run,
+    "or Move would take one step of six"), and the alternative is worse than
+    untidy: a stack that gained a member between the click and the call would be
+    left behind as a remnant of one, which is a stack that is not a stack.
 
     The applying half, and the only thing here that writes. Called after the
     owner has seen the dry run, never from detection.
@@ -227,7 +295,13 @@ def apply_stack(hub: HubDatabase, model_ids: list[int], name: str | None) -> int
         model_ids: The models to stack, as the proposal named them. Order is
             recomputed here rather than trusted; the caller cannot smuggle in a
             cover.
-        name: The stack's name, or None to leave it unnamed.
+        name: The stack's name, or None to leave it unnamed. When fusing, None
+            inherits the first name among the stacks being absorbed rather than
+            dropping it: the name is the one thing a stack carries that its
+            files do not, so losing it silently is losing data.
+        fuse: Allow models that are already stacked, absorbing their stacks
+            whole. Off by default, because the proposals flow must keep refusing
+            a row something else stacked first.
 
     Returns:
         The new ``adapter_stack.id``.
@@ -242,19 +316,70 @@ def apply_stack(hub: HubDatabase, model_ids: list[int], name: str | None) -> int
         )
 
     now = _utcnow()
-    placeholders = ",".join("?" for _ in ids)
     with hub.transaction() as conn:
+        absorbed: list[int] = []
+        if fuse:
+            # Widen the selection to every member of every stack named, BEFORE
+            # the gate reads. Inside the transaction, so a stack cannot grow a
+            # member between the widening and the write.
+            marks = ",".join("?" for _ in ids)
+            absorbed = [
+                int(row["stack_id"])
+                for row in conn.execute(
+                    f"SELECT DISTINCT stack_id FROM model "
+                    f"WHERE id IN ({marks}) AND stack_id IS NOT NULL "
+                    f"ORDER BY stack_id",
+                    ids,
+                ).fetchall()
+            ]
+            if absorbed:
+                stack_marks = ",".join("?" for _ in absorbed)
+                ids = list(
+                    dict.fromkeys(
+                        ids
+                        + [
+                            int(row["id"])
+                            for row in conn.execute(
+                                f"SELECT id FROM model "
+                                f"WHERE stack_id IN ({stack_marks}) ORDER BY id",
+                                absorbed,
+                            ).fetchall()
+                        ]
+                    )
+                )
+
+        # Counted AFTER the widening, which is the only place it means anything:
+        # the route counted what the caller sent, and fusing is exactly the step
+        # that turns two ids into two whole stacks. Raised inside the
+        # transaction, so nothing is written on the way to refusing.
+        if len(ids) > MAX_MEMBERS_PER_STACK:
+            raise StackRefused(
+                f"That would make a stack of {len(ids)} models; the ceiling is "
+                f"{MAX_MEMBERS_PER_STACK}. A subject has a few versions of tens "
+                "of steps, not thousands.",
+                reason="too_many_models",
+            )
+
+        placeholders = ",".join("?" for _ in ids)
+        # The gate. `stack_id IS NULL` is dropped only when fusing, and even then
+        # a row is admitted solely from a stack this call is absorbing — never
+        # from a third one that appeared in the meantime.
+        stacked_clause = (
+            f"(m.stack_id IS NULL OR m.stack_id IN ({','.join('?' for _ in absorbed)}))"
+            if absorbed
+            else "m.stack_id IS NULL"
+        )
         rows = conn.execute(
             # `state = 'present'` matches `propose_stacks`: a model whose only
             # copies are `missing` or `unreachable` is not something to
             # reorganise a shelf around, and the route must not offer what the
             # dry run refuses.
             f"SELECT m.id AS id, m.filename AS filename FROM model m "
-            f"WHERE m.id IN ({placeholders}) AND m.stack_id IS NULL "
+            f"WHERE m.id IN ({placeholders}) AND {stacked_clause} "
             f"AND m.file_kind = ? AND EXISTS ("
             f"  SELECT 1 FROM model_file mf "
             f"  WHERE mf.model_id = m.id AND mf.state = 'present')",
-            (*ids, FILE_ADAPTER),
+            (*ids, *absorbed, FILE_ADAPTER),
         ).fetchall()
 
         # "Grouped per folder, never shelf-wide" is the module's invariant, and
@@ -286,6 +411,19 @@ def apply_stack(hub: HubDatabase, model_ids: list[int], name: str | None) -> int
                 reason="already_stacked",
             )
 
+        if fuse and name is None and absorbed:
+            # Inherit rather than drop. The files carry their own names; the
+            # stack's is the only thing a person typed, so a fuse that silently
+            # blanks it is destroying the one field it was asked to preserve.
+            inherited = conn.execute(
+                f"SELECT name FROM adapter_stack "
+                f"WHERE id IN ({','.join('?' for _ in absorbed)}) "
+                f"AND name IS NOT NULL ORDER BY id LIMIT 1",
+                absorbed,
+            ).fetchone()
+            if inherited is not None:
+                name = inherited["name"]
+
         ordered = sorted(
             ((int(r["id"]), r["filename"] or "") for r in rows),
             key=lambda pair: _cover_first_key(
@@ -294,6 +432,7 @@ def apply_stack(hub: HubDatabase, model_ids: list[int], name: str | None) -> int
                     filename=pair[1],
                     step=_step_of(pair[1]),
                     file_size=None,
+                    version=split_model_version(pair[1])[1],
                 )
             ),
         )
@@ -304,11 +443,20 @@ def apply_stack(hub: HubDatabase, model_ids: list[int], name: str | None) -> int
                 (name, now, now),
             ).lastrowid
         )
+        # The same predicate as the gate, repeated on the UPDATE itself. A row
+        # that moved into a stack this call is NOT absorbing between the SELECT
+        # and its own UPDATE still changes nothing and still aborts the whole
+        # thing, fusing or not.
+        guard = (
+            f"(stack_id IS NULL OR stack_id IN ({','.join('?' for _ in absorbed)}))"
+            if absorbed
+            else "stack_id IS NULL"
+        )
         for position, (model_id, _) in enumerate(ordered):
             changed = conn.execute(
-                "UPDATE model SET stack_id = ?, stack_position = ? "
-                "WHERE id = ? AND stack_id IS NULL",
-                (stack_id, position, model_id),
+                f"UPDATE model SET stack_id = ?, stack_position = ? "
+                f"WHERE id = ? AND {guard}",
+                (stack_id, position, model_id, *absorbed),
             ).rowcount
             if not changed:
                 # Raised inside the transaction, so the INSERT above and every
@@ -319,10 +467,81 @@ def apply_stack(hub: HubDatabase, model_ids: list[int], name: str | None) -> int
                     "was being confirmed; nothing was changed.",
                     reason="already_stacked",
                 )
+
+        if absorbed:
+            # The absorbed stacks are empty now — every member points at the new
+            # one — so the rows go. Deleted by "has no members left" rather than
+            # by id, so a stack that somehow kept one is left alone instead of
+            # becoming an orphaned `stack_id` pointing at nothing.
+            emptied = conn.execute(
+                f"DELETE FROM adapter_stack WHERE id IN "
+                f"({','.join('?' for _ in absorbed)}) "
+                f"AND NOT EXISTS (SELECT 1 FROM model WHERE stack_id = "
+                f"adapter_stack.id)",
+                absorbed,
+            ).rowcount
+            logger.info(
+                "Fused %d stack(s) into adapter_stack %d; %d emptied row(s) removed.",
+                len(absorbed),
+                stack_id,
+                emptied,
+            )
     logger.info(
         "Stacked %d model(s) as adapter_stack %d (%s).", len(ordered), stack_id, name
     )
     return stack_id
+
+
+def unstack(hub: HubDatabase, stack_id: int) -> int:
+    """Break a stack apart, leaving its members loose on the shelf.
+
+    The undo the shelf never had. Everything else here is one-way — a stack was
+    built by a confirmation and there was no gesture that took it back — which
+    is why the grouping dialog had to warn that nothing unstacks a group, and
+    why fusing had to be argued for so carefully. With this, both become
+    ordinary edits rather than commitments.
+
+    **The files are not touched.** This clears two hub columns and deletes one
+    row; nothing is moved, renamed or unlinked on disk, and the members reappear
+    as the individual adapters they always were.
+
+    One consequence worth knowing: the members become *loose*, so
+    :func:`propose_stacks` can offer to regroup them the next time the dialog is
+    opened. That is honest — they really are files that look like a run — but it
+    means unstacking is not a way to tell detection "never again". Recording
+    that refusal needs somewhere to keep it, and there is nowhere yet.
+
+    Args:
+        hub: The hub database.
+        stack_id: The ``adapter_stack`` to dissolve.
+
+    Returns:
+        How many models were released.
+
+    Raises:
+        StackRefused: If no such stack exists.
+    """
+    with hub.transaction() as conn:
+        released = conn.execute(
+            "UPDATE model SET stack_id = NULL, stack_position = NULL "
+            "WHERE stack_id = ?",
+            (stack_id,),
+        ).rowcount
+        deleted = conn.execute(
+            "DELETE FROM adapter_stack WHERE id = ?", (stack_id,)
+        ).rowcount
+        if not deleted:
+            # Inside the transaction, so the UPDATE above rolls back with it —
+            # an id that names no stack must not half-release rows on its way to
+            # reporting that.
+            raise StackRefused(
+                f"There is no stack {stack_id}; nothing was changed.",
+                reason="no_such_stack",
+            )
+    logger.info(
+        "Unstacked adapter_stack %d, releasing %d model(s).", stack_id, released
+    )
+    return released
 
 
 def _utcnow() -> str:
@@ -332,10 +551,23 @@ def _utcnow() -> str:
 def _cover_first_key(member: ProposedMember):
     """Sort key putting the right cover at ``stack_position`` 0.
 
-    The same rule ``run_importer._cover_first`` applies, and deliberately not a
-    second one: the bare no-step file is what the trainer wrote last and is what
-    a person means by "the LoRA", so it leads; without one the highest step is
-    the best available answer and the rest follow newest first, so expanding the
-    strip reads backwards in time.
+    **Version first, then the step rule.** The newest version is what a person
+    means by "the LoRA" once they have retrained the subject — a stack of
+    ``Foxglove`` and ``Foxglove_v2`` covers with v2, and an unversioned file
+    reads as v1 because it existed before v2 did. *Within* one version the rule
+    is unchanged: the bare no-step file is what the trainer wrote last so it
+    leads, and without one the highest step is the best available answer.
+    Expanding the strip reads backwards in time through versions and then
+    through each one's steps.
+
+    **This is now a strict superset of ``run_importer._cover_first``, not the
+    same function.** That one is ``finals + stepped`` with no version term, and
+    it is deliberately left alone: it orders a single ai-toolkit run, which is
+    one version by construction, so the two agree on every input it can see. Say
+    superset rather than "the same rule" — the older wording became false the
+    moment a version term existed, and a reader checking the claim would find
+    two functions. If the importer ever ingests more than one run at a time, it
+    has to come here rather than grow its own second answer.
     """
-    return (member.step is not None, -(member.step or 0))
+    major, minor = version_sort_key(member.version)
+    return (-major, -minor, member.step is not None, -(member.step or 0))

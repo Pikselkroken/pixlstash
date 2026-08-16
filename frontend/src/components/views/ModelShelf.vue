@@ -992,7 +992,8 @@
                 >
               </li>
 
-              <!-- The run's other steps, rendered as ROWS rather than through
+              <!-- The stack's other members — later steps, earlier versions, or
+                 both — rendered as ROWS rather than through
                  `StackExpansionStrip`: that component draws picture thumbnails
                  for the dedup queue, and a model file has no thumbnail. A
                  stack's members already ARE shelf rows, so they are drawn as
@@ -1012,7 +1013,7 @@
                   </span>
                   <span role="gridcell" class="shelf-row-label">
                     <span class="shelf-row-name">{{
-                      memberLabel(member)
+                      memberLabel(member, row)
                     }}</span>
                     <span
                       class="shelf-row-file"
@@ -1066,6 +1067,7 @@
         @set-base-model="editVerb = 'base-model'"
         @set-kind="editVerb = 'kind'"
         @stack="confirmStack"
+        @unstack="confirmUnstack"
         @move="openMove(store.selectedRows)"
         @open-location="openLocation"
         @set-icon="pickIcon"
@@ -1147,7 +1149,7 @@ import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
 import { openModelLocation } from "../../api/modelShelf";
-import { createStack } from "../../api/modelStacks";
+import { createStack, unstackStack } from "../../api/modelStacks";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import {
   DEFAULT_COLUMN_WIDTHS,
@@ -1183,10 +1185,12 @@ import {
   formatModelSize,
   modelDate,
   GROUP_BY_LABELS,
+  modelVersion,
   movableCopies,
   SORT_LABELS,
   stackReceipt,
   trainingStep,
+  unstackReceipt,
   sortDirectionLabel,
 } from "../../utils/modelShelf";
 
@@ -1850,13 +1854,25 @@ const stacksOpen = ref(false);
 const stacksBtnRef = ref(null);
 
 /**
- * Group the selection into one run, the bar's manual counterpart to the sweep.
+ * Group the selection into one stack, the bar's manual counterpart to the sweep.
  *
  * A confirmation and not a dry run, unlike the toolbar's proposals dialog: the
  * reader assembled this group themselves and is looking at it, so there is
  * nothing to show them they have not already chosen. It is still a prompt,
- * because there is no way back — nothing unstacks a model shelf run — and every
- * verb afterwards acts on the whole run rather than the file that was clicked.
+ * because every verb afterwards acts on the whole stack rather than the file
+ * that was clicked — but it is no longer a warning about a one-way door, since
+ * Ungroup takes it back.
+ *
+ * **Fusing is the same gesture.** If anything selected is already in a stack,
+ * this stacks the stacks: `fuse` lets the route absorb them whole and remove
+ * the emptied rows. The prompt says which of the two it is about to do, because
+ * merging two groups somebody built is a bigger claim than collapsing loose
+ * files and should not be described in the same sentence.
+ *
+ * This is also the path for files detection will not propose: it groups only
+ * what a step or a version suffix explains, and a person's own reading of two
+ * files being the same subject is not something the filenames can be made to
+ * say.
  *
  * The bar refuses anything the route would, so a failure here is the shelf
  * having changed underneath (409) rather than a gesture that should not have
@@ -1865,18 +1881,24 @@ const stacksBtnRef = ref(null);
 async function confirmStack() {
   const ids = store.selectedModelIds;
   if (ids.length < 2) return;
+  const fuse = store.selectedRows.some((row) => row.stack_id != null);
   const ok = await confirm({
-    title: `Group ${ids.length} files into one run?`,
-    message:
-      "They become one row on the shelf — the bare final file, or the highest " +
-      "step, stands for the run — and every verb then acts on all of them.",
-    warning: "Nothing unstacks a run afterwards.",
-    confirmLabel: "Group them",
+    title: fuse
+      ? `Fuse ${store.selectedRows.length} rows into one stack?`
+      : `Group ${ids.length} files into one stack?`,
+    message: fuse
+      ? "Every member of every stack selected comes along, including any not " +
+        "shown, and the stacks they came from are removed. The newest version " +
+        "stands for the result, and every verb then acts on all of them."
+      : "They become one row on the shelf — the newest version, and within it " +
+        "the bare final file or the highest step, stands for the stack — and " +
+        "every verb then acts on all of them.",
+    confirmLabel: fuse ? "Fuse them" : "Group them",
   });
   if (!ok) return;
   const notices = useNoticeStore();
   try {
-    await createStack(ids);
+    await createStack(ids, null, { fuse });
     await store.fetchRows();
     notices.push({ level: "success", text: stackReceipt(1, 0) });
   } catch (err) {
@@ -1885,6 +1907,53 @@ async function confirmStack() {
       text: errorDetail(err) || "Those files could not be grouped.",
     });
   }
+}
+
+/**
+ * Break the selected stacks up, leaving their files loose on the shelf.
+ *
+ * The undo the shelf never had, and the reason Group no longer has to warn that
+ * nothing takes a stack back. Confirmed rather than immediate because it is a
+ * structural edit somebody may have spent a while assembling — but deliberately
+ * *not* warned about: **no file is moved, renamed or deleted**, so treating it
+ * with the vocabulary reserved for the verbs that destroy bytes would teach the
+ * reader to ignore that vocabulary.
+ *
+ * One call per stack, matching the proposals dialog: each is one row's worth of
+ * work, and one that fails must not discard the others.
+ */
+async function confirmUnstack() {
+  const stackIds = [
+    ...new Set(
+      store.selectedRows
+        .map((row) => row.stack_id)
+        .filter((id) => id != null)
+        .map(Number),
+    ),
+  ];
+  if (!stackIds.length) return;
+  const ok = await confirm({
+    title:
+      stackIds.length === 1
+        ? "Break this stack up?"
+        : `Break ${stackIds.length} stacks up?`,
+    message:
+      "Their files go back to being separate rows on the shelf. Nothing is " +
+      "moved, renamed or deleted — and PixlStash may offer to regroup them, " +
+      "because they still look like one subject.",
+    confirmLabel: stackIds.length === 1 ? "Ungroup it" : "Ungroup them",
+  });
+  if (!ok) return;
+  const notices = useNoticeStore();
+  const results = await Promise.allSettled(
+    stackIds.map((id) => unstackStack(id)),
+  );
+  const failed = results.filter((r) => r.status === "rejected");
+  await store.fetchRows();
+  notices.push({
+    level: failed.length === results.length ? "error" : "success",
+    text: unstackReceipt(results.length - failed.length, failed.length),
+  });
 }
 
 async function closeStacks() {
@@ -1906,20 +1975,36 @@ function toggleStack(stackId) {
 }
 
 /**
- * What one step of a run is called in the strip.
+ * What one member of a stack is called in the strip.
  *
- * The step, not the filename: every member of a run shares a name by
- * construction, so repeating it six times says nothing and hides the one field
- * that differs. A member with no step is the bare final the trainer wrote last.
+ * Not the filename: every member shares a name by construction, so repeating it
+ * six times says nothing and hides the fields that differ. Those are the
+ * version and the step, and a stack can now vary by either — `Foxglove` beside
+ * `Foxglove_v2` is one subject across two training runs, and labelling both
+ * "Final" would make its two halves indistinguishable in the one place the
+ * reader looks to tell them apart.
  */
-function memberLabel(member) {
+function memberLabel(member, row) {
   // `training_step` from the API when the row carries one, and the filename
   // only as the fallback it always was. The column is what the scanner parsed;
   // re-deriving it here made the shelf's answer depend on which of two parsers
-  // ran, and they are only equal by convention.
+  // ran, and they are only equal by convention. There is no version column, so
+  // the version is always derived.
   const step =
     member.training_step ?? trainingStep(member.filename ?? "") ?? null;
-  return step === null ? "Final" : `Step ${step.toLocaleString()}`;
+  const label = step === null ? "Final" : `Step ${step.toLocaleString()}`;
+  // The version only when the stack actually spans versions. A run whose files
+  // all say `v2` says it once, in the run's own name; repeating it on every
+  // member would be the "shares a name by construction" noise this label exists
+  // to avoid. `spansVersions` is computed once per stack in `collapseStacks`
+  // and compares PARSED versions, so it agrees with the server about whether
+  // `v2` and `V2.0` are one version.
+  if (!row?.spansVersions) return label;
+  // `v1` for a member that names no version — not invented, but the version the
+  // server sorted it as: an unversioned file existed before `v2` did. Saying
+  // nothing here would leave the one unlabelled row in a strip whose whole
+  // point is telling versions apart.
+  return `${modelVersion(member.filename ?? "") ?? "v1"} · ${label}`;
 }
 
 /**

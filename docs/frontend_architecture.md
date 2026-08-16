@@ -2388,7 +2388,7 @@ models, adapters only, none already stacked, each with a `present` copy, and one
 folder holding all of them — so the button is never offered where it could only
 come back refused, and the failing gate is the tooltip. It is a confirmation and
 not a second dry run: the reader assembled the group themselves and is looking
-at it. The prompt exists because nothing unstacks a model run afterwards.
+at it. The prompt exists because every verb afterwards acts on the whole stack rather than the row that was clicked; Ungroup is the way back.
 
 **Selection is by MODEL, not by rendered row.** Under folder grouping one model
 is drawn once per folder holding a copy of it, and the verbs write the model, so
@@ -2837,21 +2837,63 @@ other steps render as ordinary shelf rows, indented and not individually
 selectable. They *are* shelf rows; drawing them as anything else would be a
 second row idiom. The badge carries `aria-expanded` and is the disclosure, so
 the count and the control are one thing rather than a number beside a chevron.
-Members are labelled by **step**, not filename: every member of a run shares a
-name by construction, so repeating it six times hides the one field that differs.
+Members are labelled by **step, and by version when the stack spans versions** —
+not by filename: every member shares a name by construction, so repeating it six
+times hides the fields that actually differ.
 
-**The dry run is a batch confirmation, and every group opens ticked.** Tier 1 is
-files differing solely by a training step — there is nothing for a person to
-weigh, so making the groups opt in one at a time would apply the tier-2 flow to
-the tier that does not need it. Each group states which file will represent it,
-because that is the one decision a reader might disagree with and it is not
-readable from a list of steps. Applying is one call per run, and a group refused
-in the meantime (409, something stacked its rows first) is counted rather than
-thrown — one stale group must not discard the others.
+**The dry run is a batch confirmation for step groups, and an opt-in for version
+groups.** A `step_group` is files differing solely by a training step — nothing
+for a person to weigh — so it opens ticked, and making those opt in one at a
+time would apply an adjudication flow to the case that does not need it. A
+`version_group` is the opposite and opens **unticked**: it fuses trainings the
+owner may have kept apart deliberately, and a pre-ticked one would turn a single
+press into a shelf-wide merge of every versioned run — undoable via Ungroup, but
+a judgement nobody made and a lot of undoing. That is what the `tier` field is for — it is a
+wire value with a job, not a label, and the row also draws a `merges versions`
+mark so the risky groups are visible rather than inferred from an empty box.
+Each group states which file will represent it, because that is the one decision
+a reader might disagree with and it is not readable from a list of steps.
+Applying is one call per group, and a group refused in the meantime (409,
+something stacked its rows first) is counted rather than thrown — one stale
+group must not discard the others.
 
-**Tier 2 is absent from the UI because it is absent from the backend.** Prefix
-grouping (`JimmyVehicle` beside `JimmyVehicle2`) needs per-group adjudication with
+**A stack is a subject, not a training run, and the copy says so.** `Foxglove`
+and `Foxglove_v2` are separate runs of one character LoRA and come back as a
+`version_group`, so the dialog counts *groups* rather than runs and the cover
+line leads with the version (`v2, the final file`) — that version IS the
+decision the reader is agreeing to. In the shelf strip the same rule applies to
+`memberLabel`: the version prefixes a member's label only when the stack
+actually spans versions, because repeating `v2` on every member of an
+all-`v2` run is the shares-a-name-by-construction noise the label exists to
+avoid, and the run's own row already carries it.
+
+**Stack fuses, and Ungroup is the undo.** The bar's Stack verb used to refuse a
+selection containing a stacked row — "something here is already part of a run" —
+which was precisely the gesture people wanted: pick two stacks, get one. It now
+passes `fuse`, the confirm says *Fuse* rather than *Group* so the bigger claim is
+not described in the smaller sentence, and the route absorbs the selected stacks
+whole. **Ungroup** (`DELETE /model-stacks/{stack_id}`) sits beside it, gated on
+every selected row being in a stack, and acts per *stack* rather than per row
+because a stack is what the verb is about. Its confirm deliberately carries **no
+warning styling**: no file is moved, renamed or deleted, and spending the
+danger vocabulary here would teach the reader to ignore it where it matters. The
+receipt says where the files went — "the files are still on the shelf" — since
+"Ungrouped 2 stacks" alone is the one sentence in this view that could be read as
+"deleted". Because Ungroup exists, Group no longer warns that nothing takes a
+stack back; that warning was true when it was written and is not any more.
+
+**Prefix grouping is absent from the UI because it is absent from the backend.**
+`JimmyVehicle` beside `JimmyVehicle2` needs per-group adjudication with
 counter-evidence first; half an adjudication surface would be worse than none.
+`modelVersion` in `utils/modelShelf.js` mirrors the backend's rule for that
+reason — only ASCII `v<digits>`, matching the `re.ASCII` pin on
+`_VERSION_SUFFIX_RE`. **Parity is in the comparison, not only the parse:**
+`versionSortKey` mirrors `version_sort_key`, and every "are these the same
+version" question on this side goes through it, because the server compares
+parsed `(major, minor)` — so `v2`, `V2` and `v2.0` are one version on both
+sides. Comparing the raw tokens here instead is a real bug and not a cosmetic
+one: it made the strip prefix every member of a single-version run with a
+version the server never assigned.
 
 #### Importing from ai-toolkit (F6)
 
