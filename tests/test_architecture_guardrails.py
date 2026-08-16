@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.network_vectors import LAN_IPV4
+from tests.network_vectors import LAN_IPV4, PRIVATE_10_IPV4, PRIVATE_172_IPV4
 
 REPO_ROOT = Path(__file__).parent.parent
 PIXLSTASH_DIR = REPO_ROOT / "pixlstash"
@@ -2256,18 +2256,42 @@ _PRIVATE_ADDRESS_SUFFIXES = frozenset(
 )
 
 
+# A digit extends the last octet; a dot starts another one. End of line is
+# neither, which is why this is a set of characters and not a substring test —
+# ``"" in "0123"`` is True in Python, so the string spelling reports every line
+# that happens to end on a sanctioned address.
+_ADDRESS_CONTINUES = frozenset("0123456789.")
+
+
+def _address_continues_after(line: str, at: int) -> bool:
+    """Whether the address ending at *at* carries on past that point.
+
+    A digit does, because it extends the last octet. So does a dot, and that
+    is the deliberately blunt half: a dot followed by a digit is genuinely a
+    further octet, and a dot followed by a space is the end of a sentence — but
+    the scan this mirrors treats both the same and reports the second, so a
+    rule that quietly permitted it would pass a line the push then blocks. Over
+    -strict here costs one reworded sentence; loose costs a blocked push, which
+    is the failure this whole guardrail exists to prevent. Ending a sentence on
+    the literal is therefore reported, and the way out is to not end it there.
+
+    End of line is not a continuation, and neither is a quote, a comma, a
+    bracket or the ``/`` of a prefix length.
+    """
+    return line[at : at + 1] in _ADDRESS_CONTINUES
+
+
 def _is_sanctioned_private_literal(line: str, start: int) -> bool:
     """Whether the address at *start* is one of the six exempt strings.
 
-    Read as a prefix, and rejected when the character after it continues the
-    address: a trailing ``/24`` is the sanctioned host with a prefix length on
-    it, a further octet is a different address that merely begins with one.
+    Read as a prefix, and rejected only when what follows genuinely continues
+    the address: a trailing ``/24`` is the sanctioned host wearing a prefix
+    length, a further octet is a different address that merely begins with one.
     """
     for literal in _SANCTIONED_PRIVATE_LITERALS:
-        if not line.startswith(literal, start):
-            continue
-        tail = line[start + len(literal) : start + len(literal) + 1]
-        if tail not in {"", *"0123456789."}:
+        if line.startswith(literal, start) and not _address_continues_after(
+            line, start + len(literal)
+        ):
             return True
     return False
 
@@ -2333,7 +2357,8 @@ def test_no_unsanctioned_private_address_literal():
         + "\n\nFix: in a test, import the vector from tests/network_vectors.py "
         "rather than writing a number — inventing a different one just moves "
         "the problem. In prose, write a placeholder such as <lan-ip>, or name "
-        "the RFC 1918 block itself."
+        "the RFC 1918 block itself — with its prefix length, since a bare "
+        "network address is not one of the six exempt strings."
     )
 
 
@@ -2353,15 +2378,30 @@ def test_private_address_guardrail_has_teeth(tmp_path):
     (tmp_path / "bad.md").write_text(f"the gateway is {_TEETH_OFFENDER}\n")
     (tmp_path / "good.md").write_text(
         f"the gateway is {LAN_IPV4} on 192.168.0.0/16, and {LAN_IPV4}/24\n"
+        # Ending the *line* on the literal is its own case: "nothing" is not
+        # another octet, and reading it as one reported every such line.
+        f"the gateway is {LAN_IPV4}\n"
     )
     (tmp_path / "mixed.md").write_text(
         f"{LAN_IPV4} is fine but {_TEETH_OFFENDER} is not\n"
+    )
+    # A digit straight after a sanctioned prefix is a different host, and this
+    # is the half a continuation set of "." alone would exempt in silence.
+    (tmp_path / "digit.md").write_text(
+        f"{LAN_IPV4}0 and {PRIVATE_10_IPV4}0 and {PRIVATE_172_IPV4}0\n"
+    )
+    # Ending a *sentence* on a sanctioned literal is reported, because the scan
+    # this mirrors reports it. Built rather than written out, since writing it
+    # here would block the push carrying the rule. Reword the sentence.
+    (tmp_path / "sentence.md").write_text(
+        "".join(f"the block is {literal}. " for literal in _SANCTIONED_PRIVATE_LITERALS)
+        + "\n"
     )
     (tmp_path / "longer.md").write_text(f"the gateway is {LAN_IPV4}.7\n")
 
     offenders = _private_address_offenders(tmp_path, tmp_path)
     caught = {o.split(":", 1)[0] for o in offenders}
-    assert caught == {"bad.md", "mixed.md", "longer.md"}, (
+    assert caught == {"bad.md", "mixed.md", "longer.md", "digit.md", "sentence.md"}, (
         f"the guardrail reported the wrong set of files: {offenders}"
     )
 
