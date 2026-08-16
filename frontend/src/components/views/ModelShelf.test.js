@@ -2393,6 +2393,38 @@ describe("the model-folders door", () => {
 
     wrapper.unmount();
   });
+
+  it("returns to the empty-state button, until the first scan unmounts it", async () => {
+    // The empty state is the one door that can disappear underneath its own
+    // dialog. While it is still there it gets focus back like any other — a
+    // reader who opened it to look and closed without adding must not be
+    // thrown to a toolbar icon they never pressed. Once a scan has found
+    // something the button is gone, and THAT is what the `isConnected`
+    // fallback is for.
+    const wrapper = await mountShelf([]);
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+
+    const emptyBtn = wrapper
+      .findAll(".shelf-state button")
+      .find((b) => b.text().includes("Add a model folder"));
+    await closeFoldersFrom(wrapper, emptyBtn);
+    expect(document.activeElement).toBe(emptyBtn.element);
+
+    // Now the scan lands while the dialog is open: the empty state unmounts.
+    await emptyBtn.trigger("click");
+    store.rows = [adapter({ id: 1 })];
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-state").exists()).toBe(false);
+    wrapper.findComponent({ name: "ModelFoldersDialog" }).vm.$emit("close");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(document.activeElement).toBe(
+      wrapper.find('.shelf-toolbar button[aria-label="Model folders"]').element,
+    );
+
+    wrapper.unmount();
+  });
 });
 
 describe("Escape", () => {

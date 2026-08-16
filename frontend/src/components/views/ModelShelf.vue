@@ -116,10 +116,10 @@
       <button
         ref="stacksBtnRef"
         class="bar-btn bar-btn--boxed"
-        :class="{ 'bar-btn--open': stacksOpen }"
         type="button"
         title="Stack training runs — review proposed stacks"
         aria-label="Stack training runs"
+        aria-haspopup="dialog"
         @click="stacksOpen = true"
       >
         <v-icon size="19">mdi-layers-plus</v-icon>
@@ -134,20 +134,23 @@
            store always exists), so a permanent number beside Show's identical
            pill would mean something else entirely.
 
-           No `bar-btn--open` either, unlike Group/Sort/Show and unlike the
-           sweep beside it: that class is documented for a MENU activator, and
-           `AppDialog` sets `:scrim="true"`, so the highlight would be painted
-           under the scrim for the whole time it applies. It is a dialog, so
-           `aria-haspopup` says so and `aria-expanded` does not — focus moves
-           into the dialog rather than into anything this button owns. -->
+           No `bar-btn--open`, and the sweep above lost its copy in the same
+           change: `App.css` declares that class for "the toolbar button while
+           its MENU is open", and both of these open an `AppDialog`, which sets
+           `:scrim="true"`. The highlight is painted under the scrim for exactly
+           as long as it applies, and neither button has the chevron the rule
+           rotates. Group/Sort/Show keep it because they really are menus.
+           `aria-haspopup="dialog"` on both, and `aria-expanded` on neither:
+           focus moves into the dialog rather than into anything the button
+           owns. -->
       <button
         ref="foldersBtnRef"
         class="bar-btn bar-btn--boxed"
         type="button"
-        title="Model folders"
+        title="Model folders — add, rescan, move or forget a folder"
         aria-label="Model folders"
         aria-haspopup="dialog"
-        @click="openFolders()"
+        @click="openFolders(foldersBtnRef)"
       >
         <v-icon size="19">mdi-folder-multiple-outline</v-icon>
       </button>
@@ -388,9 +391,11 @@
           machine. Add the folder where you keep them.
         </p>
         <button
+          ref="emptyFoldersBtnRef"
           class="tbm-action tbm-action--primary"
           type="button"
-          @click="openFolders()"
+          aria-haspopup="dialog"
+          @click="openFolders(emptyFoldersBtnRef)"
         >
           Add a model folder
         </button>
@@ -1048,6 +1053,10 @@ const groupMenuOpen = ref(false);
 // that place — it unmounts with the menu.
 const addBtnRef = ref(null);
 const foldersBtnRef = ref(null);
+// The empty state's own door. Unlike the two above it is NOT always mounted —
+// the first scan that finds a model replaces the empty state with the list —
+// which is the case `closeFolders`' `isConnected` check exists for.
+const emptyFoldersBtnRef = ref(null);
 const selBarRef = ref(null);
 /** Read once, dismissed for this visit; a refetch says it again. */
 const offlineDismissed = ref(false);
@@ -1806,14 +1815,14 @@ async function onFilePicked(path) {
 const folderInvoker = shallowRef(null);
 
 /**
- * @param {HTMLElement|null} invoker Control to hand focus back to on close.
- *   The caller names it rather than the event supplying it, because the Add
- *   menu's item is gone by the time the dialog closes and its durable stand-in
- *   is the Add button behind it. Omit it and the toolbar's folder button is
- *   used, which is what the empty-state button does — it unmounts too.
+ * @param {HTMLElement} invoker Control to hand focus back to on close. Every
+ *   door names one, and names the durable control rather than the pressed
+ *   element: the `Add folder…` item is gone by the time the dialog closes, so
+ *   it names the Add button it hangs off. The earlier version read
+ *   `event.currentTarget` and was dead — no call site ever passed an event.
  */
-function openFolders(invoker = null) {
-  folderInvoker.value = invoker instanceof HTMLElement ? invoker : null;
+function openFolders(invoker) {
+  folderInvoker.value = invoker;
   foldersOpen.value = true;
 }
 

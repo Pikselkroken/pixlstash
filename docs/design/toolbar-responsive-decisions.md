@@ -22,13 +22,20 @@ container queries today**):
 **Model shelf toolbar** (`ModelShelf.vue`, `.shelf-toolbar`, container
 `shelfbar toolbar`) — added 2026-08-15, after this record was written:
 
-- Left: title → count → Add (accent) → stack sweep
+- Left: title → count → Add (accent) → stack sweep → Model folders
 - Right: Group → Sort split-button → Show → separator → **UndoControl** →
   TbGlobalActions
 
 It was shipped without the tail at all, so both app-wide controls simply
 vanished on `/models`; it now follows Decision 1 as written rather than
 inventing a third arrangement.
+
+`Model folders` rejoined the left group on 2026-08-16, having been dropped by
+the #904 consolidation. **The shelf bar still has no ladder**: it declares
+`container-name: shelfbar toolbar` and writes no `@container` rule, and there is
+no `TbOverflowMenu` on it, so Decision 2 is unimplemented here and the bar now
+carries seven focusable controls plus the tail with nothing to fold. Writing
+that ladder is open work, not something this record already decided.
 
 So undo/redo sits mid-left in the grid and right-adjacent-to-TbGlobalActions in
 Duplicates. A user who learns one position loses it in the other view. That is

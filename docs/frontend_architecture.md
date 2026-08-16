@@ -2159,11 +2159,13 @@ collapse a folder of the same name.
 **Everything that changes a file lives on the row or in the selection bar,
 never in the toolbar** (#896). The toolbar is where the view is switched, so a
 mutating control beside `Sort` and `Show` would be one stray click from a
-different question. The audit is over a **named set, not a judgement**: the six
-controls the shelf puts in its own bar are `+ Add ▾`, `Stack training runs`,
-`Model folders`, `Group`, `Sort` (a split button, so its direction toggle rides
-with it) and `Show`. All six hold. `Group`, `Sort` and `Show` write only view
-state. The other three each open something and write nothing on the press:
+different question. The audit is over a **named set, not a judgement**, and the
+set is counted in **focusable controls**, because a tab stop is a stray-press
+target whatever it is grouped with visually. The shelf puts **seven** in its own
+bar: `+ Add ▾`, `Stack training runs`, `Model folders`, `Group`, the `Sort`
+direction toggle, the `Sort` menu, and `Show`. All seven hold. `Group`, both
+halves of `Sort`, and `Show` write only view state. The other three each open
+something and write nothing on the press:
 `+ Add ▾` opens a menu, and its `Import from ai-toolkit` item is confirmed
 against a listing of the runs it found; `Stack training runs` opens the dry run,
 with the applying half behind the dialog's own confirmation; `Model folders`
@@ -2176,8 +2178,8 @@ The **app-wide tail is outside this set and outside the rule**: `UndoControl`
 writes on the press by design, and it, `Settings` and the stats toggle are not
 the shelf's controls at all — they are the canonical tail every view carries,
 ruled off by a separator (see the toolbar section above). Adding a control to
-the shelf's own bar means adding it to the six and re-running this audit; adding
-one to the tail is a different document.
+the shelf's own bar means adding it to the seven and re-running this audit;
+adding one to the tail is a different document.
 
 **The bar states the count AND what the selection weighs**, `40 models selected
 · 12.4 GB`, in the `·` separator the grid's own `SelectionBar` uses. The size is
@@ -2757,20 +2759,24 @@ the fix must not be two navigations away in Settings — and the toolbar button 
 what keeps it reachable once the empty state has unmounted, which is exactly
 when rescan, relocate and forget start to matter. Because more than one control
 opens it, `ModelShelf.vue` holds a `folderInvoker` and `openFolders(invoker)`
-takes the control to return focus to. Only one door needs to name one: the
+takes the control to return focus to. **Every door names one**, and names the
+control that will still be there rather than the element pressed: the
 `Add folder…` item names the **Add button behind it**, because the item itself
-unmounts with the menu. The other two name nothing and ride the fallback, which
-is the always-mounted toolbar button — right for the toolbar button trivially,
-and right for the empty-state button because the first scan unmounts it. Both
-paths are asserted against a real `document.activeElement`; the earlier
-`event.currentTarget` version of this was dead code, since every call site
-passed no event at all.
+unmounts with the menu. The fallback is the always-mounted toolbar button, and
+it exists for exactly one case — the empty-state button unmounting underneath
+its own dialog when the first scan finds something. That case is asserted, along
+with the two ordinary ones, against a real `document.activeElement`; drop the
+`isConnected` check and the suite goes red. The earlier `event.currentTarget`
+version of all this was dead code: no call site ever passed an event.
 
-The button takes **no `bar-btn--open`**, unlike the sweep beside it: that class
-is for a menu activator, and `AppDialog` sets `:scrim="true"`, so the highlight
-is painted under the scrim for exactly as long as it applies. It carries
-`aria-haspopup="dialog"` and no `aria-expanded` — focus moves into the dialog
-rather than into anything the button owns.
+Neither this button nor the stack sweep takes **`bar-btn--open`**. `App.css`
+declares that class for "the toolbar button while its MENU is open", and both
+open an `AppDialog`, which sets `:scrim="true"` — so the highlight is painted
+under the scrim for exactly as long as it applies, and neither button has the
+chevron the rule rotates. `Group`, `Sort` and `Show` keep it because they really
+are menus. Both carry `aria-haspopup="dialog"` and neither carries
+`aria-expanded`: focus moves into the dialog rather than into anything the
+button owns.
 
 `FolderBrowser.vue` is reused whole as the host-path picker, and
 `registeredPaths` is what stops the API's duplicate 409 rather than reporting
@@ -2837,9 +2843,10 @@ the row's fields are captured *before* the request that destroys them.
 
 Rows are a plain `<ul role="list">` of real `<button>`s, deliberately **not**
 `role="listbox"` / `role="option"`: nothing here is selected, and interactive
-controls inside an `option` are unreachable to a screen reader. Both openers
-restore focus to the control that was pressed, falling back to the toolbar
-button when the empty-state button has unmounted underneath the dialog.
+controls inside an `option` are unreachable to a screen reader. All **three**
+openers restore focus to the control that was pressed — see the folder-registry
+section above for how, and for the one case (the empty-state button unmounting
+underneath its own dialog) that the fallback exists to catch.
 
 ---
 
