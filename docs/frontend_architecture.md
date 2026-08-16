@@ -529,7 +529,7 @@ Right-side statistics panel. Responsibilities:
 
 ### Settings Dialog and Sub-sections
 
-#### `UserSettingsDialog.vue` (438 lines)
+#### `UserSettingsDialog.vue` (439 lines)
 Thin multi-tab settings shell. It now owns only the tab chrome and routing — every tab's content was extracted into its own section component, so the dialog itself holds no inline tab markup. Rail order, top to bottom (label → component; the label differs from the id where noted):
 - **Appearance** → `<AppearanceSection>`
 - **Models** (id `behaviour`) → `<BehaviourSection>` (`!isReadOnly`)
