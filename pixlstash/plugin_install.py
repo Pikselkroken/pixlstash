@@ -512,15 +512,65 @@ def _published_dirs(root: Path) -> list[Path]:
     return sorted(path for path in (root / "plugins").glob("*/*") if path.is_dir())
 
 
-def _fetch_from_repository(slug: str, ref: str, workdir: Path) -> Path:
-    """Download *slug* from the plugins repository and return its folder."""
+def _declared_name(folder: Path) -> str | None:
+    """Return the name a published plugin folder declares, or None if unreadable.
+
+    The same ast-only read the catalogue and the installer do — nothing here
+    imports code that has just come off the network. A folder that will not
+    parse, or declares no plugin, is not an error at this point: it is one entry
+    the reader cannot be offered, and the others still have to work.
+    """
+    try:
+        for source in _python_files(folder):
+            found = _analyse(read_source(source), source, strict=False)
+            if found:
+                return found[0].name
+    except (PluginError, OSError):
+        return None
+    return None
+
+
+def _fetch_from_repository(name: str, ref: str, workdir: Path) -> Path:
+    """Download the plugin called *name* and return its folder.
+
+    Matched on the plugin's **declared** name first — that is what ``plugins
+    available`` prints, what it lands under once installed, what ``plugins
+    list`` shows and what ``plugins remove`` takes — and on the repository's
+    directory name second, because that is a real name too and was the only one
+    accepted before. Accepting only the directory name meant the catalogue
+    advertised `moondream2` and installing it failed.
+
+    Both passes look at the **whole** set before choosing, so a declared name
+    always beats a directory name rather than merely beating the ones that
+    happen to sort after it, and two folders answering to the same name are
+    refused rather than resolved alphabetically — the shape `resolve_removal`
+    already uses for an ambiguous name. Silently picking one would mean the
+    plugin a reader installs is decided by a string inside downloaded code that
+    nothing in the listing shows them.
+    """
     candidates = _published_dirs(_download_repository(ref, workdir))
-    for candidate in candidates:
-        if candidate.name == slug:
-            return candidate
-    available = ", ".join(sorted(path.name for path in candidates)) or "(none)"
+    declared = {folder: _declared_name(folder) for folder in candidates}
+
+    matched = [folder for folder in candidates if declared[folder] == name] or [
+        folder for folder in candidates if folder.name == name
+    ]
+    if len(matched) > 1:
+        where = ", ".join(f"{folder.parent.name}/{folder.name}" for folder in matched)
+        raise PluginError(
+            f"{PLUGINS_REPO} at ref {ref!r} publishes {len(matched)} plugins "
+            f"called {name!r} ({where}), so the name does not say which one you "
+            "mean. That is a fault in the repository; until it is fixed, "
+            "install from a local copy of the folder you want."
+        )
+    if matched:
+        return matched[0]
+
+    available = (
+        ", ".join(sorted(declared[folder] or folder.name for folder in candidates))
+        or "(none)"
+    )
     raise PluginError(
-        f"{PLUGINS_REPO} at ref {ref!r} has no plugin called {slug!r}. "
+        f"{PLUGINS_REPO} at ref {ref!r} has no plugin called {name!r}. "
         f"Available: {available}"
     )
 
