@@ -14,6 +14,7 @@ temp root, which keeps them independent without rebuilding anything expensive.
 
 from __future__ import annotations
 
+import errno
 import io
 import json
 import os
@@ -125,6 +126,13 @@ def _restore(install: dict, archive: str, folder: str, *, yes: bool = True) -> i
     return main(argv)
 
 
+def _scratch_dirs(root: str) -> set[str]:
+    """Staging directories currently under *root*, so a leak can be attributed."""
+    return {
+        entry for entry in os.listdir(root) if entry.startswith(".pixlstash-restore-")
+    }
+
+
 def _active_library(hub_path: str):
     hub = HubDatabase(hub_path)
     try:
@@ -218,7 +226,14 @@ def test_progress_is_drawn_on_a_terminal_and_silent_off_one(temp_root, monkeypat
     terminal = _FakeTerminal()
     monkeypatch.setattr("sys.stderr", terminal)
     assert restore.progress_disabled() is False
-    restore._extract(archive, restore.restore_scratch(os.path.join(temp_root, "p1")))
+    # Cleaned up explicitly: restore_scratch stages beside the destination, so a
+    # leaked one lands in the shared temp_root and shows up as another test's
+    # leftover.
+    scratch = restore.restore_scratch(os.path.join(temp_root, "p1"))
+    try:
+        restore._extract(archive, scratch)
+    finally:
+        restore.remove_scratch(scratch)
     assert "Restoring" in terminal.getvalue(), "no progress bar on a terminal"
 
     # Backup draws one too, from the same decision.
@@ -230,8 +245,135 @@ def test_progress_is_drawn_on_a_terminal_and_silent_off_one(temp_root, monkeypat
     quiet = io.StringIO()  # a plain buffer is not a tty
     monkeypatch.setattr("sys.stderr", quiet)
     assert restore.progress_disabled() is True
-    restore._extract(archive, restore.restore_scratch(os.path.join(temp_root, "p2")))
+    scratch = restore.restore_scratch(os.path.join(temp_root, "p2"))
+    try:
+        restore._extract(archive, scratch)
+    finally:
+        restore.remove_scratch(scratch)
     assert quiet.getvalue() == "", "progress bar drawn into a non-terminal"
+
+
+def test_restore_warns_about_space_in_the_one_prompt_it_already_asks(
+    temp_root, capsys, monkeypatch
+):
+    """A shortfall is a warning beside the existing question, not a second one.
+
+    Two prompts about one decision is how people learn to hold down `y`. It also
+    has to appear *before* anything is unpacked — the whole reason planning
+    reads only the front of the archive.
+    """
+    from pixlstash.services import library_restore_service as restore
+
+    source = _install(temp_root, "no-room")
+    archive = os.path.join(temp_root, "no-room.tar.zst")
+    assert _backup(source, archive) == 0
+    capsys.readouterr()
+
+    # Pretend the filesystem is nearly full, whatever it actually is.
+    monkeypatch.setattr(restore, "space_shortfall", lambda path, needed: (needed, 1024))
+    destination = os.path.join(temp_root, "no-room-restored")
+    scratch_before = _scratch_dirs(temp_root)
+
+    asked: list[str] = []
+
+    def decline(prompt: str) -> str:
+        asked.append(prompt)
+        return "n"
+
+    monkeypatch.setattr("builtins.input", decline)
+    assert _restore(source, archive, destination, yes=False) == 1
+
+    captured = capsys.readouterr()
+    assert "may not have room" in captured.err
+    assert "is free" in captured.err
+    # Exactly one question, and it is the ordinary one.
+    assert len(asked) == 1, asked
+    assert "Restore it?" in asked[0]
+
+    assert "Cancelled" in captured.out
+    assert not os.path.exists(destination)
+    assert not any(
+        entry.startswith("pre-restore-") for entry in os.listdir(source["config_dir"])
+    )
+    assert scratch_before == _scratch_dirs(temp_root), (
+        "a declined restore staged something anyway"
+    )
+
+
+def test_restore_survives_scratch_and_config_on_different_filesystems(
+    temp_root, capsys, monkeypatch
+):
+    """The reported crash: ~/Pictures and ~/.config on separate mounts.
+
+    Staging happens beside the restored library so publishing it is a rename;
+    the hub has to reach the config directory, which is routinely a different
+    filesystem, and ``os.replace`` across one raises EXDEV. Simulated by making
+    ``os.replace`` refuse exactly the cross-directory hub move, because a real
+    second filesystem is not available in the gate.
+    """
+    source = _install(temp_root, "cross-device")
+    archive = os.path.join(temp_root, "cross-device.tar.zst")
+    assert _backup(source, archive) == 0
+    capsys.readouterr()
+
+    real_replace = os.replace
+    config_dir = source["config_dir"]
+
+    def refuse_cross_device(src, dst, *args, **kwargs):
+        # Exactly the reported shape: the config directory is its own mount, so
+        # anything renamed *into* it from elsewhere fails. Renames within one
+        # directory, and the library publication inside the temp root, are
+        # ordinary same-filesystem moves and must still work.
+        entering_config = os.path.dirname(str(dst)) == config_dir
+        from_elsewhere = os.path.dirname(str(src)) != config_dir
+        if entering_config and from_elsewhere:
+            raise OSError(errno.EXDEV, "Invalid cross-device link", str(src))
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", refuse_cross_device)
+    destination = os.path.join(temp_root, "cross-device-restored")
+    assert _restore(source, archive, destination) == 0, capsys.readouterr().err
+
+    # The hub really did land, and the restored library is the active one.
+    active = _active_library(source["hub_path"])
+    assert active is not None
+    assert active.path == os.path.realpath(destination)
+
+
+def test_backup_announces_itself_before_the_bar(temp_root, capsys):
+    """The bar appears with no context otherwise: say what and where first."""
+    source = _install(temp_root, "announce", pictures=4)
+    destination = os.path.join(temp_root, "announce.tar.zst")
+    assert _backup(source, destination) == 0
+    err = capsys.readouterr().err
+    assert "Archiving" in err and "file(s)" in err
+    assert destination in err
+
+
+@pytest.mark.parametrize(
+    ("given", "compress", "expected"),
+    [
+        ("monday", True, "monday.tar.zst"),
+        ("monday", False, "monday.tar"),
+        ("monday.tar.zst", True, "monday.tar.zst"),
+        ("monday.tar", False, "monday.tar"),
+        # The suffix must not lie about the contents: --no-compress on a name
+        # ending .tar.zst swaps rather than appends.
+        ("monday.tar.zst", False, "monday.tar"),
+        ("monday.tar", True, "monday.tar.zst"),
+    ],
+)
+def test_backup_gives_the_file_the_right_ending(temp_root, given, compress, expected):
+    """An explicit filename used to keep whatever the user typed, extension or not."""
+    from pixlstash.services.library_backup_service import _resolve_destination
+
+    class _Library:
+        name = "whatever"
+
+    resolved = _resolve_destination(
+        _Library(), os.path.join(temp_root, given), compress
+    )
+    assert os.path.basename(resolved) == expected
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
@@ -308,7 +450,7 @@ def test_restore_refuses_an_archive_it_did_not_write(temp_root, capsys):
 
     destination = os.path.join(temp_root, "foreign-restored")
     assert _restore(source, archive, destination) == 1
-    assert "not part of a PixlStash backup" in capsys.readouterr().err
+    assert "not a PixlStash backup" in capsys.readouterr().err
     assert not os.path.exists(destination)
 
 

@@ -49,6 +49,10 @@ from tqdm import tqdm
 
 from pixlstash.hub.registry import VAULT_FILENAME
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.library_backup_service import (
+    human_bytes,
+)
+from pixlstash.utils.system_utils import space_shortfall
 
 logger = get_logger(__name__)
 
@@ -83,6 +87,12 @@ RESTORED_FILE_MODE = 0o600
 # zstd's frame magic, so a renamed archive is still read correctly. The CLI's
 # `--no-compress` writes a plain tar and users rename backups.
 _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+
+# What to assume a zstd archive expands to when its header does not say.
+# Measured against this repo's own backups, whose payload is dominated by
+# already-compressed image data; the databases compress far better but are a
+# small share of the bytes.
+_UNKNOWN_RATIO = 1.6
 
 # Exactly what a backup archive may contain. Anything else is refused rather
 # than ignored: an archive holding a member this does not recognise is not one
@@ -123,6 +133,7 @@ class RestorePlan:
     config_dir: str
     preserved_dir: str
     other_libraries: int
+    space_warning: Optional[str] = None
 
     @property
     def preserved_config(self) -> str:
@@ -302,12 +313,22 @@ def _read_manifest(scratch: str, archive: str) -> dict:
         ) from exc
     if not isinstance(manifest, dict) or not manifest.get("library_uuid"):
         raise RestoreError(f"{archive} has a {_MANIFEST_NAME} without a library uuid.")
+    return manifest
+
+
+def _require_extracted_members(scratch: str, archive: str) -> None:
+    """Check the databases a full extraction must have produced.
+
+    Separate from :func:`_read_manifest` because the plan reads the manifest out
+    of a *partial* extraction — the peek deliberately stops before ``vault.db``
+    — and folding the two together made planning demand a file it had chosen not
+    to unpack.
+    """
     for required in (VAULT_FILENAME, _HUB_NAME):
         if not os.path.isfile(os.path.join(scratch, required)):
             raise RestoreError(
                 f"{archive} is missing {required}; it cannot be restored."
             )
-    return manifest
 
 
 def _require_empty_destination(folder: str) -> None:
@@ -355,12 +376,112 @@ def _assert_server_not_running(hub_path: str) -> None:
         conn.close()
 
 
-def plan_restore(archive: str, folder: str, hub_path: str, scratch: str) -> RestorePlan:
-    """Validate everything and stage the archive, without touching the install.
+def _estimated_extracted_bytes(archive: str) -> tuple[int, bool]:
+    """Estimate what *archive* expands to, and whether the figure is exact.
 
-    Extracts to *scratch* and reads the manifest, so the caller can describe the
-    restore accurately before asking for confirmation. Nothing outside *scratch*
-    is written.
+    zstd records the uncompressed size in the frame header only when the writer
+    knew it up front. Backups are written with ``stream_writer``, which does not,
+    so this is usually a guess — and it says which it is rather than quietly
+    presenting one as the other.
+
+    The fallback multiplier is deliberately mild. A library is mostly JPEG and
+    PNG, which barely compress; the databases compress well but are the small
+    part. Guessing high would cry wolf on every restore, which trains people to
+    answer "y" without reading.
+
+    Returns:
+        The estimated byte count and whether it came from the frame header.
+    """
+    compressed = os.path.getsize(archive)
+    try:
+        with open(archive, "rb") as handle:
+            prefix = handle.read(len(_ZSTD_MAGIC))
+            handle.seek(0)
+            if prefix != _ZSTD_MAGIC:
+                # A plain tar is its own uncompressed size.
+                return compressed, True
+            size = zstandard.frame_content_size(handle.read(24))
+    except (OSError, zstandard.ZstdError):
+        return int(compressed * _UNKNOWN_RATIO), False
+    if size is not None and size > 0:
+        return int(size), True
+    return int(compressed * _UNKNOWN_RATIO), False
+
+
+def _announce_start(plan: "RestorePlan") -> None:
+    """Say what is about to happen, before the bar takes over the line."""
+    print(
+        f"Reading {plan.archive}\nRestoring into {plan.library_folder}",
+        file=sys.stderr,
+    )
+
+
+def _peek(archive: str) -> tuple[dict, str, str]:
+    """Read the manifest and hub out of *archive* without unpacking the library.
+
+    This is what lets the confirmation come *before* the copy. A backup writes
+    ``manifest.json``, ``vault.db`` and ``hub.db`` before any picture, so the
+    few members needed to describe a restore — its name, its picture count, the
+    other registrations its hub carries — are at the front of the stream and
+    reading them costs nothing on a 60 GB archive. Extracting the whole thing
+    first and asking afterwards, which is what this used to do, made the user
+    wait through the entire restore to be asked whether they wanted it.
+
+    Returns:
+        The manifest, the path to the extracted hub copy, and the temporary
+        directory holding it, which the caller must remove.
+
+    Raises:
+        RestoreError: The archive is unreadable or is not a PixlStash backup.
+    """
+    peek_dir = tempfile.mkdtemp(prefix="pixlstash-restore-peek-")
+    wanted = {_MANIFEST_NAME, _HUB_NAME}
+    found: set[str] = set()
+    try:
+        with open(archive, "rb") as handle:
+            with _open_archive_stream(handle) as tar:
+                for member in tar:
+                    name = member.name.replace("\\", "/").lstrip("./")
+                    if name not in wanted or not member.isreg():
+                        continue
+                    source = tar.extractfile(member)
+                    if source is None:
+                        continue
+                    target = os.path.join(peek_dir, name)
+                    with source, open(target, "wb") as out:
+                        shutil.copyfileobj(source, out)
+                    os.chmod(target, RESTORED_FILE_MODE)
+                    found.add(name)
+                    if found == wanted:
+                        # Everything needed is at the front; stop rather than
+                        # stream past every picture in the archive.
+                        break
+    except (OSError, tarfile.TarError, zstandard.ZstdError) as exc:
+        remove_scratch(peek_dir)
+        raise RestoreError(f"Could not read the archive {archive}: {exc}") from exc
+
+    missing = wanted - found
+    if missing:
+        remove_scratch(peek_dir)
+        raise RestoreError(
+            f"{archive} is missing {', '.join(sorted(missing))}; it is not a "
+            "PixlStash backup this can restore."
+        )
+    manifest = _read_manifest(peek_dir, archive)
+    return manifest, os.path.join(peek_dir, _HUB_NAME), peek_dir
+
+
+def plan_restore(
+    archive: str,
+    folder: str,
+    hub_path: str,
+) -> RestorePlan:
+    """Describe the restore without unpacking it, so the caller can ask first.
+
+    Reads only the manifest and hub out of the archive (see :func:`_peek`), so
+    nothing large is written and nothing outside a small temporary directory is
+    touched. The library itself is unpacked by :func:`perform_restore`, after
+    the caller has confirmed.
 
     Raises:
         RestoreError: The archive, the destination, or the installation state
@@ -375,8 +496,13 @@ def plan_restore(archive: str, folder: str, hub_path: str, scratch: str) -> Rest
     config_dir = os.path.dirname(os.path.abspath(hub_path))
     _assert_server_not_running(hub_path)
 
-    _extract(archive, scratch)
-    manifest = _read_manifest(scratch, archive)
+    manifest, hub_copy, peek_dir = _peek(archive)
+    try:
+        other_libraries = _count_other_libraries(
+            hub_copy, str(manifest["library_uuid"])
+        )
+    finally:
+        remove_scratch(peek_dir)
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return RestorePlan(
@@ -391,9 +517,29 @@ def plan_restore(archive: str, folder: str, hub_path: str, scratch: str) -> Rest
         library_folder=folder,
         config_dir=config_dir,
         preserved_dir=os.path.join(config_dir, f"pre-restore-{stamp}"),
-        other_libraries=_count_other_libraries(
-            os.path.join(scratch, _HUB_NAME), str(manifest["library_uuid"])
-        ),
+        other_libraries=other_libraries,
+        space_warning=_space_warning(archive, folder),
+    )
+
+
+def _space_warning(archive: str, folder: str) -> Optional[str]:
+    """Return a sentence about a likely shortfall, or None when it should fit.
+
+    Returned rather than prompted: the CLI already asks one question about the
+    whole restore, and a second prompt for this would be two questions about
+    the same decision. Measured against the filesystem the library will land
+    on, which is where the bytes actually go.
+    """
+    needed, exact = _estimated_extracted_bytes(archive)
+    shortfall = space_shortfall(os.path.dirname(folder) or ".", needed)
+    if shortfall is None:
+        return None
+    required, free = shortfall
+    qualifier = "needs" if exact else "looks like it needs roughly"
+    return (
+        f"{os.path.dirname(folder) or '.'} may not have room: this restore "
+        f"{qualifier} {human_bytes(required)} including 10% headroom, and only "
+        f"{human_bytes(free)} is free."
     )
 
 
@@ -509,7 +655,7 @@ def _write_server_config(plan: RestorePlan, preserved: bool) -> None:
         ) from exc
 
 
-def perform_restore(plan: RestorePlan, scratch: str, file_count: int) -> RestoreResult:
+def perform_restore(plan: RestorePlan, scratch: str) -> RestoreResult:
     """Publish the staged restore: library folder first, then the config pair.
 
     Ordering is deliberate, and the library folder has to come first even though
@@ -525,6 +671,10 @@ def perform_restore(plan: RestorePlan, scratch: str, file_count: int) -> Restore
     Raises:
         RestoreError: A step failed. The message names what is where.
     """
+    _announce_start(plan)
+    file_count = _extract(plan.archive, scratch)
+    _require_extracted_members(scratch, plan.archive)
+
     staged_library = os.path.join(scratch, "library")
     os.replace(
         os.path.join(scratch, VAULT_FILENAME),
@@ -562,12 +712,17 @@ def perform_restore(plan: RestorePlan, scratch: str, file_count: int) -> Restore
         _withdraw_library_folder(plan.library_folder, remove_folder=created_folder)
         raise
 
+    # Copied into the config directory BEFORE the old pair moves aside, and
+    # copied rather than renamed. The scratch sits beside the restored library
+    # (so publishing it is a rename), which is routinely a different filesystem
+    # from the config directory -- `~/Pictures` and `~/.config` on separate
+    # mounts is the ordinary case, and `os.replace` across them raises EXDEV.
+    # Doing the copy first also means the only step left after the destructive
+    # move is a rename within one directory.
+    staged_hub = _stage_hub_beside_config(scratch, plan)
     preserved = _preserve_current_config(plan)
     try:
-        os.replace(
-            os.path.join(scratch, _HUB_NAME),
-            os.path.join(plan.config_dir, _HUB_NAME),
-        )
+        os.replace(staged_hub, os.path.join(plan.config_dir, _HUB_NAME))
     except OSError as exc:
         raise RestoreError(
             f"Could not install the restored hub: {exc}. The previous "
@@ -587,6 +742,37 @@ def perform_restore(plan: RestorePlan, scratch: str, file_count: int) -> Restore
     return RestoreResult(
         plan=plan, file_count=file_count, had_previous_config=preserved
     )
+
+
+def _stage_hub_beside_config(scratch: str, plan: RestorePlan) -> str:
+    """Copy the restored hub into the config directory, ready to be renamed in.
+
+    Returns the temporary path, which is on the config directory's own
+    filesystem so the final publication is an atomic same-directory rename.
+    The hub is a few megabytes at most, so copying it is cheap — unlike the
+    library, which is why that one is staged next to its destination instead.
+
+    Raises:
+        RestoreError: The copy failed, before anything live has moved.
+    """
+    source = os.path.join(scratch, _HUB_NAME)
+    handle, temp_path = tempfile.mkstemp(
+        prefix=".pixlstash-hub-", suffix=".tmp", dir=plan.config_dir
+    )
+    os.close(handle)
+    try:
+        shutil.copyfile(source, temp_path)
+        os.chmod(temp_path, RESTORED_FILE_MODE)
+    except OSError as exc:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise RestoreError(
+            f"Could not stage the restored hub in {plan.config_dir}: {exc}. "
+            "Your installation is unchanged."
+        ) from exc
+    return temp_path
 
 
 def _withdraw_library_folder(folder: str, *, remove_folder: bool) -> None:

@@ -116,7 +116,8 @@ pixlstash-cli libraries rename "Existing library" "Better name"
 pixlstash-cli libraries relocate "Existing library" /new/path
 pixlstash-cli libraries detach "Existing library"
 pixlstash-cli libraries backup "Existing library" /path/to/backups/
-pixlstash-cli libraries restore /path/to/backups/archive.tar.zst /path/to/new-library
+pixlstash-cli libraries backup "Existing library" /path/to/backups/monday.tar.zst
+pixlstash-cli libraries restore /path/to/backups/monday.tar.zst /path/to/new-library
 ```
 
 | Command | What it does |
@@ -135,6 +136,11 @@ Notes worth knowing before you need them:
 - `detach` refuses the **active** library. Switch to another one first.
 - Reattaching the same folder revives its original registration, including its
   share links, because a library carries a fingerprint of its own identity.
+- A backup is a **zstd-compressed tar**, named `.tar.zst` — not `.tar.gz`.
+  `--no-compress` writes a plain `.tar` instead. Given a folder, `backup`
+  invents a dated name with the right ending; given a filename, it adds the
+  right ending if you left it off. `restore` recognises an archive by its
+  contents, so a renamed file still works.
 - A backup contains `hub.db`, and therefore your login and token secrets.
   PixlStash writes it owner-readable and refuses to overwrite an existing file.
 - A backup covers the library folder. Pictures kept in **reference folders** live

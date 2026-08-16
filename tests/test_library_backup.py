@@ -281,9 +281,9 @@ class TestConsistencyAndSafety:
         destination = tmp_path / "purged-during-backup.tar.zst"
         real_write = backup_module._write_archive
 
-        def purge_then_write(payload, output, compress):
+        def purge_then_write(payload, output, compress, payload_bytes):
             os.remove(os.path.join(library.path, "1.png"))
-            return real_write(payload, output, compress)
+            return real_write(payload, output, compress, payload_bytes)
 
         monkeypatch.setattr(backup_module, "_write_archive", purge_then_write)
         with pytest.raises(BackupError, match="Could not read backup payload"):
