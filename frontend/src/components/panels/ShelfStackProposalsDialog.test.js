@@ -46,13 +46,13 @@ function proposal(overrides = {}) {
   return {
     tier: "step_group",
     key: "1:jimmycarr",
-    name: "JimmyCarr",
+    name: "JimmyBuss",
     folder_id: 1,
     total_size: 3000,
     members: [
-      { model_id: 1, filename: "JimmyCarr.safetensors", step: null },
-      { model_id: 2, filename: "JimmyCarr_000001000.safetensors", step: 1000 },
-      { model_id: 3, filename: "JimmyCarr_000000500.safetensors", step: 500 },
+      { model_id: 1, filename: "JimmyBuss.safetensors", step: null },
+      { model_id: 2, filename: "JimmyBuss_000001000.safetensors", step: 1000 },
+      { model_id: 3, filename: "JimmyBuss_000000500.safetensors", step: 500 },
     ],
     ...overrides,
   };
@@ -128,7 +128,7 @@ describe("applying", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(createStack).toHaveBeenCalledTimes(1);
-    expect(createStack).toHaveBeenCalledWith([1, 2, 3], "JimmyCarr");
+    expect(createStack).toHaveBeenCalledWith([1, 2, 3], "JimmyBuss");
   });
 
   it("keeps the runs that landed when one is refused", async () => {

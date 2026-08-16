@@ -71,8 +71,8 @@
 //
 // One dry run and one confirmation for the whole batch, which is what tier 1
 // earns: files differing solely by a training step are one run and there is
-// nothing for a person to weigh. Tier 2 — prefix grouping, `JimmyCarr` beside
-// `JimmyCarr2` — needs per-group adjudication with counter-evidence and is not
+// nothing for a person to weigh. Tier 2 — prefix grouping, `JimmyBuss` beside
+// `JimmyBuss2` — needs per-group adjudication with counter-evidence and is not
 // offered here, because the backend does not propose it yet.
 //
 // Every group is ticked on open. The reader is confirming a batch, not

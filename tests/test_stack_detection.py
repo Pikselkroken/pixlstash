@@ -80,14 +80,14 @@ def _names(proposals):
 def test_files_differing_only_by_step_are_one_run(hub, tmp_path):
     folder = _folder(hub, str(tmp_path / "loras"))
     for name in (
-        "JimmyCarr_000000500.safetensors",
-        "JimmyCarr_000001000.safetensors",
-        "JimmyCarr.safetensors",
+        "JimmyBuss_000000500.safetensors",
+        "JimmyBuss_000001000.safetensors",
+        "JimmyBuss.safetensors",
     ):
         _adapter(hub, folder, name)
 
     proposals = propose_stacks(hub)
-    assert _names(proposals) == ["JimmyCarr"]
+    assert _names(proposals) == ["JimmyBuss"]
     assert len(proposals[0].members) == 3
 
 
@@ -138,8 +138,8 @@ def test_a_group_never_spans_two_folders(hub, tmp_path):
     """
     first = _folder(hub, str(tmp_path / "disk-a"))
     second = _folder(hub, str(tmp_path / "disk-b"))
-    _adapter(hub, first, "JimmyCarr_000000500.safetensors")
-    _adapter(hub, second, "JimmyCarr_000001000.safetensors")
+    _adapter(hub, first, "JimmyBuss_000000500.safetensors")
+    _adapter(hub, second, "JimmyBuss_000001000.safetensors")
 
     assert propose_stacks(hub) == []
 
@@ -200,8 +200,8 @@ def test_a_name_that_is_only_a_step_number_groups_nothing(hub, tmp_path):
 def test_detection_writes_nothing(hub, tmp_path):
     """The house rule, asserted rather than assumed."""
     folder = _folder(hub, str(tmp_path / "loras"))
-    _adapter(hub, folder, "JimmyCarr_000000500.safetensors")
-    _adapter(hub, folder, "JimmyCarr_000001000.safetensors")
+    _adapter(hub, folder, "JimmyBuss_000000500.safetensors")
+    _adapter(hub, folder, "JimmyBuss_000001000.safetensors")
 
     propose_stacks(hub)
 
