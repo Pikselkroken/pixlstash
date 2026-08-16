@@ -42,6 +42,8 @@ from .thumbnail_generation_task import ThumbnailGenerationTask
 from .missing_thumbnail_finder import MissingThumbnailFinder
 from .pixel_sha_task import PixelShaTask
 from .missing_pixel_sha_finder import MissingPixelShaFinder
+from .orientation_task import OrientationTask
+from .missing_orientation_finder import MissingOrientationFinder
 from .dedup_scan_task import DedupScanTask
 from .dedup_scan_finder import DedupScanFinder
 
@@ -89,6 +91,8 @@ __all__ = [
     "MissingThumbnailFinder",
     "PixelShaTask",
     "MissingPixelShaFinder",
+    "OrientationTask",
+    "MissingOrientationFinder",
     "DedupScanTask",
     "DedupScanFinder",
 ]

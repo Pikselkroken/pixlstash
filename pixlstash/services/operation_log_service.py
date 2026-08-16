@@ -20,9 +20,15 @@ Values *derived* from those facets — ``anomaly_tag_uncertainty`` and the cache
 ``smart_score`` — are deliberately NOT snapshotted; they are recomputed and
 invalidated on restore through the same guards the forward path uses, because a
 snapshot of a derived value is a second source of truth waiting to drift.
-File-mutating operations may be *recorded* for audit with
-``undoable=False``, but they are not reversible until copy-on-write versions land
-(Stage 2 / v2.1). A **permanent** delete (scrapheap purge, Empty Scrapheap,
+
+**An operation is ``undoable=True`` exactly when the log stores the whole prior
+state.** That is the principle behind the file-mutating rule, and it is why
+``FACET_ORIENTATION`` is an exception to the rule rather than a hole in it. A
+crop or a re-encode destroys information that exists nowhere but the prior file,
+so those stay ``undoable=False`` until copy-on-write versions land (Stage 2 /
+v2.1); an in-place rotate replaces one enumerated value 1-8 and copies the
+entropy-coded stream through byte for byte, so ``{"orientation": n}`` IS the
+whole prior state. A **permanent** delete (scrapheap purge, Empty Scrapheap,
 retention auto-purge) destroys the file and is deliberately *not* recorded here:
 there is nothing an undo could put back.
 
@@ -43,7 +49,9 @@ for the same reason.
 
 from __future__ import annotations
 
+import importlib
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, Union
@@ -54,6 +62,7 @@ from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import (
+    Detection,
     Face,
     Operation,
     Picture,
@@ -73,6 +82,14 @@ from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.image_processing.orientation import (
+    ROTATE_CW,
+    read_orientation,
+    rotate_orientation,
+    write_orientation,
+)
+from pixlstash.utils.path_utils import path_is_within
 from pixlstash.utils.service.label_ledger import MANUAL_MODEL_VERSION, UNKNOWN
 from pixlstash.utils.service.smart_score_invalidation import (
     InteractiveRescoreRegistry,
@@ -103,6 +120,10 @@ FACET_CHARACTERS = "characters"
 FACET_PENDING_CHARACTER_ID = "pending_character_id"
 FACET_STACK = "stack"
 FACET_DELETED = "deleted"
+# The EXIF orientation tag, 1-8 (§21.5). The only facet whose applier writes a
+# FILE, and it is reversible for the reason the rest are: the recorded value is
+# the whole prior state, not a delta.
+FACET_ORIENTATION = "orientation"
 
 FACETS = (
     FACET_TAGS,
@@ -116,6 +137,7 @@ FACETS = (
     FACET_PENDING_CHARACTER_ID,
     FACET_STACK,
     FACET_DELETED,
+    FACET_ORIENTATION,
 )
 
 # Operation types the scrapheap lifecycle records. Named constants because the
@@ -134,6 +156,12 @@ OP_STACK_KEEP_COVER_ONLY = "stack.keep_cover_only"
 # is: the frontend keys its icon/receipt affordances off the string.
 OP_TAGS_CONFIRM = "pictures.tags.confirm"
 OP_TAGS_REJECT = "pictures.tags.reject"
+
+# In-place rotate (§21.5). ONE op_type for all three directions: the direction
+# lives in the request and in the summary, never in the recorded state. The state
+# stores the resulting orientation absolutely, which is what makes undo
+# idempotent and lets it converge on a file something else has since turned.
+OP_PICTURES_ROTATE = "pictures.rotate"
 
 # HTTP status for "an undo target was permanently purged and cannot come back".
 # 410 Gone, not 404: the picture demonstrably existed and was destroyed, and the
@@ -255,6 +283,13 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
             FACET_SCORE: picture.score,
             FACET_PROJECT_ID: picture.project_id,
             FACET_PENDING_CHARACTER_ID: picture.pending_character_id,
+            # Read from the COLUMN, never from the file. This capture runs twice
+            # for every recorded operation over every affected picture, so
+            # opening the file here would make a 2,700-row tag edit do 5,400 file
+            # opens on the single DB writer thread. The column is a mirror kept
+            # by ``apply_orientation`` and backfilled by
+            # ``MissingOrientationFinder``.
+            FACET_ORIENTATION: picture.orientation,
             FACET_TAGS: [],
             FACET_TAG_PREDICTIONS: {},
             FACET_SETS: [],
@@ -1051,6 +1086,242 @@ def delete_emptied_stacks(session: Session, stack_ids: set[int]) -> None:
         session.delete(stack)
 
 
+# The built-in rotate plugin owns the corner-rotation maths (all four corners
+# rotated as points, then the axis-aligned box of the result). Its folder name
+# carries a hyphen, so it is reachable only through ``importlib``; the call is
+# cached in ``sys.modules`` and paid once per process. Reusing it is the point —
+# a second copy of the formula is a second thing to get wrong, and this one is
+# already exercised by the copy-producing rotate plugin.
+_ROTATE_PLUGIN_MODULE = "pixlstash.image_plugins.built-in.rotate"
+
+# Quarter turns clockwise → the rotate plugin's own direction vocabulary.
+_ROTATE_STEP_DIRECTIONS = {1: "90_right", 2: "180", 3: "90_left"}
+
+# The orientations that show the stored bitmap turned a quarter turn, so the
+# DISPLAYED width and height are the stored ones swapped.
+_TRANSPOSED_ORIENTATIONS = frozenset({5, 6, 7, 8})
+
+
+def _clockwise_steps(current: int, target: int) -> Optional[int]:
+    """Quarter turns clockwise taking *current* to *target*, or ``None``.
+
+    ``None`` means the two orientations are not a rotation apart — they differ in
+    mirroring, which nothing in this codebase writes. The caller turns the file
+    anyway and leaves the boxes alone rather than moving them by a transform it
+    cannot derive.
+    """
+    value = current
+    for steps in (1, 2, 3):
+        value = rotate_orientation(value, ROTATE_CW)
+        if value == target:
+            return steps
+    return None
+
+
+def _rotate_picture_boxes(
+    session: Session, picture: Picture, steps: int, current: int
+) -> None:
+    """Turn every stored face/detection box with the picture's display.
+
+    Both box tables are stored in **EXIF-corrected** space — the extraction tasks
+    load through ``load_image_bgr_reduced``, which runs ``ImageOps.exif_transpose``
+    — so a change of orientation moves them even though not one pixel moved.
+    ``Picture.width`` / ``height`` are RAW and stay as they are; the display size
+    the transform needs is those two swapped when the *current* orientation is a
+    quarter turn.
+    """
+    if not picture.width or not picture.height:
+        logger.warning(
+            "operation_log: picture %s has no stored dimensions, so its face and "
+            "detection boxes cannot be turned with the orientation; they are left "
+            "as they are and will be wrong until the picture is re-processed",
+            picture.id,
+        )
+        return
+    display_w, display_h = int(picture.width), int(picture.height)
+    if current in _TRANSPOSED_ORIENTATIONS:
+        display_w, display_h = display_h, display_w
+
+    plugin = importlib.import_module(_ROTATE_PLUGIN_MODULE).RotatePlugin()
+    transform = plugin.get_bbox_transform(
+        {"direction": _ROTATE_STEP_DIRECTIONS[steps]},
+        (display_w, display_h),
+        None,
+    )
+    for model in (Face, Detection):
+        for row in session.exec(
+            select(model).where(model.picture_id == picture.id)
+        ).all():
+            box = row.bbox
+            if not box or len(box) != 4:
+                continue
+            row.bbox = transform([int(value) for value in box])
+            session.add(row)
+
+
+def apply_orientation(
+    session: Session,
+    picture_id: int,
+    orientation,
+    *,
+    image_root: Optional[str] = None,
+) -> bool:
+    """Make *picture_id*'s file carry *orientation*, and re-derive what follows.
+
+    The single applier behind BOTH the forward rotate and its undo/redo, which is
+    what makes the two agree by construction. It is **absolute, not a delta**: it
+    reads what the file carries now and turns it to *orientation*, so applying the
+    same value twice is a no-op (the idempotence every restore promises) and a
+    file something else has since rotated converges instead of drifting.
+
+    Only the orientation is ever recorded. Everything below is DERIVED and
+    re-derived here:
+
+    * the ``Picture.orientation`` mirror the capture reads;
+    * ``Face.bbox`` and ``Detection.bbox``, which live in EXIF-corrected space;
+    * ``pixel_sha`` and ``size_bytes``, because the container's bytes changed
+      even though the entropy-coded stream did not;
+    * ``thumbnail_width`` / ``thumbnail_height``, NULLed so
+      ``MissingThumbnailFinder`` regenerates the bitmap;
+    * ``image_embedding`` / ``perceptual_hash``, NULLed so
+      ``MissingImageEmbeddingFinder`` recomputes them — both describe the decoded
+      image, which now decodes at a different rotation.
+
+    ``Picture.width`` / ``height`` are deliberately untouched: they describe the
+    stored bitmap, which is copied through byte for byte.
+
+    Args:
+        session: Pre-opened DB session; the caller commits.
+        picture_id: The picture to turn.
+        orientation: The EXIF orientation to store, 1-8. ``None`` (a recorded
+            state from before the mirror was backfilled) is refused rather than
+            guessed at.
+        image_root: Vault image root, for resolving a relative ``file_path``.
+            Passed explicitly for the same reason ``origin_client_id`` is (§15):
+            this runs on the DB worker thread, which has no vault handle.
+
+    Returns:
+        Whether the file was actually turned.
+    """
+    if orientation is None:
+        logger.warning(
+            "operation_log: picture %s has no recorded orientation, so this "
+            "restore cannot turn its file; the row predates the orientation "
+            "mirror being backfilled",
+            picture_id,
+        )
+        return False
+    picture = session.get(Picture, picture_id)
+    if picture is None:
+        return False
+
+    # Refused at the SINK, not only at the route, so undo/redo inherits it the
+    # same way the locked-set guard does. A picture that was library-managed when
+    # it was turned and is reference-managed by the time it is undone would
+    # otherwise have its external file rewritten by the restore. These are the
+    # user's own files, managed outside the library: we do not write to them.
+    if picture.reference_folder_id is not None:
+        logger.warning(
+            "operation_log: refusing to set orientation %s on picture %s — it "
+            "lives in a reference folder, whose files this library does not "
+            "write to; rotate it as a copy instead",
+            orientation,
+            picture_id,
+        )
+        return False
+
+    file_path = ImageUtils.resolve_picture_path(image_root, picture.file_path)
+    if not file_path or not os.path.exists(file_path):
+        logger.error(
+            "operation_log: cannot set orientation %s on picture %s — %r does not "
+            "resolve to a readable file, so the file and the stored mirror will "
+            "disagree until the picture is rotated again",
+            orientation,
+            picture_id,
+            file_path or picture.file_path,
+        )
+        return False
+
+    # `Picture.file_path` is a database value, and `resolve_picture_path` hands an
+    # absolute one straight back and joins a relative one without normalising, so
+    # a `..` or a stray absolute path resolves wherever it says. Every other
+    # destructive sink in the product checks containment before acting
+    # (`scrapheap_service.delete_files_in_session`); this one writes the user's
+    # ORIGINAL bytes, so it is the last place that should be taking the row's word
+    # for it. Reference folders are already refused above, so the vault root is
+    # the only legitimate location left.
+    if not image_root or not path_is_within(file_path, image_root):
+        logger.error(
+            "operation_log: refusing to set orientation %s on picture %s — its "
+            "stored path %r resolves to %s, which is outside the library root %r; "
+            "the file is not touched",
+            orientation,
+            picture_id,
+            picture.file_path,
+            file_path,
+            image_root,
+        )
+        return False
+
+    # The FILE is the source of truth, not the column: a mirror that drifted (an
+    # external edit, a rolled-back transaction whose file write survived) would
+    # otherwise make this compute the turn from a lie.
+    current = read_orientation(file_path)
+    if current == int(orientation):
+        if picture.orientation != current:
+            picture.orientation = current
+            session.add(picture)
+        return False
+
+    steps = _clockwise_steps(current, int(orientation))
+    write_orientation(file_path, int(orientation))
+    picture.orientation = int(orientation)
+    if steps is None:
+        logger.warning(
+            "operation_log: orientation %d -> %d on picture %s is not a rotation "
+            "(the mirroring differs), so the face and detection boxes were left "
+            "as they are",
+            current,
+            int(orientation),
+            picture_id,
+        )
+    else:
+        _rotate_picture_boxes(session, picture, steps, current)
+
+    # The container changed, so the tier-1 duplicate key and the on-disk size did
+    # too. Re-derived here rather than snapshotted, like every other derived value
+    # a restore touches.
+    try:
+        picture.pixel_sha = ImageUtils.calculate_hash_from_file_path(file_path)
+        picture.size_bytes = os.path.getsize(file_path)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "operation_log: could not re-derive pixel_sha/size_bytes for picture "
+            "%s after turning %s (%s); the picture stays out of tier-1 duplicate "
+            "detection until MissingPixelShaFinder picks it up",
+            picture_id,
+            file_path,
+            exc,
+        )
+        picture.pixel_sha = None
+    # The stored bitmap is now upside-down relative to what the file shows.
+    # NULLing the dimensions is what MissingThumbnailFinder selects on.
+    picture.thumbnail_width = None
+    picture.thumbnail_height = None
+    # Both are computed from the DECODED image, which exif_transpose has just
+    # started producing at a different rotation, so both are now describing a
+    # picture that no longer exists. Left stale they are worse than absent: the
+    # near-duplicate tiers compare a turned picture against its own pre-turn
+    # neighbours and mis-group it. NULLing re-queues them the way every other
+    # regeneration in this codebase is triggered — `ImageEmbeddingTask.fetch_work`
+    # selects on `image_embedding IS NULL`, and that one task owns the perceptual
+    # hash as well, so this is one finder and one pass rather than two.
+    picture.image_embedding = None
+    picture.perceptual_hash = None
+    session.add(picture)
+    return True
+
+
 def _apply_deleted(session: Session, picture: Picture, lifecycle) -> None:
     """Restore a picture's scrapheap state (the soft-delete flag + its stamp)."""
     if not isinstance(lifecycle, dict):
@@ -1151,6 +1422,7 @@ def apply_state_in_session(
     registry: Optional[InteractiveRescoreRegistry] = None,
     origin_client_id: Optional[str] = None,
     vacated_stack_ids: Optional[set[int]] = None,
+    image_root: Optional[str] = None,
 ) -> list[int]:
     """Write a recorded metadata state back onto its pictures.
 
@@ -1182,6 +1454,12 @@ def apply_state_in_session(
             of the stacks this state moves pictures off of. The caller decides
             after ALL states are applied whether those stacks ended up empty and
             deletes the emptied rows (:func:`delete_emptied_stacks`).
+        image_root: Vault image root, needed only by the orientation facet, whose
+            applier writes the picture's file. Passed explicitly for the same
+            reason ``origin_client_id`` is (§15): this runs on the DB worker
+            thread, which holds no vault handle. A state carrying an orientation
+            with no ``image_root`` and a relative path is logged and skipped, not
+            guessed at.
 
     Returns:
         The picture ids actually written.
@@ -1252,6 +1530,47 @@ def apply_state_in_session(
                             picture,
                             value,
                             vacated_stack_ids=vacated_stack_ids,
+                        )
+                elif facet == FACET_ORIENTATION:
+                    # Deliberately NOT guarded on `value is not None` like its
+                    # siblings. A recorded `None` means the row predates the
+                    # orientation mirror being backfilled, so its undo genuinely
+                    # cannot turn the file — and `apply_orientation` says so, at
+                    # warning level, naming the picture. Skipping here instead
+                    # would make an incomplete undo indistinguishable from a
+                    # complete one, and silence the one message that explains it.
+                    #
+                    # This is also the only facet whose write leaves the
+                    # database, so the only one that can fail for reasons the
+                    # rest of the batch has nothing to do with — a read-only
+                    # file, a full disk, a photo replaced by something that is no
+                    # longer an image. The forward path degrades those to
+                    # `skipped`; letting them out of this loop instead would fail
+                    # the whole undo, including every unrelated facet and picture
+                    # sharing the transaction.
+                    #
+                    # ImportError belongs with the IO errors: the box rotation
+                    # resolves the rotate plugin through importlib (its package
+                    # directory is hyphenated, so it cannot be a plain import),
+                    # and that runs AFTER the file is written. A damaged install
+                    # would otherwise leave the file turned and abort an undo
+                    # that has nothing to do with rotation.
+                    try:
+                        apply_orientation(
+                            session,
+                            picture_id,
+                            value,
+                            image_root=image_root,
+                        )
+                    except (OSError, ValueError, ImportError) as exc:
+                        logger.error(
+                            "operation_log: could not restore orientation %s "
+                            "on picture %d (%s); the rest of this restore "
+                            "still applies, and the file keeps the rotation "
+                            "it has until the picture is turned again",
+                            value,
+                            picture_id,
+                            exc,
                         )
                 elif facet == FACET_DELETED:
                     if value is not None:
@@ -1456,6 +1775,7 @@ def _restore(
     to_before: bool,
     registry: Optional[InteractiveRescoreRegistry] = None,
     origin_client_id: Optional[str] = None,
+    image_root: Optional[str] = None,
 ) -> tuple[list[int], set[str], dict[str, list[int]]]:
     """Apply the before- (undo) or after- (redo) state of *operations* in order.
 
@@ -1502,6 +1822,7 @@ def _restore(
                 registry=registry,
                 origin_client_id=origin_client_id,
                 vacated_stack_ids=vacated_stack_ids,
+                image_root=image_root,
             )
         )
         for picture_facets in state.values():
@@ -1592,8 +1913,21 @@ def _emit(
             data["fields"] = list(fields)
         vault.notify(event, data)
 
+    # Restoring an orientation rewrites the FILE, so the card's thumbnail URL
+    # changes — and that URL comes from the batch-thumbnail endpoint, not from
+    # `GET /pictures/{id}/metadata`. A bare `updated` therefore makes the client
+    # re-read metadata it already has and go on painting the pre-rotate bitmap,
+    # which is exactly what `stack_count` below exists to solve for a different
+    # listing-only value. Naming the field is what lets the client know a
+    # metadata refresh is not enough.
+    #
+    # `facets` is the union over the whole restore rather than per picture, so a
+    # mixed batch re-reads a few thumbnails it did not need to. That costs one
+    # request against a conditional-GET-friendly URL; guessing wrong the other
+    # way leaves a visibly stale photo on screen.
+    updated_fields = ["pixels"] if FACET_ORIENTATION in facets else None
     for event in events:
-        _notify(event, updated, "updated")
+        _notify(event, updated, "updated", updated_fields)
     _notify(EventType.CHANGED_PICTURES, scrapheaped, "removed")
     _notify(EventType.CHANGED_PICTURES, restored, "restored")
     _notify(EventType.CHANGED_PICTURES, stack_siblings, "updated", ["stack_count"])
@@ -1697,6 +2031,7 @@ def undo_in_session(
     operation_id: Optional[int] = None,
     registry: Optional[InteractiveRescoreRegistry] = None,
     origin_client_id: Optional[str] = None,
+    image_root: Optional[str] = None,
 ) -> tuple[list[dict], list[int], list[str], dict[str, list[int]]]:
     """Undo one operation (and its whole batch), returning what it touched.
 
@@ -1715,6 +2050,7 @@ def undo_in_session(
         to_before=True,
         registry=registry,
         origin_client_id=origin_client_id,
+        image_root=image_root,
     )
     _mark_undone(session, members)
     session.commit()
@@ -1726,6 +2062,7 @@ def undo_batch_in_session(
     batch_id: str,
     registry: Optional[InteractiveRescoreRegistry] = None,
     origin_client_id: Optional[str] = None,
+    image_root: Optional[str] = None,
 ) -> tuple[list[dict], list[int], list[str], dict[str, list[int]]]:
     """Undo every still-applied operation of one batch (the sweep's Undo)."""
     members = list(
@@ -1746,6 +2083,7 @@ def undo_batch_in_session(
         to_before=True,
         registry=registry,
         origin_client_id=origin_client_id,
+        image_root=image_root,
     )
     _mark_undone(session, members)
     session.commit()
@@ -1756,6 +2094,7 @@ def redo_in_session(
     session: Session,
     registry: Optional[InteractiveRescoreRegistry] = None,
     origin_client_id: Optional[str] = None,
+    image_root: Optional[str] = None,
 ) -> tuple[list[dict], list[int], list[str], dict[str, list[int]]]:
     """Re-apply the most recently undone operation (and its whole batch)."""
     operation = session.exec(
@@ -1774,6 +2113,7 @@ def redo_in_session(
         to_before=False,
         registry=registry,
         origin_client_id=origin_client_id,
+        image_root=image_root,
     )
     for member in members:
         member.status = STATUS_APPLIED
@@ -1879,6 +2219,7 @@ def undo(
         operation_id,
         vault.interactive_rescore_registry,
         origin_client_id,
+        vault.image_root,
     )
     return _finish(vault, members, touched, facets, lifecycle, origin_client_id)
 
@@ -1892,6 +2233,7 @@ def undo_batch(
         batch_id,
         vault.interactive_rescore_registry,
         origin_client_id,
+        vault.image_root,
     )
     return _finish(vault, members, touched, facets, lifecycle, origin_client_id)
 
@@ -1899,6 +2241,9 @@ def undo_batch(
 def redo(vault: "Vault", origin_client_id: Optional[str] = None) -> dict:
     """Re-apply the most recently undone operation (and its batch)."""
     members, touched, facets, lifecycle = vault.db.run_task(
-        redo_in_session, vault.interactive_rescore_registry, origin_client_id
+        redo_in_session,
+        vault.interactive_rescore_registry,
+        origin_client_id,
+        vault.image_root,
     )
     return _finish(vault, members, touched, facets, lifecycle, origin_client_id)

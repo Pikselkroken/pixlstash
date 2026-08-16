@@ -211,34 +211,60 @@ def _force_utf8_streams():
             )
 
 
-def main():
-    _force_utf8_streams()
-    parser = argparse.ArgumentParser(description=f"Run the {APP_NAME} server.")
+def build_parser() -> argparse.ArgumentParser:
+    """Return the argument parser for the server entry point."""
+    parser = argparse.ArgumentParser(
+        prog=f"{APP_NAME}-server",
+        description=(
+            f"Run the {APP_NAME} server. In a source checkout, where the "
+            "entry point is not on PATH, the same options are accepted by "
+            f"`python -m {APP_NAME}.app`."
+        ),
+        epilog=(
+            "Every option acts during startup and the server then runs "
+            "normally, except --clear-embeddings, which does its work and "
+            "exits. Libraries and plugins are managed with a separate "
+            f"command, `{APP_NAME}-cli`."
+        ),
+    )
     parser.add_argument(
         "--server-config",
         type=str,
         default=SERVER_CONFIG_PATH,
-        help="Path to server config file.",
+        metavar="PATH",
+        help=(
+            "Path to the server config file, which is created on first run "
+            f"if it is missing (default: {SERVER_CONFIG_PATH})."
+        ),
     )
     parser.add_argument(
         "--remove-password",
         action="store_true",
-        help="Cause the server to recreate the password on next login.",
-    )
-    parser.add_argument(
-        "--retag-and-embed",
-        action="store_true",
-        help="Re-tag all images and refresh text embeddings in the database.",
+        help=(
+            "Clear the stored username and password hash and log out every "
+            "signed-in session, so the next sign-in sets them again. The "
+            "server starts as usual afterwards."
+        ),
     )
     parser.add_argument(
         "--clear-embeddings",
         action="store_true",
-        help="Clear all text embeddings for all images (does not touch tags).",
+        help=(
+            "Clear every picture's text and image embeddings, then exit "
+            "without starting the server. Tags are not touched, and the "
+            "embeddings are recomputed in the background the next time the "
+            "server runs."
+        ),
     )
     parser.add_argument(
         "--bootstrap",
         action="store_true",
-        help=("Run interactive first-run setup for storage path, port, and HTTPS."),
+        help=(
+            "Run the interactive first-run setup — storage path, port, HTTPS, "
+            "then the username and password — even if a config file already "
+            "exists, and start the server afterwards. It needs a terminal: "
+            "with stdin redirected the setup is skipped."
+        ),
     )
     parser.add_argument(
         "--cleanup-missing-pictures",
@@ -259,7 +285,12 @@ def main():
             "Example: --path-map /mnt/photos:/data/photos"
         ),
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    _force_utf8_streams()
+    args = build_parser().parse_args()
 
     ran_bootstrap = _bootstrap_server_config(args.server_config, force=args.bootstrap)
     Server.DEFAULT_CLEANUP_MISSING_PICTURES = bool(args.cleanup_missing_pictures)

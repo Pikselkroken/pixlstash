@@ -467,6 +467,7 @@ jobs:
           tests/test_characters_api.py
           tests/test_checkpoint_hash_finder.py
           tests/test_ci_shards.py
+          tests/test_cli_documentation.py
           tests/test_clip_text_embedding_similarity.py
           tests/test_comfyui_api_prompt_extraction.py
           tests/test_comfyui_pixlstash_saver.py
@@ -498,6 +499,7 @@ jobs:
           tests/test_image_embedding_worker.py
           tests/test_import_scrapheap_match.py
           tests/test_impossible_clear_authz.py
+          tests/test_inline_rotate.py
           tests/test_insightface_relocation.py
           tests/test_install_type_buckets.py
           tests/test_invalid_image_endless_retry.py
@@ -529,6 +531,7 @@ jobs:
           tests/test_model_unload_race.py
           tests/test_openapi_response_schemas.py
           tests/test_operation_log.py
+          tests/test_orientation.py
           tests/test_path_containment.py
           tests/test_pending_score_invalidation.py
           tests/test_picture_is_video.py

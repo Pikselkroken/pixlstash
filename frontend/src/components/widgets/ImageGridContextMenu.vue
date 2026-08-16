@@ -437,6 +437,29 @@
           <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
           Segment
         </button>
+        <!-- Rotate in place: applied on click, no dialog and no confirmation.
+             The label counts the selection because a bare "Rotate left" over
+             twelve tiles reads as an action on the one under the cursor.
+             Greyed rather than hidden when nothing in the selection can carry a
+             rotation, since the tooltip is what points at the copy route. -->
+        <button
+          class="ctx-item"
+          :disabled="!selectedImageIds.length || isReadOnly || !!rotateBlockReason"
+          :title="rotateLeftTitle"
+          @click="onAction('rotate-left')"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-rotate-left</v-icon>
+          {{ rotateLeftLabel }}
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="!selectedImageIds.length || isReadOnly || !!rotateBlockReason"
+          :title="rotateRightTitle"
+          @click="onAction('rotate-right')"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-rotate-right</v-icon>
+          {{ rotateRightLabel }}
+        </button>
         <div class="ctx-sep" />
       </template>
 
@@ -631,6 +654,7 @@ import {
   KEEP_COVER_ONLY_ICON,
   keepCoverOnlyMenuLabel,
 } from "../../utils/keepCoverOnly";
+import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import AddToEntityControl from "./AddToEntityControl.vue";
@@ -662,6 +686,12 @@ const props = defineProps({
   // the same rule the shipped Delete item follows.
   keepCoverOnlyLockReason: { type: String, default: null },
   groupingLockReason: { type: String, default: null },
+  // Reason string when NOTHING in the selection can be rotated in place (every
+  // picture is a WebP/TIFF/BMP/GIF/video, or lives in a reference folder), used
+  // as the rotate items' tooltip. Null while at least one can: a mixed
+  // selection stays enabled and the receipt reports what was left alone, the
+  // same rule Delete and Keep cover only follow.
+  rotateBlockReason: { type: String, default: null },
   // Reason string when at least one selected picture is frozen by a locked set;
   // gates the label-data actions (tag / auto-tag / description / delete) and is
   // shown as their tooltip. Null when nothing in the selection is locked.
@@ -740,6 +770,8 @@ const emit = defineEmits([
   "remove-picture-shares",
   "reverse-image-search",
   "find-similar-faces",
+  "rotate-left",
+  "rotate-right",
 ]);
 
 const menuRef = ref(null);
@@ -1121,6 +1153,21 @@ const keepCoverOnlyLabel = computed(() =>
     stackCount: props.keepCoverOnlyStackCount,
     selectedCount: selectedCount.value,
   }),
+);
+
+const rotateLeftLabel = computed(() =>
+  rotateMenuLabel(ROTATE_CCW, selectedCount.value),
+);
+const rotateRightLabel = computed(() =>
+  rotateMenuLabel(ROTATE_CW, selectedCount.value),
+);
+// The refusal replaces the label as the tooltip when there is one: a greyed
+// item whose tooltip only repeats its own label explains nothing.
+const rotateLeftTitle = computed(
+  () => props.rotateBlockReason || rotateLeftLabel.value,
+);
+const rotateRightTitle = computed(
+  () => props.rotateBlockReason || rotateRightLabel.value,
 );
 
 const showAnyStackAction = computed(

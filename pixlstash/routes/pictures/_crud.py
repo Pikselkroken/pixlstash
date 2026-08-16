@@ -41,6 +41,15 @@ from pixlstash.utils.field_allowlist import (
     require_servable_field,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.image_processing.orientation import (
+    ROTATE_180,
+    ROTATE_CCW,
+    ROTATE_CW,
+    ROTATE_DIRECTIONS,
+    read_orientation,
+    rotate_orientation,
+    supports_in_place_rotation,
+)
 from pixlstash.utils.service.caption_utils import (
     serialize_tag_objects,
     sync_picture_sidecar,
@@ -73,6 +82,13 @@ DETECT_MAX_IDS = 1000
 # list would serialise that much work on the DB queue from a single request.
 # Mirrors the caps above; the frontend chunks larger selections into multiple calls.
 BULK_DELETE_MAX_IDS = 1000
+
+
+# Upper bound on picture_ids per in-place rotate. Lower than the caps above on
+# purpose: each id costs two EXIF reads, a whole-container splice, an fsync and a
+# re-hash, all of it on the single DB writer thread, so this is the cap where the
+# per-id work is file I/O rather than a row fetch.
+ROTATE_MAX_IDS = 200
 
 
 # picture belongs to a locked set. Organisation fields (e.g. project_id) are not
@@ -240,6 +256,32 @@ class ScrapheapDeletePreviewResponse(BaseModel):
     confirm_token: str = ""
 
 
+# What the undo toast says. The direction is a property of the *request*, not of
+# the recorded state (the log stores the resulting orientation absolutely), so it
+# is closed over here rather than read back out of the diff. The count IS read
+# from the diff, like every other summary: a rotate that skipped a picture must
+# not claim it turned one.
+_ROTATE_SUMMARY_SUFFIX = {
+    ROTATE_CW: "right",
+    ROTATE_CCW: "left",
+    ROTATE_180: "180°",
+}
+
+
+def _rotate_summary(direction: str):
+    """Build the ``(before_delta, after_delta) -> str`` summary for a rotate."""
+    suffix = _ROTATE_SUMMARY_SUFFIX.get(direction, "right")
+
+    def build(before_delta, after_delta):
+        count = len(after_delta or {})
+        if not count:
+            return None
+        noun = "picture" if count == 1 else "pictures"
+        return f"Rotated {count} {noun} {suffix}"
+
+    return build
+
+
 def _parse_scrapheap_ids(payload: dict | None) -> list[int] | None:
     """Parse the scrapheap id selection from a request body.
 
@@ -279,6 +321,26 @@ class BulkPictureDeleteResponse(BaseModel):
     # Picture ids skipped because a locked set freezes them (not deleted); unlock
     # the set to delete them.
     skipped_locked: list[int] = []
+
+
+class PictureRotateResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    # Pictures whose file now carries a new EXIF orientation. Disjoint from the
+    # two lists below, and the three together account for every requested id —
+    # the buckets are counted where they happen, never by subtraction.
+    rotated_picture_ids: list[int] = []
+    # Pictures that cannot be rotated in place and need the copy-producing rotate
+    # plugin instead: a reference-folder original, or a container with no
+    # orientation tag we can splice (anything but JPEG and PNG).
+    unsupported_picture_ids: list[int] = []
+    # Pictures that were addressed but had nothing to rotate: no row, already in
+    # the Scrapheap, no file on disk, or a file the write failed on.
+    skipped_picture_ids: list[int] = []
+    # The operation-log batch this rotate was recorded under, so the client can
+    # offer one Undo for the whole gesture. Null when nothing changed.
+    batch_id: Optional[str] = None
 
 
 def register_routes(router, server):
@@ -1600,4 +1662,179 @@ def register_routes(router, server):
             "status": "success",
             "deleted_count": len(deleted_ids),
             "skipped_locked": skipped_locked,
+        }
+
+    @router.post(
+        "/pictures/rotate",
+        summary="Rotate pictures in place",
+        description=(
+            "Turns pictures by rewriting **only** their EXIF orientation tag. Not "
+            "one pixel byte is re-encoded, so a JPEG takes no generational loss "
+            "and a PNG keeps its ComfyUI workflow/prompt chunks. Body: "
+            '{"picture_ids": [int, ...], "direction": "cw"|"ccw"|"180"}.\n\n'
+            "Three disjoint result buckets that together account for every id "
+            "sent: `rotated_picture_ids`, `unsupported_picture_ids` (a "
+            "reference-folder original, or a container with no orientation tag "
+            "this server can splice — use the `rotate` image plugin, which "
+            "produces a rotated *copy*) and `skipped_picture_ids` (no row, "
+            "already in the Scrapheap, or the write failed).\n\n"
+            "Recorded as a single `pictures.rotate` operation carrying a "
+            "`batch_id`, so the whole gesture is **one** undo. Undo is exact: the "
+            "log stores the orientation the file had, not the turn that was "
+            "applied, so undoing twice is the same as undoing once."
+        ),
+        response_model=PictureRotateResponse,
+    )
+    def rotate_pictures(request: Request, payload: dict = Body(...)):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        maybe_ids = payload.get("picture_ids") if isinstance(payload, dict) else None
+        if not isinstance(maybe_ids, list) or not maybe_ids:
+            raise HTTPException(
+                status_code=400, detail="picture_ids must be a non-empty list"
+            )
+        if len(maybe_ids) > ROTATE_MAX_IDS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"picture_ids exceeds the maximum of {ROTATE_MAX_IDS} ids "
+                    "per request"
+                ),
+            )
+        try:
+            pic_ids = [int(pid) for pid in maybe_ids]
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail="picture_ids must contain valid integers"
+            )
+        direction = str((payload or {}).get("direction") or "").strip().lower()
+        if direction not in ROTATE_DIRECTIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"direction must be one of {list(ROTATE_DIRECTIONS)}",
+            )
+
+        image_root = server.vault.image_root
+
+        def prime_orientation(session, ids):
+            """Fill the orientation mirror of any target that has none yet.
+
+            ``capture_state_in_session`` reads the mirror, and it runs *before*
+            the mutation — so a target still NULL here would record
+            ``before_state {"orientation": null}`` and its undo would have
+            nothing to write back. Every row predating the column is NULL, and
+            ``MissingOrientationFinder`` may not have reached this one yet.
+
+            Its own DB task, ahead of the recorded one, and it writes only where
+            the column is NULL. A rotate that lands in between therefore cannot
+            be clobbered: it leaves the column non-NULL, so this skips the row.
+
+            The lock check is repeated here, ahead of ``rotate_pics``'s own, so a
+            request that is going to be refused with 423 does not first open up
+            to ``ROTATE_MAX_IDS`` files on the DB writer thread and write to rows
+            the caller is not allowed to touch.
+            """
+            enforce_pictures_not_locked(session, ids, "rotate")
+            for pid in ids:
+                pic = session.get(Picture, pid)
+                if pic is None or pic.orientation is not None or not pic.file_path:
+                    continue
+                path = ImageUtils.resolve_picture_path(image_root, pic.file_path)
+                if not path:
+                    continue
+                pic.orientation = read_orientation(path)
+                session.add(pic)
+            session.commit()
+
+        server.vault.db.run_task(prime_orientation, pic_ids)
+
+        def rotate_pics(session, ids, direction):
+            # A hard refusal, not a skip: a rotate rewrites the user's original
+            # file, and quietly turning some of a frozen selection is worse than
+            # turning none of it.
+            enforce_pictures_not_locked(session, ids, "rotate")
+            rotated: list[int] = []
+            unsupported: list[int] = []
+            skipped: list[int] = []
+            for pid in ids:
+                pic = session.get(Picture, pid)
+                if pic is None or pic.deleted or not pic.file_path:
+                    skipped.append(pid)
+                    continue
+                # A reference-folder picture is the user's own file, managed
+                # outside the library: the mount may be read-only, and the
+                # changed mtime reads as a source swap to the next scan.
+                if pic.reference_folder_id is not None:
+                    unsupported.append(pid)
+                    continue
+                path = ImageUtils.resolve_picture_path(image_root, pic.file_path)
+                if not path:
+                    # A file problem, not a format one — so `skipped`, beside the
+                    # other "there is nothing on disk to turn" cases above. The
+                    # two buckets are advice, not bookkeeping: the client answers
+                    # `unsupported` with "use Filters > Rotate to make a rotated
+                    # copy", which is the wrong thing to tell someone whose file
+                    # cannot be located.
+                    skipped.append(pid)
+                    continue
+                if not supports_in_place_rotation(path):
+                    unsupported.append(pid)
+                    continue
+                # Read INSIDE the DB task, never in the handler: two concurrent
+                # rotates reading in their handlers would both see 1, both write
+                # 6, and one turn would be silently lost.
+                try:
+                    target = rotate_orientation(read_orientation(path), direction)
+                    turned = operation_log_service.apply_orientation(
+                        session, pid, target, image_root=image_root
+                    )
+                except (OSError, ValueError) as exc:
+                    logger.warning(
+                        "rotate_pictures: could not turn picture_id=%s path=%s "
+                        "%s (%s); it is reported as skipped and its file is "
+                        "unchanged",
+                        pid,
+                        path,
+                        direction,
+                        exc,
+                    )
+                    skipped.append(pid)
+                    continue
+                (rotated if turned else skipped).append(pid)
+            session.flush()
+            return rotated, unsupported, skipped
+
+        # Always batched, so one Undo reverses the whole gesture: the caller's
+        # gesture id when it sent one, a server-minted ``srv-…`` otherwise.
+        context = operation_log_service.request_context(
+            request, fallback_batch_id=operation_log_service.new_batch_id()
+        )
+        (rotated_ids, unsupported_ids, skipped_ids), _operation = (
+            operation_log_service.run_recorded_metadata_task(
+                server.vault,
+                rotate_pics,
+                pic_ids,
+                direction,
+                op_type=operation_log_service.OP_PICTURES_ROTATE,
+                picture_ids=pic_ids,
+                summary=_rotate_summary(direction),
+                **context,
+            )
+        )
+        if rotated_ids:
+            # The card keeps its place and its id; its bitmap and its aspect
+            # ratio changed. ``updated`` is the kind for that.
+            server.vault.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": rotated_ids,
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "updated",
+                },
+            )
+        return {
+            "status": "success",
+            "rotated_picture_ids": rotated_ids,
+            "unsupported_picture_ids": unsupported_ids,
+            "skipped_picture_ids": skipped_ids,
+            "batch_id": context.get("batch_id") if rotated_ids else None,
         }
