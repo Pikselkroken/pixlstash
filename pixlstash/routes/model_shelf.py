@@ -1140,7 +1140,7 @@ def create_router(server) -> APIRouter:
 
     @router.post(
         "/models/{model_id}/open-location",
-        summary="Show a model's file in the host file manager",
+        summary="Open a model's folder in the host file manager",
         description=(
             "Opens the folder holding a `present` copy of the model in the "
             "file manager of the machine PixlStash runs on — the same gesture "

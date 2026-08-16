@@ -67,6 +67,13 @@ def open_in_file_manager(path: str) -> bool:
             )
             return False
         return True
-    except Exception as exc:
-        logger.warning("Failed to open %s in the host file manager: %s", path, exc)
+    except Exception:
+        # With the traceback: what lands here is platform-specific and varies by
+        # desktop — a missing opener, a permission error, a Windows shell verb
+        # that failed — and the frame is the only thing that says which.
+        logger.exception(
+            "Failed to open %s in the host file manager (platform %s).",
+            path,
+            sys.platform,
+        )
         return False

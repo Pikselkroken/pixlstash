@@ -531,7 +531,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                         |
 | POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                       |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                         |
-| POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Show a model's file in the host file manager               |
+| POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager             |
 | GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                    |
 | POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                 |
 | POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                |
