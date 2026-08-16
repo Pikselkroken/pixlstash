@@ -613,11 +613,34 @@ function onVisible() {
   if (document.visibilityState === "visible") loadRuns();
 }
 
+/**
+ * Keep a valid destination selected, rather than picking one once at mount.
+ *
+ * `folders.refresh()` is not awaited — this view must draw before the registry
+ * lands — so on a cold start or a direct navigation to `/models/runs` the list
+ * is EMPTY at mount. Deriving the default there left `destinationId` null with
+ * nothing to re-derive it, and `canSubmit` requires a destination: the reader
+ * could tick runs and find Import disabled with nothing on screen saying why.
+ *
+ * `immediate` covers the mount case, so this is the only place that chooses.
+ * It also re-chooses when the selected folder stops being a legal destination
+ * (forgotten, or relocated into `external`), instead of holding an id the
+ * server would refuse.
+ */
+watch(
+  destinations,
+  (list) => {
+    const stillThere = list.some((f) => f.id === destinationId.value);
+    if (destinationId.value != null && stillThere) return;
+    const managed = list.find((f) => f.kind === "managed");
+    destinationId.value = managed?.id ?? list[0]?.id ?? null;
+  },
+  { immediate: true },
+);
+
 onMounted(() => {
   if (!folders.loaded) folders.refresh();
   loadRuns();
-  const managed = destinations.value.find((f) => f.kind === "managed");
-  destinationId.value = managed?.id ?? destinations.value[0]?.id ?? null;
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("focus", onVisible);
 });

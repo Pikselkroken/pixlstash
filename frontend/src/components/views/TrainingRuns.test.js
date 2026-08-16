@@ -231,6 +231,49 @@ describe("drawing the grid", () => {
     expect(wrapper.findAll(".tr-card")).toHaveLength(2);
   });
 
+  it("still finds a destination when the registry lands after mount", async () => {
+    // The cold-start / direct-navigation case: `folders.refresh()` is not
+    // awaited, so `destinations` is EMPTY at mount. Choosing the default there
+    // left `destinationId` null with nothing to re-derive it, and `canSubmit`
+    // requires one — so the reader could tick runs and find Import disabled
+    // with nothing on screen saying why.
+    listRuns.mockResolvedValue([run()]);
+    const store = useModelFoldersStore();
+    store.folders = [];
+    store.loaded = true;
+    const wrapper = mount(TrainingRuns, globalOpts);
+    mounted.push(wrapper);
+    await settle(wrapper);
+
+    store.folders = FOLDERS;
+    await settle(wrapper);
+
+    await tick(wrapper, "Clementine");
+    expect(importBtn(wrapper).attributes("disabled")).toBeUndefined();
+    importRun.mockResolvedValue({ run_name: "Clementine", files: [] });
+    await importBtn(wrapper).trigger("click");
+    await settle(wrapper);
+    expect(importRun.mock.calls[0][0].destinationFolderId).toBe(2);
+  });
+
+  it("re-chooses when the selected destination stops being one", async () => {
+    // Forgotten, or relocated into `external`. Holding the id would send an
+    // import at a folder the server refuses.
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    const store = useModelFoldersStore();
+    store.folders = [
+      FOLDERS[0],
+      { id: 9, path: "/models/other", kind: "user", movable: "per_item" },
+    ];
+    await settle(wrapper);
+
+    importRun.mockResolvedValue({ run_name: "Clementine", files: [] });
+    await importBtn(wrapper).trigger("click");
+    await settle(wrapper);
+    expect(importRun.mock.calls[0][0].destinationFolderId).toBe(9);
+  });
+
   it("tells the shelf how many runs there are, for the count beside the tabs", async () => {
     const wrapper = await openWith([run(), run("Foxglove")]);
     expect(wrapper.emitted("count").at(-1)).toEqual([2]);

@@ -7,6 +7,7 @@ import {
   watch,
   nextTick,
 } from "vue";
+import { MODEL_SHELF_ROUTES } from "../../router/routeNames";
 import ImageImporter from "../io/ImageImporter.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
 import PictureSetEditor from "../editors/PictureSetEditor.vue";
@@ -159,7 +160,9 @@ const hasFolderFilter = computed(
 // Duplicates is addressed by route name, not by a selection sentinel: it shows
 // no pictures, so there is no selection to express.
 const isDuplicatesView = computed(() => route.name === "duplicates");
-const isModelsView = computed(() => route.name === "models");
+// Both of the shelf's routes, from the one list, so the runs tab cannot fall
+// out of this the way it did when the two predicates were separate literals.
+const isModelsView = computed(() => MODEL_SHELF_ROUTES.includes(route.name));
 
 // A shared library keeps the duplicate affordances VISIBLE and inert rather
 // than hiding them: a read-only visitor should still see that the feature

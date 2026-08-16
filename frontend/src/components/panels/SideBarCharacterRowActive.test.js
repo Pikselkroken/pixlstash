@@ -69,16 +69,26 @@ vi.mock("vuetify/components", async () => {
   return vuetifyComponentStubs();
 });
 
-vi.mock("vue-router", () => ({
-  useRoute: () => ({ query: {}, params: {}, path: "/", name: "all-pictures" }),
-  useRouter: () => ({
-    push: vi.fn(),
-    replace: vi.fn(),
-    currentRoute: ref({ query: {} }),
-  }),
-}));
-
-
+// Mutable, so a test can put the sidebar on a route other than the default.
+const nav = vi.hoisted(() => ({ route: null }));
+vi.mock("vue-router", async () => {
+  const { reactive } = await vi.importActual("vue");
+  const { vi: vitest } = await import("vitest");
+  nav.route = reactive({
+    query: {},
+    params: {},
+    path: "/",
+    name: "all-pictures",
+  });
+  return {
+    useRoute: () => nav.route,
+    useRouter: () => ({
+      push: vitest.fn(),
+      replace: vitest.fn(),
+      currentRoute: { value: { query: {} } },
+    }),
+  };
+});
 
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import { useSelectionStore } from "../../stores/useSelectionStore";
@@ -220,5 +230,36 @@ describe("the character row's single-selection fallback", () => {
     expect(resolutionWarnings).toEqual([]);
 
     wrapper.unmount();
+  });
+});
+
+describe("the shelf's two routes are one destination", () => {
+  // `SideBar` keeps its own `isModelsView`, separate from the one
+  // `useAppNavigation` exports, and adding the runs tab broke this half
+  // silently: on `/models/runs` the Models entry went dark AND the underlying
+  // picture selection lit a row of its own, which is the two-active-
+  // destinations defect the guard exists to prevent. Both now read
+  // `MODEL_SHELF_ROUTES`, so the pair cannot drift apart again.
+  it("treats /models/runs as the Models destination", async () => {
+    nav.route.name = "models-runs";
+    const wrapper = await mountSidebar();
+    const models = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Models"));
+    expect(models).toBeTruthy();
+    expect(models.attributes("aria-current")).toBe("page");
+    wrapper.unmount();
+    nav.route.name = "all-pictures";
+  });
+
+  it("does not let a picture selection light a second destination there", async () => {
+    nav.route.name = "models-runs";
+    useSelectionStore().selectedCharacter = ADA.id;
+    const wrapper = await mountSidebar();
+    const active = wrapper.findAll(".sidebar-list-item.active");
+    const labels = active.map((el) => el.text());
+    expect(labels.filter((l) => l.includes("Ada"))).toHaveLength(0);
+    wrapper.unmount();
+    nav.route.name = "all-pictures";
   });
 });
