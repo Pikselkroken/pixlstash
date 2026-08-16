@@ -8,6 +8,7 @@ import {
   listModelFolders,
   MANAGED_KIND,
   rescanModelFolder,
+  SOURCE_KIND,
 } from "../api/modelFolders";
 import { onSessionReset } from "../utils/apiClient";
 import { errorDetail } from "../utils/apiError";
@@ -77,6 +78,20 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   /** The one folder that is PixlStash's own storage. Always exactly one. */
   const managedFolder = computed(() =>
     folders.value.find((folder) => folder.kind === MANAGED_KIND),
+  );
+
+  /**
+   * The registered ai-toolkit output root, or `undefined` while none is set.
+   *
+   * Singular on purpose. The server permits several `source` folders, but
+   * ai-toolkit writes every run under one output root, so a second would be a
+   * setting nobody asked for: the offer to set one disappears once this exists,
+   * and the training-runs view reads exactly this folder. `find`, so a registry
+   * that somehow holds two still resolves rather than reporting an error the
+   * owner has no control to fix.
+   */
+  const sourceFolder = computed(() =>
+    folders.value.find((folder) => folder.kind === SOURCE_KIND),
   );
 
   /** Paths already registered, for the picker to disable rather than 409 on. */
@@ -196,24 +211,35 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   }
 
   /**
-   * Register a folder and immediately scan it.
+   * Register a folder and, unless it is taken from, immediately scan it.
    *
    * Registering alone puts an empty row on screen, which reads as a failure;
    * the scan is what the owner actually asked for.
+   *
+   * A `source` folder is the exception on both counts. It is an ai-toolkit
+   * output root, catalogued nowhere: the server answers its scan with
+   * `skipped` (`model_folder_scanner.py`), so submitting one spends a task to
+   * do nothing, and the toast that promises it would be describing work that
+   * never happens. Its runs are read live by the training-runs view instead.
    *
    * @param {Object} options - forwarded to the API's `createModelFolder`.
    * @returns {Promise<boolean>} true when the folder was registered.
    */
   async function add(options) {
     const notices = useNoticeStore();
+    const takenFrom = options?.kind === SOURCE_KIND;
     try {
       const created = await createModelFolder(options);
       await refresh();
+      const name = basename(created?.path || options.path);
       notices.push({
         level: "success",
-        text: `Added ${basename(created?.path || options.path)}. Looking for models in it now.`,
+        text: takenFrom
+          ? `Added ${name}. Its training runs are ready to import.`
+          : `Added ${name}. Looking for models in it now.`,
       });
-      if (created?.id != null) await scan(created.id, { silent: true });
+      if (!takenFrom && created?.id != null)
+        await scan(created.id, { silent: true });
       return true;
     } catch (err) {
       notices.push({
@@ -334,6 +360,7 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     error,
     scanningIds,
     managedFolder,
+    sourceFolder,
     registeredPaths,
     refresh,
     refreshDevices,

@@ -10,14 +10,16 @@ import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
 const listModelFolders = vi.fn();
+const createModelFolder = vi.fn();
 const forgetModelFolder = vi.fn();
 const rescanModelFolder = vi.fn();
 
 vi.mock("../../api/modelFolders", () => ({
   MANAGED_KIND: "managed",
+  SOURCE_KIND: "source",
   CREATABLE_KINDS: ["user", "source"],
   listModelFolders: (...a) => listModelFolders(...a),
-  createModelFolder: vi.fn(),
+  createModelFolder: (...a) => createModelFolder(...a),
   forgetModelFolder: (...a) => forgetModelFolder(...a),
   rescanModelFolder: (...a) => rescanModelFolder(...a),
 }));
@@ -141,6 +143,7 @@ async function open(rows, { canManage = true, inDocker = false } = {}) {
 beforeEach(() => {
   setActivePinia(createPinia());
   listModelFolders.mockReset().mockResolvedValue([]);
+  createModelFolder.mockReset().mockResolvedValue(folder({ id: 9 }));
   relocate.mockReset().mockResolvedValue(true);
   moveBusy = false;
   forgetModelFolder.mockReset().mockResolvedValue({ tombstoned_files: 0 });
@@ -254,7 +257,10 @@ describe("relocation", () => {
       .getComponent({ name: "FolderBrowser" })
       .vm.$emit("select", "/mnt/big/.insightface");
     await wrapper.vm.$nextTick();
-    expect(relocate).toHaveBeenCalledWith(INSIGHTFACE.id, "/mnt/big/.insightface");
+    expect(relocate).toHaveBeenCalledWith(
+      INSIGHTFACE.id,
+      "/mnt/big/.insightface",
+    );
   });
 });
 
@@ -346,5 +352,67 @@ describe("how much disk the folder is using", () => {
     // as one. The managed store on a fresh install is exactly this.
     const wrapper = await open([folder({ file_count: 0, present_bytes: 0 })]);
     expect(wrapper.text()).not.toContain("0 B");
+  });
+});
+
+describe("setting the ai-toolkit output folder", () => {
+  const SOURCE = folder({
+    id: 4,
+    path: "/home/g/ai-toolkit/output",
+    kind: "source",
+    movable: "external",
+  });
+
+  it("offers to set it while none is registered", async () => {
+    const wrapper = await open([folder()]);
+    expect(wrapper.text()).toContain("Set ai-toolkit folder");
+  });
+
+  it("stops offering once one is registered, because there is only one", async () => {
+    // ai-toolkit writes every run under a single output root, so a second
+    // button-press has nothing left to set. The row it created carries the
+    // Forget that undoes it.
+    const wrapper = await open([folder(), SOURCE]);
+    expect(wrapper.text()).not.toContain("Set ai-toolkit folder");
+  });
+
+  it("registers what the picker returns as the output root, not as a model folder", async () => {
+    // The bug this whole change exists to fix: the picker used to hardcode
+    // `kind: "user"`, so no UI could ever produce a source folder and the
+    // import surface was unreachable.
+    const wrapper = await open([folder()]);
+    const setBtn = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Set ai-toolkit folder"));
+    await setBtn.trigger("click");
+    await wrapper
+      .findComponent({ name: "FolderBrowser" })
+      .vm.$emit("select", "/home/g/ai-toolkit/output");
+    await wrapper.vm.$nextTick();
+
+    expect(createModelFolder).toHaveBeenCalledWith({
+      path: "/home/g/ai-toolkit/output",
+      kind: "source",
+    });
+  });
+
+  it("still registers an ordinary folder as one, after a set was cancelled", async () => {
+    // The picker is shared, so the verb that opened it has to be forgotten when
+    // it closes. Without that, cancelling a Set and then pressing Add would
+    // silently register the next folder as an output root.
+    const wrapper = await open([folder()]);
+    const byText = (t) =>
+      wrapper.findAll("button").find((b) => b.text().includes(t));
+    await byText("Set ai-toolkit folder").trigger("click");
+    const browser = wrapper.findComponent({ name: "FolderBrowser" });
+    await browser.vm.$emit("close");
+    await byText("Add folder").trigger("click");
+    await browser.vm.$emit("select", "/home/g/loras2");
+    await wrapper.vm.$nextTick();
+
+    expect(createModelFolder).toHaveBeenCalledWith({
+      path: "/home/g/loras2",
+      kind: "user",
+    });
   });
 });

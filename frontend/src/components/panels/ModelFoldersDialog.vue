@@ -6,6 +6,22 @@
     @close="emit('close')"
   >
     <template #header-right>
+      <!-- Shown only while no output root is set, because there is exactly one
+           to set: ai-toolkit writes every run under a single folder. Once it is
+           registered this button has nothing left to do, and the row it created
+           carries the Forget that undoes it. A second button rather than a
+           split menu, so the ordinary verb keeps its own shape and its own
+           position whichever state this is in. -->
+      <AppButton
+        v-if="!store.sourceFolder"
+        size="sm"
+        variant="secondary"
+        v-bind="blockedAttrs(addReason, REMOTE_NOTE_ID)"
+        @click="onAddSource"
+      >
+        <template #icon="{ size }"><AiToolkitIcon :size="size" /></template>
+        Set ai-toolkit folder
+      </AppButton>
       <AppButton
         size="sm"
         variant="primary_green"
@@ -69,7 +85,7 @@
             <span v-if="folder.kind === MANAGED_KIND" class="mf-chip"
               >Managed</span
             >
-            <span v-else-if="folder.kind === 'source'" class="mf-chip"
+            <span v-else-if="folder.kind === SOURCE_KIND" class="mf-chip"
               >ai-toolkit</span
             >
             <span v-else-if="folder.kind === 'foreign'" class="mf-chip"
@@ -192,11 +208,12 @@
 import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
+import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import HelpTip from "../widgets/HelpTip.vue";
 import FolderBrowser from "../editors/FolderBrowser.vue";
-import { MANAGED_KIND } from "../../api/modelFolders";
+import { MANAGED_KIND, SOURCE_KIND } from "../../api/modelFolders";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import {
@@ -247,9 +264,11 @@ const KIND_ICON = Object.fromEntries(
 
 const browseOpen = ref(false);
 const expanded = ref(new Set());
-// Which verb opened the picker. One browser serves both, so the pick has to be
-// told apart: Add registers the folder, Move empties another one into it.
+// Which verb opened the picker. One browser serves all three, so the pick has
+// to be told apart: Add registers the folder, Move empties another one into it,
+// and Set ai-toolkit folder registers it as the output root instead.
 const relocating = ref(null);
+const addingSource = ref(false);
 
 /**
  * Whether this session can reach the §16.3 host-capability tier.
@@ -357,6 +376,15 @@ function toggleExpanded(id) {
 function onAdd() {
   if (addReason.value) return;
   relocating.value = null;
+  addingSource.value = false;
+  browseOpen.value = true;
+}
+
+/** The same picker, registering what it returns as the ai-toolkit output root. */
+function onAddSource() {
+  if (addReason.value) return;
+  relocating.value = null;
+  addingSource.value = true;
   browseOpen.value = true;
 }
 
@@ -370,7 +398,7 @@ async function onPicked(path) {
   const folder = relocating.value;
   if (!folder) {
     if (addReason.value) return;
-    store.add({ path, kind: "user" });
+    store.add({ path, kind: addingSource.value ? SOURCE_KIND : "user" });
     return;
   }
   if (relocateReason(folder)) return;
@@ -383,6 +411,7 @@ async function onPicked(path) {
 function closeBrowser() {
   browseOpen.value = false;
   relocating.value = null;
+  addingSource.value = false;
 }
 
 function onScan(folder) {

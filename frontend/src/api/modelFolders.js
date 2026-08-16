@@ -28,6 +28,15 @@ const MODEL_FOLDERS_URL = "/model-folders";
 /** The folder kind PixlStash owns: exactly one exists and it cannot be forgotten. */
 export const MANAGED_KIND = "managed";
 
+/**
+ * An ai-toolkit output root: taken from on import, never catalogued in place.
+ *
+ * The server permits several, but ai-toolkit writes everything under one root,
+ * so the UI treats it as a single setting — registering one hides the offer to
+ * register another, and the training-runs view reads that one.
+ */
+export const SOURCE_KIND = "source";
+
 /** The folder kinds a caller may register (`managed`/`foreign` are ours). */
 export const CREATABLE_KINDS = ["user", "source"];
 
