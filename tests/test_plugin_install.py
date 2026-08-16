@@ -1053,3 +1053,32 @@ def test_the_installer_writes_where_the_registries_read():
     assert (
         os.path.join(root, *plugin_install._SUBDIRS[IMAGE]) == image_user_plugin_dir()
     )
+
+
+def test_the_cli_names_itself_the_way_it_was_actually_invoked(
+    plugin_root, capsys, monkeypatch
+):
+    """A desktop launcher declares the working command; the CLI must use it.
+
+    ``pixlstash-cli`` is sealed inside the app image and on nobody's PATH there,
+    so a hint printing that name sends the reader to a command they do not have.
+    """
+    monkeypatch.setenv("PIXLSTASH_CLI_COMMAND", "pixlstash")
+
+    assert cli.main(["plugins", "list"]) == cli.EXIT_OK
+    printed = capsys.readouterr().out
+    assert "pixlstash plugins install" in printed
+    assert "pixlstash-cli" not in printed
+
+    # Usage and error lines come from argparse's prog, so they follow too.
+    assert cli.build_parser().prog == "pixlstash"
+
+
+def test_without_a_declaration_the_console_script_is_still_the_name(monkeypatch):
+    """Every non-desktop deployment is untouched by the above."""
+    monkeypatch.delenv("PIXLSTASH_CLI_COMMAND", raising=False)
+    assert cli.invoked_as() == "pixlstash-cli"
+
+    # An empty declaration must not produce a prog of "" or a leading space.
+    monkeypatch.setenv("PIXLSTASH_CLI_COMMAND", "  ")
+    assert cli.invoked_as() == "pixlstash-cli"

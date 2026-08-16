@@ -1,5 +1,11 @@
 # [Unreleased]
 
+- The desktop app can now run the PixlStash CLI: `PixlStash.AppImage cli
+  libraries list` works whether or not the app is open, and targets the desktop
+  app's own library registry. Turn on Settings → Backend → Desktop → Shell
+  command to get a `pixlstash` command in `~/.local/bin` and attach libraries or
+  install plugins from any terminal. Settings → Libraries shows the exact
+  command for your install.
 - Add multiple image libraries with switching from Settings → Libraries. Each
   library keeps its own pictures, tags, scores and snapshots while your account
   and preferences stay with the PixlStash installation.

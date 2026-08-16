@@ -157,6 +157,10 @@ watch(
 
 // Desktop-shell preference: keep running in the tray when the window is closed.
 const hideToTrayOnClose = ref(true);
+// Desktop-shell preference: put a `pixlstash` command on the shell's PATH.
+// null means this install has nothing to install (Windows, or a dev run), and
+// the row is hidden rather than shown as a switch that would do nothing.
+const shellCommand = ref(null);
 
 async function refresh() {
   if (!desktop) return;
@@ -199,6 +203,8 @@ async function refreshDesktopPrefs() {
   try {
     const prefs = await desktop.getDesktopPrefs();
     hideToTrayOnClose.value = !!prefs.hideToTrayOnClose;
+    shellCommand.value =
+      typeof prefs.shellCommand === "boolean" ? prefs.shellCommand : null;
   } catch (e) {
     error.value = e?.message || String(e);
   }
@@ -211,6 +217,24 @@ async function setHideToTray(value) {
     await desktop.setDesktopPrefs({ hideToTrayOnClose: value });
   } catch (e) {
     error.value = e?.message || String(e);
+  }
+}
+
+// Installing can be refused (a `pixlstash` the user wrote themselves is in the
+// way, or the home directory is not writable), so the switch is set from what
+// the main process reports afterwards rather than from what was asked for. A
+// switch left on over a command that does not exist is the failure worth
+// avoiding here.
+async function setShellCommand(value) {
+  if (!desktop?.setDesktopPrefs) return;
+  shellCommand.value = value;
+  try {
+    const prefs = await desktop.setDesktopPrefs({ shellCommand: value });
+    shellCommand.value =
+      typeof prefs?.shellCommand === "boolean" ? prefs.shellCommand : null;
+  } catch (e) {
+    error.value = e?.message || String(e);
+    await refreshDesktopPrefs();
   }
 }
 
@@ -509,6 +533,19 @@ watch(
           />
         </SettingsRow>
         <SettingsRow
+          v-if="shellCommand !== null"
+          label="Shell command"
+          sub="Puts a pixlstash command in ~/.local/bin so you can attach libraries and install plugins from a terminal."
+        >
+          <v-switch
+            :model-value="shellCommand"
+            color="accent"
+            density="compact"
+            hide-details
+            @update:model-value="setShellCommand($event)"
+          />
+        </SettingsRow>
+        <SettingsRow
           label="Check for updates"
           sub="Checks once a day and shows a sidebar notice when a new version is out. Sends only your app version and install type, anonymously."
         >
@@ -520,6 +557,9 @@ watch(
           />
         </SettingsRow>
       </SettingsTwoCol>
+      <!-- The other copy of this lives in the compute pane, which the backend
+           pane never renders, so a failure here had nowhere to be shown. -->
+      <div v-if="error" class="settings-error">{{ error }}</div>
     </SettingsSection>
 
     <!-- Pinned to the bottom of the Backend pane. -->

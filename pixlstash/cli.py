@@ -20,6 +20,7 @@ deletes is always inside one of the two plugin directories.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import Sequence
 
@@ -41,21 +42,6 @@ EXIT_OK = 0
 EXIT_REFUSED = 1
 EXIT_HUB_UNAVAILABLE = 3
 
-# Shown under every top-level `--help`. Exit codes belong in the help output
-# rather than only in this file's docstring: a script calling the CLI has to
-# tell "you asked for something I will not do" apart from "I could not open
-# the hub", and nothing else tells it.
-EPILOG = """\
-Every command has its own help, e.g.
-  pixlstash-cli libraries backup --help
-
-Exit codes:
-  0  the command did what it says
-  1  refused for a reason you can act on, or you answered no to a prompt
-  2  the command line itself was wrong
-  3  the hub database could not be opened
-"""
-
 # Every verb that names a library accepts the same three forms, so they are
 # documented in one place rather than drifting apart across five parsers.
 LIBRARY_ARG_HELP = (
@@ -65,17 +51,51 @@ LIBRARY_ARG_HELP = (
 )
 
 
+def invoked_as() -> str:
+    """Return the command the user typed to get here.
+
+    Every usage line, error and "add one with:" hint names this, so on a desktop
+    install they must not say ``pixlstash-cli``: that console script is sealed
+    inside the app image and is on nobody's PATH. The launcher that ran us
+    declares the working form in ``PIXLSTASH_CLI_COMMAND`` (see
+    :mod:`pixlstash.hub.cli_hint`, which reads the same variable to fill the
+    Settings panel). Everywhere else the console script is exactly right.
+    """
+    return os.environ.get("PIXLSTASH_CLI_COMMAND", "").strip() or "pixlstash-cli"
+
+
+def epilog() -> str:
+    """Return the text shown under every top-level ``--help``.
+
+    Exit codes belong in the help output rather than only in this file's
+    docstring: a script calling the CLI has to tell "you asked for something I
+    will not do" apart from "I could not open the hub", and nothing else tells
+    it. Built per call rather than held as a constant so its worked example
+    names the command the reader actually typed (see :func:`invoked_as`).
+    """
+    return f"""\
+Every command has its own help, e.g.
+  {invoked_as()} libraries backup --help
+
+Exit codes:
+  0  the command did what it says
+  1  refused for a reason you can act on, or you answered no to a prompt
+  2  the command line itself was wrong
+  3  the hub database could not be opened
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Return the argument parser for the library CLI."""
     parser = argparse.ArgumentParser(
-        prog="pixlstash-cli",
+        prog=invoked_as(),
         # Wrapped by hand: RawDescriptionHelpFormatter prints the description
         # as written, which is the price of an epilog that keeps its layout.
         description=(
             "PixlStash command line. Run this on the machine hosting\n"
             "PixlStash, signed in as the user that owns it."
         ),
-        epilog=EPILOG,
+        epilog=epilog(),
         # Keeps the epilog's exit-code list on separate lines instead of
         # reflowing it into a paragraph.
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -448,7 +468,7 @@ def _cmd_list(registry: LibraryRegistry, _args: argparse.Namespace) -> int:
     libraries = registry.list_libraries()
     if not libraries:
         print("No libraries are registered yet.")
-        print("Add one with:  pixlstash-cli libraries attach /path/to/library")
+        print(f"Add one with:  {invoked_as()} libraries attach /path/to/library")
         return EXIT_OK
 
     name_width = max(len(library.name) for library in libraries)
@@ -506,7 +526,8 @@ def _cmd_detach(registry: LibraryRegistry, args: argparse.Namespace) -> int:
     print(f'Detached library "{library.name}".')
     print(f"No files were removed. {library.path} is unchanged.")
     print(
-        f'Add it back at any time with:  pixlstash-cli libraries attach "{library.path}"'
+        f"Add it back at any time with:  {invoked_as()} "
+        f'libraries attach "{library.path}"'
     )
     return EXIT_OK
 
@@ -746,7 +767,7 @@ def _cmd_plugins_list(_args: argparse.Namespace) -> int:
             print(
                 f"  {plugin_install.KIND_LABELS[kind]}: {plugin_install.user_dir(kind)}"
             )
-        print("Add one with:  pixlstash-cli plugins install hello_world_stamp")
+        print(f"Add one with:  {invoked_as()} plugins install hello_world_stamp")
         return EXIT_OK
 
     notes = {
