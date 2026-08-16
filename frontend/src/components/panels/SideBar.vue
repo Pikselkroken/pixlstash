@@ -5441,16 +5441,27 @@ defineExpose({
               </button>
             </div>
 
+            <!-- Under Models, not beside it. These are models too — still in
+                 ai-toolkit's output folder rather than on the shelf, and
+                 importing one is the act of moving it from here to there. A
+                 top-level entry would have claimed the runs are a separate
+                 thing from the shelf, which is the opposite of what the
+                 destination is for. Its own wrapper, because
+                 `.sidebar-all-pictures-row` is a flex ROW and a second child
+                 inside it would sit beside Models rather than under it. Depth
+                 by `--depth`, the sidebar's one indent mechanism (never a
+                 hardcoded inset — `SideBarRowSystem.test.js` fails the build on
+                 a row type that sets its own `padding-left`). -->
             <div v-if="hasTrainingRuns" class="sidebar-all-pictures-row">
               <button
                 type="button"
-                class="sidebar-list-item sidebar-destination-btn"
+                class="sidebar-list-item sidebar-destination-btn sidebar-models-child"
                 :class="{ active: isTrainingRunsView }"
                 :aria-current="isTrainingRunsView ? 'page' : undefined"
                 @click="emit('select-training-runs')"
               >
-                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
-                  ><AiToolkitIcon :size="18"
+                <span class="sidebar-list-icon"
+                  ><AiToolkitIcon :size="16"
                 /></span>
                 <span class="sidebar-list-label">Training runs</span>
               </button>

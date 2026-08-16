@@ -2442,3 +2442,17 @@ button.sidebar-ctx-item:disabled:hover {
 .sidebar-collapsed-item.sidebar-destination-btn {
   text-align: center;
 }
+
+/* A destination that belongs UNDER Models rather than beside it: the ai-toolkit
+   runs are models too, still in the output folder rather than on the shelf.
+   `--depth` is the whole indent — the shared row rule in SideBar.global.css
+   turns it into padding, and setting `padding-left` here instead is what
+   `SideBarRowSystem.test.js` fails the build on. Weight rather than dimming
+   carries the rank: `.sidebar-all-pictures-row .sidebar-list-item` makes every
+   fixed destination semibold, and a child that keeps that reads as a peer,
+   while fading it below its parent would put a row under content it does not
+   head at a contrast the label does not deserve (§4). */
+.sidebar-models-child {
+  --depth: 1;
+  font-weight: var(--weight-regular) !important;
+}
