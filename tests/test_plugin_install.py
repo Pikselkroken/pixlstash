@@ -465,8 +465,12 @@ def fake_repository(monkeypatch, tmp_path):
         bundle.writestr(
             "PixlStash-plugins-main/plugins/image/my_filter/README.md", FILTER_README
         )
+        # Folder slug deliberately unlike the declared name, as the published
+        # repository actually ships them (`moondream2_captioner` holding
+        # `moondream2`): the catalogue prints the declared name, so installing
+        # has to accept it.
         bundle.writestr(
-            "PixlStash-plugins-main/plugins/captioning/my_captioner/__init__.py",
+            "PixlStash-plugins-main/plugins/captioning/my_captioner_plugin/__init__.py",
             CAPTIONER,
         )
 
@@ -478,6 +482,32 @@ def fake_repository(monkeypatch, tmp_path):
 
     monkeypatch.setattr(requests, "get", fake_get)
     return requested
+
+
+@pytest.fixture
+def published(monkeypatch):
+    """Serve a codeload zip holding exactly the files one test names.
+
+    The shared `fake_repository` is the repository as it really is; this is for
+    the shapes it cannot hold at once — a name collision, a folder that will not
+    parse — without changing what every other test in the module sees.
+    """
+
+    def serve(files: dict[str, str]) -> None:
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as bundle:
+            for path, content in files.items():
+                bundle.writestr(f"PixlStash-plugins-main/{path}", content)
+
+        import requests
+
+        monkeypatch.setattr(
+            requests,
+            "get",
+            lambda url, timeout=None: _FakeResponse(archive.getvalue()),
+        )
+
+    return serve
 
 
 def test_installing_a_named_plugin_from_the_repository(plugin_root, fake_repository):
@@ -492,7 +522,16 @@ def test_installing_a_named_plugin_from_the_repository(plugin_root, fake_reposit
 def test_a_repository_folder_captioner_installs_as_a_folder(
     plugin_root, fake_repository
 ):
+    """The declared name, which is what `plugins available` printed."""
     assert _install("my_captioner") == cli.EXIT_OK
+    assert (
+        plugin_root / "tagger-plugins" / "user" / "my_captioner" / "__init__.py"
+    ).is_file()
+
+
+def test_the_repository_folder_slug_still_installs(plugin_root, fake_repository):
+    """The directory name was the only name accepted before; keep it working."""
+    assert _install("my_captioner_plugin") == cli.EXIT_OK
     assert (
         plugin_root / "tagger-plugins" / "user" / "my_captioner" / "__init__.py"
     ).is_file()
@@ -501,9 +540,59 @@ def test_a_repository_folder_captioner_installs_as_a_folder(
 def test_an_unknown_plugin_name_lists_what_the_repository_has(
     plugin_root, fake_repository, capsys
 ):
+    """Listed under the names install takes, not the repository's own slugs."""
     assert _install("nosuch") == cli.EXIT_REFUSED
     error = capsys.readouterr().err
-    assert "my_filter" in error and "my_captioner" in error
+    # Exact, not a substring apiece: "my_captioner" is a prefix of the folder
+    # slug, so `in error` would pass on a listing that still printed slugs.
+    assert "Available: my_captioner, my_filter" in error
+
+
+def test_a_declared_name_beats_another_plugin_s_folder_slug(plugin_root, published):
+    """Whole-set precedence, not first-match: the slug owner sorts first here."""
+    published(
+        {
+            "plugins/captioning/my_filter/__init__.py": CAPTIONER,
+            "plugins/image/some_filter/my_filter.py": IMAGE_PLUGIN,
+        }
+    )
+    assert _install("my_filter") == cli.EXIT_OK
+    assert (plugin_root / "image-plugins" / "user" / "my_filter.py").is_file()
+    assert not (plugin_root / "tagger-plugins" / "user" / "my_filter").exists()
+
+
+def test_two_plugins_declaring_one_name_are_refused_not_chosen_between(
+    plugin_root, published, capsys
+):
+    """Alphabetical order must not decide which downloaded code gets installed."""
+    published(
+        {
+            "plugins/captioning/first/__init__.py": CAPTIONER,
+            "plugins/captioning/second/__init__.py": CAPTIONER,
+        }
+    )
+    assert _install("my_captioner") == cli.EXIT_REFUSED
+    error = capsys.readouterr().err
+    assert "captioning/first" in error and "captioning/second" in error
+    assert not (plugin_root / "tagger-plugins" / "user").exists()
+
+
+def test_a_published_folder_that_will_not_parse_blocks_nothing(
+    plugin_root, published, capsys
+):
+    """It is one entry the reader cannot be offered; the rest still install."""
+    published(
+        {
+            "plugins/image/broken/broken.py": "class Nope(:",
+            "plugins/image/my_filter/my_filter.py": IMAGE_PLUGIN,
+        }
+    )
+    assert _install("my_filter") == cli.EXIT_OK
+    assert (plugin_root / "image-plugins" / "user" / "my_filter.py").is_file()
+
+    # And it is still listed, under the only name it has left: its folder's.
+    assert _install("nosuch") == cli.EXIT_REFUSED
+    assert "broken" in capsys.readouterr().err
 
 
 def test_a_ref_may_choose_a_branch(plugin_root, fake_repository):
