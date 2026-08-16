@@ -7,6 +7,7 @@ import {
   cliCommandHint,
   launcherPath,
   parseCliArgs,
+  shimInstalled,
   shimPath,
   shimScript,
   syncShim,
@@ -123,6 +124,27 @@ describe('syncShim — installing and removing the shell command', () => {
     } finally {
       chmodSync(readOnly, 0o700);
     }
+  });
+});
+
+describe('shimInstalled — reading the state without changing it', () => {
+  const scratch = () => mkdtempSync(join(tmpdir(), 'pixlstash-shim-'));
+
+  it('is false with nothing there, and installs nothing by asking', () => {
+    const path = join(scratch(), 'bin', 'pixlstash');
+    assert.equal(shimInstalled(path), false);
+    assert.equal(existsSync(path), false, 'a CLI run must not install a shim');
+  });
+
+  it('is true only for a file carrying our marker', () => {
+    const dir = scratch();
+    const ours = join(dir, 'ours');
+    syncShim(true, '/opt/PixlStash/pixlstash', ours);
+    assert.equal(shimInstalled(ours), true);
+
+    const theirs = join(dir, 'theirs');
+    writeFileSync(theirs, '#!/bin/sh\nexec /somewhere/else "$@"\n');
+    assert.equal(shimInstalled(theirs), false);
   });
 });
 

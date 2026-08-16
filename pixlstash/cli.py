@@ -20,6 +20,7 @@ deletes is always inside one of the two plugin directories.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import Sequence
 
@@ -42,10 +43,23 @@ EXIT_REFUSED = 1
 EXIT_HUB_UNAVAILABLE = 3
 
 
+def invoked_as() -> str:
+    """Return the command the user typed to get here.
+
+    Every usage line, error and "add one with:" hint names this, so on a desktop
+    install they must not say ``pixlstash-cli``: that console script is sealed
+    inside the app image and is on nobody's PATH. The launcher that ran us
+    declares the working form in ``PIXLSTASH_CLI_COMMAND`` (see
+    :mod:`pixlstash.hub.cli_hint`, which reads the same variable to fill the
+    Settings panel). Everywhere else the console script is exactly right.
+    """
+    return os.environ.get("PIXLSTASH_CLI_COMMAND", "").strip() or "pixlstash-cli"
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Return the argument parser for the library CLI."""
     parser = argparse.ArgumentParser(
-        prog="pixlstash-cli",
+        prog=invoked_as(),
         description=(
             "PixlStash command line. Run this on the machine hosting "
             "PixlStash, signed in as the user that owns it."
@@ -280,7 +294,7 @@ def _cmd_list(registry: LibraryRegistry, _args: argparse.Namespace) -> int:
     libraries = registry.list_libraries()
     if not libraries:
         print("No libraries are registered yet.")
-        print("Add one with:  pixlstash-cli libraries attach /path/to/library")
+        print(f"Add one with:  {invoked_as()} libraries attach /path/to/library")
         return EXIT_OK
 
     name_width = max(len(library.name) for library in libraries)
@@ -338,7 +352,8 @@ def _cmd_detach(registry: LibraryRegistry, args: argparse.Namespace) -> int:
     print(f'Detached library "{library.name}".')
     print(f"No files were removed. {library.path} is unchanged.")
     print(
-        f'Add it back at any time with:  pixlstash-cli libraries attach "{library.path}"'
+        f"Add it back at any time with:  {invoked_as()} "
+        f'libraries attach "{library.path}"'
     )
     return EXIT_OK
 
@@ -491,7 +506,7 @@ def _cmd_plugins_list(_args: argparse.Namespace) -> int:
             print(
                 f"  {plugin_install.KIND_LABELS[kind]}: {plugin_install.user_dir(kind)}"
             )
-        print("Add one with:  pixlstash-cli plugins install hello_world_stamp")
+        print(f"Add one with:  {invoked_as()} plugins install hello_world_stamp")
         return EXIT_OK
 
     notes = {

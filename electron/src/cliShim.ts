@@ -70,6 +70,21 @@ export function cliCommandHint(shimInstalled: boolean, launcher: string): string
 }
 
 /**
+ * Whether our shim is on disk right now, without touching it.
+ *
+ * The CLI path needs the answer to name itself correctly, and a CLI run must
+ * never install anything as a side effect. Checks for our marker so a
+ * `pixlstash` the user wrote themselves is not mistaken for ours.
+ */
+export function shimInstalled(path: string = shimPath()): boolean {
+  try {
+    return readFileSync(path, 'utf8').includes(MARKER);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Bring `~/.local/bin/pixlstash` in line with *enabled*.
  *
  * Rewritten on every launch rather than once at install time, so moving or

@@ -42,7 +42,7 @@ import {
   setBackendsRoot,
 } from './config';
 import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
-import { cliCommandHint, launcherPath, parseCliArgs, syncShim } from './cliShim';
+import { cliCommandHint, launcherPath, parseCliArgs, shimInstalled, syncShim } from './cliShim';
 
 const execFileP = promisify(execFile);
 
@@ -1165,12 +1165,22 @@ function registerIpc(): void {
  * on destructive verbs; piping would hang that prompt with nothing shown.
  */
 function runCli(args: string[]): void {
+  // No window is coming, so keep Chromium's GPU process out of it entirely. It
+  // otherwise starts anyway and writes driver-probe noise ("MESA-LOADER: failed
+  // to open dri...") to the terminal *after* the CLI's own output.
+  app.disableHardwareAcceleration();
   // Same interpreter choice the backend makes, so a dev run drives the repo's
   // .venv and the CLI branch is exercisable without building the bundled env.
   const child = spawn(
     isDevBackend() ? devInterpreter() : bundledInterpreter(),
     ['-m', 'pixlstash.cli', '--hub', hubPath(), ...args],
-    { stdio: 'inherit' },
+    {
+      stdio: 'inherit',
+      // So the CLI's own usage lines, errors and "add one with:" hints name the
+      // command the user actually typed instead of the `pixlstash-cli` console
+      // script, which no desktop install puts on PATH.
+      env: { ...process.env, PIXLSTASH_CLI_COMMAND: cliCommandHint(shimInstalled(), launcherPath()) },
+    },
   );
   // 3 is the CLI's own "hub unavailable" code; a runtime we cannot even launch
   // is the same class of failure from the caller's side.
