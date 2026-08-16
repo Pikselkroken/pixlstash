@@ -82,6 +82,20 @@ PROVENANCE_EXTERNAL = "external"
 
 _HASH_CHUNK_BYTES = 1024 * 1024
 
+# Above this, a file is hashed later by MissingCheckpointHashFinder instead of
+# during the scan.
+#
+# The question was always about SIZE — "it may be 24 GB and the shelf must not
+# stall behind it" — and `file_kind == 'checkpoint'` was a usable proxy for it
+# only while `checkpoint` was the one large kind. It stopped being one the
+# moment text encoders got a kind of their own: a 23 GB T5 is precisely the read
+# the finder exists to defer, and it would have gone back to being paid inline.
+#
+# 2 GiB sits above every VAE and CLIP measured on a real shelf (the largest a
+# 5 GB video VAE, the typical 0.3 GB) and below every base model and large
+# encoder, so the split lands where the stall does.
+_DEFER_HASH_BYTES = 2 * 1024**3
+
 # Files per write transaction. The hub's multi-process contract is "short
 # transactions only", and this also means an interrupted scan keeps the rows it
 # already wrote instead of discarding the whole folder.
@@ -518,36 +532,49 @@ class ModelFolderScanner:
             param_count=info.param_count,
         )
 
+        # Hash now, or leave it for MissingCheckpointHashFinder.
+        #
+        # An adapter is always hashed here whatever its size: `CHECK (file_kind
+        # <> 'adapter' OR sha256 IS NOT NULL)` is an invariant, so a deferred one
+        # could not be registered at all. A checkpoint is always deferred: it may
+        # be 24 GB and the shelf must not stall behind it.
+        #
+        # Every other kind defers on SIZE, which is what the question was always
+        # about. `file_kind == 'checkpoint'` was a usable proxy for "large" only
+        # while `checkpoint` was the one large kind, and it stopped being one the
+        # moment text encoders got a kind of their own. The finder queries on
+        # `sha256 IS NULL` rather than on a kind, so it picks these up whatever
+        # they are.
+        #
+        # A digest the caller already has is used either way: that only happens
+        # when it just copied these bytes through a hash, so the read the finder
+        # exists to defer has already been paid for, and deferring anyway would
+        # schedule a second one for nothing.
+        if known_digest is not None:
+            digest = known_digest
+        elif info.file_kind != FILE_ADAPTER and (
+            info.file_kind == FILE_CHECKPOINT or size >= _DEFER_HASH_BYTES
+        ):
+            digest = None
+        else:
+            try:
+                digest = sha256_file(abs_path)
+            except OSError as exc:
+                logger.warning(
+                    "Model scan could not hash %s (%d bytes): %s. Leaving it "
+                    "unregistered; a partial hash would be a wrong identity.",
+                    abs_path,
+                    size,
+                    exc,
+                )
+                result.unreadable += 1
+                return None
+
         if info.file_kind == FILE_CHECKPOINT:
             result.checkpoints += 1
-            # No hash: it may be 24 GB. MissingCheckpointHashFinder supplies it.
-            # Unless the caller already has one, which only happens when it just
-            # copied these bytes through a hash — then the read the finder exists
-            # to defer has already been paid for, and deferring anyway would
-            # schedule a second one for nothing.
-            if known_digest is None:
-                return record
-            return record._replace(digest=known_digest)
-
-        if known_digest is not None:
+        else:
             result.adapters += 1
-            return record._replace(digest=known_digest)
-
-        try:
-            digest = sha256_file(abs_path)
-        except OSError as exc:
-            logger.warning(
-                "Model scan could not hash %s (%d bytes): %s. Leaving it "
-                "unregistered; a partial hash would be a wrong identity.",
-                abs_path,
-                size,
-                exc,
-            )
-            result.unreadable += 1
-            return None
-
-        result.adapters += 1
-        return record._replace(digest=digest)
+        return record if digest is None else record._replace(digest=digest)
 
     # -- hub reads --------------------------------------------------------
 

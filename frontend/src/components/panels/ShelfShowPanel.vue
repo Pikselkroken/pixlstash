@@ -81,6 +81,30 @@
         />
         Checkpoints
       </label>
+      <!-- Support files: the VAEs and text encoders a graph loads beside a
+           checkpoint. One box for two `file_kind`s, because they are one
+           question to someone deciding what to keep. On by default, and the
+           box matters more than the others: before these kinds existed the
+           large encoders were counted as checkpoints, so `Checkpoints` was
+           answering with a list mostly made of them. -->
+      <label
+        class="tbm-check"
+        title="VAEs and text encoders — the files a generation graph loads beside a checkpoint"
+      >
+        <input
+          type="checkbox"
+          :checked="filters.support"
+          @change="
+            store.setFilters(
+              { support: $event.target.checked },
+              {
+                refetch: true,
+              },
+            )
+          "
+        />
+        Support files
+      </label>
       <!-- `unknown` is a first-class stored value, never promoted to
            checkpoint and never folded into adapters. It gets its own box and
            its own word, and it is ON by default: the leftovers in PixlStash's

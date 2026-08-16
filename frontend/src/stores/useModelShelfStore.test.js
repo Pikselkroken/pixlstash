@@ -20,6 +20,10 @@ const listEngines = vi.fn();
 // would answer the unclassified request with adapter rows and make every list
 // here look duplicated.
 const listUnclassified = vi.fn();
+// Same split again, for the two support kinds. One double serves both: they are
+// one checkbox and one row bucket, so a test that wants support rows wants them
+// without caring which of the two requests carried them.
+const listSupport = vi.fn();
 
 const editModels = vi.fn();
 const listBaseModelCompletions = vi.fn();
@@ -34,6 +38,9 @@ vi.mock("../api/modelShelf", () => ({
   listAdapters: (...args) => {
     if (args[0]?.fileKind === "engine") return listEngines(...args);
     if (args[0]?.fileKind === "unknown") return listUnclassified(...args);
+    if (args[0]?.fileKind === "vae" || args[0]?.fileKind === "text_encoder") {
+      return listSupport(...args);
+    }
     return listAdapters(...args);
   },
   listCheckpoints: (...args) => listCheckpoints(...args),
@@ -83,6 +90,7 @@ beforeEach(() => {
   listCheckpoints.mockReset().mockResolvedValue([]);
   listEngines.mockReset().mockResolvedValue([]);
   listUnclassified.mockReset().mockResolvedValue([]);
+  listSupport.mockReset().mockResolvedValue([]);
   listBaseModelCompletions.mockReset().mockResolvedValue([]);
 });
 
@@ -370,6 +378,58 @@ describe("the badge", () => {
     await store.setFilters({ engines: false }, { refetch: true });
     expect(store.activeCount).toBe(1);
   });
+
+  it("counts turning support files off, for the same reason", async () => {
+    const store = useModelShelfStore();
+    await store.setFilters({ support: false }, { refetch: true });
+    expect(store.activeCount).toBe(1);
+  });
+});
+
+describe("the support block", () => {
+  it("puts both kinds in one bucket from two requests", async () => {
+    // One checkbox, two `file_kind`s. The route takes a single kind, so the
+    // block is two requests, and a reader deciding what to keep sees one list.
+    const store = useModelShelfStore();
+    listSupport
+      .mockResolvedValueOnce([
+        adapter({ id: 1, file_kind: "vae", kind: null }),
+      ])
+      .mockResolvedValueOnce([
+        adapter({ id: 2, file_kind: "text_encoder", kind: null }),
+      ]);
+
+    await store.fetchRows();
+
+    expect(store.rows.map((r) => r.id)).toEqual([1, 2]);
+  });
+
+  it("replaces only its own rows when it refetches", async () => {
+    // `blockOf` has to map BOTH kinds to `support`, or a refetch leaves the
+    // kind it forgot about behind as a duplicate.
+    const store = useModelShelfStore();
+    listSupport
+      .mockResolvedValueOnce([adapter({ id: 1, file_kind: "vae", kind: null })])
+      .mockResolvedValueOnce([
+        adapter({ id: 2, file_kind: "text_encoder", kind: null }),
+      ]);
+    await store.fetchRows();
+
+    listSupport
+      .mockResolvedValueOnce([adapter({ id: 3, file_kind: "vae", kind: null })])
+      .mockResolvedValueOnce([
+        adapter({ id: 4, file_kind: "text_encoder", kind: null }),
+      ]);
+    await store.fetchRows();
+
+    expect(store.rows.map((r) => r.id)).toEqual([3, 4]);
+  });
+
+  it("asks for nothing when the box is off", async () => {
+    const store = useModelShelfStore();
+    await store.setFilters({ support: false }, { refetch: true });
+    expect(listSupport).not.toHaveBeenCalled();
+  });
 });
 
 describe("empty states", () => {
@@ -382,6 +442,7 @@ describe("empty states", () => {
         checkpoints: false,
         unclassified: false,
         engines: false,
+        support: false,
       },
       { refetch: true },
     );

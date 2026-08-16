@@ -19,6 +19,10 @@ const listEngines = vi.fn();
 // And the unclassified block, for the same reason, now that it is on by
 // default (#927): one route, one more result set, its own double.
 const listUnclassified = vi.fn();
+// And the support block: two `file_kind`s behind one checkbox, so one double
+// answers both requests. Same reason again — without it every
+// `listAdapters.mockResolvedValue` here would answer them with adapter rows.
+const listSupport = vi.fn();
 const deleteModels = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
@@ -26,6 +30,9 @@ vi.mock("../../api/modelShelf", () => ({
   listAdapters: (...args) => {
     if (args[0]?.fileKind === "engine") return listEngines(...args);
     if (args[0]?.fileKind === "unknown") return listUnclassified(...args);
+    if (args[0]?.fileKind === "vae" || args[0]?.fileKind === "text_encoder") {
+      return listSupport(...args);
+    }
     return listAdapters(...args);
   },
   listCheckpoints: (...args) => listCheckpoints(...args),
@@ -162,6 +169,7 @@ async function mountShelf(
   listCheckpoints.mockResolvedValue(checkpoints);
   listEngines.mockResolvedValue([]);
   listUnclassified.mockResolvedValue(unclassified);
+  listSupport.mockResolvedValue([]);
   const wrapper = mount(ModelShelf, { ...globalOpts, ...extra });
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
@@ -180,6 +188,7 @@ beforeEach(() => {
   listCheckpoints.mockReset();
   listEngines.mockReset().mockResolvedValue([]);
   listUnclassified.mockReset().mockResolvedValue([]);
+  listSupport.mockReset().mockResolvedValue([]);
   listModelFolderDevices.mockReset();
   listModelFolderDevices.mockResolvedValue([]);
   listModelFolders.mockReset();
@@ -672,6 +681,7 @@ describe("empty states", () => {
       checkpoints: false,
       unclassified: false,
       engines: false,
+      support: false,
     });
     await wrapper.vm.$nextTick();
     expect(textOf(wrapper.find(".shelf-state"))).toContain(

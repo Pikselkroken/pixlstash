@@ -29,6 +29,11 @@ import secrets
 import sqlite3
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.adapter_header import (
+    FILE_CHECKPOINT,
+    FILE_UNKNOWN,
+    role_from_folder,
+)
 
 logger = get_logger(__name__)
 
@@ -37,6 +42,27 @@ logger = get_logger(__name__)
 # was written by a newer PixlStash: refuse it rather than migrate it downward
 # (see :func:`apply_migrations`).
 CURRENT_SCHEMA_VERSION = 2
+
+# How many one-shot DATA backfills have been applied, kept in SQLite's own
+# ``PRAGMA user_version`` slot.
+#
+# This is deliberately a second counter and not a schema version. The two answer
+# different questions and must not share one number:
+#
+# * ``schema_version`` is the SHAPE, and its steps are re-runnable by design —
+#   ``_apply_v2`` is re-applied on every open so a developer hub picks up newly
+#   added v2 tables. A step that rewrites a user-correctable *value* cannot live
+#   there: re-running it would undo the correction, silently, on every restart.
+# * this counter is applied strictly once per hub, which is what a backfill over
+#   owner-editable data needs.
+#
+# It also cannot be a third schema version. A build shipped before this change
+# has ``CURRENT_SCHEMA_VERSION = 2`` and would refuse a v3 hub outright with
+# ``HubSchemaTooNewError``, locking that user out of a downgrade — the same
+# reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
+# free (nothing in PixlStash has ever written it), costs no DDL, and an older
+# build ignores it entirely.
+CURRENT_DATA_VERSION = 1
 
 
 # Identity plus the per-user preference and machine/deployment columns that move
@@ -667,6 +693,71 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         )
 
 
+def _backfill_component_roles(conn: sqlite3.Connection) -> int:
+    """Re-file VAEs and text encoders that were registered before they had kinds.
+
+    Every row on an existing shelf was classified by tensor markers and a
+    parameter count alone, and those two cannot see a support file: a VAE and a
+    CLIP fall below ``_CHECKPOINT_MIN_PARAMS`` and were stored as ``unknown``,
+    while a T5-class encoder clears it and was stored as ``checkpoint``. The
+    directory each file sits in says which it is, and the directory is already
+    in the hub — so this needs no rescan and reads no bytes.
+
+    Only ``unknown`` and ``checkpoint`` rows are considered. An ``adapter`` was
+    asserted from markers the file cannot strip, and an ``engine`` was declared
+    by us rather than derived, so neither is a guess this can improve on.
+
+    **A model with several copies must agree with itself.** Two locations that
+    name different roles — one under ``vae/``, one loose in a mixed folder —
+    are not evidence, so the row is left alone rather than resolved by picking
+    a side.
+
+    Runs exactly once per hub (see :data:`CURRENT_DATA_VERSION`), because
+    ``file_kind`` is owner-correctable and a backfill that re-ran would undo the
+    correction on the next restart.
+
+    Args:
+        conn: An open hub connection, inside the caller's transaction.
+
+    Returns:
+        How many rows were re-filed.
+    """
+    # Indexed positionally rather than by name: this runs from
+    # `apply_migrations`, which a test may hand a bare `sqlite3.connect` with no
+    # `row_factory` set.
+    rows = conn.execute(
+        "SELECT m.id, f.path, mf.relpath "
+        "FROM model m "
+        "JOIN model_file mf ON mf.model_id = m.id "
+        "JOIN model_folder f ON f.id = mf.model_folder_id "
+        "WHERE m.file_kind IN (?, ?)",
+        (FILE_UNKNOWN, FILE_CHECKPOINT),
+    ).fetchall()
+
+    roles_by_model: dict[int, set] = {}
+    for model_id, folder_path, relpath in rows:
+        roles_by_model.setdefault(model_id, set()).add(
+            role_from_folder(f"{folder_path}/{relpath}")
+        )
+
+    refiled = 0
+    for model_id, roles in roles_by_model.items():
+        if len(roles) != 1:
+            continue
+        (role,) = roles
+        if role is None:
+            continue
+        conn.execute("UPDATE model SET file_kind = ? WHERE id = ?", (role, model_id))
+        refiled += 1
+    if refiled:
+        logger.info(
+            "Re-filed %d model rows as VAEs or text encoders from the folder "
+            "they sit in; they were registered before those kinds existed.",
+            refiled,
+        )
+    return refiled
+
+
 class HubSchemaTooNewError(RuntimeError):
     """The hub file was written by a newer PixlStash than this build.
 
@@ -750,6 +841,30 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
             logger.error(
                 "Hub v2 shape reconciliation failed, hub stays on version %d: %s",
                 version,
+                exc,
+            )
+            raise
+
+    # Data backfills, after the shape is settled and each applied exactly once.
+    # BEGIN IMMEDIATE and the version write share the transaction for the same
+    # reason the schema steps do: an interrupted backfill must leave the counter
+    # where it was, so the next open retries it rather than skipping it.
+    data_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if data_version < CURRENT_DATA_VERSION:
+        try:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if data_version < 1:
+                    _backfill_component_roles(conn)
+                # No placeholder: PRAGMA takes no parameters, and the value is
+                # this module's own constant rather than anything from outside.
+                conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")
+        except sqlite3.Error as exc:
+            logger.error(
+                "Hub data backfill to version %d failed, hub stays on data "
+                "version %d: %s",
+                CURRENT_DATA_VERSION,
+                data_version,
                 exc,
             )
             raise
