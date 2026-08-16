@@ -2737,7 +2737,7 @@ in the meantime (409, something stacked its rows first) is counted rather than
 thrown — one stale group must not discard the others.
 
 **Tier 2 is absent from the UI because it is absent from the backend.** Prefix
-grouping (`JimmyCarr` beside `JimmyCarr2`) needs per-group adjudication with
+grouping (`JimmyVehicle` beside `JimmyVehicle2`) needs per-group adjudication with
 counter-evidence first; half an adjudication surface would be worse than none.
 
 #### Importing from ai-toolkit (F6)
@@ -2778,6 +2778,16 @@ the deletion only when something actually landed: the server unlinks last and
 only after each row is committed, so "nothing imported" and "the run is gone"
 cannot both be true, and saying it anyway would tell the reader their run was
 destroyed for nothing.
+
+**A checkpoint that landed without its previews gets its own sentence.** The
+import copies each checkpoint's samples into `<stem>_samples/` beside it, and a
+failed copy is deliberately *not* a failed file — losing a preview must not cost
+the weights, so the server leaves the outcome `imported` with `sample_count: 0`
+and a `detail`. That means the status counts the receipt is otherwise built from
+cannot see it, and a receipt built from them alone would call a run whose
+previews were lost a clean import. It is named separately rather than folded
+into the failure count, because the checkpoint is genuinely on the shelf and
+telling someone otherwise is the worse error.
 
 **`Add file` is the same step's loose-file half, and it reuses `FolderBrowser`
 in a file mode rather than an `<input type=file>`.** The file is on the machine

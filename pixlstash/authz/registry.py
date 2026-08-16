@@ -494,6 +494,26 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 copies a run's files into a registered host folder and, when the source folder carries delete_after_import, unlinks them from the output root — the same filesystem authority as POST /model-moves; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    # The imported previews, read back off the shelf. NOT owner_only, and the
+    # plan that asked for them said owner_only on the grounds that they are
+    # addressed by a row id with no host path crossing the wire. That is exactly
+    # the argument the matrix records as **not** the argument: GET
+    # /adapters/{sha256}/file takes no host path either and is on this tier,
+    # because what decides the tier is the authority exercised — reading bytes
+    # out of a folder the owner registered — not what the route accepts. The
+    # listing walks one directory inside that folder and reports names of files
+    # PixlStash never registered, which is rescan's authority in miniature; the
+    # byte route is the sample route beside it with the run replaced by a shelf
+    # row. Both are kept on one tier so a caller who cannot fetch a preview is
+    # not handed a list of them.
+    ("GET", "/api/v1/models/{model_id}/samples"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 lists one directory inside a registered model folder, reporting filenames of files PixlStash never registered — rescan's walk-a-registered-root authority, narrowed to one directory; kept on the byte route's tier so a caller who cannot fetch a preview is not handed a list of them; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/models/{model_id}/samples/{filename}"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 serves raw image bytes out of a registered model folder — GET /adapters/{sha256}/file's authority class exactly, and the shelf-side twin of model-folders/{folder_id}/runs/{run_name}/samples/{filename}. Takes no host path (a model.id addresses a row the importer wrote), which per the 2026-08-11 correction is not the argument for owner_only. Two containment joins, not one: the samples directory against the registered folder path, because a symlinked <stem>_samples would otherwise become its own safe base, then the filename against that resolved directory, because a folder-level join alone would let ../alice.safetensors through; the extension is allowlisted so nothing but an image is served from our origin; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── model_files.py (shelf plan F6, `Add file`; §16.3 host-capability) ──
     # The one shelf route that READS a caller-supplied host path — the loose
     # file it copies is by definition in a folder nobody registered — and it

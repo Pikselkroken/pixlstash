@@ -60,7 +60,10 @@ export function runSampleUrl(folderId, runName, filename) {
  * @param {Array<number|null>} [options.steps] - which checkpoints, by step,
  *   with `null` for the bare final. Omit for the whole run.
  * @returns {Promise<Object>} the import report: `stack_id`, `deleted_source`
- *   and a per-file `files` array.
+ *   and a per-file `files` array. Each file carries `sample_count` — the run's
+ *   previews copied in beside that checkpoint — and a `detail` that says why
+ *   they did not come when it is zero. A failed preview copy leaves the file
+ *   `imported`: losing a preview must not cost the weights.
  */
 export async function importRun({
   sourceFolderId,

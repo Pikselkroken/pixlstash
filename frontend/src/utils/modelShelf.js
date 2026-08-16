@@ -1001,6 +1001,20 @@ export function importReceipt(report) {
       `${count(failed)} could not be copied and ${failed === 1 ? "was" : "were"} left in the run.`,
     );
   }
+  // A checkpoint whose previews did not copy is still `imported` — losing a
+  // preview must not cost the weights, so the server does not fail the file for
+  // it. Which means the status counts above cannot see it, and a receipt built
+  // from them alone would call a run whose samples were lost a clean import.
+  // Named separately rather than folded into `failed`, because the checkpoint
+  // is genuinely on the shelf and telling someone otherwise is worse.
+  const withoutSamples = files.filter(
+    (f) => f.status === "imported" && f.sample_count === 0 && f.detail,
+  ).length;
+  if (withoutSamples) {
+    notes.push(
+      `${count(withoutSamples)} landed without ${withoutSamples === 1 ? "its" : "their"} training previews.`,
+    );
+  }
   if (report?.deleted_source && landed) {
     notes.push("The run's own files have been removed.");
   }

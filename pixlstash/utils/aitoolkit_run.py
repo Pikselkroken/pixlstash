@@ -101,6 +101,37 @@ class TrainingRun:
             (s for s in self.samples if s.step == step), key=lambda s: s.index
         )
 
+    def samples_for(self, checkpoint: Checkpoint) -> list[Sample]:
+        """Previews that belong to one checkpoint, final included.
+
+        A stepped checkpoint takes the samples naming its step. **The bare final
+        takes the highest sample step's**, because it carries no step of its own
+        and is the stack cover: a rule that left it blank would make the most
+        visible row of a fresh import the only empty one. When a stepped
+        checkpoint is imported at that same step the previews are taken twice,
+        which is 15 MB of duplication against a cover that reads.
+
+        Returns an empty list for a run with no samples at all.
+        """
+        if not checkpoint.is_final:
+            return self.samples_for_step(checkpoint.step)
+        if not self.samples:
+            return []
+        return self.samples_for_step(max(sample.step for sample in self.samples))
+
+
+def is_sample_filename(filename: str) -> bool:
+    """Whether a filename is one ai-toolkit wrote as a step preview.
+
+    The same two tests :func:`_read_samples` applies — an image extension and
+    the ``<timestamp>__<step>_<index>`` shape — exposed because a *caller* needs
+    to ask it of a file it did not read here: the delete verb decides whether a
+    ``<stem>_samples/`` directory holds only the trainer's previews, and so is
+    the model's to remove, or something the owner put there.
+    """
+    stem, ext = os.path.splitext(filename)
+    return ext.lower() in SAMPLE_SUFFIXES and _SAMPLE_RE.match(stem) is not None
+
 
 def _split_step(stem: str, run_name: str) -> int | None:
     """Read the step out of a checkpoint stem, or ``None`` for the final save.

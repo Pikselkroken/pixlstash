@@ -422,7 +422,7 @@ def _trigger_words_from_tag_frequency(raw) -> list[str]:
     """Pull tag names out of kohya/ai-toolkit's ``ss_tag_frequency``.
 
     The value is ``{dataset_dir: {tag: count}}``, e.g.
-    ``{"1_jimmycarr": {"jimmycarr": 1}}``. The dataset directory name is an
+    ``{"1_jimmyvehicle": {"jimmyvehicle": 1}}``. The dataset directory name is an
     artefact of how the trainer was invoked, so only the inner tags are used,
     ordered by descending count so the actual trigger leads.
 
