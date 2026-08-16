@@ -482,6 +482,7 @@ jobs:
           tests/test_dedup_tier_service.py
           tests/test_dedup_tiers_api.py
           tests/test_dedup_verdict_service.py
+          tests/test_description_cancel_blanking.py
           tests/test_detections_scope.py
           tests/test_face_score_aggregation.py
           tests/test_facial_features_worker.py
