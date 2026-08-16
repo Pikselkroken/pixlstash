@@ -262,6 +262,24 @@ describe("copyPathsTitle", () => {
     ).toBe("/home/me/models/b.st");
   });
 
+  it("appends nothing for a state that names something on Object.prototype", () => {
+    // `state` comes off the wire, and a plain index answers `constructor` with
+    // a FUNCTION — truthy, so the note would be Object's constructor source
+    // pasted after the path. Same hole `labelFrom` closes for the two label
+    // tables. A state this build has simply never seen appends nothing either:
+    // machine vocabulary after a path reads as a fault.
+    expect(
+      copyPathsTitle([
+        {
+          folder_path: "/home/me/models",
+          relpath: "a.st",
+          state: "constructor",
+        },
+        { folder_path: "/home/me/models", relpath: "b.st", state: "sundered" },
+      ]),
+    ).toBe("/home/me/models/a.st\n/home/me/models/b.st");
+  });
+
   it("says nothing when every copy has been forgotten", () => {
     // The caller binds no tooltip at all rather than an empty one, and the
     // file line already carries the words for this state.

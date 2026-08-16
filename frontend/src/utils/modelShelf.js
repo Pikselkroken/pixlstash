@@ -837,12 +837,33 @@ export function locationState(locations) {
  * glyph and a word telling them apart on the row (#898) — a tooltip that
  * rendered all four as bare identical lines would be the one place they read
  * the same. `present` adds nothing, because that is what a path already says.
+ *
+ * Read through `copyStateNote` and never indexed raw, for the reason
+ * `ADAPTER_KIND_LABELS` is not exported: `state` comes off the wire, and
+ * `constructor` indexes a FUNCTION off `Object.prototype` that is truthy and
+ * would be pasted into the tooltip.
  */
 const COPY_STATE_NOTE = {
   missing: "not where it was",
   unreachable: "out of reach",
   not_downloaded: "not downloaded yet",
 };
+
+/**
+ * What one copy's state adds to its path, or nothing.
+ *
+ * Unlike {@link labelFrom} an unknown state falls through to NOTHING rather
+ * than to itself: the fallthrough there shows a value a human chose, and this
+ * one is machine vocabulary that would read as a fault ("/x/a.st · sundered").
+ * A state this build has never seen is not a claim it may make.
+ *
+ * @param {string} state - a stored `model_file.state`.
+ * @returns {string} the note, or `""`.
+ */
+function copyStateNote(state) {
+  const key = String(state || "");
+  return Object.hasOwn(COPY_STATE_NOTE, key) ? COPY_STATE_NOTE[key] : "";
+}
 
 /**
  * Where a row's copies sit, one path per line, each saying what is there.
@@ -883,7 +904,7 @@ export function copyPathsTitle(locations) {
       const sep = windows ? "\\" : "/";
       const tail = windows ? relpath.replace(/\//g, "\\") : relpath;
       const path = `${folder.replace(/[/\\]+$/, "")}${sep}${tail.replace(/^[/\\]+/, "")}`;
-      const note = COPY_STATE_NOTE[loc?.state];
+      const note = copyStateNote(loc?.state);
       return note ? `${path} · ${note}` : path;
     })
     .filter(Boolean)
