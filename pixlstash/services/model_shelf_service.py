@@ -40,6 +40,14 @@ from pixlstash.db_models.adapter_attachment import (
 from pixlstash.db_models.character import Character
 from pixlstash.db_models.picture_set import PictureSet
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.model_features import (
+    FEATURE_CAPTIONER,
+    FEATURE_DETECTOR,
+    FEATURE_FACE,
+    FEATURE_SCORER,
+    FEATURE_SEARCH,
+    FEATURE_TAGGER,
+)
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
@@ -482,6 +490,30 @@ FILE_KINDS = (
     FILE_UNKNOWN,
 )
 
+# What a model may be said to be FOR, which is a different question from what it
+# IS and lives in its own table because one repo can answer it twice: Florence-2
+# captions and detects.
+#
+# Settable at all because the shelf shows it. `model_capability` was written
+# only by PixlStash's own declarations, so the Kind column read `Captioning` on
+# rows whose editor offered nothing but file kinds — a value on screen that the
+# owner could not correct. It is a CLASSIFICATION, and for a model PixlStash
+# does not load it is a guess off a name or a `config.json`; the owner's answer
+# beats ours.
+#
+# Two of the eight stored values are deliberately not offered. `checkpoint` is
+# what the file IS and belongs to `FILE_KINDS`, where the same dialog already
+# asks; `other` is the classifier's shrug, and an empty set says that without
+# printing a heading for it.
+CURATABLE_CAPABILITIES = (
+    FEATURE_CAPTIONER,
+    FEATURE_TAGGER,
+    FEATURE_DETECTOR,
+    FEATURE_FACE,
+    FEATURE_SEARCH,
+    FEATURE_SCORER,
+)
+
 # A location state that means the bytes are still out there somewhere, so the
 # row is NOT a candidate for Forget. `unreachable` is in here deliberately: it
 # is "we could not look", and forgetting on it would let one click wipe the
@@ -498,23 +530,29 @@ def update_models(hub, ids: list[int], changes: dict) -> list[int]:
     the owner is entitled to make, and it puts the row back in the `Needs a
     name` / unset queues where it belongs.
 
+    ``capabilities`` is the one entry that is not a column. It is the complete
+    set for every id, written to ``model_capability``: replaced wholesale rather
+    than merged, because these sets are two entries long and a merge would leave
+    the owner no way to take one off.
+
     Args:
         hub: The open hub database.
         ids: ``model.id`` values to write. Ids that name no row are ignored.
-        changes: A subset of :data:`CURATABLE_FIELDS` mapped to their new values.
+        changes: A subset of :data:`CURATABLE_FIELDS` mapped to their new
+            values, and/or ``capabilities`` as a list.
 
     Returns:
         The ids that existed and were written, ascending.
     """
     if not ids or not changes:
         return []
-    unknown = set(changes) - set(CURATABLE_FIELDS)
+    capabilities = changes.get("capabilities")
+    columns_only = {k: v for k, v in changes.items() if k != "capabilities"}
+    unknown = set(columns_only) - set(CURATABLE_FIELDS)
     if unknown:
         raise ValueError(f"not a curatable field: {sorted(unknown)}")
 
-    columns = ", ".join(f"{field} = ?" for field in changes)
     placeholders = ", ".join("?" for _ in ids)
-    params = tuple(changes.values()) + tuple(ids)
     with hub.transaction() as conn:
         existing = [
             int(row[0])
@@ -523,20 +561,37 @@ def update_models(hub, ids: list[int], changes: dict) -> list[int]:
             ).fetchall()
         ]
         if existing:
-            conn.execute(
-                f"UPDATE model SET {columns} WHERE id IN ({placeholders})", params
-            )
+            if columns_only:
+                columns = ", ".join(f"{field} = ?" for field in columns_only)
+                conn.execute(
+                    f"UPDATE model SET {columns} WHERE id IN ({placeholders})",
+                    tuple(columns_only.values()) + tuple(ids),
+                )
             # Correcting what a file IS drops the capabilities we guessed it
-            # served. Those rows are only ever written by a declaration — the
-            # scanner writes none — so this reaches exactly the found
-            # HuggingFace repos, where the capability came from a name or a
-            # `config.json` and the owner has just said it was wrong. Left
+            # served — unless the same call states them, which is the owner
+            # answering both questions at once and must not be undone by the
+            # answer to the first. Capability rows are only ever written by a
+            # declaration (the scanner writes none), so this reaches exactly the
+            # found HuggingFace repos, where the capability came from a name or
+            # a `config.json` and the owner has just said it was wrong. Left
             # standing, the Feature axis would keep filing the row under the
             # guess while the Kind column beside it read the correction.
-            if "file_kind" in changes:
+            if capabilities is not None or "file_kind" in changes:
                 conn.execute(
                     f"DELETE FROM model_capability WHERE model_id IN ({placeholders})",
                     tuple(ids),
+                )
+            if capabilities:
+                conn.executemany(
+                    "INSERT INTO model_capability (model_id, capability) VALUES (?, ?)",
+                    [
+                        (model_id, capability)
+                        for model_id in existing
+                        # Ordered as the caller sent them, so `model.kind` and
+                        # the shelf's primary-first reading still hold: the
+                        # first box ticked is the word the Kind column shows.
+                        for capability in dict.fromkeys(capabilities)
+                    ],
                 )
     return sorted(existing)
 

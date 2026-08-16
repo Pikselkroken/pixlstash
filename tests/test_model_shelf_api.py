@@ -3656,6 +3656,78 @@ def test_every_editing_verb_refuses_an_engine(shelf_env):
     )
 
 
+def _capabilities(shelf_env, model_id: int) -> list:
+    return [
+        row["capability"]
+        for row in shelf_env.server.hub.fetchall(
+            "SELECT capability FROM model_capability WHERE model_id = ? ORDER BY rowid",
+            (model_id,),
+        )
+    ]
+
+
+def test_the_features_a_model_serves_are_the_owners_to_set(shelf_env):
+    """The Kind column has always shown `Captioning` and `Faces` on rows
+    PixlStash classified, and the editor offered nothing but file kinds — a
+    value on screen the owner could not correct. The set is REPLACED, not
+    merged: it is two entries long, and a merge would leave no way to take one
+    off."""
+    model_id = shelf_env.model_ids["alice.safetensors"]
+
+    r = shelf_env.owner.patch(
+        f"{API}/models",
+        json={"ids": [model_id], "capabilities": ["captioner", "detector"]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["fields"] == ["capabilities"]
+    assert _capabilities(shelf_env, model_id) == ["captioner", "detector"]
+
+    # Ordered as sent, so `Captioning` stays the primary word the row reads by.
+    shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [model_id], "capabilities": ["face"]}
+    )
+    assert _capabilities(shelf_env, model_id) == ["face"]
+
+    # And empty clears it, which is how a row says it is not a tool.
+    shelf_env.owner.patch(f"{API}/models", json={"ids": [model_id], "capabilities": []})
+    assert _capabilities(shelf_env, model_id) == []
+
+
+def test_a_feature_this_build_has_never_heard_of_is_refused(shelf_env):
+    """`model_capability` carries no CHECK, so a typo stored silently would head
+    a feature group nothing else in the app has ever heard of. `checkpoint` is
+    refused with it: that is what the file IS, and the same dialog asks it as a
+    file kind."""
+    model_id = shelf_env.model_ids["alice.safetensors"]
+
+    for bad in (["captionr"], ["checkpoint"], ["other"]):
+        r = shelf_env.owner.patch(
+            f"{API}/models", json={"ids": [model_id], "capabilities": bad}
+        )
+        assert r.status_code == 400, f"{bad} was allowed: {r.text}"
+        assert "is not a feature" in r.text
+    assert _capabilities(shelf_env, model_id) == []
+
+
+def test_setting_the_file_kind_and_the_features_at_once_keeps_both(shelf_env):
+    """Correcting a file kind clears the capabilities we guessed — but not when
+    the same call states them, which is the owner answering both questions at
+    once. One dialog sends both, so the order inside the transaction is the
+    difference between the feature landing and vanishing."""
+    model_id = shelf_env.model_ids["alice.safetensors"]
+
+    r = shelf_env.owner.patch(
+        f"{API}/models",
+        json={
+            "ids": [model_id],
+            "file_kind": "unknown",
+            "capabilities": ["captioner"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert _capabilities(shelf_env, model_id) == ["captioner"]
+
+
 def test_a_model_in_a_shared_cache_that_we_did_not_choose_is_the_owners_to_correct(
     shelf_env,
 ):

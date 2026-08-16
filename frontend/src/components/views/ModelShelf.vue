@@ -1178,6 +1178,7 @@ import {
   defaultSortDirection,
   deletableModels,
   fileKindLabel,
+  undeletableNotice,
   trashName,
   withEmptyFolders,
   withFolderSignals,
@@ -1291,9 +1292,7 @@ async function confirmDelete(permanent) {
     if (store.selectedRows.length) {
       useNoticeStore().push({
         level: "info",
-        text:
-          "Nothing here can be deleted. PixlStash only removes files from your " +
-          "own model folders, and never from a drive that is not plugged in.",
+        text: undeletableNotice(store.selectedRows, foldersById.value),
       });
     }
     return;

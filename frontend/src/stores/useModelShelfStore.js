@@ -218,6 +218,7 @@ const FIELD_WORDS = {
   base_model: "base model",
   kind: "algorithm",
   file_kind: "type",
+  capabilities: "features",
 };
 
 /**

@@ -1264,6 +1264,86 @@ export function deletableModels(rows, foldersById = null) {
 }
 
 /**
+ * Why this selection cannot be deleted, in the reader's own terms.
+ *
+ * The three gates {@link deletableModels} checks, said back. The sentence it
+ * replaced claimed PixlStash "only removes files from your own model folders,
+ * and never from a drive that is not plugged in", which was two thirds of one
+ * gate and untrue on its face: the shelf deletes from the managed store and
+ * from PixlStash's own download folder, neither of which is a folder the owner
+ * registered. It also named no folder, so the one thing the reader wanted — WHY
+ * this file and what to do instead — was the thing it left out.
+ *
+ * The folder is named by its PATH rather than by a kind, because the path is
+ * the answer: `~/.cache/huggingface/hub` explains itself, and no vocabulary of
+ * ours explains it better. A folder another tool owns (`movable: fixed`, which
+ * is what the HuggingFace cache carries and what the column means) gets the one
+ * clause that is actually actionable, since the tool that put the file there is
+ * the one that can take it away.
+ *
+ * Every reason present is reported, not the first: a selection of forty can be
+ * blocked three different ways, and a reader who fixes the drive only to hit
+ * the folder rule has been sent round twice.
+ *
+ * @param {Array<Object>} rows - the selected rows, none of them deletable.
+ * @param {Map<number, Object>|null} foldersById - `model_folder.id` to folder.
+ * @returns {string} one to three sentences, or "" for an empty selection.
+ */
+export function undeletableNotice(rows, foldersById = null) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return "";
+  if (!foldersById) {
+    // The registry has not loaded or could not be read, which is the one case
+    // where the honest answer is that we do not know yet.
+    return "The folder list has not loaded yet, so nothing can be deleted.";
+  }
+  let engine = false;
+  let unreachable = false;
+  const folders = new Set();
+  let anotherToolOwns = false;
+  for (const row of list) {
+    for (const part of row?.members?.length ? row.members : [row]) {
+      if (part?.file_kind === "engine") engine = true;
+      for (const loc of part?.locations || []) {
+        if (loc?.state === "unreachable") {
+          unreachable = true;
+          continue;
+        }
+        const folder = foldersById.get(Number(loc?.folder_id));
+        if (folder && !folder.deletable) {
+          folders.add(String(folder.path || ""));
+          if (folder.movable === "fixed") anotherToolOwns = true;
+        }
+      }
+    }
+  }
+  const notes = [];
+  if (folders.size) {
+    // One path is named; several are counted. A notice listing six paths is one
+    // nobody finishes reading.
+    const where =
+      folders.size === 1
+        ? [...folders][0]
+        : `${folders.size} folders PixlStash does not delete from`;
+    notes.push(
+      `PixlStash does not delete from ${where}. It removes files from folders you registered, its own managed store and the folder it downloads engines into.`,
+    );
+    if (anotherToolOwns) {
+      notes.push("Another tool owns that folder, so remove them with that.");
+    }
+  }
+  if (engine) {
+    notes.push(
+      "PixlStash downloaded some of these for itself and would fetch them again.",
+    );
+  }
+  if (unreachable) {
+    notes.push("Some sit on a drive that is not plugged in.");
+  }
+  return notes.join(" ");
+}
+
+/**
  * Fold each stack's members into the one row that stands for them.
  *
  * A training run is many `model` rows and the list query returns all of them,

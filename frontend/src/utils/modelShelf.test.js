@@ -10,6 +10,7 @@ import {
   adapterKindLabel,
   assignmentRing,
   deletableModels,
+  undeletableNotice,
   trashName,
   RING_STYLES,
   bandGroups,
@@ -1549,6 +1550,83 @@ describe("deletableModels", () => {
   it("deletes nothing while the folder registry is unknown", () => {
     // The safe direction to fail in, and the one Move already fails in.
     expect(deletableModels([at(1)], null)).toEqual([]);
+  });
+});
+
+describe("undeletableNotice", () => {
+  const folders = new Map([
+    [1, { id: 1, kind: "user", path: "/models", deletable: true }],
+    [
+      3,
+      {
+        id: 3,
+        kind: "foreign",
+        path: "/home/u/.cache/huggingface/hub",
+        movable: "fixed",
+        deletable: false,
+      },
+    ],
+    [
+      5,
+      {
+        id: 5,
+        kind: "foreign",
+        path: "/home/u/.insightface",
+        movable: "root_only",
+        deletable: false,
+      },
+    ],
+  ]);
+
+  const at = (folderId, state = "present") => ({
+    file_kind: "adapter",
+    locations: [{ folder_id: folderId, relpath: "a.st", state }],
+  });
+
+  it("names the folder and what to do instead", () => {
+    // The sentence this replaced said PixlStash "only removes files from your
+    // own model folders", which is untrue — it deletes from the managed store
+    // and from its own download folder — and named nothing the reader could
+    // act on.
+    const text = undeletableNotice([at(3)], folders);
+    expect(text).toContain("/home/u/.cache/huggingface/hub");
+    expect(text).toContain("Another tool owns that folder");
+    expect(text).not.toContain("your own model folders");
+  });
+
+  it("does not send the reader to another tool for a folder we own", () => {
+    // The InsightFace packs are PixlStash's: it re-fetches them, and there is
+    // no other tool to go to.
+    const text = undeletableNotice([at(5)], folders);
+    expect(text).toContain("/home/u/.insightface");
+    expect(text).not.toContain("Another tool owns");
+  });
+
+  it("reports every reason present, not the first one found", () => {
+    // A reader who unplugs-and-replugs only to hit the folder rule has been
+    // sent round twice.
+    const engine = { ...at(1), file_kind: "engine" };
+    const text = undeletableNotice(
+      [at(3), engine, at(1, "unreachable")],
+      folders,
+    );
+    expect(text).toContain("huggingface");
+    expect(text).toContain("downloaded some of these for itself");
+    expect(text).toContain("not plugged in");
+  });
+
+  it("counts the folders rather than listing six paths", () => {
+    expect(undeletableNotice([at(3), at(5)], folders)).toContain(
+      "2 folders PixlStash does not delete from",
+    );
+  });
+
+  it("says so plainly while the folder registry is unknown", () => {
+    // `deletableModels` refuses everything here, so without this the notice
+    // would blame a folder rule it has not actually read.
+    expect(undeletableNotice([at(1)], null)).toBe(
+      "The folder list has not loaded yet, so nothing can be deleted.",
+    );
   });
 });
 
