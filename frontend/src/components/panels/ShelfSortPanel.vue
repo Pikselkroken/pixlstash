@@ -1,5 +1,8 @@
 <template>
-  <div class="tbm shelf-sort-panel">
+  <div
+    class="tbm shelf-sort-panel"
+    :class="{ 'shelf-sort-panel--wide': showsGroup }"
+  >
     <span class="tbm-caret tbm-caret--end"></span>
     <div class="tbm-header">
       <v-icon size="18" class="tbm-header-icon">{{ headerIcon }}</v-icon>
@@ -154,5 +157,15 @@ function toggleDirection() {
 .shelf-sort-panel {
   width: 320px;
   max-width: 94vw;
+}
+
+/* Only the Group section needs the extra room: its three columns left ~51px of
+   label at 320px, so "Base model" — the middle one — ellipsized, and it wants
+   ~76px at --text-sm. 420px gives ~126px tracks, ~84px of label, clearing it
+   on a wide fallback font too. Sort stays 320px, matching the Show popover
+   beside it in the same bar. Below ~447px of viewport the 94vw cap wins and
+   the label ellipsizes again, as everything in this bar already does. */
+.shelf-sort-panel--wide {
+  width: 420px;
 }
 </style>

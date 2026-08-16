@@ -529,6 +529,40 @@ describe("persistence", () => {
 // sorts last in BOTH directions, and collapse is namespaced per axis.
 
 describe("sorting", () => {
+  it("starts a NEW key at its own end, whichever control asked", () => {
+    // The rule lives in `setView` rather than in the column headings, because
+    // the Sort panel writes `sortKey` too and writes it WITHOUT a direction
+    // (`ShelfSortPanel.vue`). With the rule in the heading, the panel carried
+    // "Newest first" onto Name and handed back Z to A while the heading beside
+    // it gave A to Z.
+    const store = useModelShelfStore();
+    expect(store.view.sortKey).toBe("added_at");
+    expect(store.view.sortDirection).toBe("desc");
+
+    store.setView({ sortKey: "name" });
+    expect(store.view.sortDirection).toBe("asc");
+    store.setView({ sortKey: "size" });
+    expect(store.view.sortDirection).toBe("desc");
+    store.setView({ sortKey: "base_model" });
+    expect(store.view.sortDirection).toBe("asc");
+  });
+
+  it("leaves the direction alone when the key is unchanged or given", () => {
+    // Otherwise the direction toggle could never reach the non-default end,
+    // and re-picking the key you are already on would silently reset it.
+    const store = useModelShelfStore();
+    store.setView({ sortKey: "name" });
+    store.setView({ sortDirection: "desc" });
+    expect(store.view.sortDirection).toBe("desc");
+    store.setView({ sortKey: "name" });
+    expect(store.view.sortDirection).toBe("desc");
+    store.setView({ sortKey: "size", sortDirection: "asc" });
+    expect(store.view.sortDirection).toBe("asc");
+    // And a patch that is about something else entirely does not touch it.
+    store.setView({ groupBy: "folder" });
+    expect(store.view.sortDirection).toBe("asc");
+  });
+
   it("never refetches: every sort field is already on the row", async () => {
     // `fetchRows` merges up to three parallel requests, so a server-sorted list
     // per block would be destroyed by the concatenation anyway. Sorting client
@@ -842,6 +876,101 @@ describe("the view is remembered", () => {
     const store = useModelShelfStore();
     expect(store.view.groupBy).toBe("none");
     expect(store.view.sortKey).toBe("added_at");
+  });
+});
+
+describe("the column widths", () => {
+  it("clamps a width to the bounds rather than taking what it is given", () => {
+    const store = useModelShelfStore();
+    store.setColumnWidth("size", 4000);
+    // The ceiling came down from 200 to 150 when the date column made the
+    // shelf four resizable columns wide: the ~600px the panel has for columns
+    // is what was measured, and it is divided by however many there are.
+    expect(store.view.columnWidths.size).toBe(150);
+    store.setColumnWidth("size", -20);
+    expect(store.view.columnWidths.size).toBe(48);
+  });
+
+  it("ignores a column it does not have and a width that is not one", () => {
+    // Every one of these coerces to 0 through `Number()` and would come back
+    // as the 48px FLOOR rather than being refused — `null` in particular is a
+    // value JSON can carry, so a stored blob would silently hand back a
+    // 48px column where the read-back loop is meant to fall through to the
+    // default.
+    const store = useModelShelfStore();
+    store.setColumnWidth("name", 120);
+    for (const bad of ["wide", null, undefined, "", "64", [], {}, true, NaN]) {
+      store.setColumnWidth("kind", bad);
+    }
+    expect(store.view.columnWidths).toEqual({
+      kind: 64,
+      base: 84,
+      size: 74,
+      date: 96,
+    });
+  });
+
+  it("falls through to the default for a stored width that is not a number", () => {
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({
+        v: 1,
+        columnWidths: { kind: null, base: "84", size: 90 },
+      }),
+    );
+    const store = useModelShelfStore();
+    expect(store.view.columnWidths).toEqual({
+      kind: 64,
+      base: 84,
+      size: 90,
+      date: 96,
+    });
+  });
+
+  it("restores what was dragged, and clamps that too", () => {
+    // A blob edited by hand — or written by a build with different bounds —
+    // must not hand back a shelf whose Size column is 4,000px wide.
+    const store = useModelShelfStore();
+    store.setColumnWidth("base", 150);
+    const blob = JSON.parse(
+      window.localStorage.getItem("pixlstash:modelShelfView"),
+    );
+    expect(blob.columnWidths).toEqual({
+      kind: 64,
+      base: 150,
+      size: 74,
+      date: 96,
+    });
+
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ ...blob, columnWidths: { base: 150, size: 9000 } }),
+    );
+    setActivePinia(createPinia());
+    const restored = useModelShelfStore();
+    expect(restored.view.columnWidths).toEqual({
+      kind: 64,
+      base: 150,
+      size: 150,
+      date: 96,
+    });
+  });
+
+  it("takes the defaults from a blob written before columns could be dragged", () => {
+    // Per field rather than behind a schema bump, for the reason the folder
+    // layout is: that blob is still a perfectly good remembered sort.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({ v: 1, sortKey: "name", sortDirection: "asc" }),
+    );
+    const store = useModelShelfStore();
+    expect(store.view.sortKey).toBe("name");
+    expect(store.view.columnWidths).toEqual({
+      kind: 64,
+      base: 84,
+      size: 74,
+      date: 96,
+    });
   });
 });
 

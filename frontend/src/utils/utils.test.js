@@ -3,6 +3,7 @@ import {
   debounce,
   toggleScore,
   formatUserDate,
+  formatUserDay,
   getStackThreshold,
   arraysEqualByString,
   isRangeOverlap,
@@ -66,6 +67,53 @@ describe('formatUserDate', () => {
     for (const fmt of formats) {
       expect(formatUserDate('2024-01-20T09:05:00Z', fmt)).toBeTruthy()
     }
+  })
+})
+
+describe('formatUserDay', () => {
+  // An instant built from LOCAL noon, so the day asserted is the day every
+  // runner's clock is on rather than the one before it east of the date line.
+  const NOON = new Date(2024, 0, 20, 12, 0).toISOString()
+
+  it('writes the day each format writes, and no clock', () => {
+    // Fixed expected strings, never a comparison against `formatUserDate`'s own
+    // output: the point of this function is that it is BUILT from the parts
+    // rather than cut out of a formatted stamp, and a test that trimmed the
+    // stamp the same way would agree with any trimming bug.
+    expect(formatUserDay(NOON, 'iso')).toBe('2024-01-20')
+    expect(formatUserDay(NOON, 'us')).toBe('01/20/2024')
+    expect(formatUserDay(NOON, 'british')).toBe('20/01/2024')
+    expect(formatUserDay(NOON, 'eu')).toBe('20/01/2024')
+    expect(formatUserDay(NOON, 'ymd-slash')).toBe('2024/01/20')
+    expect(formatUserDay(NOON, 'ymd-dot')).toBe('2024.01.20')
+    expect(formatUserDay(NOON, 'ymd-jp')).toBe('2024年01月20日')
+    expect(formatUserDay(NOON, undefined)).toBe('2024-01-20')
+  })
+
+  it('carries no clock in the locale format either', () => {
+    // `locale` delegates to the BROWSER's locale, so there is no string to pin
+    // — and comparing against `Intl.DateTimeFormat` with the same options would
+    // be comparing the implementation with itself. What is left are two
+    // properties, both stated so that no locale can fail them for the wrong
+    // reason: `\p{Nd}` rather than `\d`, because `\d` is ASCII-only and would
+    // read Arabic-Indic digits as no digits at all.
+    const day = formatUserDay(NOON, 'locale')
+    expect(day).toBeTruthy()
+    // No clock. This is the property a trimmed stamp broke: some locales put
+    // the clock FIRST (vi-VN), so cutting at the first space kept `13:00`.
+    expect(day).not.toMatch(/\p{Nd}{1,2}:\p{Nd}{2}/u)
+    // And a whole day rather than a fragment of one: three number groups, for
+    // the year, the month and the day, whichever order and numeral system the
+    // locale writes them in. Trimming left ONE (`2024.` in ko-KR, `20.` in
+    // cs-CZ) or the clock's two, so this is what tells a day from a piece of
+    // one without naming a single locale.
+    expect(day.match(/\p{Nd}+/gu)).toHaveLength(3)
+  })
+
+  it('matches formatUserDate on the falsy and unparseable paths', () => {
+    expect(formatUserDay('', 'iso')).toBe('')
+    expect(formatUserDay(null, 'iso')).toBe('')
+    expect(formatUserDay('not-a-date', 'iso')).toBe('not-a-date')
   })
 })
 

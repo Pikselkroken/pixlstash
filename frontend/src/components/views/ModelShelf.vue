@@ -5,6 +5,7 @@
   <div
     ref="rootEl"
     class="shelf"
+    :style="columnStyle"
     role="region"
     tabindex="-1"
     aria-label="Model shelf"
@@ -13,13 +14,16 @@
     <p id="shelf-help" class="visually-hidden">
       Every adapter and checkpoint PixlStash has found on this machine. Group
       and Sort choose the order and whether the list is cut into groups; Show
-      chooses which kinds are listed and which base models. The bar ends in the
-      app-wide controls: Settings and the stats sidebar toggle. Nothing on this
-      screen can be undone. A ring around a model's mark says who it is assigned
-      to. A name in italics has not been given one. A row that stands for a
-      training run says how many files it holds; Right and Left open and close
-      it. Right-click a row for everything that can be done to it. Escape clears
-      the selection.
+      chooses which kinds are listed and which base models. Above the list, the
+      Name, Base and Size headings sort it too, and Kind, Base and Size each end
+      in a handle that resizes them: Left and Right move the edge, Home and End
+      take it to its narrowest and widest, Enter puts it back. The bar ends in
+      the app-wide controls: Settings and the stats sidebar toggle. Nothing on
+      this screen can be undone. A ring around a model's mark says who it is
+      assigned to. A name in italics has not been given one. A row that stands
+      for a training run says how many files it holds; Right and Left open and
+      close it. Right-click a row for everything that can be done to it. Escape
+      clears the selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -404,6 +408,105 @@
            menu rather than inside it. Group headers stay stops too, so Tab
            still moves group to group. -->
       <template v-else>
+        <!-- The column headings, drawn ONCE for the view and sticky above
+             everything under them. Once per group is what the grid semantics
+             want — a `columnheader` heads the grid it is in, which is why the
+             hidden header row below is repeated per `<ul>` — but a visible
+             strip repeated over eight folders would be eight identical bands
+             of chrome down a list, and the widths are shared anyway.
+
+             So this is a control group, not the grid's header: a `group` of
+             buttons that set the sort and separators that size the columns.
+             The grid keeps its own hidden headings, and those now carry
+             `aria-sort`, so a reader inside the treegrid hears the order
+             without this strip having to lie about being part of it. -->
+        <div
+          class="shelf-head"
+          role="group"
+          aria-label="Sort and size the columns"
+        >
+          <!-- Matches `.shelf-row-ident`, which holds the mark and the ring.
+               There is nothing to name: the mark IS the row's identity and the
+               hidden `Model` columnheader already says so. -->
+          <span class="shelf-head-ident" aria-hidden="true"></span>
+          <span class="shelf-head-col shelf-head-col--label">
+            <button
+              class="section-label shelf-head-cell"
+              :class="{
+                'shelf-head-cell--on': store.view.sortKey === NAME_COLUMN.sort,
+              }"
+              type="button"
+              :aria-label="columnSortLabel(NAME_COLUMN)"
+              :title="columnSortLabel(NAME_COLUMN)"
+              @click="sortByColumn(NAME_COLUMN.sort)"
+            >
+              <span class="shelf-head-text">{{ NAME_COLUMN.label }}</span>
+              <v-icon class="shelf-head-arrow" size="14" aria-hidden="true">{{
+                directionIcon
+              }}</v-icon>
+            </button>
+          </span>
+          <!-- The heading and its grip are one element wide, because the grip
+               is positioned against the heading's own right edge. Without the
+               wrapper it would either be a flex item of its own — widening
+               every column past what the rows draw — or clipped by the
+               heading's overflow. -->
+          <span
+            v-for="col in SHELF_COLUMNS"
+            :key="col.key"
+            class="shelf-head-col"
+            :class="`shelf-head-col--${col.key}`"
+          >
+            <button
+              v-if="col.sort"
+              class="section-label shelf-head-cell"
+              :class="{
+                'shelf-head-cell--on': store.view.sortKey === col.sort,
+              }"
+              type="button"
+              :aria-label="columnSortLabel(col)"
+              :title="columnSortLabel(col)"
+              @click="sortByColumn(col.sort)"
+            >
+              <span class="shelf-head-text">{{ col.label }}</span>
+              <v-icon class="shelf-head-arrow" size="14" aria-hidden="true">{{
+                directionIcon
+              }}</v-icon>
+            </button>
+            <span
+              v-else
+              class="section-label shelf-head-cell shelf-head-cell--static"
+            >
+              <span class="shelf-head-text">{{ col.label }}</span>
+            </span>
+            <!-- `separator` with a value, which is the window-splitter pattern
+                 and the only reason this is focusable: a grip that answered
+                 the pointer alone would put the column widths out of reach of
+                 anyone not using one. Left, Right, Home and End move the edge;
+                 Enter and a double-click put it back, which is the only way
+                 back from a mis-drag. -->
+            <span
+              class="shelf-head-grip"
+              :class="{ 'shelf-head-grip--on': resizing?.key === col.key }"
+              role="separator"
+              aria-orientation="vertical"
+              :aria-label="`Resize the ${col.label} column`"
+              :aria-valuenow="store.view.columnWidths[col.key]"
+              :aria-valuetext="`${store.view.columnWidths[col.key]} pixels`"
+              :aria-valuemin="MIN_COLUMN_WIDTH"
+              :aria-valuemax="MAX_COLUMN_WIDTH"
+              tabindex="0"
+              :title="`Drag to resize the ${col.label} column, double-click to reset it`"
+              @pointerdown="startResize(col.key, $event)"
+              @pointermove="onResizeMove"
+              @pointerup="endResize"
+              @pointercancel="endResize"
+              @lostpointercapture="endResize"
+              @dblclick="resetColumn(col.key)"
+              @keydown="onGripKeydown(col.key, $event)"
+            ></span>
+          </span>
+        </div>
         <!-- The key to the meters, said ONCE for the view rather than once per
              band: it is the same three segments every time, and repeating it
              down the list would cost more room than the meters themselves.
@@ -624,17 +727,34 @@
           >
             <!-- The column names, on every grid and drawn on none of them.
                  `columnheader`s head the grid they are in and nothing else, so
-                 grouping needs one strip per group — and the resolved design
-                 has no visible header strip, because the kind is a chip, the
-                 base is a word and the size is right-aligned, which is what
-                 makes the columns readable without being named. The names stay
-                 for the reader who cannot see that. -->
+                 grouping needs one strip per group, and eight identical
+                 visible bands down a grouped list is exactly what the header
+                 strip above the list exists to avoid. These stay hidden and
+                 carry the `aria-sort` for their own grid, so the order is
+                 readable from inside the treegrid rather than only from the
+                 control group above it. -->
             <li class="visually-hidden" role="row">
               <span role="columnheader">Model</span>
-              <span role="columnheader">Name</span>
+              <span role="columnheader" :aria-sort="columnSortState('name')"
+                >Name</span
+              >
               <span role="columnheader">Kind</span>
-              <span role="columnheader">Base</span>
-              <span role="columnheader">Size</span>
+              <span
+                role="columnheader"
+                :aria-sort="columnSortState('base_model')"
+                >Base</span
+              >
+              <span role="columnheader" :aria-sort="columnSortState('size')"
+                >Size</span
+              >
+              <!-- Named for the axis it is drawn in, because that axis changes
+                   with the sort: a reader who hears `Size` then `Date added`
+                   knows which of the two dates the column holds. -->
+              <span
+                role="columnheader"
+                :aria-sort="columnSortState(DATE_COLUMN.sort)"
+                >{{ DATE_COLUMN.label }}</span
+              >
             </li>
             <!-- A row with one spanning cell, because a grid takes nothing but
                  rows: not selectable, because there is nothing here to select.
@@ -859,6 +979,17 @@
                 <span role="gridcell" class="shelf-col shelf-col--size">{{
                   row.file_size ? formatModelSize(row.file_size) : ""
                 }}</span>
+                <!-- The DAY, not the stamp: a column is scanned, and the clock
+                     is what stops it being scannable. The full stamp is in the
+                     title, which also names which of the two dates this is —
+                     the column follows the sort, so the same cell holds
+                     `Date added` on one shelf and `File date` on the next. -->
+                <span
+                  role="gridcell"
+                  class="shelf-col shelf-col--date"
+                  :title="dateTitle(row)"
+                  >{{ dateCell(row) }}</span
+                >
               </li>
 
               <!-- The run's other steps, rendered as ROWS rather than through
@@ -904,6 +1035,16 @@
                   <span role="gridcell" class="shelf-col shelf-col--size">{{
                     member.file_size ? formatModelSize(member.file_size) : ""
                   }}</span>
+                  <!-- A step's OWN date, unlike its kind and base: when a run
+                       was saved is the one thing that differs from step to
+                       step, and answering it with the run's would print the
+                       same stamp down the whole strip. -->
+                  <span
+                    role="gridcell"
+                    class="shelf-col shelf-col--date"
+                    :title="dateTitle(member, true)"
+                    >{{ dateCell(member, true) }}</span
+                  >
                 </li>
               </template>
             </template>
@@ -1008,13 +1149,20 @@ import { addModelFile } from "../../api/modelFiles";
 import { openModelLocation } from "../../api/modelShelf";
 import { createStack } from "../../api/modelStacks";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
-import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import {
+  DEFAULT_COLUMN_WIDTHS,
+  MAX_COLUMN_WIDTH,
+  MIN_COLUMN_WIDTH,
+  useModelShelfStore,
+} from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { errorDetail } from "../../utils/apiError";
+import { formatUserDate, formatUserDay } from "../../utils/utils";
 import { isTypingTarget } from "../../utils/dom.js";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
 import {
@@ -1026,12 +1174,15 @@ import {
   bandUsage,
   capabilityLabel,
   copyPathsTitle,
+  dateColumnKey,
+  defaultSortDirection,
   deletableModels,
   fileKindLabel,
   trashName,
   withEmptyFolders,
   withFolderSignals,
   formatModelSize,
+  modelDate,
   GROUP_BY_LABELS,
   movableCopies,
   SORT_LABELS,
@@ -1053,6 +1204,10 @@ const moves = useModelMovesStore();
 // owns the key before it clears anything. See `onShelfEscape`.
 const reviewSessionsStore = useReviewSessionsStore();
 const sidebarStore = useSidebarStore();
+// The date column is stamped in the reader's own format, through the same
+// `formatUserDate(iso, dateFormat)` pattern every other timestamp in the app
+// uses.
+const userPrefs = useUserPrefsStore();
 const rootEl = ref(null);
 const showMenuOpen = ref(false);
 const sortMenuOpen = ref(false);
@@ -2303,7 +2458,47 @@ function ringStyle(row) {
  * `aria-colspan` cannot drift apart. A grid where one row has a different cell
  * count is a grid a reader is lied to about.
  */
-const COLUMN_COUNT = 5;
+const COLUMN_COUNT = 6;
+
+/**
+ * The date column, named and sorted by whichever date axis it is drawn in.
+ *
+ * The only entry in the header strip that is not a constant. There is ONE date
+ * column and there are two date sort keys, so the heading has to move: it says
+ * `Date added` while the shelf is ordered on anything that is not a date and
+ * while it is ordered on `added_at`, and `File date` once the Sort panel has
+ * moved the shelf onto `file_mtime`. Pressing it then does what every other
+ * heading does — sort on the key it names, flip the direction if that key is
+ * already the sorted one — so the two axes stay reachable from the panel while
+ * the heading always names the one the cells beneath it are showing.
+ */
+const DATE_COLUMN = computed(() => {
+  const sort = dateColumnKey(store.view.sortKey);
+  return { key: "date", label: SORT_LABELS[sort].label, sort };
+});
+
+/**
+ * The day a row shows in the date column, or nothing when it cannot answer.
+ *
+ * An empty cell rather than a dash, exactly as the size column does it: the two
+ * are the row's figures, and a placeholder in a figure column is noise the eye
+ * has to step over on every scan.
+ *
+ * @param {Object} row - a shelf row, or a stack member with `own` set.
+ * @param {boolean} [own=false] - read the member's own date, not its run's.
+ */
+function dateCell(row, own = false) {
+  const iso = modelDate(row, store.view.sortKey, own);
+  return iso ? formatUserDay(iso, userPrefs.dateFormat) : "";
+}
+
+/** The same date in full, named by its axis, for the cell's tooltip. */
+function dateTitle(row, own = false) {
+  const iso = modelDate(row, store.view.sortKey, own);
+  return iso
+    ? `${DATE_COLUMN.value.label}: ${formatUserDate(iso, userPrefs.dateFormat)}`
+    : undefined;
+}
 
 /**
  * What an empty folder group says, per reason.
@@ -2577,6 +2772,174 @@ function toggleDirection() {
   });
 }
 
+/* ── The header strip ──────────────────────────────────────────────────────
+   The four fixed data columns, in the order the rows draw them. `sort` is the
+   SORT_KEYS value the heading orders on, or null where the column answers no
+   sort key: `Kind` is a chip of whatever the row's capabilities happen to be
+   and the API's `SortKey` has no member for it, so its heading names the
+   column and offers a grip, but is not a button that would do nothing.
+
+   The Name column is not in this list. It is the flexible track — it takes
+   whatever the others leave — so it has a heading and a sort but no width
+   to drag, and it is written out on its own in the template.
+
+   Every heading is LEFT-aligned, including Size's, whose figures are not: the
+   heading is a label naming the column and the figures are a magnitude being
+   compared, and the grip lives on the column's right edge — a right-aligned
+   `SIZE` would sit under it and be a resize target as much as a sort one. */
+const NAME_COLUMN = { key: "name", label: "Name", sort: "name" };
+
+/* A computed and not a constant, for one entry: `DATE_COLUMN` renames itself
+   with the axis it is drawn in. The three ahead of it never move. */
+const SHELF_COLUMNS = computed(() => [
+  { key: "kind", label: "Kind", sort: null },
+  { key: "base", label: "Base", sort: "base_model" },
+  { key: "size", label: "Size", sort: "size" },
+  DATE_COLUMN.value,
+]);
+
+/** How far one arrow-key press moves a column edge. One --space-3. */
+const RESIZE_STEP = 8;
+
+/** The column drag in flight, or null. Never persisted. */
+const resizing = ref(null);
+
+/**
+ * The remembered widths, handed to the row rules as the custom properties they
+ * already read. Bound on the root rather than per cell so the headings, the
+ * rows and a stack's member rows cannot drift apart: there is one declaration
+ * of each width and every cell resolves the same variable.
+ */
+const columnStyle = computed(() =>
+  Object.fromEntries(
+    Object.entries(store.view.columnWidths).map(([key, px]) => [
+      `--shelf-col-${key}`,
+      `${px}px`,
+    ]),
+  ),
+);
+
+/** `"ascending"` / `"descending"` / `"none"`, for `aria-sort`. */
+function columnSortState(key) {
+  if (!key || store.view.sortKey !== key) return "none";
+  return store.view.sortDirection === "asc" ? "ascending" : "descending";
+}
+
+/**
+ * A heading's accessible name: what the column is, how it is sorted now, and
+ * what pressing it would do.
+ *
+ * The direction phrases keep their capitals for the reason `sortButtonTitle`
+ * does — "A to Z" lowercased reads as a typo — so the three parts are separate
+ * sentences rather than one clause.
+ */
+function columnSortLabel(column) {
+  const now = store.view.sortKey === column.sort;
+  const next = now
+    ? store.view.sortDirection === "asc"
+      ? "desc"
+      : "asc"
+    : defaultSortDirection(column.sort);
+  const state = now
+    ? `sorted ${sortDirectionLabel(column.sort, store.view.sortDirection)}`
+    : "not sorted";
+  return `${column.label}, ${state}. Activate to sort ${sortDirectionLabel(column.sort, next)}.`;
+}
+
+/**
+ * Sort on a column, or flip the direction if it is already the sorted one.
+ *
+ * A key the reader has just arrived at starts at its own end, and that is
+ * `setView`'s job rather than this one's: the Sort panel writes `sortKey` too,
+ * and a rule living in one of the two writers is a rule the other breaks.
+ */
+function sortByColumn(key) {
+  if (store.view.sortKey === key) toggleDirection();
+  else store.setView({ sortKey: key });
+}
+
+/**
+ * Start a column drag.
+ *
+ * Pointer capture rather than window listeners: the grip keeps receiving moves
+ * once the pointer has left it — which it does immediately, because dragging
+ * an edge is exactly moving away from where you pressed — and the browser
+ * releases the capture for us on pointerup, on cancel, and if the element goes
+ * away mid-drag.
+ *
+ * The primary button on ANY device, not just a mouse: a pen's barrel button
+ * reports `button: 2` with `pointerType: "pen"`, and a guard that only tested
+ * mice let it start a drag. Touch reports 0 and is unaffected.
+ *
+ * There is deliberately NO `preventDefault()` here. It is not needed — `.shelf`
+ * already sets `user-select: none` and the grip sets `touch-action: none`, so
+ * neither a text selection nor a touch scroll can start — and calling it
+ * suppresses the compatibility mouse events, which is what focuses the grip on
+ * click and what `dblclick` (the only pointer-side way back from a mis-drag)
+ * is built on.
+ */
+function startResize(key, event) {
+  if (event.button !== 0) return;
+  resizing.value = {
+    key,
+    startX: event.clientX,
+    startWidth: store.view.columnWidths[key],
+  };
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+}
+
+// Not persisted per frame: see `setColumnWidth`. The end of the gesture is
+// what writes.
+function onResizeMove(event) {
+  if (!resizing.value) return;
+  // The pointer came back with nothing held down, so the release happened
+  // somewhere this grip never heard about — a refused or lost capture, or the
+  // strip re-rendering out from under the drag. Without this the drag is stuck
+  // for good and the next hover resumes it from the original press.
+  if (event.buttons === 0) {
+    endResize();
+    return;
+  }
+  const { key, startX, startWidth } = resizing.value;
+  store.setColumnWidth(key, startWidth + (event.clientX - startX), false);
+}
+
+function endResize() {
+  if (!resizing.value) return;
+  const { key } = resizing.value;
+  resizing.value = null;
+  store.setColumnWidth(key, store.view.columnWidths[key]);
+}
+
+/**
+ * The keyboard half of the same gesture, which is the whole reason the grip is
+ * a focusable `separator` rather than a decoration on the heading.
+ *
+ * Left/Right/Home/End are the window-splitter pattern's own keys. `Enter` is
+ * the pattern's "restore the default position", and here it is the ONLY way
+ * back: a width is remembered for good once it has been dragged, so without a
+ * reset a mis-drag is permanent short of clearing the browser's storage. A
+ * double-click on the grip does the same thing, which is the pointer-side
+ * convention every table with draggable columns already trains.
+ */
+function onGripKeydown(key, event) {
+  const width = {
+    ArrowLeft: () => store.view.columnWidths[key] - RESIZE_STEP,
+    ArrowRight: () => store.view.columnWidths[key] + RESIZE_STEP,
+    Home: () => MIN_COLUMN_WIDTH,
+    End: () => MAX_COLUMN_WIDTH,
+    Enter: () => DEFAULT_COLUMN_WIDTHS[key],
+  }[event.key];
+  if (!width) return;
+  // Home and End scroll the list, and the list is 1,800 rows long.
+  event.preventDefault();
+  store.setColumnWidth(key, width());
+}
+
+function resetColumn(key) {
+  store.setColumnWidth(key, DEFAULT_COLUMN_WIDTHS[key]);
+}
+
 /**
  * The always-present anchor of the metadata line, whatever else is null.
  *
@@ -2670,14 +3033,24 @@ watch(
   background: rgb(var(--v-theme-background));
   color: rgb(var(--v-theme-on-background));
   outline: none;
-  /* The three data columns, stated once. FIXED widths, not `auto`: grouping
-     makes one list per group, so `auto` tracks would be measured against that
-     group's contents alone and the columns would step sideways from one folder
-     to the next — which is the alignment #891 exists to hold. The figures are
-     the resolved design's own (ui_kits/app/model-shelf.html, row anatomy). */
-  --shelf-col-kind: 64px;
-  --shelf-col-base: 84px;
-  --shelf-col-size: 74px;
+  /* `--shelf-col-kind` / `--shelf-col-base` / `--shelf-col-size` /
+     `--shelf-col-date` are NOT declared here. `columnStyle` writes all four
+     onto this element from `view.columnWidths`, whose defaults are the
+     resolved design's own (ui_kits/app/model-shelf.html, row anatomy; the date
+     column is this feature's, sized for the widest day format) — and a
+     fallback copy of those figures here would be a second literal of the same
+     numbers with nothing keeping them equal, which is how a "cannot disagree"
+     comment becomes false. One declaration, in the store.
+
+     FIXED widths, not `auto`: grouping makes one list per group, so `auto`
+     tracks would be measured against that group's contents alone and the
+     columns would step sideways from one folder to the next — the alignment
+     #891 exists to hold. */
+  /* What the header strip stands, so the group headings can stick UNDER it
+     rather than behind it. A fixed figure rather than a measured one: the
+     strip is one line of --text-2xs and never wraps, and 32px is already the
+     token for a horizontal band of exactly this kind. */
+  --shelf-head-h: var(--rule-h-seam);
   /* Picking rows is the gesture on this panel, and the browser's text selection
      rode along with it: Shift+click extends a text range from the last click and
      a fast double click word-selects, so a multi-select arrived with the list
@@ -3030,6 +3403,177 @@ watch(
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 
+/* ── The column strip ──────────────────────────────────────────────────────
+   The same flex metrics as `.shelf-row`, restated rather than shared, because
+   the row's padding and gap are what a heading has to line up with and a
+   heading that computed its own would be one refactor from drifting. The
+   transparent rail is the rows' absence rail: without it every heading would
+   sit one rail-width left of the column it names.
+
+   Its own rung, named rather than an arithmetic `+1` at the use site: it is
+   INSIDE the sticky stratum and one step above the group headings, which are
+   later siblings in the same scroller and would otherwise win the tie on DOM
+   order and paint over it. OPAQUE for the same reason — the headings pass
+   under this one. */
+.shelf-head {
+  --shelf-head-z: calc(var(--z-sticky) + 5);
+  position: sticky;
+  top: 0;
+  z-index: var(--shelf-head-z);
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-4);
+  /* border-box, so the hairline is INSIDE the 32px the group headings offset
+     themselves by. There is no universal reset in this app, so a content-box
+     strip would stand 33px and leave a 1px sliver of row under it. */
+  box-sizing: border-box;
+  height: var(--shelf-head-h);
+  padding: 0 var(--space-4) 0 var(--space-6);
+  border-left: var(--rail-w) solid transparent;
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  background: rgb(var(--v-theme-background));
+}
+
+.shelf-head-ident {
+  width: calc(var(--entity-thumb) + var(--space-4));
+  flex: none;
+}
+
+/* The wrapper that carries the column's width and anchors its grip. Its own
+   width classes rather than the rows' `.shelf-col--*`: those are the DATA
+   cells, several selectors reach for them by name, and a heading answering to
+   the same class is how `.shelf-col--base span` came to find a column name
+   instead of a base model. The variable is what the two share. */
+.shelf-head-col {
+  position: relative;
+  flex: none;
+}
+
+.shelf-head-col--label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.shelf-head-col--kind {
+  width: var(--shelf-col-kind);
+}
+
+.shelf-head-col--base {
+  width: var(--shelf-col-base);
+}
+
+.shelf-head-col--size {
+  width: var(--shelf-col-size);
+}
+
+.shelf-head-col--date {
+  width: var(--shelf-col-date);
+}
+
+/* The type, the weight, the tracking, the case and the 0.7 ink all come from
+   the global `.section-label`, which is what a column name IS — §3 says use it
+   rather than re-roll it, and its alpha in particular is a measured value that
+   has been wrong here once already. Only the layout is local. */
+.shelf-head-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-standard);
+}
+
+.shelf-head-cell--static {
+  cursor: default;
+}
+
+button.shelf-head-cell:hover {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.shelf-head-cell:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+/* The sorted column is named in full ink with an arrow beside it. Both halves
+   on purpose: the arrow alone is a 14px glyph at the edge of a quiet strip,
+   and the ink alone does not say which way. */
+.shelf-head-cell--on {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+/* Always present, only sometimes visible — the same rule as the row's absence
+   rail (§5.1): `v-if` would let the label shift 22px sideways at the instant
+   the reader clicks it, and ellipsize its own heading at the narrow end. */
+.shelf-head-arrow {
+  visibility: hidden;
+}
+
+.shelf-head-cell--on .shelf-head-arrow {
+  visibility: visible;
+}
+
+.shelf-head-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 24px wide and centred ON the column's right edge, so the grab area is the
+   visual seam rather than something beside it. 24 is WCAG 2.5.8's floor and
+   the grab area is decoupled from the drawn hairline by the pseudo-element
+   below, so it costs nothing to hit: the strip's 12px gap takes half of it and
+   the column's own last 12px take the other, which no heading's label reaches
+   (the widest is `BASE` at ~30px in an 84px column, and every heading is
+   left-aligned so none of them ends near the edge). The last column's grip
+   lands inside the row's right padding, which is why the strip does not clip
+   and why it stops exactly where the next column begins. */
+.shelf-head-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: calc(var(--space-6) / -2);
+  width: var(--space-6);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+/* The hairline the reader actually sees, and the ONLY signal that a column can
+   be resized — so it is a component-grade 0.4 rather than the `divider` token,
+   which measures ~1.2:1 on this canvas and fails 1.4.11's 3:1. Same floor and
+   the same reasoning as §11's scrollbar thumb. */
+.shelf-head-grip::after {
+  content: "";
+  position: absolute;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  left: 50%;
+  width: 1px;
+  background: rgba(var(--v-theme-on-background), 0.4);
+  transition: background var(--dur-1) var(--ease-standard);
+}
+
+/* Colour only, never width: the hairline is `left: 50%` on the seam, so
+   growing it would slide the line sideways under the pointer at the moment
+   the reader is aiming at it. */
+.shelf-head-grip:hover::after,
+.shelf-head-grip--on::after,
+.shelf-head-grip:focus-visible::after {
+  background: rgb(var(--v-theme-primary));
+}
+
+.shelf-head-grip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
 /* The key, once for the view. Wraps rather than scrolls: four short pairs at a
    narrow width belong on two lines, not behind a scrollbar. */
 .shelf-keys {
@@ -3081,7 +3625,10 @@ watch(
    header that gains one does not move a pixel. */
 .shelf-group-btn {
   position: sticky;
-  top: 0;
+  /* Under the column strip, not behind it: both are sticky in the same
+     scroller, and a heading pinned at 0 would be covered by the strip exactly
+     when the reader needs to know which folder they are scrolling through. */
+  top: var(--shelf-head-h);
   z-index: var(--z-sticky);
   display: flex;
   align-items: center;
@@ -3513,6 +4060,15 @@ watch(
   font-variant-numeric: tabular-nums;
 }
 
+/* Tabular but LEFT-aligned, unlike the size beside it: every day in a column is
+   the same width in the same format, so the digits line up either way, and Size
+   stays the one right-aligned track — which is what keeps a magnitude readable
+   as a magnitude rather than as one more figure in a row of them. */
+.shelf-col--date {
+  width: var(--shelf-col-date);
+  font-variant-numeric: tabular-nums;
+}
+
 .shelf-row--broken .shelf-row-name,
 .shelf-row--broken .shelf-col {
   opacity: 0.75;
@@ -3553,11 +4109,18 @@ watch(
 }
 
 /* The visible half of `inert`. A veil over the LIST, never over the app: the
-   toolbar keeps answering while files are in flight. */
+   toolbar keeps answering while files are in flight.
+
+   ABOVE everything sticky in this scroller, including the column strip and the
+   group headings. Both are opaque, so at or below the veil's rung they stay at
+   full brightness over a dimmed list and read as usable when they are not —
+   which is the failure the veil exists to prevent. The strip in particular is
+   pinned and spans the width, so it is the one that makes the veil look like a
+   bug. */
 .shelf-dim {
   position: absolute;
   inset: 0;
-  z-index: var(--z-sticky);
+  z-index: calc(var(--z-sticky) + 10);
   background: rgba(var(--v-theme-background), 0.55);
 }
 </style>

@@ -52,7 +52,10 @@ from pixlstash.db_models.adapter_attachment import AdapterAttachment
 from pixlstash.routes import model_files as model_files_routes
 from pixlstash.routes import model_folders as model_folders_routes
 from pixlstash.routes import model_shelf as model_shelf_routes
-from pixlstash.routes.model_imports import sample_path_within
+from pixlstash.routes.model_imports import (
+    model_sample_path_within,
+    sample_path_within,
+)
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.server import Server
 from pixlstash.services import builtin_models
@@ -1888,6 +1891,12 @@ _IMPORT_ROUTES = (
             }
         },
     ),
+    # The imported previews, read back off the shelf. On the same locality tier
+    # as the rest of this block: the byte route serves raw bytes out of a
+    # registered model folder, which is `GET /adapters/{sha256}/file`'s class,
+    # and the listing walks one directory inside that folder.
+    ("GET", f"{API}/models/1/samples", {}),
+    ("GET", f"{API}/models/1/samples/a.png", {}),
 )
 
 
@@ -1951,6 +1960,14 @@ def test_every_import_route_is_declared_local_owner_only():
             "/api/v1/model-folders/{folder_id}/runs/{run_name}/samples/{filename}",
         ),
         ("POST", "/api/v1/model-imports"),
+        # NOT owner_only, which is what the plan for the samples change asked
+        # for on the grounds that a model.id crosses the wire and a host path
+        # does not. That is the argument the matrix records as *not* the
+        # argument: GET /adapters/{sha256}/file takes no host path either and is
+        # on this tier, because the tier follows the authority exercised —
+        # reading bytes out of a folder the owner registered.
+        ("GET", "/api/v1/models/{model_id}/samples"),
+        ("GET", "/api/v1/models/{model_id}/samples/{filename}"),
     ):
         declared = ROUTE_POLICIES.get((method, path))
         assert declared is not None, f"({method}, {path}) has no ROUTE_POLICIES entry"
@@ -2197,6 +2214,197 @@ def test_importing_a_run_registers_it_as_one_stack(shelf_env, import_folders):
     assert cover["provenance"] == "trained"
     assert cover["stack_position"] == 0
     assert cover["member_count"] == 2
+
+
+# ── The imported samples, read back off the shelf ───────────────────────────
+#
+# The run's previews travel with its weights, so the same images are reachable
+# twice: from the output root before the import (the routes above) and from the
+# destination folder afterwards (these). The containment story is the same one,
+# with the run replaced by a `model_file` row.
+
+
+def _import_clementine(env, folders, *, steps=None):
+    """Import the fixture run and return `{filename: model_id}`."""
+    body = {
+        "source_folder_id": folders.source_id,
+        "run_name": "Clementine",
+        "destination_folder_id": folders.destination_id,
+    }
+    if steps is not None:
+        body["steps"] = steps
+    r = env.owner.post(f"{API}/model-imports", json=body)
+    assert r.status_code == 200, r.text
+    return {f["filename"]: f["model_id"] for f in r.json()["files"]}, r.json()["files"]
+
+
+def _run_samples(folders, *pairs):
+    """Write `(step, index)` previews into the fixture run's `samples/`."""
+    samples = folders.run_dir / "samples"
+    samples.mkdir(exist_ok=True)
+    for step, index in pairs:
+        (samples / f"1712345678901__{step:09d}_{index}.jpg").write_bytes(
+            b"\xff\xd8\xff" + f"{step}-{index}".encode()
+        )
+
+
+def test_an_imported_runs_samples_are_listed_and_served_off_the_shelf(
+    shelf_env, import_folders
+):
+    """The positive control for both routes, and the bare final's cover rule at
+    the same time: it carries no step of its own, so it takes the highest step's
+    previews rather than showing nothing."""
+    _run_samples(import_folders, (500, 0), (500, 1))
+    ids, files = _import_clementine(shelf_env, import_folders)
+
+    final = ids["Clementine.safetensors"]
+    stepped = ids["Clementine_000000500.safetensors"]
+    assert {f["filename"]: f["sample_count"] for f in files} == {
+        "Clementine.safetensors": 2,
+        "Clementine_000000500.safetensors": 2,
+    }
+
+    listed = shelf_env.owner.get(f"{API}/models/{final}/samples")
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["samples"] == [
+        "1712345678901__000000500_0.jpg",
+        "1712345678901__000000500_1.jpg",
+    ], "the stack cover listed no previews — the blank-cover failure"
+    assert (
+        shelf_env.owner.get(f"{API}/models/{stepped}/samples").json()["samples"]
+        == listed.json()["samples"]
+    )
+
+    served = shelf_env.owner.get(
+        f"{API}/models/{final}/samples/1712345678901__000000500_1.jpg"
+    )
+    assert served.status_code == 200, served.text
+    assert served.headers["content-type"] == "image/jpeg"
+    assert served.content == b"\xff\xd8\xff500-1"
+
+
+def test_a_model_with_no_previews_lists_none(shelf_env):
+    """An empty list, not a 404: the model exists and simply has no previews."""
+    model_id = shelf_env.model_ids["alice.safetensors"]
+    r = shelf_env.owner.get(f"{API}/models/{model_id}/samples")
+    assert r.status_code == 200, r.text
+    assert r.json()["samples"] == []
+    assert shelf_env.owner.get(
+        f"{API}/models/{model_id}/samples/a.jpg"
+    ).status_code == (404)
+
+
+def test_the_sample_routes_serve_previews_and_not_the_owners_own_pictures(
+    shelf_env, real_files
+):
+    """The directory is found by name, so anything can be in it.
+
+    Both routes therefore key on the trainer's `<timestamp>__<step>_<index>`
+    shape rather than on "it is an image in a directory whose name matched" —
+    the same test the delete verb uses to decide the directory is the model's.
+    Without it these routes read the owner's own pictures back out over HTTP and
+    the response describes them as the run's previews.
+    """
+    model_id = shelf_env.model_ids["alice.safetensors"]
+    directory = real_files / "alice_samples"
+    directory.mkdir()
+    (directory / "1712345678901__000000500_0.jpg").write_bytes(b"\xff\xd8\xff")
+    (directory / "holiday-photo.jpg").write_bytes(b"\xff\xd8\xffprivate")
+
+    listed = shelf_env.owner.get(f"{API}/models/{model_id}/samples")
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["samples"] == ["1712345678901__000000500_0.jpg"], (
+        "a picture the owner left in the directory was listed as a run preview"
+    )
+
+    served = shelf_env.owner.get(f"{API}/models/{model_id}/samples/holiday-photo.jpg")
+    assert served.status_code == 400, served.text
+    assert b"private" not in served.content
+
+
+def test_an_unknown_model_id_is_a_404_on_both_sample_routes(shelf_env):
+    """An unmatched path is *also* a 404, so this assertion is worthless unless
+    the routes are known to exist. `assert_real_route` is that proof, and
+    without it the test would pass verbatim against a renamed or deleted
+    route — the 403-shaped trap in its 404 form."""
+    for path in ("samples", "samples/a.jpg"):
+        url = f"{API}/models/9999999/{path}"
+        assert_real_route(shelf_env.server.api, "GET", url)
+        r = shelf_env.owner.get(url)
+        assert r.status_code == 404, f"{path}: {r.status_code} {r.text}"
+
+
+def test_a_non_image_in_a_models_samples_is_never_served_or_listed(
+    shelf_env, import_folders
+):
+    """Same allowlist as the run route, for the same reason: the directory is on
+    the owner's disk and anything can be dropped into it, and `mimetypes` would
+    label this text/html and serve it from our own origin."""
+    _run_samples(import_folders, (500, 0))
+    ids, _ = _import_clementine(shelf_env, import_folders, steps=[None])
+    model_id = ids["Clementine.safetensors"]
+    (import_folders.destination_dir / "Clementine_samples" / "note.html").write_text(
+        "<script>alert(1)</script>"
+    )
+
+    listed = shelf_env.owner.get(f"{API}/models/{model_id}/samples")
+    assert "note.html" not in listed.json()["samples"], (
+        "the listing advertised a name the byte route refuses"
+    )
+    served = shelf_env.owner.get(f"{API}/models/{model_id}/samples/note.html")
+    assert served.status_code == 400, served.text
+    assert b"script" not in served.content
+
+
+def test_the_model_sample_join_refuses_a_name_that_climbs_out(tmp_path):
+    """The containment, asserted where it can be made to fail.
+
+    Not over HTTP, for the reason the run-sample twin of this test records at
+    length: Starlette percent-decodes before matching, so `{filename}` cannot
+    carry a `/` and a traversal never reaches the handler on POSIX. The guard is
+    still real on Windows, where a backslash is both an ordinary URL character
+    and a path separator, and where four CI shards run.
+    """
+    folder = tmp_path / "loras"
+    (folder / "Clementine_samples").mkdir(parents=True)
+    (folder / "Clementine_samples" / "ok.jpg").write_bytes(b"\xff\xd8\xff")
+    (folder / "Clementine.safetensors").write_bytes(b"weights")
+
+    # Positive control: over-blocking is its own regression.
+    assert model_sample_path_within(
+        str(folder), "Clementine.safetensors", "ok.jpg"
+    ) == str(folder / "Clementine_samples" / "ok.jpg")
+
+    for escape in (
+        "../Clementine.safetensors",
+        "..",
+        "../../etc/passwd",
+        "/etc/passwd",
+    ):
+        with pytest.raises(ValueError):
+            model_sample_path_within(str(folder), "Clementine.safetensors", escape)
+
+
+def test_a_symlinked_model_samples_directory_is_not_its_own_safe_base(tmp_path):
+    """The hinge the run-sample route had to learn twice.
+
+    `resolve_path_within` realpaths the base it is handed, so containing the
+    filename against the derived directory alone would make a symlinked
+    `<stem>_samples` its own safe base — an arbitrary-image reader for any
+    allowlisted extension. Registered model folders are less exposed than a
+    `source` folder, whose contents are third-party tool output, but the
+    directory name here is derived rather than chosen and the owner's disk is
+    still the owner's disk.
+    """
+    folder = tmp_path / "loras"
+    folder.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.jpg").write_bytes(b"\xff\xd8\xffsecret")
+    (folder / "Clementine_samples").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError):
+        model_sample_path_within(str(folder), "Clementine.safetensors", "private.jpg")
 
 
 def test_a_run_name_that_escapes_the_output_root_is_refused(shelf_env, import_folders):
@@ -4512,6 +4720,142 @@ def test_delete_moves_the_file_to_the_trash_and_takes_the_row_with_it(
         )
         is None
     ), "the location rows outlived the model they point at"
+
+
+@pytest.mark.parametrize("permanent", [False, True], ids=["trash", "permanent"])
+def test_delete_takes_a_directory_of_nothing_but_previews_with_the_model(
+    shelf_env, real_files, fake_trash, permanent
+):
+    """The lifecycle the import opens and a move carries has to close here.
+
+    A delete that skipped `<stem>_samples/` would leave a directory no route
+    lists and no rescan registers — and, worse, one that then refuses the
+    owner's **whole** re-import of that run, with the remedy only available
+    outside the app. Both gestures, because the trash path and the unlink path
+    remove it by different calls.
+    """
+    alice = shelf_env.model_ids["alice.safetensors"]
+    samples = real_files / "alice_samples"
+    samples.mkdir()
+    (samples / "1712345678901__000000500_0.jpg").write_bytes(b"\xff\xd8\xff")
+    (samples / "1712345678901__000000500_1.jpg").write_bytes(b"\xff\xd8\xff")
+    bystander = real_files / "bob_samples"
+    bystander.mkdir()
+    (bystander / "1712345678901__000000500_0.jpg").write_bytes(b"\xff\xd8\xff")
+
+    r = _delete(shelf_env, [alice], permanent=permanent)
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == [alice]
+
+    assert not samples.exists(), "the previews were orphaned in the folder"
+    assert bystander.exists(), "another model's previews were deleted"
+    assert (bystander / "1712345678901__000000500_0.jpg").exists()
+
+
+@pytest.mark.parametrize("permanent", [False, True], ids=["trash", "permanent"])
+def test_delete_never_touches_a_directory_pixlstash_did_not_write(
+    shelf_env, real_files, fake_trash, permanent
+):
+    """**The one that matters.** The directory name is derived by string
+    manipulation and recorded nowhere, so "there is a folder called
+    `<stem>_samples` beside the file" is a guess about who made it. What settles
+    it is what is inside: ai-toolkit names every preview
+    `<timestamp>__<step>_<index>`, so one file that is not shaped like that
+    means the directory is the owner's and the model does not take it.
+
+    An owner who keeps favourite generations in `alice_samples/` beside a model
+    is doing the natural thing, and on `permanent=true` this route would `rmtree`
+    it with no trash and no undo. The importer refuses the mirror image of the
+    same guess — it will not merge into a directory "they may have put there
+    themselves" — so without this the two halves of one PR contradict each other.
+
+    Deliberately **not** keyed on `provenance`: that is a fact about the model's
+    *content*, one value shared by every copy of it, while the risk is per
+    *copy*. A trained model with a second copy a rescan registered elsewhere
+    would have taken that folder's contents with it.
+    """
+    alice = shelf_env.model_ids["alice.safetensors"]
+    mine = real_files / "alice_samples"
+    mine.mkdir()
+    # One file that is not a trainer preview is all it takes.
+    (mine / "1712345678901__000000500_0.jpg").write_bytes(b"\xff\xd8\xff")
+    (mine / "my-favourite-render.jpg").write_bytes(b"\xff\xd8\xff")
+
+    r = _delete(shelf_env, [alice], permanent=permanent)
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == [alice]
+
+    assert not (real_files / "alice.safetensors").exists(), "the file was not deleted"
+    assert (mine / "my-favourite-render.jpg").exists(), (
+        "a directory the owner made was destroyed with the model beside it"
+    )
+    assert (mine / "1712345678901__000000500_0.jpg").exists(), (
+        "the previews were removed one by one out of a directory kept whole"
+    )
+
+
+@pytest.mark.parametrize("permanent", [False, True], ids=["trash", "permanent"])
+def test_a_symlinked_previews_directory_is_left_alone(
+    shelf_env, real_files, fake_trash, tmp_path, permanent
+):
+    """`os.path.isdir` follows the link, so without an explicit check what
+    happens is decided by which branch runs — `rmtree` refuses a symlinked root,
+    `send2trash` moves the link. Neither is promised by either function, and an
+    `ignore_errors=True` added later would turn the first into a deletion
+    somewhere else entirely.
+
+    **The trash case is the one that proves the guard**, and the first version
+    of this test omitted it and therefore proved nothing: `rmtree` refuses a
+    symlinked root on its own, so the permanent branch stays green with the
+    guard mutated out — an adversarial pass demonstrated exactly that.
+    `send2trash` has no such scruple, it moves the link, so only this
+    parametrisation goes red when the guard goes.
+    """
+    alice = shelf_env.model_ids["alice.safetensors"]
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    # Trainer-shaped, so it is not the contents check sparing this — the link is.
+    (elsewhere / "1712345678901__000000500_0.jpg").write_bytes(b"\xff\xd8\xff")
+    (real_files / "alice_samples").symlink_to(elsewhere, target_is_directory=True)
+
+    r = _delete(shelf_env, [alice], permanent=permanent)
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == [alice]
+    assert (elsewhere / "1712345678901__000000500_0.jpg").exists(), (
+        "the removal followed the link out of the registered folder"
+    )
+    assert (real_files / "alice_samples").is_symlink(), "the link itself was removed"
+
+
+def test_previews_that_will_not_delete_do_not_fail_the_deletion(
+    shelf_env, real_files, fake_trash, monkeypatch
+):
+    """Non-fatal, unlike the file itself: the weights are what was asked for.
+
+    Turning "the previews are stuck" into a refused deletion would leave the
+    model on the shelf naming a file that is already gone.
+    """
+    alice = shelf_env.model_ids["alice.safetensors"]
+    samples = real_files / "alice_samples"
+    samples.mkdir()
+    (samples / "a.jpg").write_bytes(b"\xff\xd8\xff")
+
+    real_send = model_files_routes.send2trash
+
+    def refuse_the_directory(path):
+        if os.path.isdir(path):
+            raise OSError("the previews directory is locked")
+        return real_send(path)
+
+    monkeypatch.setattr(model_files_routes, "send2trash", refuse_the_directory)
+
+    r = _delete(shelf_env, [alice])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["deleted"] == [alice], "a stuck previews directory failed the delete"
+    assert body["refused"] == []
+    assert not (real_files / "alice.safetensors").exists()
+    assert samples.exists(), "the fixture did not exercise the failure it meant to"
 
 
 def test_a_permanent_delete_unlinks_the_file_rather_than_trashing_it(

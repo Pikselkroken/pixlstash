@@ -104,6 +104,65 @@ export const SORT_LABELS = {
 };
 
 /**
+ * Which date axis the shelf's date column is drawn in.
+ *
+ * The column FOLLOWS the sort. Two of the five keys are dates, and a column
+ * that always showed `added_at` would read as unordered the moment the shelf
+ * was sorted on the other one — the reader would be looking at a column of
+ * dates in what looks like no order at all. Every non-date key falls back to
+ * `added_at`, which is the shelf's own default axis.
+ *
+ * @param {string} sortKey - the active `SORT_LABELS` key.
+ * @returns {"added_at"|"file_mtime"}
+ */
+export function dateColumnKey(sortKey) {
+  return sortKey === "file_mtime" ? "file_mtime" : "added_at";
+}
+
+/**
+ * What one row says in the date column, as an ISO string a formatter takes.
+ *
+ * Mirrors `SORT_VALUE` in `useModelShelfStore`, which is the whole point: the
+ * column has to agree with the order the rows are drawn in.
+ *
+ * On `added_at` that means a stack's date is its newest member's and never its
+ * cover's, and `own` reads a single step of a run instead. It is needed:
+ * `newest_member_at` is a JOIN over the stack, so every member row carries the
+ * run's date too, and without `own` the whole opened strip would print one
+ * stamp.
+ *
+ * On `file_mtime` there is nothing to choose and `own` is not read.
+ * `newest_file_mtime` is grouped by MODEL rather than by stack (`_LOCATION_JOIN`
+ * in `model_shelf_service.py`), so a cover answers for itself, which is also
+ * what the sort orders that row on. Taking a maximum across the members here
+ * would print a date the sort does not use — the disagreement this whole
+ * function exists to prevent. Opening the run is what shows a step that was
+ * written later.
+ *
+ * `file_mtime` arrives as `st_mtime_ns`, so it is divided down to the
+ * milliseconds `Date` counts in rather than parsed.
+ *
+ * @param {Object} row - a shelf row (or a stack member).
+ * @param {string} sortKey - the active sort key.
+ * @param {boolean} [own=false] - on `added_at`, read the row's own date rather
+ *   than its stack's.
+ * @returns {string} an ISO timestamp, or `""` when the row cannot answer.
+ */
+export function modelDate(row, sortKey, own = false) {
+  if (dateColumnKey(sortKey) === "file_mtime") {
+    const ns = Number(row?.newest_file_mtime);
+    // `!(ns > 0)` and not `ns <= 0`, so a null or a non-number is caught here
+    // rather than by the range check below.
+    if (!(ns > 0)) return "";
+    const at = new Date(ns / 1e6);
+    // `toISOString` THROWS on a date out of range, and this runs inside render:
+    // one corrupt mtime would take the whole shelf down rather than one cell.
+    return Number.isNaN(at.getTime()) ? "" : at.toISOString();
+  }
+  return (!own && row?.newest_member_at) || row?.added_at || "";
+}
+
+/**
  * The two directions, worded for the axis being sorted.
  *
  * "Ascending" is not wrong so much as useless: nobody thinks of a date as
@@ -128,6 +187,23 @@ const DIRECTION_WORDS = {
 export function sortDirectionLabel(key, direction) {
   const words = DIRECTION_WORDS[key] || DIRECTION_WORDS.name;
   return direction === "asc" ? words[0] : words[1];
+}
+
+/**
+ * Which end a key starts at when the reader first sorts on it.
+ *
+ * Carrying the previous key's direction over is what a plain toggle would do,
+ * and it is wrong at the moment it matters most: arriving at Name from "Date
+ * added, newest first" would hand back Z to A, which nobody asked for and
+ * reads as a broken sort. A name starts at A, a size starts at the big files —
+ * the reason anyone sorts a shelf by size is to find what is eating the disk —
+ * and a date starts at the newest, which is the shelf's own default.
+ *
+ * @param {string} key - a `SORT_LABELS` key.
+ * @returns {"asc"|"desc"}
+ */
+export function defaultSortDirection(key) {
+  return key === "name" || key === "base_model" ? "asc" : "desc";
 }
 
 /** What each grouping axis is called, and the glyph that stands for it. */
@@ -1038,6 +1114,20 @@ export function importReceipt(report) {
     // singular case is now asserted in both receipts' tests.
     notes.push(
       `${count(failed)} could not be copied and ${failed === 1 ? "was" : "were"} left in the run.`,
+    );
+  }
+  // A checkpoint whose previews did not copy is still `imported` — losing a
+  // preview must not cost the weights, so the server does not fail the file for
+  // it. Which means the status counts above cannot see it, and a receipt built
+  // from them alone would call a run whose samples were lost a clean import.
+  // Named separately rather than folded into `failed`, because the checkpoint
+  // is genuinely on the shelf and telling someone otherwise is worse.
+  const withoutSamples = files.filter(
+    (f) => f.status === "imported" && f.sample_count === 0 && f.detail,
+  ).length;
+  if (withoutSamples) {
+    notes.push(
+      `${count(withoutSamples)} landed without ${withoutSamples === 1 ? "its" : "their"} training previews.`,
     );
   }
   if (report?.deleted_source && landed) {

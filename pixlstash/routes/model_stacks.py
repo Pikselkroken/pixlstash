@@ -10,7 +10,7 @@ third instance of, after folder monitoring and the ai-toolkit run scan.
 
 **Tier 1 only, on purpose.** Files differing solely by a training step are one
 run and there is nothing for a person to weigh, so the tier gets one dry run and
-one confirmation. Tier 2 (prefix grouping, ``JimmyCarr`` beside ``JimmyCarr2``)
+one confirmation. Tier 2 (prefix grouping, ``JimmyVehicle`` beside ``JimmyVehicle2``)
 needs per-group adjudication with counter-evidence and is not here yet; its
 evidence model is a design question rather than missing code.
 

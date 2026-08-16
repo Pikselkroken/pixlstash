@@ -459,6 +459,33 @@ answer because the stand-ins above are named.
 fails the build on a new private-address literal under `tests/`, `docs/`,
 `pixlstash/`, `frontend/e2e/` or `README.md`, so this does not drift back.
 
+### The owner's address is published on purpose
+
+**One real email address appears in this repository, it is the owner's own, and
+every occurrence is a deliberate declaration** — the plugin `author` field
+(`pixlstash/image_plugins/built-in/*.py`, `pixlstash/tagger_plugins/*.py`),
+package authorship (`pyproject.toml`, `electron/package.json`), and the contact
+a reporter is told to use (`SECURITY.md`, `PRIVACY.md`, `CODE_OF_CONDUCT.md`,
+`website/privacy.html`, and the gated test that asserts it,
+`tests/test_security_supported_versions.py`). A published authorship or contact
+declaration is not a leaked credential. Do not remove or rewrite any of them:
+editing the contact out of `SECURITY.md` reds the gate *and* deletes the address
+somebody is supposed to report a vulnerability to.
+
+**Why it is worth writing down.** Push scans read *added lines*, so merging
+`develop` re-presents every one of those declarations as an added line and
+blocks a branch that never opened those files. That has happened twice. When it
+does: **prove each cited line is one of these** — already on `develop`, in a
+file your branch does not touch — with `git diff origin/develop...HEAD` and
+`git log -S`, then say so and leave the release to a person. Clear the lines one
+by one; a scan reports several things at once, and "my branch didn't touch those
+files" is not a reading of the report.
+
+This is not an allowlist for anything else. A finding outside those files is a
+finding, the fixture rules in the table above are untouched (an address that is
+not the owner's own is still `me@example.com` or a `.test` / `.invalid` name),
+and none of it licenses repeating the address anywhere new.
+
 ## Tests: reuse the environment, don't rebuild it
 
 The expensive thing in this suite is **not the test, it is the environment

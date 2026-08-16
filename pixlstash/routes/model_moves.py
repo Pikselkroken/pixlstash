@@ -195,7 +195,13 @@ class MoveItemResult(BaseModel):
         )
     )
     detail: Optional[str] = Field(
-        default=None, description="Why, when the status is `failed`."
+        default=None,
+        description=(
+            "Why, when the status is `failed` — and, on a file that moved, why "
+            "its `<stem>_samples/` previews did not come with it. A failed "
+            "samples carry is deliberately not a failed file: losing a preview "
+            "must not cost the weights."
+        ),
     )
 
 

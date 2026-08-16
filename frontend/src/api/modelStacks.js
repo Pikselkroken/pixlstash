@@ -12,7 +12,7 @@ import { unwrap } from "../utils/unwrap";
  * Groups of loose adapters that look like one training run.
  *
  * Tier 1 only: files differing solely by a training step, which needs no
- * judgement. Prefix grouping (`JimmyCarr` beside `JimmyCarr2`) is tier 2 and
+ * judgement. Prefix grouping (`JimmyVehicle` beside `JimmyVehicle2`) is tier 2 and
  * is not offered yet.
  *
  * @returns {Promise<Array<Object>>} the `proposals` array, each carrying

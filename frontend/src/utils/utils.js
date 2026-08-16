@@ -16,11 +16,10 @@ function formatDateParts(date) {
   };
 }
 
-export function formatUserDate(dateStr, format) {
-  if (!dateStr) return '';
-  // Naive ISO datetime strings from the backend represent UTC but carry no
-  // timezone marker. Append 'Z' so the browser parses them as UTC and
-  // converts to the viewer's local time correctly.
+// Naive ISO datetime strings from the backend represent UTC but carry no
+// timezone marker. Append 'Z' so the browser parses them as UTC and
+// converts to the viewer's local time correctly.
+function parseUserDate(dateStr) {
   let normalized = dateStr;
   if (
     typeof dateStr === 'string' &&
@@ -31,7 +30,35 @@ export function formatUserDate(dateStr, format) {
     normalized = dateStr + 'Z';
   }
   const d = new Date(normalized);
-  if (Number.isNaN(d.getTime())) return dateStr;
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+const LOCALE_DATE_OPTIONS = {year: 'numeric', month: '2-digit', day: '2-digit'};
+// Seconds left out on purpose.
+const LOCALE_DATETIME_OPTIONS = {
+  ...LOCALE_DATE_OPTIONS,
+  hour: '2-digit',
+  minute: '2-digit'
+};
+
+// An `Intl.DateTimeFormat` costs far more to CONSTRUCT than to run, and
+// `toLocaleString` builds one per call — `locale` is the DEFAULT format, so a
+// list of a couple of thousand rows pays for a couple of thousand of them on
+// every render. Two option sets, two formatters, kept.
+const intlFormatters = new Map();
+function intlFormat(date, options) {
+  let formatter = intlFormatters.get(options);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(undefined, options);
+    intlFormatters.set(options, formatter);
+  }
+  return formatter.format(date);
+}
+
+export function formatUserDate(dateStr, format) {
+  if (!dateStr) return '';
+  const d = parseUserDate(dateStr);
+  if (!d) return dateStr;
   const {year, month, day, hour, minute} = formatDateParts(d);
   // Helper for AM/PM time
   function ampmTime(date) {
@@ -58,17 +85,50 @@ export function formatUserDate(dateStr, format) {
     case 'ymd-jp':
       return `${year}年${month}月${day}日 ${time24}`;
     case 'locale':
-      // Use toLocaleString with options to avoid seconds
-      return d.toLocaleString(undefined, {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
+      return intlFormat(d, LOCALE_DATETIME_OPTIONS);
     case 'iso':
     default:
       return `${year}-${month}-${day} ${time24}`;
+  }
+}
+
+/**
+ * The same stamp without the clock, for a column rather than a line.
+ *
+ * A column is scanned, and the clock is what stops it being scannable —
+ * `locale`, the default, spends about a third of its width on a time nobody is
+ * comparing rows by. Built from the parts, NEVER by trimming what
+ * {@link formatUserDate} returned: `locale` delegates to the browser's own
+ * locale, which puts the clock wherever that locale puts it (before the date in
+ * vi-VN, after an Arabic comma in ar-EG), so a caller that cut at the first
+ * space would print a clock to some readers and a bare year to others.
+ *
+ * @param {string} dateStr - a timestamp, naive-UTC or with an offset.
+ * @param {string} format - the user's `dateFormat` preference.
+ * @returns {string} e.g. `2026-08-16`, `16/08/2026`, `2026年08月16日`.
+ */
+export function formatUserDay(dateStr, format) {
+  if (!dateStr) return '';
+  const d = parseUserDate(dateStr);
+  if (!d) return dateStr;
+  const {year, month, day} = formatDateParts(d);
+  switch (format) {
+    case 'us':
+      return `${month}/${day}/${year}`;
+    case 'british':
+    case 'eu':
+      return `${day}/${month}/${year}`;
+    case 'ymd-slash':
+      return `${year}/${month}/${day}`;
+    case 'ymd-dot':
+      return `${year}.${month}.${day}`;
+    case 'ymd-jp':
+      return `${year}年${month}月${day}日`;
+    case 'locale':
+      return intlFormat(d, LOCALE_DATE_OPTIONS);
+    case 'iso':
+    default:
+      return `${year}-${month}-${day}`;
   }
 }
 
