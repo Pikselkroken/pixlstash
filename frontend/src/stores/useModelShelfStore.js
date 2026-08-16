@@ -108,47 +108,56 @@ export const COLUMN_KEYS = ["kind", "base", "size", "date"];
 export const DEFAULT_COLUMN_WIDTHS = { kind: 64, base: 84, size: 74, date: 96 };
 
 /**
- * The bounds a dragged column is held inside.
+ * The floor each column is held above, per column rather than one figure.
  *
- * The floor is what keeps a column from being dragged to nothing and then
- * being unfindable to drag back.
+ * A floor keeps a column from being dragged to nothing and then being
+ * unfindable to drag back, and what "nothing" means is different per column:
+ * `Kind` holds a word like `Checkpoint`, `Base` holds a model name, and `Size`
+ * holds five characters of right-aligned figure. One shared 48px let the two
+ * wordy columns be dragged into permanent ellipsis. Each floor is at or under
+ * that column's default, which is what keeps a stored default from being
+ * clamped UP on read-back.
  *
- * The ceiling is set so that every column at it CANNOT overflow the panel
- * sideways. The budget is the one the grips shipped with: the rail, the
- * identity slot, the gaps and the row's padding cost ~90px, and ~690px total
- * fits the shelf on a 1024px window with the stats rail open. Past that the row
- * would scroll horizontally, and the strip's background and hairline stop at
- * the scrollport — rows sliding through a transparent header.
+ * `Date` is the fourth: 96px is what the widest of the day formats needs, so
+ * its floor is the point below which the common ones start ellipsising rather
+ * than a proof against every one.
  *
- * That left 600px to divide, which was 3 x 200 with three columns and is
- * 4 x 150 now the date column is one of them. The ceiling moved rather than the
- * budget: a fourth column at 200 would put the maxed-out shelf ~200px over a
- * figure that was measured, and 150 is still nearly twice the widest default.
- * A stored 200 from the previous build clamps down to it on the way in, which
- * is what the read-back loop is for.
- *
- * The name is still the flexible track and still carries `min-width: 0`, so a
- * genuinely narrow window squeezes it; what this bound rules out is the reader
- * doing it to themselves with the grips.
+ * @type {Record<string, number>}
  */
-export const MIN_COLUMN_WIDTH = 48;
-export const MAX_COLUMN_WIDTH = 150;
+export const MIN_COLUMN_WIDTHS = { kind: 64, base: 72, size: 56, date: 80 };
 
 /**
- * Hold a width inside its bounds, or reject it.
+ * The ceiling, which is a sanity bound on a stored blob and NOT the limit a
+ * drag actually meets.
+ *
+ * It was a flat 200 for three columns, then 150 once the date column made it
+ * four, chosen each time so every column at the ceiling could not overflow the
+ * panel sideways on a 1024px window. That bound was doing the wrong job: it is
+ * a guess about the narrowest panel anyone has, so on a wide one it stopped the
+ * reader at four columns totalling ~600px and a Name track that could never be
+ * less than about half the shelf — and it had to be re-derived every time a
+ * column was added. The real limit is the panel
+ * in front of the reader, so the header strip measures the Name track and
+ * refuses to widen a column past `MIN_NAME_WIDTH` — see `ModelShelf.vue`. This
+ * figure only has to be a number no legitimate column reaches.
+ */
+export const MAX_COLUMN_WIDTH = 400;
+
+/**
+ * Hold a width inside its column's bounds, or reject it.
  *
  * A finite NUMBER and nothing else. `Number()` coercion would take `null`,
  * `""`, `[]` and `false` as 0 and hand back the floor, so a stored blob
- * carrying `{"size": null}` would silently come back as a 48px column instead
+ * carrying `{"size": null}` would silently come back as a 56px column instead
  * of falling through to the default — which is the one thing the read-back
  * loop exists to prevent.
  *
  * @returns {number|null} the clamped width, or null if `px` is not one.
  */
-export function clampColumnWidth(px) {
+export function clampColumnWidth(key, px) {
   if (typeof px !== "number" || !Number.isFinite(px)) return null;
   const n = Math.round(px);
-  return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, n));
+  return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTHS[key], n));
 }
 
 /**
@@ -545,7 +554,7 @@ function storedView() {
   // still a valid remembered sort, and a width edited by hand in devtools is
   // not a reason to hand back a shelf whose Size column is 4,000px wide.
   for (const key of COLUMN_KEYS) {
-    const width = clampColumnWidth(parsed.columnWidths?.[key]);
+    const width = clampColumnWidth(key, parsed.columnWidths?.[key]);
     if (width !== null) view.columnWidths[key] = width;
   }
   return view;
@@ -1273,7 +1282,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   function setColumnWidth(key, px, persist = true) {
     if (!COLUMN_KEYS.includes(key)) return;
-    const width = clampColumnWidth(px);
+    const width = clampColumnWidth(key, px);
     if (width === null) return;
     if (width !== view.columnWidths[key]) {
       view.columnWidths = { ...view.columnWidths, [key]: width };

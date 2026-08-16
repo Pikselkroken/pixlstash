@@ -1118,12 +1118,15 @@ describe("resizing the columns", () => {
     await fire(wrapper, grip, "pointerup", to, 0);
   };
 
+  // Leftwards widens: the grip is the column's left edge, and the three fixed
+  // columns are anchored to the strip's right edge, so that is the direction
+  // that keeps the edge under the pointer.
   it("widens the column the grip belongs to, and remembers it", async () => {
     const wrapper = await mountShelf([adapter()]);
     const store = useModelShelfStore();
     expect(store.view.columnWidths.base).toBe(84);
 
-    await drag(wrapper, gripOf(wrapper, "base"), 200, 240);
+    await drag(wrapper, gripOf(wrapper, "base"), 240, 200);
     expect(store.view.columnWidths.base).toBe(124);
     // The variable the rows read, not a per-cell style: one declaration, so a
     // heading and the cells under it cannot drift apart.
@@ -1136,21 +1139,51 @@ describe("resizing the columns", () => {
     ).toBe(124);
   });
 
+  it("stops widening where the Name track would go under its floor", async () => {
+    // The ceiling a drag actually meets is the panel, not the store's bound:
+    // every pixel a fixed column takes comes out of Name, and past 200px of it
+    // the shelf would scroll sideways with the rows sliding under a strip
+    // whose background stops at the scrollport. jsdom lays nothing out, so the
+    // measurement is the one thing that has to be stated here.
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    Object.defineProperty(
+      wrapper.find(".shelf-head-col--label").element,
+      "offsetWidth",
+      { configurable: true, value: 260 },
+    );
+
+    await drag(wrapper, gripOf(wrapper, "base"), 400, 0);
+    expect(store.view.columnWidths.base).toBe(144);
+
+    // The separator ANNOUNCES that limit rather than the store's absolute
+    // ceiling: a reader told the maximum is 400 and stopped at 144 has been
+    // told the wrong thing about the control in their hand. 204 because the
+    // stubbed track never shrinks — it is the live measurement that is being
+    // asserted here, not the arithmetic.
+    expect(gripOf(wrapper, "base").attributes("aria-valuemax")).toBe("204");
+
+    // And a panel with nothing left to give still lets the column back down:
+    // the measurement is a ceiling, so a request to narrow passes untouched.
+    await drag(wrapper, gripOf(wrapper, "base"), 0, 40);
+    expect(store.view.columnWidths.base).toBe(104);
+  });
+
   it("holds a column at its floor rather than letting it vanish", async () => {
     // A column dragged to nothing takes its own grip off the screen with it,
     // and there is no way back.
     const wrapper = await mountShelf([adapter()]);
-    await drag(wrapper, gripOf(wrapper, "size"), 400, 0);
-    expect(useModelShelfStore().view.columnWidths.size).toBe(48);
+    await drag(wrapper, gripOf(wrapper, "size"), 0, 400);
+    expect(useModelShelfStore().view.columnWidths.size).toBe(56);
   });
 
   it("stops tracking once the pointer is released", async () => {
     const wrapper = await mountShelf([adapter()]);
     const store = useModelShelfStore();
     const grip = gripOf(wrapper, "kind");
-    await drag(wrapper, grip, 100, 120);
+    await drag(wrapper, grip, 120, 100);
     expect(store.view.columnWidths.kind).toBe(84);
-    await fire(wrapper, grip, "pointermove", 300, 0);
+    await fire(wrapper, grip, "pointermove", 0, 0);
     expect(store.view.columnWidths.kind).toBe(84);
   });
 
@@ -1162,15 +1195,15 @@ describe("resizing the columns", () => {
     const store = useModelShelfStore();
     const grip = gripOf(wrapper, "base");
 
-    await fire(wrapper, grip, "pointerdown", 200);
-    await fire(wrapper, grip, "pointermove", 220);
+    await fire(wrapper, grip, "pointerdown", 220);
+    await fire(wrapper, grip, "pointermove", 200);
     expect(store.view.columnWidths.base).toBe(104);
 
     // The release happened somewhere else. The next move arrives with nothing
     // held down, and that is the drag over.
-    await fire(wrapper, grip, "pointermove", 260, 0);
+    await fire(wrapper, grip, "pointermove", 160, 0);
     expect(store.view.columnWidths.base).toBe(104);
-    await fire(wrapper, grip, "pointermove", 400, 0);
+    await fire(wrapper, grip, "pointermove", 20, 0);
     expect(store.view.columnWidths.base).toBe(104);
   });
 
@@ -1194,29 +1227,33 @@ describe("resizing the columns", () => {
     expect(grip.attributes("tabindex")).toBe("0");
     expect(grip.attributes("aria-valuenow")).toBe("64");
 
-    await grip.trigger("keydown", { key: "ArrowRight" });
+    // The keys move the separator, so Left widens — the same mapping the
+    // pointer has, because the grip is the column's left edge.
+    await grip.trigger("keydown", { key: "ArrowLeft" });
     expect(store.view.columnWidths.kind).toBe(72);
-    await grip.trigger("keydown", { key: "ArrowLeft" });
-    await grip.trigger("keydown", { key: "ArrowLeft" });
-    expect(store.view.columnWidths.kind).toBe(56);
-    expect(gripOf(wrapper, "kind").attributes("aria-valuenow")).toBe("56");
+    // 64 rather than 56: two steps down from 72 is 56, and `Kind`'s own floor
+    // holds it at 64.
+    await grip.trigger("keydown", { key: "ArrowRight" });
+    await grip.trigger("keydown", { key: "ArrowRight" });
+    expect(store.view.columnWidths.kind).toBe(64);
+    expect(gripOf(wrapper, "kind").attributes("aria-valuenow")).toBe("64");
     expect(gripOf(wrapper, "kind").attributes("aria-valuetext")).toBe(
-      "56 pixels",
+      "64 pixels",
     );
+    expect(gripOf(wrapper, "kind").attributes("aria-valuemin")).toBe("64");
   });
 
   it("takes Home and End to the two ends", async () => {
     const wrapper = await mountShelf([adapter()]);
     const store = useModelShelfStore();
     const grip = gripOf(wrapper, "base");
-    await grip.trigger("keydown", { key: "End" });
-    // The ceiling, which came down from 200 to 150 when the date column made
-    // the shelf four resizable columns wide: the ~600px the panel has for
-    // columns is the figure that was measured, and it is divided by however
-    // many there are.
-    expect(store.view.columnWidths.base).toBe(150);
+    // Home is the separator as far left as it goes, which is the column at its
+    // widest — the store's sanity ceiling here, because jsdom lays nothing out
+    // and an unmeasured Name track means unlimited.
     await grip.trigger("keydown", { key: "Home" });
-    expect(store.view.columnWidths.base).toBe(48);
+    expect(store.view.columnWidths.base).toBe(400);
+    await grip.trigger("keydown", { key: "End" });
+    expect(store.view.columnWidths.base).toBe(72);
   });
 
   it("puts a column back, which is the only way out of a mis-drag", async () => {
@@ -1226,15 +1263,12 @@ describe("resizing the columns", () => {
     const store = useModelShelfStore();
     const grip = gripOf(wrapper, "size");
 
-    // 60px rather than 100: the assertion worth having here is the width the
-    // pointer asked for, and 174 is now past the ceiling, so it would be
-    // asserting the clamp instead.
-    await drag(wrapper, grip, 400, 460);
-    expect(store.view.columnWidths.size).toBe(134);
+    await drag(wrapper, grip, 500, 400);
+    expect(store.view.columnWidths.size).toBe(174);
     await grip.trigger("keydown", { key: "Enter" });
     expect(store.view.columnWidths.size).toBe(74);
 
-    await drag(wrapper, grip, 400, 460);
+    await drag(wrapper, grip, 500, 400);
     await grip.trigger("dblclick");
     expect(store.view.columnWidths.size).toBe(74);
     expect(
@@ -1250,14 +1284,14 @@ describe("resizing the columns", () => {
     const grip = gripOf(wrapper, "base");
     const write = vi.spyOn(Storage.prototype, "setItem");
 
-    await fire(wrapper, grip, "pointerdown", 200);
-    await fire(wrapper, grip, "pointermove", 210);
+    await fire(wrapper, grip, "pointerdown", 230);
     await fire(wrapper, grip, "pointermove", 220);
-    await fire(wrapper, grip, "pointermove", 230);
+    await fire(wrapper, grip, "pointermove", 210);
+    await fire(wrapper, grip, "pointermove", 200);
     expect(useModelShelfStore().view.columnWidths.base).toBe(114);
     expect(write).not.toHaveBeenCalled();
 
-    await fire(wrapper, grip, "pointerup", 230, 0);
+    await fire(wrapper, grip, "pointerup", 200, 0);
     expect(write).toHaveBeenCalledTimes(1);
     expect(
       JSON.parse(window.localStorage.getItem("pixlstash:modelShelfView"))
@@ -1506,6 +1540,82 @@ describe("drive bands", () => {
     expect(
       wrapper.find(".shelf-band-meter").attributes("role"),
     ).toBeUndefined();
+  });
+
+  it("says what kind of drive it is on the glyph, and nothing when unsure", async () => {
+    // The kind rides the mark the band already carries, because the row has no
+    // horizontal room for a chip — which is the whole reason this exists. A
+    // null kind is the normal answer on macOS and for any filesystem the
+    // backend will not vouch for, and it must draw the plain disk rather than
+    // the word "Unknown".
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: "9",
+        mount_point: "/mnt/nas",
+        label: "Archive",
+        kind: "network",
+        total_bytes: 1024 ** 4,
+        free_bytes: 512 * 1024 ** 3,
+        shelf_bytes: 0,
+        folder_ids: [1],
+      },
+      {
+        device_id: "10",
+        mount_point: "/mnt/plain",
+        label: "Plain",
+        total_bytes: 1024 ** 4,
+        free_bytes: 512 * 1024 ** 3,
+        shelf_bytes: 0,
+        folder_ids: [2],
+      },
+    ]);
+    // The auto-stub swallows `v-icon`'s slot, and the glyph IS the slot here.
+    const wrapper = await mountShelf(
+      [inFolder(1, 1, "/mnt/nas/loras"), inFolder(2, 2, "/mnt/plain/loras")],
+      [],
+      [],
+      {
+        global: {
+          ...globalOpts.global,
+          stubs: {
+            ...globalOpts.global.stubs,
+            "v-icon": { template: "<i><slot /></i>" },
+          },
+        },
+      },
+    );
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
+    await wrapper.vm.$nextTick();
+
+    const icons = wrapper.findAll(".shelf-band-icon");
+    expect(icons[0].text()).toBe("mdi-nas");
+    expect(icons[0].attributes("title")).toBe("Network share");
+    expect(icons[1].text()).toBe("mdi-harddisk");
+    expect(icons[1].attributes("title")).toBeUndefined();
+    expect(textOf(wrapper.findAll(".shelf-band")[1])).not.toContain("Unknown");
+  });
+
+  it("drops the mount point when it is already the band's name", async () => {
+    // With no volume label the name IS the mount point, and drawing both
+    // rendered `/` twice — which reads as a rendering fault, not as detail.
+    listModelFolderDevices.mockResolvedValue([
+      {
+        device_id: "9",
+        mount_point: "/",
+        label: null,
+        total_bytes: 1024 ** 4,
+        free_bytes: 512 * 1024 ** 3,
+        shelf_bytes: 0,
+        folder_ids: [1],
+      },
+    ]);
+    const wrapper = await mountShelf([inFolder(1, 1, "/models")]);
+    useModelShelfStore().setView({ groupBy: "folder", folderLayout: "drive" });
+    await wrapper.vm.$nextTick();
+
+    const band = wrapper.find(".shelf-band");
+    expect(textOf(band.find(".shelf-band-name"))).toBe("/");
+    expect(band.find(".shelf-band-path").exists()).toBe(false);
   });
 
   it("keys the meter once for the view, not once per band", async () => {

@@ -1806,8 +1806,14 @@ is the string that gets pasted into a ComfyUI node, so it is drawn rather than
 parked in a tooltip.
 
 **One visible column strip for the view, and hidden `columnheader`s per grid.**
-`.shelf-head` is sticky at the top of the body scroller and the group headings
-stick under it at `--shelf-head-h`. It is deliberately **not** the grid's header
+`.shelf-head` sits **above** the scrollport (`.shelf-scroll`) as its sibling,
+not sticky inside it, and the group headings stick at that scrollport's own
+`top: 0`. A scroll container's scrollbar runs the container's full height, so a
+strip inside one has the bar climbing past it to the top of the panel, pointing
+at rows that are not there. Both boxes carry `scrollbar-gutter: stable` — the
+strip is `overflow: hidden`, which is enough to make it honour the gutter — so
+the columns cannot shift sideways relative to the rows when the list is too
+short to scroll. It is deliberately **not** the grid's header
 row: a `columnheader` heads the grid it is in and nothing else, so a visible one
 would have to be repeated per group, which is eight identical bands of chrome
 down a grouped list. So the strip is a `role="group"` of controls —
@@ -1826,13 +1832,27 @@ down a grouped list. So the strip is a `role="group"` of controls —
   while the heading beside it gave A-to-Z. `setView` fills the direction in
   only when the key actually changes and the caller named none, so the
   direction toggle and a re-pick of the current key are both untouched.
-- **A grip is a `role="separator"` that resizes.** It sits on the column's right
+- **A grip is a `role="separator"` that resizes.** It sits on the column's LEFT
   edge — 24px of grab area for WCAG 2.5.8 around a 1px drawn hairline, which is
   the only signal a column is resizable and is therefore a component-grade 0.4
   alpha rather than the `divider` token (1.4.11 wants 3:1, and `divider` on this
-  canvas is ~1.2:1). It drags with pointer capture and answers the window-
-  splitter keys: Left/Right by 8px, Home/End to the bounds, **Enter to the
-  default** — with a double-click doing the same, because a width is remembered
+  canvas is ~1.2:1).
+
+  **Left, because a fixed column's right edge does not move when it resizes.**
+  Name is the flexible track and the three fixed columns are anchored to the
+  strip's right edge, so `kind`'s right edge is pinned by `base` and `size`
+  whatever `kind` is doing. A grip drawn there stands still under the pointer
+  while the whole left half of the strip slides — which reads as the drag going
+  backwards, and it puts a seam past `Size` where no column boundary is while
+  leaving none between `Name` and `Kind`. On the left edge the hairline
+  tracks the pointer, so **leftwards widens**, and the grab area is centred on
+  the 12px seam rather than flush to the column so it stays off the heading's
+  left-aligned label.
+
+  It drags with pointer capture and answers the window-splitter keys, which
+  move the SEPARATOR rather than the number: Left widens and Right narrows by
+  8px, Home/End take the separator to its ends (so Home is the column at its
+  widest), **Enter to the default** — with a double-click doing the same, because a width is remembered
   for good once it is dragged and a reset is otherwise the reader's only way out
   of a mis-drag. It sets no `preventDefault` on `pointerdown`: `.shelf` already
   suppresses selection and the grip sets `touch-action: none`, and calling it
@@ -1840,20 +1860,30 @@ down a grouped list. So the strip is a `role="group"` of controls —
   `dblclick` is built on. A `pointermove` arriving with `buttons === 0` ends the
   drag, so a refused or lost capture cannot leave one live forever.
 
-  Widths are clamped to **48–150px**. The ceiling is whatever divides the ~600px
-  the panel has for columns (~690px of chrome fits a 1024px window with the
-  stats rail open, and the rail, identity slot, gaps and padding take ~90px of
-  it), so it was 3 x 200 and became 4 x 150 when the date column arrived: a
-  fourth column at 200 would put a maxed-out shelf ~200px past a figure that was
-  measured. A stored 200 from the previous build clamps down on the way in. Past that the row scrolls
-  horizontally and the strip's background stops at the scrollport, so rows slide
-  through a transparent header. They are written into the same versioned view
+  **The floor is per column and the ceiling is measured, not guessed.**
+  `MIN_COLUMN_WIDTHS` (kind 64, base 72, size 56, date 80) is a map beside
+  `DEFAULT_COLUMN_WIDTHS` because what "too narrow" means differs per column —
+  `Kind` holds a word like `Checkpoint` and `Size` holds five characters — and
+  every floor is at or under that column's default, or a stored default would
+  be clamped *up* on read-back. The ceiling in the store is 400 and is only a
+  sanity bound on a stored blob: the limit a drag actually meets is
+  `widenable()` in the component, which reads the Name track's `offsetWidth`
+  and refuses to take it below `MIN_NAME_WIDTH` (200px). That is the same
+  guarantee the old flat ceiling was making — 200px for three columns, then
+  150px once the date column made it four — that the columns cannot
+  overflow the panel sideways and slide rows under a strip whose background
+  stops at the scrollport — but made against the panel in front of the reader
+  rather than against a guess at the narrowest one, which on a wide shelf had
+  pinned Name at about half the width and had to be re-derived every time a
+  column was added. An unmeasured track (0, so not laid out
+  — or jsdom) means unlimited, because a grip that silently refuses to move is
+  the worse failure. Widths are written into the same versioned view
   blob **once per gesture, not per frame** — `rememberView` rebuilds the whole
   blob synchronously, so `setColumnWidth(key, px, persist)` takes `false` during
   a drag and is called once on pointerup — and read back per column through
   `clampColumnWidth`, which takes a **finite number only**: `Number()` coercion
-  would turn a stored `null` into the 48px floor instead of falling through to
-  the default.
+  would turn a stored `null` into that column's floor instead of falling
+  through to the default.
 
   `DEFAULT_COLUMN_WIDTHS` in the store is the *only* declaration of the four
   figures; `.shelf` deliberately carries no CSS fallback copy, which would be a
@@ -2055,6 +2085,44 @@ for.
   returns null when there is none, which a root partition usually has not. The
   fallback chain is label → mount point → the folder's own path, so the header
   is never empty and never invented.
+- **The row is three tracks, and the meter is what spends the slack.**
+  `.shelf-band-id` (glyph, name, path) is a `min-width: 320px` track rather
+  than the flexible one — at `flex: 1 1 auto` it swallowed every spare pixel on
+  a wide window and left a dead ~1,200px band between the drive's name and its
+  meter, which moves the slack rather than using it. The meter then takes all
+  of what is left (`flex: 1 1 auto`, floor 190px, **no ceiling** — a ceiling
+  only moves the empty space back between the meter and the figures), and
+  `.shelf-band-figures` carries `margin-left: auto` so the numbers stay on the
+  row's right edge. The segments are percentages, so the width is spent on
+  legibility: measured at a 2000px row, the shelf's own slice of a nearly-empty
+  900 GB drive is 77px against 11px at the old fixed 190. Every band's meter
+  still begins at the same x however long the drive's name is. One gap between five
+  peers had the meter starting ~400px apart on two bands of the same list, and
+  two meters that do not share a left edge cannot be read down the column —
+  which is the only reason to draw the meter more than once. The path is drawn
+  **only when it differs from the name**: with no volume label the name IS the
+  mount point, and a band with both rendered `/` twice, which reads as a
+  rendering fault rather than as detail.
+- **The figure line is an anchor and its context, not a sentence.**
+  `meterLabel` returns `{ lead, rest }`: `190.1 GB free` at `--text-xs`
+  semibold in full-strength ink, then `of 897.3 GB · 51.6 GB on the shelf` at
+  the `--text-2xs`/0.7 the whole line used to be. One number decides whether
+  the next checkpoint fits and three at identical weight made the reader parse
+  English to find it. Both halves live in **one** flex item: the gap would draw
+  the space between them but a gap is not a character, and as two items the
+  accessible name ran together as "GB freeof", so `rest` carries its own
+  leading space.
+- **The kind rides the glyph, and null draws the plain disk.** `kind` on the
+  device response is one of `local`, `network`, `removable`, `ramdisk` or null,
+  and `DRIVE_KINDS` maps it to the mark the band already wears plus a `title`.
+  It is never drawn as a word: the row has no horizontal room, which is the
+  whole reason for the split above, and a chip would be a fourth
+  variable-width item ahead of the meter as well as a second dialect of the
+  `Locked`/`Managed` chips one level down. **Null is a normal answer** — macOS
+  says nothing at all and so does any filesystem type the backend will not
+  vouch for — so the band must render the plain disk and never the word
+  "Unknown". What the value deliberately does not carry is SSD-versus-platter;
+  see `device_kind` in `system_utils.py` for why that evidence lies.
 - **The band is a drive, never a path prefix.** `bandGroups` keys on the
   `device_id` the server measured (`GET /model-folders/devices`), because a bind
   mount and a symlinked folder look like different drives by path and are one,

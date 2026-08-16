@@ -3566,6 +3566,88 @@ def test_a_mount_point_holding_a_backslash_still_matches_its_device():
 
 
 @_LINUX_ONLY
+@pytest.mark.parametrize(
+    ("device", "fstype", "expected"),
+    [
+        # The connection IS the fact, whatever is spinning at the far end.
+        ("/dev/nowhere", "nfs4", "network"),
+        ("nas:/models", "cifs", "network"),
+        ("me@host:/models", "fuse.sshfs", "network"),
+        ("tmpfs", "tmpfs", "ramdisk"),
+        ("/dev/fake-disk", "ext4", "local"),
+        # A fuse filesystem we do not recognise, backed by nothing in /dev:
+        # `local` would be a guess about somebody's cloud mount, so it is null.
+        ("portal", "fuse.portal", None),
+    ],
+)
+def test_a_band_reads_its_kind_off_the_mount_table(
+    tmp_path, monkeypatch, device, fstype, expected
+):
+    """The four kinds come from the filesystem type and the block device, both
+    already in `/proc/mounts`. Nothing here infers a MEDIUM: an unrecognised
+    filesystem reports null rather than claiming to be a local disk."""
+    from pixlstash.utils import system_utils
+
+    mounts = tmp_path / "mounts"
+    mounts.write_text(f"{device} /mnt/models {fstype} rw 0 0\n")
+    monkeypatch.setattr(system_utils, "_MOUNTS_FILE", str(mounts))
+    monkeypatch.setattr(system_utils, "_SYS_BLOCK_CLASS", str(tmp_path / "no-sysfs"))
+
+    assert system_utils._linux_device_kind("/mnt/models") == expected
+
+
+@_LINUX_ONLY
+def test_a_stick_is_removable_and_the_disk_beside_it_is_not(tmp_path, monkeypatch):
+    """`removable` is one byte udev maintains on the DISK, so a partition finds
+    it one directory up. A false here is deliberately weak — an SSD in a USB
+    enclosure reports 0 and is called a local disk, which claims nothing about
+    speed rather than claiming the wrong thing."""
+    from pixlstash.utils import system_utils
+
+    sysfs = tmp_path / "block"
+    (sysfs / "sdb").mkdir(parents=True)
+    (sysfs / "sdb" / "removable").write_text("1\n")
+    # The partition's directory is a child of the disk's, which is what makes
+    # `..` the right place to look.
+    (sysfs / "sdb" / "sdb1").mkdir()
+    os.symlink(sysfs / "sdb" / "sdb1", sysfs / "sdb1")
+    (sysfs / "sda").mkdir()
+    (sysfs / "sda" / "removable").write_text("0\n")
+
+    mounts = tmp_path / "mounts"
+    mounts.write_text(
+        "/dev/sdb1 /mnt/stick ext4 rw 0 0\n/dev/sda /mnt/disk ext4 rw 0 0\n"
+    )
+    monkeypatch.setattr(system_utils, "_MOUNTS_FILE", str(mounts))
+    monkeypatch.setattr(system_utils, "_SYS_BLOCK_CLASS", str(sysfs))
+
+    assert system_utils._linux_device_kind("/mnt/stick") == "removable"
+    assert system_utils._linux_device_kind("/mnt/disk") == "local"
+
+
+@_LINUX_ONLY
+def test_the_band_carries_its_kind_to_the_api(shelf_env, tmp_path, monkeypatch):
+    """The field has to reach the response, and a drive we cannot classify has
+    to arrive as null rather than as a string the band would print."""
+    from pixlstash.utils import system_utils
+
+    folder_id, folder_path = _register_folder_with_adapters(
+        shelf_env, tmp_path, "kinded", 1
+    )
+    mount_point = system_utils.mount_point_of(folder_path)
+    mounts = tmp_path / "kind-mounts"
+    mounts.write_text(f"nas:/models {mount_point} nfs4 rw 0 0\n")
+    monkeypatch.setattr(system_utils, "_MOUNTS_FILE", str(mounts))
+
+    band = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
+    assert band["kind"] == "network"
+
+    monkeypatch.setattr(system_utils, "_MOUNTS_FILE", str(tmp_path / "gone"))
+    band = next(d for d in _devices(shelf_env) if folder_id in d["folder_ids"])
+    assert band["kind"] is None, "an unreadable mount table says nothing, not 'local'"
+
+
+@_LINUX_ONLY
 def test_a_drive_with_no_label_reports_null_rather_than_a_guess(
     shelf_env, tmp_path, monkeypatch
 ):

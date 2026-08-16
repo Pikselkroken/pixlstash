@@ -759,6 +759,10 @@ export function bandGroups(groups, deviceByFolderId) {
         // header out; the precise string stays available as the tooltip.
         label: device?.label || device?.mount_point || group.label,
         mountPoint: device?.mount_point || group.label,
+        // `local`, `network`, `removable`, `ramdisk` — or null, which is the
+        // answer on macOS and for any filesystem the backend will not classify.
+        // Null is normal and draws the plain disk glyph; see `device_kind`.
+        kind: device?.kind || null,
         measured: Boolean(device?.device_id),
         totalBytes: device?.total_bytes ?? null,
         freeBytes: device?.free_bytes ?? null,

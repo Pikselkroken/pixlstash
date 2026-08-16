@@ -14,15 +14,16 @@
       Every adapter and checkpoint PixlStash has found on this machine. Group
       and Sort choose the order and whether the list is cut into groups; Show
       chooses which kinds are listed and which base models. Above the list, the
-      Name, Base and Size headings sort it too, and Kind, Base and Size each end
-      in a handle that resizes them: Left and Right move the edge, Home and End
-      take it to its narrowest and widest, Enter puts it back. The bar ends in
-      the app-wide controls: Settings and the stats sidebar toggle. Nothing on
-      this screen can be undone. A ring around a model's mark says who it is
-      assigned to. A name in italics has not been given one. A row that stands
-      for a training run says how many files it holds; Right and Left open and
-      close it. Right-click a row for everything that can be done to it. Escape
-      clears the selection.
+      Name, Base and Size headings sort it too, as does the date column's, which
+      is named for the date it shows. Every column but Name begins with a handle
+      that resizes it: Left and Right move the edge, Home and End take it to its
+      widest and narrowest, Enter puts it back. The bar ends in the app-wide
+      controls: Settings and the stats sidebar toggle. Nothing on this screen
+      can be undone. A ring around a model's mark says who it is assigned to. A
+      name in italics has not been given one. A row that stands for a training
+      run says how many files it holds; Right and Left open and close it.
+      Right-click a row for everything that can be done to it. Escape clears the
+      selection.
     </p>
 
     <!-- One announcement for a resort, because the rows reorder silently: the
@@ -571,8 +572,8 @@
               :aria-label="`Resize the ${col.label} column`"
               :aria-valuenow="store.view.columnWidths[col.key]"
               :aria-valuetext="`${store.view.columnWidths[col.key]} pixels`"
-              :aria-valuemin="MIN_COLUMN_WIDTH"
-              :aria-valuemax="MAX_COLUMN_WIDTH"
+              :aria-valuemin="MIN_COLUMN_WIDTHS[col.key]"
+              :aria-valuemax="widenable(col.key, MAX_COLUMN_WIDTH)"
               tabindex="0"
               :title="`Drag to resize the ${col.label} column, double-click to reset it`"
               @pointerdown="startResize(col.key, $event)"
@@ -585,549 +586,620 @@
             ></span>
           </span>
         </div>
-        <!-- The key to the meters, said ONCE for the view rather than once per
-             band: it is the same three segments every time, and repeating it
-             down the list would cost more room than the meters themselves.
-             Drawn only when a measured meter is actually on screen — an
-             unmeasured band renders no meter at all, so a shelf of offline
-             drives would otherwise key a picture nobody can see.
+        <!-- The scrollport, and the reason the strip above it is a sibling
+             rather than a sticky child: a scroll container's scrollbar runs
+             the full height of the container, so a header inside one has the
+             bar climbing past it to the top of the panel — pointing at rows
+             that are not there. Outside it, the bar starts where the rows do.
 
-             No ARIA and no `aria-describedby` back from the bands: each
-             heading already states its figures in words, so this is redundant
-             to a screen reader, and wiring it up would re-read all three
-             labels on every heading. -->
-        <p v-if="showsBandLegend" class="shelf-keys">
-          <span v-for="item in BAND_LEGEND" :key="item.key" class="shelf-key">
-            <span
-              class="shelf-key-swatch"
-              :class="`shelf-band-seg--${item.key}`"
-            ></span>
-            <span>{{ item.label }}</span>
-          </span>
-          <span class="shelf-key">
-            <v-icon size="14">mdi-cursor-move</v-icon>
-            <span>drag a selection onto a drive or folder to move it</span>
-          </span>
-        </p>
-        <div v-for="group in shownGroups" :key="group.key" class="shelf-group">
-          <!-- The drive band: the OUTER of the two levels the plan allows, and
-               the second one is spent here rather than on stacks, which nest
-               inside a row and not inside a header. Drawn on the first group of
-               each band, never as a wrapper element, so the sticky folder
-               headers below keep scrolling under it in one flow. -->
-          <!-- And the drop target for a move (#894). `dragover` carries no
-               `.prevent` here either — calling preventDefault() is what ACCEPTS
-               a drop, so a band with no room simply never calls it and the
-               browser draws its own refusal cursor over a band already in the
-               error treatment. -->
-          <h3
-            v-if="group.bandStart"
-            class="shelf-band"
-            :class="{
-              'shelf-band--unknown': !group.band.measured,
-              'shelf-band--drop': bandDropState(group.band) === 'drop',
-              'shelf-band--reject': bandDropState(group.band) === 'reject',
-            }"
-            @dragover="onBandDragOver(group.band, $event)"
-            @dragleave="onBandDragLeave(group.band)"
-            @drop="onBandDrop(group.band, $event)"
-          >
-            <v-icon size="15" class="shelf-band-icon">mdi-harddisk</v-icon>
-            <span class="shelf-band-name">{{ group.band.label }}</span>
-            <span v-if="group.band.mountPoint" class="shelf-band-path">{{
-              group.band.mountPoint
-            }}</span>
-            <!-- Three segments carving up one track, not fills stacked on top
-                 of each other. The shelf's share is a PART of what is used, so
-                 `other` is the REST of the used space: laid end to end the
-                 three are the drive, and no boundary is ambiguous. Overlaying
-                 them was the original shape and it meant a reader could see a
-                 boundary without being able to tell which of the two questions
-                 — "how full is this disk" and "how much of that is us" — it
-                 answered (#893).
+             It costs the strip nothing: it was sticky only to stay put, and a
+             sibling above the scrollport is already put. The two stay aligned
+             because both reserve the same scrollbar gutter. -->
+        <div class="shelf-scroll">
+          <!-- The key to the meters, said ONCE for the view rather than once per
+               band: it is the same three segments every time, and repeating it
+               down the list would cost more room than the meters themselves.
+               Drawn only when a measured meter is actually on screen — an
+               unmeasured band renders no meter at all, so a shelf of offline
+               drives would otherwise key a picture nobody can see.
 
-                 `aria-hidden`, and no `role="img"`: `.shelf-band-figures`
-                 below already renders the identical string as visible text in
-                 this same heading, so labelling the meter made every band
-                 announce its figures twice. `role="meter"` would be worse —
-                 it carries one `aria-valuenow` and this is three numbers. -->
-            <span
-              v-if="usage(group.band)"
-              class="shelf-band-meter"
-              :class="{ 'shelf-band-meter--low': usage(group.band).lowFree }"
-              aria-hidden="true"
-            >
+               No ARIA and no `aria-describedby` back from the bands: each
+               heading already states its figures in words, so this is redundant
+               to a screen reader, and wiring it up would re-read all three
+               labels on every heading. -->
+          <p v-if="showsBandLegend" class="shelf-keys">
+            <span v-for="item in BAND_LEGEND" :key="item.key" class="shelf-key">
               <span
-                class="shelf-band-seg shelf-band-seg--shelf"
-                :style="{ width: `${meter(group.band).shelfPct}%` }"
+                class="shelf-key-swatch"
+                :class="`shelf-band-seg--${item.key}`"
               ></span>
-              <span
-                class="shelf-band-seg shelf-band-seg--other"
-                :style="{ width: `${meter(group.band).otherPct}%` }"
-              ></span>
-              <!-- The ghost: what a drop would add, carved out of the free
-                   segment rather than laid over it, so the four still sum to
-                   the drive. Hatched, never a solid, because a projection is
-                   provisional and a measurement is not — and the two must not
-                   be one reading apart. -->
-              <span
-                v-if="projection(group.band)"
-                class="shelf-band-seg shelf-band-seg--ghost"
-                :class="{
-                  'shelf-band-seg--ghost-reject': !projection(group.band).fits,
-                }"
-                :style="{ width: `${projection(group.band).addedPct}%` }"
-              ></span>
-              <span
-                class="shelf-band-seg shelf-band-seg--free"
-                :style="{ width: `${meter(group.band).freePct}%` }"
-              ></span>
+              <span>{{ item.label }}</span>
             </span>
-            <span
-              class="shelf-band-figures"
+            <span class="shelf-key">
+              <v-icon size="14">mdi-cursor-move</v-icon>
+              <span>drag a selection onto a drive or folder to move it</span>
+            </span>
+          </p>
+          <div
+            v-for="group in shownGroups"
+            :key="group.key"
+            class="shelf-group"
+          >
+            <!-- The drive band: the OUTER of the two levels the plan allows, and
+                 the second one is spent here rather than on stacks, which nest
+                 inside a row and not inside a header. Drawn on the first group of
+                 each band, never as a wrapper element, so the sticky folder
+                 headers below keep scrolling under it in one flow. -->
+            <!-- And the drop target for a move (#894). `dragover` carries no
+                 `.prevent` here either — calling preventDefault() is what ACCEPTS
+                 a drop, so a band with no room simply never calls it and the
+                 browser draws its own refusal cursor over a band already in the
+                 error treatment. -->
+            <h3
+              v-if="group.bandStart"
+              class="shelf-band"
               :class="{
-                'shelf-band-figures--low':
-                  !projection(group.band) && usage(group.band)?.lowFree,
-                'shelf-band-figures--reject':
-                  bandDropState(group.band) === 'reject',
+                'shelf-band--unknown': !group.band.measured,
+                'shelf-band--drop': bandDropState(group.band) === 'drop',
+                'shelf-band--reject': bandDropState(group.band) === 'reject',
               }"
+              @dragover="onBandDragOver(group.band, $event)"
+              @dragleave="onBandDragLeave(group.band)"
+              @drop="onBandDrop(group.band, $event)"
             >
-              <!-- The non-colour half of the low and reject states. Colour is
-                   additive here, never the carrier: the distinction has to
-                   survive greyscale, and the glyph and the words ("Only", "will
-                   not fit") both do. A drop that fits gets the tray glyph
-                   rather than none, so the label under a hatched meter is
-                   marked as being about the drag and not about the disk. -->
-              <v-icon v-if="projection(group.band)" size="16">{{
-                projection(group.band).fits
-                  ? "mdi-tray-arrow-down"
-                  : "mdi-alert-circle-outline"
-              }}</v-icon>
-              <v-icon v-else-if="usage(group.band)?.lowFree" size="16"
-                >mdi-alert-outline</v-icon
-              >
-              <span>{{ meterLabel(group.band) }}</span>
-            </span>
-          </h3>
-
-          <!-- The header IS the button, so its whole width is the drop target
-               and the collapse control. A heading as well as a button, so a
-               screen reader can jump group to group by heading. -->
-          <h3 v-if="grouped" class="shelf-group-heading">
-            <!-- A folder header is also the drop target for a drag, which is
-                 why the drag handlers sit on the button and not on a wrapper:
-                 the button already spans the header's full width, and a second
-                 element would put a dead strip between the two. `dragover`
-                 does NOT carry `.prevent` — calling preventDefault() is what
-                 ACCEPTS a drop, so it happens inside the handler and only for
-                 a payload this target takes (#757). -->
-            <button
-              class="shelf-group-btn"
-              :class="[
-                `shelf-group-btn--${group.tier || 'plain'}`,
-                {
-                  'shelf-group-btn--drop':
-                    dropTargetKey === group.key && dropFits(group.band),
-                  'shelf-group-btn--offline': group.offline,
-                  'shelf-group-btn--nested': group.nested,
-                },
-              ]"
-              :style="groupStyle(group)"
-              type="button"
-              :aria-expanded="!store.isCollapsed(group.key)"
-              :aria-label="groupLabel(group)"
-              @click="store.toggleGroup(group.key)"
-              @dragover="onGroupDragOver(group, $event)"
-              @dragleave="onGroupDragLeave(group)"
-              @drop="onGroupDrop(group, $event)"
-            >
-              <v-icon
-                size="16"
-                class="shelf-group-chevron"
-                :class="{
-                  'shelf-group-chevron--open': !store.isCollapsed(group.key),
-                }"
-                >mdi-chevron-right</v-icon
-              >
-              <!-- The GROUP's own glyph where it has one, and the axis's only
-                   where it does not. Under `Folder` that is the TIER's — one
-                   mdi folder family, never a hand-drawn box — and an
-                   unreachable folder wears the disconnected mark instead, which
-                   is the shape half of the offline treatment. Under `Feature`
-                   it is the feature's own mark, or eight headers read as eight
-                   copies of one star. The fallback is what the unset group and
-                   an unrecognised value get, both of which mean "no feature
-                   here to name" and so are exactly the axis. -->
-              <v-icon size="16" class="shelf-group-mark">{{
-                group.icon || GROUP_BY_LABELS[store.view.groupBy].icon
-              }}</v-icon>
-              <!-- The label and everything that qualifies it. The chips are
-                   WORDS on purpose: the rail's hue groups the folders on one
-                   disk and the tier's glyph gives it a shape, but neither
-                   survives greyscale on its own, and only the chip is readable
-                   out loud. -->
-              <span
-                class="shelf-group-label"
-                :class="`shelf-group-label--${group.labelKind}`"
-                >{{ group.label }}</span
-              >
-              <span v-if="group.chip" class="shelf-chip">{{ group.chip }}</span>
-              <!-- Only where no band names the drive already: under `Drive,
-                   then folder` the band above IS this chip, and repeating it on
-                   every folder under it is noise rather than a signal. -->
-              <span v-if="!group.band && group.drive" class="shelf-chip">
-                <v-icon size="12">mdi-harddisk</v-icon>
-                {{ group.drive.label }}
-              </span>
-              <span v-if="group.offline" class="shelf-chip">Offline</span>
-              <span class="shelf-spacer"></span>
-              <span class="shelf-group-count">{{
-                modelCount(group.rows.length)
-              }}</span>
-            </button>
-          </h3>
-
-          <!-- `role="treegrid"`, which is what the rows became once they got
-               columns. A listbox cannot carry a `columnheader`, so nothing
-               named what the figures in a row meant (#891); a treegrid can,
-               and its keyboard model is already the one this list implements —
-               Up/Down walk rows, Right/Left open and close a run, and
-               `aria-multiselectable` + `aria-selected` still say what is
-               picked. A run's other steps are CHILD rows, which is the "tree"
-               half: they carry `aria-level="2"` because the DOM draws them as
-               siblings of their cover rather than nesting them. -->
-          <ul
-            v-if="!grouped || !store.isCollapsed(group.key)"
-            class="shelf-list"
-            role="treegrid"
-            aria-multiselectable="true"
-            :aria-label="grouped ? group.label : 'Models'"
-          >
-            <!-- The column names, on every grid and drawn on none of them.
-                 `columnheader`s head the grid they are in and nothing else, so
-                 grouping needs one strip per group, and eight identical
-                 visible bands down a grouped list is exactly what the header
-                 strip above the list exists to avoid. These stay hidden and
-                 carry the `aria-sort` for their own grid, so the order is
-                 readable from inside the treegrid rather than only from the
-                 control group above it. -->
-            <li class="visually-hidden" role="row">
-              <span role="columnheader">Model</span>
-              <span role="columnheader" :aria-sort="columnSortState('name')"
-                >Name</span
-              >
-              <span role="columnheader">Kind</span>
-              <span
-                role="columnheader"
-                :aria-sort="columnSortState('base_model')"
-                >Base</span
-              >
-              <span role="columnheader" :aria-sort="columnSortState('size')"
-                >Size</span
-              >
-              <!-- Named for the axis it is drawn in, because that axis changes
-                   with the sort: a reader who hears `Size` then `Date added`
-                   knows which of the two dates the column holds. -->
-              <span
-                role="columnheader"
-                :aria-sort="columnSortState(DATE_COLUMN.sort)"
-                >{{ DATE_COLUMN.label }}</span
-              >
-            </li>
-            <!-- A row with one spanning cell, because a grid takes nothing but
-                 rows: not selectable, because there is nothing here to select.
-                 A registered folder with no models says which of the two
-                 states it is in, because "we have not looked yet" is the
-                 owner's to act on and "we looked and it is empty" is not. -->
-            <li v-if="!group.rows.length" role="row" class="shelf-empty-folder">
-              <span role="gridcell" :aria-colspan="COLUMN_COUNT">
-                {{ EMPTY_FOLDER_NOTE[group.emptyReason] }}
-              </span>
-            </li>
-            <!-- The `v-for` sits on a wrapping template, not on the row, so a
-                 stack's expanded members can be siblings of their cover inside
-                 the same iteration and still see `row`. -->
-            <template v-for="row in group.rows" :key="row.rowKey">
-              <li
-                class="shelf-row"
-                :class="{
-                  'shelf-row--selected': store.isSelected(row.id),
-                  'shelf-row--offline': row.locState === 'unreachable',
-                  'shelf-row--broken': BROKEN_STATES.has(row.locState),
-                }"
-                role="row"
-                aria-level="1"
-                :aria-expanded="
-                  row.memberCount > 1 ? isStackOpen(row.stack_id) : undefined
-                "
-                :aria-selected="store.isSelected(row.id)"
-                aria-keyshortcuts="F2 Shift+F2"
-                :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
-                :data-row-key="row.rowKey"
-                :draggable="
-                  canDrag(row) &&
-                  editingRowKey !== row.rowKey &&
-                  editingBaseKey !== row.rowKey
-                "
-                @click="pickRow(row, $event)"
-                @contextmenu.prevent="openRowMenu(row, $event)"
-                @keydown="onRowKeydown(row, $event)"
-                @focus="focusedRowKey = row.rowKey"
-                @dragstart="onRowDragStart(row, $event)"
-                @dragend="clearDropState()"
-              >
-                <!-- The identity slot, and the assignment (#904). The RING is
-                     the assignment: its hue is the entity's own and its style
-                     is hashed off the entity, so the pair survives greyscale
-                     where the hue alone would not, and the mark's own label
-                     names every attachment out loud. That is what replaced the
-                     `Assigned to` column — one mark, two axes, no track that is
-                     empty on most rows. -->
-                <span role="gridcell" class="shelf-row-ident">
-                  <!-- Deck ticks behind the mark say "this is more than one
-                       file" before the count is read, exactly as they do on a
-                       picture tile. Count-only, so the component reuses cleanly
-                       here even though a model has no thumbnail. -->
-                  <StackEdgeTicks
-                    v-if="row.memberCount > 1"
-                    :count="row.memberCount"
-                  />
-                  <!-- The hue is bound as a custom property rather than a
-                       class, because it is per-entity DATA and there is no
-                       bounded set of them to name. Bound only when there IS
-                       one: an unassigned ring has no hue, and a custom
-                       property set to an empty string is a different thing
-                       from an unset one — `var(--mmark-ring, transparent)`
-                       would resolve to nothing rather than to its fallback,
-                       and an invalid-at-computed-value-time `border` takes the
-                       whole shorthand down with it, including the 2px. -->
-                  <ModelMark
-                    :row="row"
-                    :ring="ringFor(row)"
-                    :style="ringStyle(row)"
-                  />
-                </span>
-                <span role="gridcell" class="shelf-row-label">
-                  <!-- The absence glyph leads the line, because it changes what
-                       everything after it means: the name is still true, the
-                       file behind it is not there. -->
-                  <v-icon
-                    v-if="row.locState !== 'present'"
-                    size="14"
-                    class="shelf-row-loc"
-                    :class="`shelf-row-loc--${row.locState}`"
-                    :title="LOC_TITLE[row.locState]"
-                    >{{ LOC_ICON[row.locState] }}</v-icon
-                  >
-                  <!-- The name is a FIELD, and it has four states, because
-                       naming is the commonest fix on this shelf and the reader
-                       has to be able to tell "somebody chose this" from "we
-                       guessed" from "there is nothing here" without opening
-                       anything. Rendering all four as one string is what made
-                       an unnamed row look inert, and an inert row never gets
-                       named (#897). Type and the accent rule carry the
-                       distinction; only the file's own string gets a tag on
-                       top, so the shelf is not a column of chips. -->
-                  <input
-                    v-if="editingRowKey === row.rowKey"
-                    v-model="editingName"
-                    class="shelf-row-rename"
-                    type="text"
-                    :placeholder="row.name.text || 'Name this model'"
-                    :aria-label="`Name for ${row.filename || 'this model'}`"
-                    @click.stop
-                    @keydown="onRenameKeydown"
-                    @blur="commitRename"
-                  />
-                  <template v-else>
-                    <span
-                      class="shelf-row-name"
-                      :class="`shelf-row-name--${row.name.state}`"
-                      @dblclick.stop="startRename(row)"
-                      >{{ row.name.text || "Name this model" }}</span
-                    >
-                    <span
-                      v-if="row.name.state === 'from-file'"
-                      class="shelf-name-tag"
-                      :title="FROM_FILE_TAG_TITLE"
-                      >from filename</span
-                    >
-                  </template>
-                  <!-- Beside the name rather than in a column of its own: the
-                       count belongs to the run's identity, and only stacked
-                       rows carry one, so a track for it would be empty on
-                       nearly every row. -->
-                  <button
-                    v-if="row.memberCount > 1"
-                    class="shelf-stack-badge"
-                    type="button"
-                    :aria-expanded="isStackOpen(row.stack_id)"
-                    :title="`${row.memberCount} files in this run`"
-                    @click.stop="toggleStack(row.stack_id)"
-                  >
-                    {{ row.memberCount }}
-                    <v-icon
-                      size="13"
-                      :class="{
-                        'shelf-stack-chevron--open': isStackOpen(row.stack_id),
-                      }"
-                      >mdi-chevron-right</v-icon
-                    >
-                  </button>
-                  <!-- The step, on any row that is not a stack cover.
-                       `deriveModelName` strips the trailing step from the
-                       filename on the stated grounds that "the step is parsed
-                       into its own field" — and that field was never rendered
-                       anywhere except inside an expanded stack. So two
-                       checkpoints of one run that the stack detector did not
-                       fold both read `clementine-zib-3b`, with nothing on the
-                       row telling them apart: exactly the outcome stripping it
-                       was meant to prevent. -->
-                  <span
-                    v-if="stepLabel(row)"
-                    class="shelf-chip shelf-chip--step"
-                    >{{ stepLabel(row) }}</span
-                  >
-                  <!-- What the scan you just ran brought in. The SUCCESS
-                       treatment, because an arrival is a good outcome — and
-                       nothing else on a row is green, so it reads without a
-                       key. Cleared by the next fetch, so it is never a stale
-                       mark from three refreshes ago. -->
-                  <span v-if="row.isNew" class="shelf-row-new">New</span>
-                  <!-- The filename, on its own line under the name. It is what
-                       the file is actually called, which the name above it may
-                       well not be, and it is the string the reader pastes into
-                       a ComfyUI node — so it is monospaced and it is always
-                       there rather than living in a tooltip. What IS in the
-                       tooltip is the folder: the header names it only under
-                       `groupBy: 'folder'`, so on every other axis this line is
-                       the one place left that can say where the file is. -->
-                  <span
-                    class="shelf-row-file"
-                    :title="copyPathsTitle(row.locations) || undefined"
-                  >
-                    {{ row.filename
-                    }}<template v-if="LOC_NOTE[row.locState]">
-                      · {{ LOC_NOTE[row.locState] }}</template
-                    >
-                  </span>
-                </span>
-                <span role="gridcell" class="shelf-col shelf-col--kind">
-                  <span class="shelf-chip" :title="kindLabel(row)">{{
-                    kindLabel(row)
-                  }}</span>
-                </span>
-                <!-- Base is a COLUMN, not a phrase on a metadata line: it is
-                     the field a reader scans a shelf for, and it can only be
-                     scanned if it aligns. -->
-                <span role="gridcell" class="shelf-col shelf-col--base">
-                  <!-- Double-click edits it here, on the row, for the same
-                       reason the name is edited here: this is where the value
-                       is read, and "not set" is a value like any other, so it
-                       opens the field rather than being the one state you have
-                       to go to a dialog for. The dialog stays for the bulk
-                       verb, which is a different gesture with a different
-                       warning in front of it. -->
-                  <BaseModelInput
-                    v-if="editingBaseKey === row.rowKey"
-                    v-model="editingBase"
-                    class="shelf-row-base-edit"
-                    placeholder="Base model"
-                    :aria-label="`Base model for ${row.filename || 'this model'}`"
-                    @click.stop
-                    @keydown.stop
-                    @confirm="commitBaseModel(true)"
-                    @cancel="cancelBaseModel"
-                    @blur="commitBaseModel()"
-                  />
-                  <template v-else>
-                    <span
-                      v-if="row.base_model"
-                      @dblclick.stop="startBaseModelEdit(row)"
-                      >{{ row.base_model }}</span
-                    >
-                    <span
-                      v-else
-                      class="shelf-chip shelf-chip--none"
-                      @dblclick.stop="startBaseModelEdit(row)"
-                      >not set</span
-                    >
-                  </template>
-                </span>
-                <span role="gridcell" class="shelf-col shelf-col--size">{{
-                  row.file_size ? formatModelSize(row.file_size) : ""
-                }}</span>
-                <!-- The DAY, not the stamp: a column is scanned, and the clock
-                     is what stops it being scannable. The full stamp is in the
-                     title, which also names which of the two dates this is —
-                     the column follows the sort, so the same cell holds
-                     `Date added` on one shelf and `File date` on the next. -->
+              <!-- Which disk, as one group. It takes the slack so that every
+                   band's meter and figures begin at the same x — two meters
+                   that do not share a left edge cannot be compared down the
+                   column, which is the only reason to draw the meter twice. -->
+              <span class="shelf-band-id">
+                <!-- The kind rides the glyph rather than arriving as a chip:
+                     the disk mark is on every band already and says nothing,
+                     and a chip would be a fourth variable-width thing ahead of
+                     the meter as well as a second dialect of the `Locked` and
+                     `Managed` chips one level down. The word is in the title
+                     for the reader who wants it, and null draws the plain
+                     disk — never the word "Unknown". -->
+                <v-icon
+                  size="15"
+                  class="shelf-band-icon"
+                  :title="DRIVE_KINDS[group.band.kind]?.label"
+                  >{{
+                    DRIVE_KINDS[group.band.kind]?.icon || "mdi-harddisk"
+                  }}</v-icon
+                >
+                <span class="shelf-band-name">{{ group.band.label }}</span>
+                <!-- Only when it says something the name did not. With no
+                     volume label the name IS the mount point, and drawing both
+                     rendered `/` twice, which reads as a fault rather than as
+                     detail. -->
                 <span
-                  role="gridcell"
-                  class="shelf-col shelf-col--date"
-                  :title="dateTitle(row)"
-                  >{{ dateCell(row) }}</span
+                  v-if="group.band.mountPoint !== group.band.label"
+                  class="shelf-band-path"
+                  >{{ group.band.mountPoint }}</span
+                >
+              </span>
+              <!-- Three segments carving up one track, not fills stacked on top
+                   of each other. The shelf's share is a PART of what is used, so
+                   `other` is the REST of the used space: laid end to end the
+                   three are the drive, and no boundary is ambiguous. Overlaying
+                   them was the original shape and it meant a reader could see a
+                   boundary without being able to tell which of the two questions
+                   — "how full is this disk" and "how much of that is us" — it
+                   answered (#893).
+
+                   `aria-hidden`, and no `role="img"`: `.shelf-band-figures`
+                   below already renders the identical string as visible text in
+                   this same heading, so labelling the meter made every band
+                   announce its figures twice. `role="meter"` would be worse —
+                   it carries one `aria-valuenow` and this is three numbers. -->
+              <span class="shelf-band-usage">
+                <span
+                  v-if="usage(group.band)"
+                  class="shelf-band-meter"
+                  :class="{
+                    'shelf-band-meter--low': usage(group.band).lowFree,
+                  }"
+                  aria-hidden="true"
+                >
+                  <span
+                    class="shelf-band-seg shelf-band-seg--shelf"
+                    :style="{ width: `${meter(group.band).shelfPct}%` }"
+                  ></span>
+                  <span
+                    class="shelf-band-seg shelf-band-seg--other"
+                    :style="{ width: `${meter(group.band).otherPct}%` }"
+                  ></span>
+                  <!-- The ghost: what a drop would add, carved out of the free
+                     segment rather than laid over it, so the four still sum to
+                     the drive. Hatched, never a solid, because a projection is
+                     provisional and a measurement is not — and the two must not
+                     be one reading apart. -->
+                  <span
+                    v-if="projection(group.band)"
+                    class="shelf-band-seg shelf-band-seg--ghost"
+                    :class="{
+                      'shelf-band-seg--ghost-reject': !projection(group.band)
+                        .fits,
+                    }"
+                    :style="{ width: `${projection(group.band).addedPct}%` }"
+                  ></span>
+                  <span
+                    class="shelf-band-seg shelf-band-seg--free"
+                    :style="{ width: `${meter(group.band).freePct}%` }"
+                  ></span>
+                </span>
+                <span
+                  class="shelf-band-figures"
+                  :class="{
+                    'shelf-band-figures--low':
+                      !projection(group.band) && usage(group.band)?.lowFree,
+                    'shelf-band-figures--reject':
+                      bandDropState(group.band) === 'reject',
+                  }"
+                >
+                  <!-- The non-colour half of the low and reject states. Colour is
+                     additive here, never the carrier: the distinction has to
+                     survive greyscale, and the glyph and the words ("Only", "will
+                     not fit") both do. A drop that fits gets the tray glyph
+                     rather than none, so the label under a hatched meter is
+                     marked as being about the drag and not about the disk. -->
+                  <v-icon v-if="projection(group.band)" size="16">{{
+                    projection(group.band).fits
+                      ? "mdi-tray-arrow-down"
+                      : "mdi-alert-circle-outline"
+                  }}</v-icon>
+                  <v-icon v-else-if="usage(group.band)?.lowFree" size="16"
+                    >mdi-alert-outline</v-icon
+                  >
+                  <!-- One anchor number, then its context. The reader's
+                       question is "will this fit", and the run-on sentence
+                       gave the answer, what it is measured against and our own
+                       share the same size, weight and ink — three numbers to
+                       parse for one. Split, not shortened: the other two are
+                       the reason to believe the first.
+
+                       Two items, so the gap can give the anchor room to be one
+                       — but `rest` still carries its own leading space, and
+                       that is not redundant: the accessible name is the text
+                       nodes run together with no regard for a gap, so without
+                       it the line is read aloud as "GB freeof". -->
+                  <strong class="shelf-band-lead">{{
+                    meterLabel(group.band).lead
+                  }}</strong>
+                  <span>{{ meterLabel(group.band).rest }}</span>
+                </span>
+              </span>
+            </h3>
+
+            <!-- The header IS the button, so its whole width is the drop target
+                 and the collapse control. A heading as well as a button, so a
+                 screen reader can jump group to group by heading. -->
+            <h3 v-if="grouped" class="shelf-group-heading">
+              <!-- A folder header is also the drop target for a drag, which is
+                   why the drag handlers sit on the button and not on a wrapper:
+                   the button already spans the header's full width, and a second
+                   element would put a dead strip between the two. `dragover`
+                   does NOT carry `.prevent` — calling preventDefault() is what
+                   ACCEPTS a drop, so it happens inside the handler and only for
+                   a payload this target takes (#757). -->
+              <button
+                class="shelf-group-btn"
+                :class="[
+                  `shelf-group-btn--${group.tier || 'plain'}`,
+                  {
+                    'shelf-group-btn--drop':
+                      dropTargetKey === group.key && dropFits(group.band),
+                    'shelf-group-btn--offline': group.offline,
+                    'shelf-group-btn--nested': group.nested,
+                  },
+                ]"
+                :style="groupStyle(group)"
+                type="button"
+                :aria-expanded="!store.isCollapsed(group.key)"
+                :aria-label="groupLabel(group)"
+                @click="store.toggleGroup(group.key)"
+                @dragover="onGroupDragOver(group, $event)"
+                @dragleave="onGroupDragLeave(group)"
+                @drop="onGroupDrop(group, $event)"
+              >
+                <v-icon
+                  size="16"
+                  class="shelf-group-chevron"
+                  :class="{
+                    'shelf-group-chevron--open': !store.isCollapsed(group.key),
+                  }"
+                  >mdi-chevron-right</v-icon
+                >
+                <!-- The GROUP's own glyph where it has one, and the axis's only
+                     where it does not. Under `Folder` that is the TIER's — one
+                     mdi folder family, never a hand-drawn box — and an
+                     unreachable folder wears the disconnected mark instead, which
+                     is the shape half of the offline treatment. Under `Feature`
+                     it is the feature's own mark, or eight headers read as eight
+                     copies of one star. The fallback is what the unset group and
+                     an unrecognised value get, both of which mean "no feature
+                     here to name" and so are exactly the axis. -->
+                <v-icon size="16" class="shelf-group-mark">{{
+                  group.icon || GROUP_BY_LABELS[store.view.groupBy].icon
+                }}</v-icon>
+                <!-- The label and everything that qualifies it. The chips are
+                     WORDS on purpose: the rail's hue groups the folders on one
+                     disk and the tier's glyph gives it a shape, but neither
+                     survives greyscale on its own, and only the chip is readable
+                     out loud. -->
+                <span
+                  class="shelf-group-label"
+                  :class="`shelf-group-label--${group.labelKind}`"
+                  >{{ group.label }}</span
+                >
+                <span v-if="group.chip" class="shelf-chip">{{
+                  group.chip
+                }}</span>
+                <!-- Only where no band names the drive already: under `Drive,
+                     then folder` the band above IS this chip, and repeating it on
+                     every folder under it is noise rather than a signal. -->
+                <span v-if="!group.band && group.drive" class="shelf-chip">
+                  <v-icon size="12">mdi-harddisk</v-icon>
+                  {{ group.drive.label }}
+                </span>
+                <span v-if="group.offline" class="shelf-chip">Offline</span>
+                <span class="shelf-spacer"></span>
+                <span class="shelf-group-count">{{
+                  modelCount(group.rows.length)
+                }}</span>
+              </button>
+            </h3>
+
+            <!-- `role="treegrid"`, which is what the rows became once they got
+                 columns. A listbox cannot carry a `columnheader`, so nothing
+                 named what the figures in a row meant (#891); a treegrid can,
+                 and its keyboard model is already the one this list implements —
+                 Up/Down walk rows, Right/Left open and close a run, and
+                 `aria-multiselectable` + `aria-selected` still say what is
+                 picked. A run's other steps are CHILD rows, which is the "tree"
+                 half: they carry `aria-level="2"` because the DOM draws them as
+                 siblings of their cover rather than nesting them. -->
+            <ul
+              v-if="!grouped || !store.isCollapsed(group.key)"
+              class="shelf-list"
+              role="treegrid"
+              aria-multiselectable="true"
+              :aria-label="grouped ? group.label : 'Models'"
+            >
+              <!-- The column names, on every grid and drawn on none of them.
+                   `columnheader`s head the grid they are in and nothing else, so
+                   grouping needs one strip per group, and eight identical
+                   visible bands down a grouped list is exactly what the header
+                   strip above the list exists to avoid. These stay hidden and
+                   carry the `aria-sort` for their own grid, so the order is
+                   readable from inside the treegrid rather than only from the
+                   control group above it. -->
+              <li class="visually-hidden" role="row">
+                <span role="columnheader">Model</span>
+                <span role="columnheader" :aria-sort="columnSortState('name')"
+                  >Name</span
+                >
+                <span role="columnheader">Kind</span>
+                <span
+                  role="columnheader"
+                  :aria-sort="columnSortState('base_model')"
+                  >Base</span
+                >
+                <span role="columnheader" :aria-sort="columnSortState('size')"
+                  >Size</span
+                >
+                <!-- Named for the axis it is drawn in, because that axis changes
+                     with the sort: a reader who hears `Size` then `Date added`
+                     knows which of the two dates the column holds. -->
+                <span
+                  role="columnheader"
+                  :aria-sort="columnSortState(DATE_COLUMN.sort)"
+                  >{{ DATE_COLUMN.label }}</span
                 >
               </li>
-
-              <!-- The stack's other members — later steps, earlier versions, or
-                 both — rendered as ROWS rather than through
-                 `StackExpansionStrip`: that component draws picture thumbnails
-                 for the dedup queue, and a model file has no thumbnail. A
-                 stack's members already ARE shelf rows, so they are drawn as
-                 shelf rows — indented, and not selectable on their own, because
-                 stacks are atomic here and a member cannot be acted on apart
-                 from its run. -->
-              <template v-if="row.memberCount > 1 && isStackOpen(row.stack_id)">
+              <!-- A row with one spanning cell, because a grid takes nothing but
+                   rows: not selectable, because there is nothing here to select.
+                   A registered folder with no models says which of the two
+                   states it is in, because "we have not looked yet" is the
+                   owner's to act on and "we looked and it is empty" is not. -->
+              <li
+                v-if="!group.rows.length"
+                role="row"
+                class="shelf-empty-folder"
+              >
+                <span role="gridcell" :aria-colspan="COLUMN_COUNT">
+                  {{ EMPTY_FOLDER_NOTE[group.emptyReason] }}
+                </span>
+              </li>
+              <!-- The `v-for` sits on a wrapping template, not on the row, so a
+                   stack's expanded members can be siblings of their cover inside
+                   the same iteration and still see `row`. -->
+              <template v-for="row in group.rows" :key="row.rowKey">
                 <li
-                  v-for="member in row.members.slice(1)"
-                  :key="`${row.rowKey}:${member.id}`"
-                  class="shelf-row shelf-row--member"
+                  class="shelf-row"
+                  :class="{
+                    'shelf-row--selected': store.isSelected(row.id),
+                    'shelf-row--offline': row.locState === 'unreachable',
+                    'shelf-row--broken': BROKEN_STATES.has(row.locState),
+                  }"
                   role="row"
-                  aria-level="2"
+                  aria-level="1"
+                  :aria-expanded="
+                    row.memberCount > 1 ? isStackOpen(row.stack_id) : undefined
+                  "
+                  :aria-selected="store.isSelected(row.id)"
+                  aria-keyshortcuts="F2 Shift+F2"
+                  :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
+                  :data-row-key="row.rowKey"
+                  :draggable="
+                    canDrag(row) &&
+                    editingRowKey !== row.rowKey &&
+                    editingBaseKey !== row.rowKey
+                  "
+                  @click="pickRow(row, $event)"
+                  @contextmenu.prevent="openRowMenu(row, $event)"
+                  @keydown="onRowKeydown(row, $event)"
+                  @focus="focusedRowKey = row.rowKey"
+                  @dragstart="onRowDragStart(row, $event)"
+                  @dragend="clearDropState()"
                 >
+                  <!-- The identity slot, and the assignment (#904). The RING is
+                       the assignment: its hue is the entity's own and its style
+                       is hashed off the entity, so the pair survives greyscale
+                       where the hue alone would not, and the mark's own label
+                       names every attachment out loud. That is what replaced the
+                       `Assigned to` column — one mark, two axes, no track that is
+                       empty on most rows. -->
                   <span role="gridcell" class="shelf-row-ident">
-                    <v-icon size="14">mdi-subdirectory-arrow-right</v-icon>
+                    <!-- Deck ticks behind the mark say "this is more than one
+                         file" before the count is read, exactly as they do on a
+                         picture tile. Count-only, so the component reuses cleanly
+                         here even though a model has no thumbnail. -->
+                    <StackEdgeTicks
+                      v-if="row.memberCount > 1"
+                      :count="row.memberCount"
+                    />
+                    <!-- The hue is bound as a custom property rather than a
+                         class, because it is per-entity DATA and there is no
+                         bounded set of them to name. Bound only when there IS
+                         one: an unassigned ring has no hue, and a custom
+                         property set to an empty string is a different thing
+                         from an unset one — `var(--mmark-ring, transparent)`
+                         would resolve to nothing rather than to its fallback,
+                         and an invalid-at-computed-value-time `border` takes the
+                         whole shorthand down with it, including the 2px. -->
+                    <ModelMark
+                      :row="row"
+                      :ring="ringFor(row)"
+                      :style="ringStyle(row)"
+                    />
                   </span>
                   <span role="gridcell" class="shelf-row-label">
-                    <span class="shelf-row-name">{{
-                      memberLabel(member, row)
-                    }}</span>
+                    <!-- The absence glyph leads the line, because it changes what
+                         everything after it means: the name is still true, the
+                         file behind it is not there. -->
+                    <v-icon
+                      v-if="row.locState !== 'present'"
+                      size="14"
+                      class="shelf-row-loc"
+                      :class="`shelf-row-loc--${row.locState}`"
+                      :title="LOC_TITLE[row.locState]"
+                      >{{ LOC_ICON[row.locState] }}</v-icon
+                    >
+                    <!-- The name is a FIELD, and it has four states, because
+                         naming is the commonest fix on this shelf and the reader
+                         has to be able to tell "somebody chose this" from "we
+                         guessed" from "there is nothing here" without opening
+                         anything. Rendering all four as one string is what made
+                         an unnamed row look inert, and an inert row never gets
+                         named (#897). Type and the accent rule carry the
+                         distinction; only the file's own string gets a tag on
+                         top, so the shelf is not a column of chips. -->
+                    <input
+                      v-if="editingRowKey === row.rowKey"
+                      v-model="editingName"
+                      class="shelf-row-rename"
+                      type="text"
+                      :placeholder="row.name.text || 'Name this model'"
+                      :aria-label="`Name for ${row.filename || 'this model'}`"
+                      @click.stop
+                      @keydown="onRenameKeydown"
+                      @blur="commitRename"
+                    />
+                    <template v-else>
+                      <span
+                        class="shelf-row-name"
+                        :class="`shelf-row-name--${row.name.state}`"
+                        @dblclick.stop="startRename(row)"
+                        >{{ row.name.text || "Name this model" }}</span
+                      >
+                      <span
+                        v-if="row.name.state === 'from-file'"
+                        class="shelf-name-tag"
+                        :title="FROM_FILE_TAG_TITLE"
+                        >from filename</span
+                      >
+                    </template>
+                    <!-- Beside the name rather than in a column of its own: the
+                         count belongs to the run's identity, and only stacked
+                         rows carry one, so a track for it would be empty on
+                         nearly every row. -->
+                    <button
+                      v-if="row.memberCount > 1"
+                      class="shelf-stack-badge"
+                      type="button"
+                      :aria-expanded="isStackOpen(row.stack_id)"
+                      :title="`${row.memberCount} files in this run`"
+                      @click.stop="toggleStack(row.stack_id)"
+                    >
+                      {{ row.memberCount }}
+                      <v-icon
+                        size="13"
+                        :class="{
+                          'shelf-stack-chevron--open': isStackOpen(
+                            row.stack_id,
+                          ),
+                        }"
+                        >mdi-chevron-right</v-icon
+                      >
+                    </button>
+                    <!-- The step, on any row that is not a stack cover.
+                         `deriveModelName` strips the trailing step from the
+                         filename on the stated grounds that "the step is parsed
+                         into its own field" — and that field was never rendered
+                         anywhere except inside an expanded stack. So two
+                         checkpoints of one run that the stack detector did not
+                         fold both read `clementine-zib-3b`, with nothing on the
+                         row telling them apart: exactly the outcome stripping it
+                         was meant to prevent. -->
+                    <span
+                      v-if="stepLabel(row)"
+                      class="shelf-chip shelf-chip--step"
+                      >{{ stepLabel(row) }}</span
+                    >
+                    <!-- What the scan you just ran brought in. The SUCCESS
+                         treatment, because an arrival is a good outcome — and
+                         nothing else on a row is green, so it reads without a
+                         key. Cleared by the next fetch, so it is never a stale
+                         mark from three refreshes ago. -->
+                    <span v-if="row.isNew" class="shelf-row-new">New</span>
+                    <!-- The filename, on its own line under the name. It is what
+                         the file is actually called, which the name above it may
+                         well not be, and it is the string the reader pastes into
+                         a ComfyUI node — so it is monospaced and it is always
+                         there rather than living in a tooltip. What IS in the
+                         tooltip is the folder: the header names it only under
+                         `groupBy: 'folder'`, so on every other axis this line is
+                         the one place left that can say where the file is. -->
                     <span
                       class="shelf-row-file"
-                      :title="copyPathsTitle(member.locations) || undefined"
-                      >{{ member.filename }}</span
+                      :title="copyPathsTitle(row.locations) || undefined"
                     >
+                      {{ row.filename
+                      }}<template v-if="LOC_NOTE[row.locState]">
+                        · {{ LOC_NOTE[row.locState] }}</template
+                      >
+                    </span>
                   </span>
-                  <!-- A step of a run has no kind or base of its own — those
-                       are the run's, one row up — but a grid row still owes a
-                       cell per column, and an empty one is the honest way to
-                       say "same as the run". -->
-                  <span
-                    role="gridcell"
-                    class="shelf-col shelf-col--kind"
-                  ></span>
-                  <span
-                    role="gridcell"
-                    class="shelf-col shelf-col--base"
-                  ></span>
+                  <span role="gridcell" class="shelf-col shelf-col--kind">
+                    <span class="shelf-chip" :title="kindLabel(row)">{{
+                      kindLabel(row)
+                    }}</span>
+                  </span>
+                  <!-- Base is a COLUMN, not a phrase on a metadata line: it is
+                       the field a reader scans a shelf for, and it can only be
+                       scanned if it aligns. -->
+                  <span role="gridcell" class="shelf-col shelf-col--base">
+                    <!-- Double-click edits it here, on the row, for the same
+                         reason the name is edited here: this is where the value
+                         is read, and "not set" is a value like any other, so it
+                         opens the field rather than being the one state you have
+                         to go to a dialog for. The dialog stays for the bulk
+                         verb, which is a different gesture with a different
+                         warning in front of it. -->
+                    <BaseModelInput
+                      v-if="editingBaseKey === row.rowKey"
+                      v-model="editingBase"
+                      class="shelf-row-base-edit"
+                      placeholder="Base model"
+                      :aria-label="`Base model for ${row.filename || 'this model'}`"
+                      @click.stop
+                      @keydown.stop
+                      @confirm="commitBaseModel(true)"
+                      @cancel="cancelBaseModel"
+                      @blur="commitBaseModel()"
+                    />
+                    <template v-else>
+                      <span
+                        v-if="row.base_model"
+                        @dblclick.stop="startBaseModelEdit(row)"
+                        >{{ row.base_model }}</span
+                      >
+                      <span
+                        v-else
+                        class="shelf-chip shelf-chip--none"
+                        @dblclick.stop="startBaseModelEdit(row)"
+                        >not set</span
+                      >
+                    </template>
+                  </span>
                   <span role="gridcell" class="shelf-col shelf-col--size">{{
-                    member.file_size ? formatModelSize(member.file_size) : ""
+                    row.file_size ? formatModelSize(row.file_size) : ""
                   }}</span>
-                  <!-- A step's OWN date, unlike its kind and base: when a run
-                       was saved is the one thing that differs from step to
-                       step, and answering it with the run's would print the
-                       same stamp down the whole strip. -->
+                  <!-- The DAY, not the stamp: a column is scanned, and the clock
+                       is what stops it being scannable. The full stamp is in the
+                       title, which also names which of the two dates this is —
+                       the column follows the sort, so the same cell holds
+                       `Date added` on one shelf and `File date` on the next. -->
                   <span
                     role="gridcell"
                     class="shelf-col shelf-col--date"
-                    :title="dateTitle(member, true)"
-                    >{{ dateCell(member, true) }}</span
+                    :title="dateTitle(row)"
+                    >{{ dateCell(row) }}</span
                   >
                 </li>
+
+                <!-- The stack's other members — later steps, earlier versions,
+                   or both — rendered as ROWS rather than through
+                   `StackExpansionStrip`: that component draws picture thumbnails
+                   for the dedup queue, and a model file has no thumbnail. A
+                   stack's members already ARE shelf rows, so they are drawn as
+                   shelf rows — indented, and not selectable on their own, because
+                   stacks are atomic here and a member cannot be acted on apart
+                   from its run. -->
+                <template
+                  v-if="row.memberCount > 1 && isStackOpen(row.stack_id)"
+                >
+                  <li
+                    v-for="member in row.members.slice(1)"
+                    :key="`${row.rowKey}:${member.id}`"
+                    class="shelf-row shelf-row--member"
+                    role="row"
+                    aria-level="2"
+                  >
+                    <span role="gridcell" class="shelf-row-ident">
+                      <v-icon size="14">mdi-subdirectory-arrow-right</v-icon>
+                    </span>
+                    <span role="gridcell" class="shelf-row-label">
+                      <span class="shelf-row-name">{{
+                        memberLabel(member, row)
+                      }}</span>
+                      <span
+                        class="shelf-row-file"
+                        :title="copyPathsTitle(member.locations) || undefined"
+                        >{{ member.filename }}</span
+                      >
+                    </span>
+                    <!-- A step of a run has no kind or base of its own — those
+                         are the run's, one row up — but a grid row still owes a
+                         cell per column, and an empty one is the honest way to
+                         say "same as the run". -->
+                    <span
+                      role="gridcell"
+                      class="shelf-col shelf-col--kind"
+                    ></span>
+                    <span
+                      role="gridcell"
+                      class="shelf-col shelf-col--base"
+                    ></span>
+                    <span role="gridcell" class="shelf-col shelf-col--size">{{
+                      member.file_size ? formatModelSize(member.file_size) : ""
+                    }}</span>
+                    <!-- A step's OWN date, unlike its kind and base: when a run
+                         was saved is the one thing that differs from step to
+                         step, and answering it with the run's would print the
+                         same stamp down the whole strip. -->
+                    <span
+                      role="gridcell"
+                      class="shelf-col shelf-col--date"
+                      :title="dateTitle(member, true)"
+                      >{{ dateCell(member, true) }}</span
+                    >
+                  </li>
+                </template>
               </template>
-            </template>
-          </ul>
+            </ul>
+          </div>
         </div>
       </template>
     </div>
@@ -1265,7 +1337,7 @@ import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import {
   DEFAULT_COLUMN_WIDTHS,
   MAX_COLUMN_WIDTH,
-  MIN_COLUMN_WIDTH,
+  MIN_COLUMN_WIDTHS,
   useModelShelfStore,
 } from "../../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
@@ -2886,6 +2958,26 @@ const BAND_LEGEND = [
   { key: "free", label: "Free" },
 ];
 
+/**
+ * The drive kinds the backend will vouch for, and the glyph each one wears.
+ *
+ * Four, because these are the four whose evidence cannot lie: a filesystem type
+ * and a removable flag are facts, where the SSD-versus-platter question is a
+ * guess that a VM, an LVM mapper or a USB enclosure each answer wrongly. The
+ * table is keyed by the wire value and an unlisted or null key falls through to
+ * the plain disk — `local` therefore has a glyph of its own only so that the
+ * three that matter are read as a difference rather than as decoration.
+ *
+ * The label is a `title`, never drawn: the row is short of horizontal room,
+ * which is the whole reason this change exists.
+ */
+const DRIVE_KINDS = {
+  local: { icon: "mdi-harddisk", label: "Disk in this machine" },
+  network: { icon: "mdi-nas", label: "Network share" },
+  removable: { icon: "mdi-usb-flash-drive", label: "Removable drive" },
+  ramdisk: { icon: "mdi-memory", label: "Memory disk — cleared on reboot" },
+};
+
 const showsBandLegend = computed(() =>
   shownGroups.value.some((group) => group.bandStart && usage(group.band)),
 );
@@ -2899,17 +2991,23 @@ const showsBandLegend = computed(() =>
  */
 function meterLabel(band) {
   const projected = projection(band);
-  if (projected) return projectionLabel(projected);
+  if (projected) return { lead: projectionLabel(projected), rest: "" };
   const use = bandUsage(band);
-  if (!use) return "Capacity unknown";
+  if (!use) return { lead: "", rest: "Capacity unknown" };
   const free = formatModelSize(band.freeBytes);
   const total = formatModelSize(band.totalBytes);
   const shelf = formatModelSize(band.shelfBytes);
   // One word for the low state, and it states the fact and stops. Nothing is
   // broken and there is nothing to click, so this is not the error voice and
   // gets no action — the same register as the offline banner.
-  const lead = use.lowFree ? "Only " : "";
-  return `${lead}${free} free of ${total} · ${shelf} on the shelf`;
+  const only = use.lowFree ? "Only " : "";
+  return {
+    lead: `${only}${free} free`,
+    // `rest` carries the space that separates it from `lead`: the two are one
+    // text run, and the flex gap that would draw that space cannot be read
+    // aloud. The two branches above have no lead to separate from.
+    rest: ` of ${total} · ${shelf} on the shelf`,
+  };
 }
 
 /**
@@ -3053,8 +3151,9 @@ function toggleDirection() {
 
    Every heading is LEFT-aligned, including Size's, whose figures are not: the
    heading is a label naming the column and the figures are a magnitude being
-   compared, and the grip lives on the column's right edge — a right-aligned
-   `SIZE` would sit under it and be a resize target as much as a sort one. */
+   compared. The grip lives on the column's LEFT edge, so it is held clear of
+   the label by sitting in the seam rather than flush against the column — see
+   `.shelf-head-grip`. */
 const NAME_COLUMN = { key: "name", label: "Name", sort: "name" };
 
 /* A computed and not a constant, for one entry: `DATE_COLUMN` renames itself
@@ -3068,6 +3167,18 @@ const SHELF_COLUMNS = computed(() => [
 
 /** How far one arrow-key press moves a column edge. One --space-3. */
 const RESIZE_STEP = 8;
+
+/**
+ * The Name track's floor, and the only thing standing between the grips and a
+ * shelf that scrolls sideways.
+ *
+ * Not a `min-width` in the stylesheet: a genuinely narrow window is still
+ * allowed to squeeze the name — that is what the flexible track IS — and a CSS
+ * floor would make those windows overflow instead. This bounds the GESTURE, so
+ * the reader cannot do it to themselves. 200px is about 24 characters of the
+ * name line, past which the second line's filename is what is being read.
+ */
+const MIN_NAME_WIDTH = 200;
 
 /** The column drag in flight, or null. Never persisted. */
 const resizing = ref(null);
@@ -3168,8 +3279,56 @@ function onResizeMove(event) {
     endResize();
     return;
   }
+  // Leftwards WIDENS: the grip is the column's left edge, so the width grows
+  // away from the pointer's direction of travel and the edge stays under it.
   const { key, startX, startWidth } = resizing.value;
-  store.setColumnWidth(key, startWidth + (event.clientX - startX), false);
+  store.setColumnWidth(
+    key,
+    widenable(key, startWidth - (event.clientX - startX)),
+    false,
+  );
+}
+
+/**
+ * The requested width, held to what the Name track can actually give up.
+ *
+ * The ceiling in the store is a sanity bound on a stored blob; THIS is the
+ * limit a drag meets, and it is measured rather than guessed because it is a
+ * fact about the panel in front of the reader. Name is the flexible track, so
+ * every pixel a fixed column takes comes out of it: the room available is
+ * whatever Name has beyond `MIN_NAME_WIDTH` right now, and past that the shelf
+ * would scroll sideways and rows would slide under a strip whose background
+ * stops at the scrollport.
+ *
+ * Measured per event rather than once at `pointerdown` so the keyboard gets
+ * the same limit, and so a window resized mid-drag is answered honestly. It is
+ * one `offsetWidth` read on a pointer move, which is a layout the browser has
+ * already done by the time the event is dispatched.
+ *
+ * It is a CEILING and nothing else, so a request to narrow passes through
+ * untouched. The ceiling itself never falls below the column's current width,
+ * which is what lets an already-cramped panel go on shrinking a column it can
+ * no longer widen.
+ *
+ * A track measuring 0 is not a track with no room, it is one nothing has laid
+ * out — the strip is not on screen, or this is jsdom. Unmeasured means
+ * unlimited, because the alternative is a grip that silently refuses to move.
+ *
+ * Also the grip's `aria-valuemax`, so the announced maximum is the one the
+ * gesture will actually enforce rather than the store's absolute bound. That
+ * binding is as fresh as the last render, which covers every width change and
+ * every sort; a window resized with nothing else touched leaves it overstated
+ * until the next one. Deliberately not fixed with a resize listener — it would
+ * re-render the whole list on every resize frame to keep one attribute exact,
+ * and the value it replaces was overstated ALL of the time.
+ */
+function widenable(key, px) {
+  const measured = rootEl.value?.querySelector(
+    ".shelf-head-col--label",
+  )?.offsetWidth;
+  const current = store.view.columnWidths[key];
+  const spare = measured ? measured - MIN_NAME_WIDTH : Infinity;
+  return Math.min(px, current + Math.max(0, spare));
 }
 
 function endResize() {
@@ -3183,7 +3342,10 @@ function endResize() {
  * The keyboard half of the same gesture, which is the whole reason the grip is
  * a focusable `separator` rather than a decoration on the heading.
  *
- * Left/Right/Home/End are the window-splitter pattern's own keys. `Enter` is
+ * Left/Right/Home/End are the window-splitter pattern's own keys, and they move
+ * the SEPARATOR, not the number: the grip is the column's left edge, so Left
+ * widens and Home — the separator as far left as it goes — is the widest the
+ * column gets. That is the same mapping the pointer has. `Enter` is
  * the pattern's "restore the default position", and here it is the ONLY way
  * back: a width is remembered for good once it has been dragged, so without a
  * reset a mis-drag is permanent short of clearing the browser's storage. A
@@ -3192,16 +3354,16 @@ function endResize() {
  */
 function onGripKeydown(key, event) {
   const width = {
-    ArrowLeft: () => store.view.columnWidths[key] - RESIZE_STEP,
-    ArrowRight: () => store.view.columnWidths[key] + RESIZE_STEP,
-    Home: () => MIN_COLUMN_WIDTH,
-    End: () => MAX_COLUMN_WIDTH,
+    ArrowLeft: () => store.view.columnWidths[key] + RESIZE_STEP,
+    ArrowRight: () => store.view.columnWidths[key] - RESIZE_STEP,
+    Home: () => MAX_COLUMN_WIDTH,
+    End: () => MIN_COLUMN_WIDTHS[key],
     Enter: () => DEFAULT_COLUMN_WIDTHS[key],
   }[event.key];
   if (!width) return;
   // Home and End scroll the list, and the list is 1,800 rows long.
   event.preventDefault();
-  store.setColumnWidth(key, width());
+  store.setColumnWidth(key, widenable(key, width()));
 }
 
 function resetColumn(key) {
@@ -3408,11 +3570,26 @@ watch(
   white-space: nowrap;
 }
 
+/* The panel below the toolbar: the veil's containing block and the `inert`
+   wrapper, and a column so the column strip can sit above the scrollport
+   rather than inside it. It does not scroll itself — `.shelf-scroll` does. */
 .shelf-body {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.shelf-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Reserved whether or not the list is long enough to need it, so the strip
+     above — which reserves the same gutter — cannot shift sideways relative to
+     the rows the moment a filter makes the list short. */
+  scrollbar-gutter: stable;
   /* Room under the last row for the pill to float over nothing. Without it the
      bottom-most rows sit permanently behind it and cannot be read or clicked
      at the one moment they matter — while a selection exists. */
@@ -3568,9 +3745,15 @@ watch(
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-3);
+  /* The gap BETWEEN the two halves, not between five peers. One gap for
+     everything was what made the row read as five things of equal rank
+     rather than as "which disk" and "how full". */
+  gap: var(--space-3) var(--space-5);
   margin: 0;
-  padding: var(--space-3) var(--space-4);
+  /* A step more block padding than the folder headers below it, because rank
+     here is size and space (§5.1) and a surface tint of a few luminance values
+     was carrying it alone. */
+  padding: var(--space-4);
   background: rgb(var(--v-theme-surface));
   border-top: 1px solid rgb(var(--v-theme-border));
   border-bottom: 1px solid rgb(var(--v-theme-divider));
@@ -3586,7 +3769,33 @@ watch(
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 
+/* Which disk. A track with a FLOOR rather than one that takes the slack: at
+   `flex: 1 1 auto` it swallowed every spare pixel on a wide window and left a
+   dead 1,200px band between the drive's name and its meter — the slack moved
+   rather than being used. 320px is what a volume label and a mount point ask
+   for, so most bands start their meter on the same x and can be read down the
+   column, and a longer name pushes its own meter right instead of being cut. */
+.shelf-band-id {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 1 auto;
+  min-width: 320px;
+}
+
+/* How full, and the half that takes the room. */
+.shelf-band-usage {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* A step up the ramp, because this heads the folder headers below it and those
+   are `--text-sm` semibold too — the outer level was the quieter of the two. */
 .shelf-band-name {
+  font-size: var(--text-base);
   font-weight: var(--weight-semibold);
 }
 
@@ -3637,9 +3846,17 @@ watch(
    stops here" when the next segment carries straight on (#893). */
 .shelf-band-meter {
   display: flex;
-  width: 190px;
+  /* GROWS, and takes ALL of what is left, which is what spends the row's slack
+     on something instead of pooling it in a gap. The segments are percentages,
+     so a wider track is the same three facts drawn where the small one is
+     legible: measured at a 2000px row, the shelf's own slice of a nearly-empty
+     900 GB drive is 77px here against 11px at the old fixed 190. There is
+     deliberately no ceiling — one only moves the empty space back between the
+     meter and the figures, which is the arrangement this replaced. 190 stays
+     as the floor a narrow panel falls back to. */
+  flex: 1 1 auto;
+  min-width: 190px;
   height: 10px;
-  flex: none;
   padding: 1px;
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
@@ -3727,11 +3944,24 @@ watch(
 .shelf-band-figures {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  /* Pinned to the row's right edge, so whatever the meter does not take is
+     spent BETWEEN the graphic and the numbers rather than pooled at one end. */
+  margin-left: auto;
+  gap: var(--space-3);
   font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* The one number the reader is actually after, at full strength and a step up
+   the ramp from the context that follows it. The rest of the line keeps the
+   2xs and the 0.7 it always had, so this is a division of the existing line
+   rather than a louder one. */
+.shelf-band-lead {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-on-background));
 }
 
 /* ── The column strip ──────────────────────────────────────────────────────
@@ -3741,16 +3971,15 @@ watch(
    transparent rail is the rows' absence rail: without it every heading would
    sit one rail-width left of the column it names.
 
-   Its own rung, named rather than an arithmetic `+1` at the use site: it is
-   INSIDE the sticky stratum and one step above the group headings, which are
-   later siblings in the same scroller and would otherwise win the tie on DOM
-   order and paint over it. OPAQUE for the same reason — the headings pass
-   under this one. */
+   It is a SIBLING of the scrollport, not a sticky child of it, so it needs no
+   sticky rung and nothing passes under it: the group headings stick to the top
+   of `.shelf-scroll`, which begins below this strip. `overflow: hidden` is not
+   about clipping — an element with a scrolling box honours `scrollbar-gutter`,
+   which is what reserves the same strip of nothing the scrollport reserves and
+   is the whole reason the columns still line up with the rows. */
 .shelf-head {
-  --shelf-head-z: calc(var(--z-sticky) + 5);
-  position: sticky;
-  top: 0;
-  z-index: var(--shelf-head-z);
+  overflow: hidden;
+  scrollbar-gutter: stable;
   display: flex;
   align-items: stretch;
   gap: var(--space-4);
@@ -3759,7 +3988,12 @@ watch(
      strip would stand 33px and leave a 1px sliver of row under it. */
   box-sizing: border-box;
   height: var(--shelf-head-h);
-  padding: 0 var(--space-4) 0 var(--space-6);
+  /* The 4px top and bottom are the room a 3px focus ring needs to be INSIDE
+     the strip: `overflow: hidden` is what makes the gutter work, and it clips
+     a ring on a full-height cell against the strip's own edge. Everything in
+     here is vertically centred, so the only thing 8px of height buys is the
+     ring. */
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-6);
   border-left: var(--rail-w) solid transparent;
   border-bottom: 1px solid rgb(var(--v-theme-divider));
   background: rgb(var(--v-theme-background));
@@ -3856,20 +4090,26 @@ button.shelf-head-cell:hover {
   white-space: nowrap;
 }
 
-/* 24px wide and centred ON the column's right edge, so the grab area is the
-   visual seam rather than something beside it. 24 is WCAG 2.5.8's floor and
-   the grab area is decoupled from the drawn hairline by the pseudo-element
-   below, so it costs nothing to hit: the strip's 12px gap takes half of it and
-   the column's own last 12px take the other, which no heading's label reaches
-   (the widest is `BASE` at ~30px in an 84px column, and every heading is
-   left-aligned so none of them ends near the edge). The last column's grip
-   lands inside the row's right padding, which is why the strip does not clip
-   and why it stops exactly where the next column begins. */
+/* The grip sits on the column's LEFT edge, in the seam before it, because that
+   is the only edge of a fixed column that MOVES when the column is resized.
+   Name is the flexible track and the fixed columns are anchored to the strip's
+   right edge, so a column's right edge is pinned by whatever follows it: a grip
+   drawn there stands still while the whole left half of the strip slides under
+   the pointer, which is what the reader reads as the drag going the wrong way.
+   On the left edge the hairline tracks the pointer exactly. It also puts a seam
+   between Name and Kind and none past the last column, which is the set of
+   seams that actually exist.
+
+   24px wide, WCAG 2.5.8's floor, centred on the 12px gap's midpoint rather
+   than flush to the column: that keeps the grab area off the heading's label,
+   which is left-aligned and starts at the column's own edge. 6px of each
+   neighbour is all it takes, and the previous column's last 6px are dead
+   space — the widest heading is `BASE` at ~30px in an 84px column. */
 .shelf-head-grip {
   position: absolute;
   top: 0;
   bottom: 0;
-  right: calc(var(--space-6) / -2);
+  left: calc(var(--space-6) / -2 - var(--space-4) / 2);
   width: var(--space-6);
   cursor: col-resize;
   touch-action: none;
@@ -3878,12 +4118,15 @@ button.shelf-head-cell:hover {
 /* The hairline the reader actually sees, and the ONLY signal that a column can
    be resized — so it is a component-grade 0.4 rather than the `divider` token,
    which measures ~1.2:1 on this canvas and fails 1.4.11's 3:1. Same floor and
-   the same reasoning as §11's scrollbar thumb. */
+   the same reasoning as §11's scrollbar thumb.
+
+   Full height of the grip rather than inset, because the strip's own 4px block
+   padding is now the inset: the line stands the same 24px it always did. */
 .shelf-head-grip::after {
   content: "";
   position: absolute;
-  top: var(--space-2);
-  bottom: var(--space-2);
+  top: 0;
+  bottom: 0;
   left: 50%;
   width: 1px;
   background: rgba(var(--v-theme-on-background), 0.4);
@@ -3956,10 +4199,10 @@ button.shelf-head-cell:hover {
    header that gains one does not move a pixel. */
 .shelf-group-btn {
   position: sticky;
-  /* Under the column strip, not behind it: both are sticky in the same
-     scroller, and a heading pinned at 0 would be covered by the strip exactly
-     when the reader needs to know which folder they are scrolling through. */
-  top: var(--shelf-head-h);
+  /* 0, because the scrollport it sticks to now BEGINS under the column strip:
+     the strip is a sibling above it rather than a sticky child of it, so there
+     is nothing here to duck. */
+  top: 0;
   z-index: var(--z-sticky);
   display: flex;
   align-items: center;
