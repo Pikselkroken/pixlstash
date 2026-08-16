@@ -53,7 +53,11 @@
   permanently. Only your own model folders and PixlStash's own store are
   touched — the engines it downloaded for itself, the InsightFace packs and the
   HuggingFace cache it shares with your other tools are refused, and so is
-  anything with a copy on a drive that is not plugged in.
+  anything with a copy on a drive that is not plugged in. Two things the trash
+  cannot do for you: Windows deletes a file outright when it is bigger than the
+  Recycle Bin allows, which a multi-GB checkpoint often is, and on Linux and
+  macOS the trash sits on the same drive as the file — so the space comes back
+  when you empty it, not when you delete.
 
 # [1.9.0]
 

@@ -2064,7 +2064,12 @@ longer wants was a file manager and then a rescan.
   2026-08-09 stands). The frontend sends `true` only for Shift+Delete, the
   Windows-Explorer gesture. A machine with no trash we can reach — a container —
   refuses with `trash_unavailable` rather than quietly unlinking instead, which
-  is the one substitution that could not be taken back.
+  is the one substitution that could not be taken back. **Two honest limits on "the trash is the
+  undo":** Windows deletes outright anything larger than the Recycle Bin's
+  per-volume quota, which a multi-GB checkpoint routinely is, and a
+  freedesktop trash lives on the same volume as the file — so trashing frees no
+  space until the trash itself is emptied. The confirmation says the first out
+  loud; neither is something PixlStash can fix from here.
 - **Only the folders whose contents are the owner's.** `user`, and the
   `managed` store PixlStash keeps for files it was *given* — which is where
   `Add file` and an import land, so a shelf that could not delete from it could
@@ -2083,14 +2088,36 @@ longer wants was a file manager and then a rescan.
   deletion — and `missing` is not a refusal at all: there is nothing to unlink
   and the row is exactly what was asked for.
 - **Bytes first, rows second, per model.** The unlink runs before
-  `purge_models` drops the rows, so an interruption leaves a row naming a file
-  that is not there — which the next scan marks `missing` — rather than a file
-  nothing on the shelf can see, which is the tombstone invariant the mover's
-  ordering exists to protect, read in the other direction. A model whose unlink
-  fails keeps its rows and is reported as `delete_failed`, so one read-only file
-  cannot take the rest of the batch with it. Every path is
-  `resolve_path_within` its registered folder: a row that escapes its folder is
-  a broken row, never a request to unlink somebody's file elsewhere on the disk.
+  `purge_deleted_models` drops the rows, so an interruption leaves a row naming
+  a file that is not there — which the next scan marks `missing` — rather than a
+  file nothing on the shelf can see, which is the tombstone invariant the
+  mover's ordering exists to protect, read in the other direction. A model whose
+  unlink fails keeps its rows; the refusal distinguishes `delete_failed`
+  (nothing went) from **`partly_deleted`** (some copies went and one did not),
+  because "could not be deleted" over a model that has already lost half its
+  copies is the one sentence this route must not produce.
+- **The gate reads share one transaction, and the purge has a gate of its own.**
+  `forget_models` documents why the first is necessary: two `hub.fetchall` calls
+  take and release the hub lock between them, so a background
+  `ModelFolderScanner` can rewrite the states being gated on. The unlink cannot
+  run inside that transaction — a 24 GB file would hold the hub's write lock for
+  the length of a disk operation — so the remaining window is closed on the
+  other side: `purge_deleted_models` deletes the location rows this call emptied
+  and then drops a `model` row **only when no location row for it survives**. A
+  copy the scanner registered while the files were going therefore keeps its
+  model alive instead of being purged out from under a file that is really
+  there, and the route logs the difference.
+- **The link, never what the link points at.** Containment here is *not*
+  `resolve_path_within`, which returns a `realpath`: unlinking that would delete
+  the bytes a symlinked model points at and leave the link, gutting any other
+  row naming those bytes. A symlinked model is ordinary practice on this shelf
+  (`_present_copy` contains lexically for exactly that reason), so
+  `_contained_path` contains the file lexically and `realpath`s the *directory*
+  holding it — a `..` cannot escape, a symlinked directory component cannot
+  redirect the unlink out of the folder, and what is removed is the name the
+  shelf catalogues. A row that still escapes is refused as
+  `escapes_its_folder`: a broken row, never a request to unlink somebody's file
+  elsewhere on the disk.
 - **It holds the machine-wide `SHELF_IO_LOCK`** for the whole call, the same
   slot an add, a move and an import take, so nothing can be copying into a
   folder this is emptying.

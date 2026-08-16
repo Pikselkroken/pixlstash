@@ -2350,6 +2350,16 @@ and at the pointer with them.
   stack's members — so the verb is never offered where it could only come back
   refused, and it is disabled while the folder registry is unknown, which is the
   safe direction and the one Move already fails in.
+- **The confirmation counts MODELS and posts exactly what it counted.** A stack
+  is one row standing for a whole run, so `confirmDelete` narrows to the
+  deletable rows, expands them to member ids, and sends *those* — a prompt
+  counting rows would have offered "Move this model to the Trash?" over six
+  checkpoints. The `Delete` key has no disabled state, so when it finds nothing
+  deletable it says why in a notice rather than answering the press with
+  silence. The receipt's trash word comes from the delete response
+  (`trash_name`, the SERVER's platform) rather than from the browser: where the
+  bytes went is the difference between recoverable and not. Only the pre-action
+  label falls back to the browser's own guess, which is cosmetic.
 - **`Open in file manager` is the design's and is NOT built.** It has no route
   behind it and is a host-capability operation, so it stays tracked rather than
   rendered dead.
