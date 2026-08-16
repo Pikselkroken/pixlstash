@@ -118,6 +118,12 @@ export function useUpdatesSocket({
     // detection change never affects grid membership or order — don't reload or
     // raise the "view changed" pill for it.
     if (field === "detections") return false;
+    // Neither does a rotate: `pixels` means the file's own bytes changed (an
+    // in-place rotate, or an undo/redo of one). The card renders differently but
+    // does not move — no sort reads orientation, and no filter selects on it —
+    // so reloading the grid or raising the "view changed" pill would both be
+    // wrong for what is really a repaint of one tile.
+    if (field === "pixels") return false;
     // Unknown field → assume it can affect the view, so refresh to be safe.
     return true;
   }
@@ -150,6 +156,8 @@ export function useUpdatesSocket({
       gridContainer.value?.insertGridImagesById?.(ids),
     refreshGridImage: (id) => gridContainer.value?.refreshGridImage?.(id),
     refreshStackFacets: (ids) => gridContainer.value?.refreshStackFacets?.(ids),
+    refreshThumbnailUrls: (ids) =>
+      gridContainer.value?.refreshThumbnailUrls?.(ids),
     repositionImageByScore: (id, score) =>
       gridContainer.value?.repositionImageByScore?.(id, score),
     repositionImageBySmartScore: (id) =>

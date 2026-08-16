@@ -18,9 +18,10 @@ from .thumbnail_generation_task import ThumbnailGenerationTask
 class MissingThumbnailFinder(BaseTaskFinder):
     """Find pictures missing a generated thumbnail and create a generation task."""
 
-    def __init__(self, database):
+    def __init__(self, database, notifier=None):
         super().__init__()
         self._db = database
+        self._notifier = notifier
 
     def finder_name(self) -> str:
         return "MissingThumbnailFinder"
@@ -45,7 +46,9 @@ class MissingThumbnailFinder(BaseTaskFinder):
         if not selected:
             return None
 
-        return ThumbnailGenerationTask(database=self._db, pictures=selected)
+        return ThumbnailGenerationTask(
+            database=self._db, pictures=selected, notifier=self._notifier
+        )
 
     @staticmethod
     def _fetch_missing(session: Session, limit: int, suppressed_ids=None):

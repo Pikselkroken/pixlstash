@@ -35,6 +35,7 @@ class WorkPlanner:
         engine_getter,
         image_root=None,
         path_mapper=None,
+        notifier=None,
     ):
         from pixlstash.tasks import TaskType
         from pixlstash.tasks.missing_description_finder import MissingDescriptionFinder
@@ -78,6 +79,7 @@ class WorkPlanner:
         from pixlstash.tasks.missing_text_score_finder import MissingTextScoreFinder
         from pixlstash.tasks.missing_thumbnail_finder import MissingThumbnailFinder
         from pixlstash.tasks.missing_pixel_sha_finder import MissingPixelShaFinder
+        from pixlstash.tasks.missing_orientation_finder import MissingOrientationFinder
         from pixlstash.tasks.dedup_scan_finder import DedupScanFinder
         from pixlstash.tasks.missing_stack_cohesion_finder import (
             MissingStackCohesionFinder,
@@ -150,8 +152,12 @@ class WorkPlanner:
             ),
             TaskType.THUMBNAIL_GENERATION: MissingThumbnailFinder(
                 database=database,
+                notifier=notifier,
             ),
             TaskType.PIXEL_SHA: MissingPixelShaFinder(
+                database=database,
+            ),
+            TaskType.ORIENTATION: MissingOrientationFinder(
                 database=database,
             ),
             TaskType.DEDUP_SCAN: DedupScanFinder(

@@ -701,6 +701,27 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Returns protected reference-original file paths; owner only",
     ),
+    # PICTURE_SCOPED, like every other per-picture mutation on this surface, and
+    # shaped exactly like ("DELETE", "/api/v1/pictures") above. The in-place
+    # write is a metadata-only EXIF-orientation splice: the entropy-coded pixel
+    # stream is copied through byte for byte, the whole prior state is one
+    # enumerated value 1–8, so the operation is exactly reversible by the
+    # ordinary undo machinery (§21.5) — and a file on a reference folder is
+    # refused at the sink and reported ``unsupported`` rather than rewritten.
+    # None of that is a destructive edit of someone else's original, so a
+    # write-enabled grant that already reaches the picture is the right level.
+    # READ tokens never arrive here at all: the auth middleware refuses a
+    # non-GET from a READ token unless the path is in READ_SAFE_POST_PATHS, and
+    # this one deliberately is not — that is what makes "write-enabled" the
+    # operative condition and leaves the gate to answer "reaches this picture".
+    # The gate resolves body_ids element by element and raises on the first id
+    # out of scope, before the handler runs, so a mixed batch is refused whole
+    # and rotates nothing. (#950)
+    ("POST", "/api/v1/pictures/rotate"): RoutePolicy(
+        _PIC,
+        body_ids="picture_ids",
+        justification="In-place rotate splices only the EXIF orientation (pixels byte-identical, exactly reversible, reference-folder files refused at the sink), so a write-enabled picture-scoped grant is the right level. READ tokens are refused earlier by the middleware: POST not in READ_SAFE. Gate loops enforce_picture_scope over every id",
+    ),
     # ── tags.py: single-picture tag mutations (enforce_picture_scope) ────────
     ("POST", "/api/v1/pictures/{id}/tags"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/{id}/tags"): RoutePolicy(_PIC, id_param="id"),

@@ -23,7 +23,7 @@ test.describe('the route drives the grid', () => {
   }) => {
     await grid.waitForThumbnailLoaded()
     expect(page.url()).not.toContain('/set/')
-    const allViewFirst = await grid.firstThumbnailSrc()
+    const allViewFirst = await grid.firstThumbnailKey()
 
     // Entry click — the one action that navigates.
     const row = await sidebar.firstNonEmpty(sidebar.setItems)
@@ -37,7 +37,7 @@ test.describe('the route drives the grid', () => {
     await expect.poll(() => page.url()).not.toContain('/set/')
     await grid.waitForThumbnailLoaded()
     await expect
-      .poll(() => grid.firstThumbnailSrc(), {
+      .poll(() => grid.firstThumbnailKey(), {
         message: 'grid must return to the all-view leader when the route does',
       })
       .toBe(allViewFirst)

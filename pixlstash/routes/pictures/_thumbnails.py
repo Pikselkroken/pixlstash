@@ -471,6 +471,14 @@ def register_routes(router, server):
                     "square_crop_y",
                     "square_crop_side",
                     "imported_at",
+                    # Feeds `thumbnail_cache_token` below. `select_fields` is an
+                    # allowlist, so anything absent is DEFERRED — and these rows
+                    # outlive their session, which turns a deferred read into
+                    # `DetachedInstanceError` for every picture in the batch.
+                    # `getattr(pic, ..., None)` does not save you: SQLAlchemy
+                    # raises that, not `AttributeError`, so the default never
+                    # applies and the whole thumbnail request 500s.
+                    "orientation",
                 ],
                 include_deleted=True,
                 include_unimported=True,
@@ -567,6 +575,7 @@ def register_routes(router, server):
                 v = ImageUtils.thumbnail_cache_token(
                     getattr(pic, "thumbnail_width", None),
                     getattr(pic, "thumbnail_height", None),
+                    getattr(pic, "orientation", None),
                 )
                 thumbnail_url = f"/pictures/thumbnails/{pic.id}.webp?v={v}"
                 # Whole-frame AR-bitmap dimensions and the face-weighted square-crop

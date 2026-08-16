@@ -66,17 +66,23 @@ carries the caller's own `tagger_settings`, and `GET /api/v1/pictures/plugins`, 
 image-plugin sibling); every other movement here is drift being written down, not a
 change made now.
 
+**Re-derived again 2026-08-15 (#950 merge), counted from `ROUTE_POLICIES`: 280
+declared.** #950 itself adds exactly **+1 `picture_scoped`**
+(`POST /api/v1/pictures/rotate`); the other two (`owner_only` 129 → 130,
+`local_owner_only` 27 → 28) were already drift on the base branch at the time of
+the re-derivation above, and are written down here rather than carried forward.
+
 | Policy | Count |
 |---|---|
 | `public` | 13 |
 | `any_token` | 12 |
-| `owner_only` | 129 |
-| `picture_scoped` | 36 |
+| `owner_only` | 130 |
+| `picture_scoped` | 37 |
 | `scoped_list` | 39 |
 | `set_scoped` | 4 |
 | `character_scoped` | 6 |
 | `project_scoped` | 6 |
-| `local_owner_only` | 27 |
+| `local_owner_only` | 28 |
 | `loopback_owner_only` | 5 |
 
 > **Updated for Step 3 (2026-07-21).** The §16.3 host-capability retarget moved 16
@@ -226,6 +232,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | GET | `/api/v1/pictures/plugins` | owner_only |  | Image plugin list; third-party plugin text, and the run endpoint beside it is owner-only |
 | POST | `/api/v1/pictures/plugins/{name}` | scoped_list |  |  |
 | PATCH | `/api/v1/pictures/project` | scoped_list |  |  |
+| POST | `/api/v1/pictures/rotate` | picture_scoped | body=picture_ids | (#950, in-place rotate) `picture_scoped`, the same tier every other per-picture mutation on this surface carries, and the same shape as `DELETE /api/v1/pictures`. The in-place write is a **metadata-only EXIF-orientation splice**: the entropy-coded pixel stream is copied through byte for byte, the whole prior state is one enumerated value 1–8 so the operation is exactly reversible by the ordinary undo machinery (§21.5), and a reference-folder file is refused at the sink and reported `unsupported` rather than rewritten. A write-enabled grant that already reaches the picture is therefore the right level. READ tokens never reach the gate here: POST is not in `READ_SAFE_POST_PATHS`, so the auth middleware refuses them first — that is what makes "write-enabled" the operative condition. The gate loops `enforce_picture_scope` over every id in `picture_ids` and raises on the first one out of scope, before the handler runs, so a mixed batch is refused whole |
 | POST | `/api/v1/pictures/score_character_likeness` | owner_only |  | Owner scoring op; POST not in READ_SAFE; owner only |
 | DELETE | `/api/v1/pictures/scrapheap` | owner_only |  | require_unscoped_owner |
 | POST | `/api/v1/pictures/scrapheap/delete-preview` | owner_only |  | (v1.8.0) Authoritative delete-forever preview. Returns absolute on-disk paths of protected reference-folder originals; per-object data → owner_only, not any_token (POST not in READ_SAFE; gate-enforced). Rows constrained to `Picture.deleted.is_(True)`, so it cannot leak paths of live/non-scrapheap ids |

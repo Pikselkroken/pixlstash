@@ -26,6 +26,7 @@ except Exception:  # pragma: no cover - optional import
 from pixlstash.pixl_logging import get_logger
 from pixlstash.db_models.picture import Picture
 from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
+from pixlstash.utils.image_processing.orientation import ORIENTATION_TAG
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 logger = get_logger(__name__)
@@ -661,7 +662,9 @@ class ImageUtils:
 
     @staticmethod
     def thumbnail_cache_token(
-        thumbnail_width: Optional[int], thumbnail_height: Optional[int]
+        thumbnail_width: Optional[int],
+        thumbnail_height: Optional[int],
+        orientation: Optional[int] = None,
     ) -> str:
         """The ``?v=`` cache-buster for a picture's thumbnail URL.
 
@@ -669,21 +672,38 @@ class ImageUtils:
         repopulates them changes the URL and the browser refetches instead of
         painting a stale bitmap. ``"0"`` until the picture has been processed.
 
+        **The orientation is part of the key, and it is not optional polish.**
+        Thumbnails are served ``Cache-Control: private, max-age=3600,
+        must-revalidate``, and a 180° in-place rotate — or a 90° one of a square
+        picture — regenerates a bitmap with exactly the dimensions it had before.
+        On dimensions alone the URL would be identical and the browser would go
+        on painting the pre-rotate bitmap for up to an hour.
+
         Single source of truth on purpose: the batch-thumbnail endpoint and the
         duplicate queue both hand this token to the same frontend cache, and two
-        independent copies of the ``WxH`` formula would eventually disagree and
+        independent copies of the formula would eventually disagree and
         reintroduce the stale-thumbnail bug this token exists to fix.
 
         Args:
             thumbnail_width: Stored bitmap width, or ``None`` when unprocessed.
             thumbnail_height: Stored bitmap height, or ``None`` when unprocessed.
+            orientation: The picture's stored EXIF orientation, 1-8, or ``None``
+                when it has not been read yet. ``None`` and ``1`` produce the
+                same token: an unrotated picture keeps the URL it has always had,
+                so backfilling the mirror does not invalidate every thumbnail in
+                the library at once.
 
         Returns:
-            ``"<width>x<height>"``, or ``"0"`` when either dimension is missing.
+            ``"<width>x<height>"`` for an unrotated picture,
+            ``"<width>x<height>o<orientation>"`` for a rotated one, or ``"0"``
+            when either dimension is missing.
         """
-        if thumbnail_width and thumbnail_height:
-            return f"{thumbnail_width}x{thumbnail_height}"
-        return "0"
+        if not (thumbnail_width and thumbnail_height):
+            return "0"
+        token = f"{thumbnail_width}x{thumbnail_height}"
+        if orientation and int(orientation) != 1:
+            token = f"{token}o{int(orientation)}"
+        return token
 
     @staticmethod
     def calculate_hash_from_bytes(image_bytes: bytes) -> str:
@@ -766,6 +786,7 @@ class ImageUtils:
 
         img_format = None
         width = height = None
+        orientation = None
         thumbnail_bytes = None
         # Thumbnail column values (AR-bitmap dims + faceless square crop). Faces
         # are not known at import; ``FaceExtractionTask`` refines the square crop
@@ -776,6 +797,19 @@ class ImageUtils:
             with Image.open(BytesIO(image_bytes)) as img:
                 img_format = img.format or "PNG"
                 width, height = img.size
+                # Read here, from the image that is already open, rather than
+                # left to `MissingOrientationFinder`. That finder exists to fill
+                # rows that predate the column; a NEW picture whose orientation
+                # is NULL for an indeterminate window is a value anything reading
+                # it right after import races — and the operation log records it
+                # as a facet, so a rotate landing in that window would snapshot
+                # `None` as the prior state and its undo would have nothing to
+                # write back.
+                try:
+                    raw_orientation = int((img.getexif() or {}).get(ORIENTATION_TAG, 1))
+                except (TypeError, ValueError):
+                    raw_orientation = 1
+                orientation = raw_orientation if 1 <= raw_orientation <= 8 else 1
                 rendered = ImageUtils.render_thumbnail(img)
                 if rendered is not None:
                     thumbnail_bytes, bmp_w, bmp_h, crop = rendered
@@ -903,6 +937,7 @@ class ImageUtils:
             format=img_format,
             width=width,
             height=height,
+            orientation=orientation,
             size_bytes=size_bytes,
             created_at=created_at,
             pixel_sha=pixel_sha,

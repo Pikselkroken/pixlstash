@@ -105,6 +105,9 @@ const OP_ICONS = {
   "pictures.tags.replace": "mdi-tag-multiple-outline",
   "pictures.score": "mdi-star-outline",
   "pictures.fields": "mdi-pencil-outline",
+  // One glyph for both directions: the op type does not name which way the
+  // picture turned, and a receipt that guessed would be wrong half the time.
+  "pictures.rotate": "mdi-rotate-right",
   "pictures.project": "mdi-folder-outline",
   "characters.assign": "mdi-account-check-outline",
   "characters.unassign": "mdi-account-off-outline",

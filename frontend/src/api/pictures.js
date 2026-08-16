@@ -323,6 +323,32 @@ export async function deletePictures(pictureIds) {
 }
 
 /**
+ * Rotate pictures in place, by 90° in either direction or by 180°.
+ *
+ * The file's EXIF orientation tag is rewritten and the bitmap is left alone, so
+ * this is not a new picture and nothing is stacked: the same id keeps the same
+ * URL and only its bytes move. Owner-only — a share or otherwise scoped token
+ * cannot call it at all.
+ *
+ * The response splits what happened three ways and a caller must read all
+ * three: `rotated_picture_ids` (done, thumbnails will regenerate),
+ * `unsupported_picture_ids` (the format cannot carry a rotation every renderer
+ * agrees on — Filters > Rotate still makes a copy), and `skipped_picture_ids`
+ * (a locked set, or the file is missing). `batch_id` groups the whole call as
+ * one undo step.
+ *
+ * @param {Array<number|string>} pictureIds
+ * @param {string} direction - `"cw"`, `"ccw"` or `"180"`.
+ * @returns {Promise<Object>} the response body.
+ */
+export async function rotatePictures(pictureIds, direction) {
+  return unwrap(apiClient.post(`/pictures/rotate`, {
+    picture_ids: pictureIds,
+    direction,
+  }));
+}
+
+/**
  * Assign, add or remove a project on a set of pictures.
  * @param {Array<number|string>} pictureIds
  * @param {number|string|null} projectId
