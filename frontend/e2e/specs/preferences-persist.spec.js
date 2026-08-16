@@ -1,4 +1,4 @@
-import { test, expect } from "../fixtures/test.js";
+import { test, expect } from '../fixtures/test.js'
 
 // Preferences take a long road: a control writes a store, a watcher notices and
 // PATCHes /users/me/config, and the next session reads it back. The Phase 3
@@ -21,11 +21,11 @@ import { test, expect } from "../fixtures/test.js";
  * suite shares one mutable backend, and CI runs with `retries: 1`, so a failed
  * attempt would otherwise hand the next one exactly that vacuous pass.
  */
-async function resetCompactMode(apiContext) {
-  const res = await apiContext.patch("/api/v1/users/me/config", {
+async function compactModeOff(apiContext) {
+  const res = await apiContext.patch('/api/v1/users/me/config', {
     data: { compact_mode: false },
-  });
-  expect(res.ok()).toBe(true);
+  })
+  expect(res.ok()).toBe(true)
 }
 
 /**
@@ -43,67 +43,67 @@ function configPatched(page, key) {
   return page.waitForResponse(
     (res) => {
       if (
-        !res.url().includes("/users/me/config") ||
-        res.request().method() !== "PATCH"
+        !res.url().includes('/users/me/config') ||
+        res.request().method() !== 'PATCH'
       ) {
-        return false;
+        return false
       }
-      const body = res.request().postDataJSON();
-      return Boolean(body) && key in body;
+      const body = res.request().postDataJSON()
+      return Boolean(body) && key in body
     },
     // Playwright's default action timeout is 0 (= no timeout), which would turn
     // a missing PATCH into a bare 30 s test timeout instead of naming the wait.
     { timeout: 10_000 },
-  );
+  )
 }
 
 /** Open the toolbar's "Grid view" menu and return its Compact toggle. */
 async function openViewMenu(page) {
-  await page.locator(".bar-btn:has(.mdi-view-grid)").first().click();
-  const compact = page.locator(".tbm-btn--compact");
-  await expect(compact).toBeVisible();
-  return compact;
+  await page.locator('.bar-btn:has(.mdi-view-grid)').first().click()
+  const compact = page.locator('.tbm-btn--compact')
+  await expect(compact).toBeVisible()
+  return compact
 }
 
-test.describe("preferences round-trip", () => {
-  test("a compact-mode change is PATCHed and survives a reload", async ({
+test.describe('preferences round-trip', () => {
+  test('a compact-mode change is PATCHed and survives a reload', async ({
     page,
     apiContext,
   }) => {
-    await resetCompactMode(apiContext);
+    await compactModeOff(apiContext)
 
-    await page.goto("/");
-    await expect(page.locator(".thumbnail-card").first()).toBeVisible({
+    await page.goto('/')
+    await expect(page.locator('.thumbnail-card').first()).toBeVisible({
       timeout: 15_000,
-    });
+    })
 
-    const compact = await openViewMenu(page);
-    const patched = configPatched(page, "compact_mode");
-    await compact.click();
+    const compact = await openViewMenu(page)
+    const patched = configPatched(page, 'compact_mode')
+    await compact.click()
 
     // The change reached the server AND the server accepted it, not just the store.
-    const res = await patched;
-    expect(res.ok()).toBe(true);
-    expect(res.request().postDataJSON().compact_mode).toBe(true);
+    const res = await patched
+    expect(res.ok()).toBe(true)
+    expect(res.request().postDataJSON().compact_mode).toBe(true)
 
     // And it is what the next session gets. Compact ON cannot come from the
     // store's default, so this only passes if the backend stored the change.
-    await page.reload();
-    await expect(page.locator(".thumbnail-card").first()).toBeVisible({
+    await page.reload()
+    await expect(page.locator('.thumbnail-card').first()).toBeVisible({
       timeout: 15_000,
-    });
-    const afterReload = await openViewMenu(page);
+    })
+    const afterReload = await openViewMenu(page)
     await expect
-      .poll(
-        () =>
-          afterReload.evaluate((el) => el.classList.contains("tbm-btn--on")),
-        { timeout: 10_000 },
-      )
-      .toBe(true);
+      .poll(() => afterReload.evaluate((el) => el.classList.contains('tbm-btn--on')), {
+        timeout: 10_000,
+      })
+      .toBe(true)
 
-    // Leave the shared fixture as it was found. Through the API rather than a
-    // second click: the watcher early-returns while a config fetch is still in
-    // flight, so a UI restore can legitimately send nothing at all to wait for.
-    await resetCompactMode(apiContext);
-  });
-});
+    // Undo this test's own write, so the shared backend is left with compact
+    // mode off - the state this test forced on the way in, not whatever it
+    // found. Through the API rather than a second click: the watcher
+    // early-returns while a config fetch is still in flight, so a UI restore
+    // can legitimately send nothing at all to wait for.
+    await compactModeOff(apiContext)
+  })
+})
