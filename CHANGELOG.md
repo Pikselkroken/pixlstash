@@ -32,6 +32,19 @@
 - Add `pixlstash-cli libraries backup` for an owner-readable local archive of a
   library plus its hub. Existing files and symlink destinations are refused and
   never overwritten.
+- Add `pixlstash-cli plugins install|list|remove`. Install a captioning plugin
+  or an image filter from the PixlStash-plugins repository, a zip, a folder or a
+  single `.py`; the installer works out which kind it is and where it belongs
+  instead of asking you to copy files into a path that differs by OS and by
+  kind. It refuses a source that is not a plugin, a name that collides with a
+  built-in, a zip that would unpack outside the folder it unpacks into, and a
+  `--ref` that would fetch from anywhere but the plugins repository; it never
+  installs a plugin's `requirements.txt` unless you pass `--with-deps`.
+  `plugins remove` deletes an installed plugin, wherever it came from, and can
+  only ever reach a file directly inside the two plugin directories.
+- The documented Windows plugin directory was missing a path component. It is
+  `%LOCALAPPDATA%\pixlstash\pixlstash\image-plugins\user\`, which is why hand-copying
+  a plugin to the path the README gave appeared to do nothing.
 
 # [1.9.0]
 

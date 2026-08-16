@@ -18,7 +18,7 @@
 5. [Routes / HTTP API](#5-routes--http-api)
 6. [Database Models](#6-database-models)
 7. [Task System](#7-task-system)
-8. [Image Plugins](#8-image-plugins)
+8. [Image Plugins](#8-image-plugins) — incl. [8.1 Installing plugins from the CLI](#81-installing-plugins-from-the-cli-issue-958)
 9. [Tagger Plugins](#9-tagger-plugins)
 10. [Services Layer](#10-services-layer)
 11. [Utility Modules](#11-utility-modules)
@@ -305,13 +305,15 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | [pixlstash/auth.py](../pixlstash/auth.py) | `AuthService`: password + JWT + scoped tokens. Enforces resource-level permissions (picture / set / character / project). |
 | [pixlstash/task_runner.py](../pixlstash/task_runner.py) | Threaded executor with separate CPU and GPU pools. Monitors VRAM, gates GPU-heavy tasks, drains queues at shutdown. |
 | [pixlstash/work_planner.py](../pixlstash/work_planner.py) | Registers all `BaseTaskFinder`s, polls them in round-robin, enforces inflight limits and adaptive backoff. |
-| [pixlstash/scoring/](../pixlstash/scoring/) | Smart-score computation (anchor-based heuristic combining image embedding, CLIP anchors, a CLIP-IQA objective quality probe, and a calibrated anomaly penalty: per-tag severity × confidence × precision, where confidence is graded *relative to that tag's acceptance threshold* (normalised onto `[threshold, 1]` before the `CONF_POWER` exponent, so a barely-accepted detection costs `EVIDENCE_FLOOR` of full severity for every tag regardless of where its gate sits, and full confidence is unchanged), noisy-OR over merge-alias duplicates only, then rank-decayed accumulation across distinct defects so defect *count* escalates the penalty; the raw score is soft-compressed rather than hard-clipped at the bottom so heavily penalised pictures stay ordered instead of tying at 1.0. Per-tag severity comes from the **user's** `User.smart_score_penalised_tags` (resolved per scoring session by `resolve_penalised_tag_weights`; `DEFAULT_SMART_SCORE_PENALIZED_TAGS` is only the seed/fallback, and a tag absent from the user's table is not penalised at all), and a **model** prediction is charged only when the defect is genuinely visible in the picture's tag list: it must clear the tagger's per-label acceptance threshold **and** have a matching `Tag` row. The threshold alone used to stand in for both, but `TagPredictionBackfillTask` writes predictions against a picture's *existing* tag set and deliberately never writes a `Tag` row, and a stale-model prediction re-graded against a newer meta.json's lower threshold can clear a gate it never cleared when it was written; either way the picture was penalised for a defect that appears nowhere in the UI. Human POS/NEG decisions are honoured regardless of confidence *and* of tag membership: a human POS counts with no `Tag` row, a human NEG suppresses while the tag is still applied. The applied-tag check is applied unconditionally rather than inside the threshold branch, which is what puts tag membership into `anomaly_state_signature` (it reads with `apply_thresholds=None`) and so makes adding or removing an anomaly tag invalidate the cached score. See [`utils/quality/anomaly_penalty.py`](../pixlstash/utils/quality/anomaly_penalty.py), [`utils/service/anomaly_thresholds.py`](../pixlstash/utils/service/anomaly_thresholds.py) and [`docs/reviews/2026-06-smart-score-calibrated-anomaly-plan.md`](reviews/2026-06-smart-score-calibrated-anomaly-plan.md)) and character likeness scoring (face↔reference similarity via InsightFace embeddings). These two distinct features are split into `scoring/smart_score.py` and `scoring/character_likeness.py`; import the public names from `pixlstash.scoring`. |
+| [pixlstash/scoring/](../pixlstash/scoring/) | Smart-score computation (anchor-based heuristic combining image embedding, CLIP anchors, a CLIP-IQA objective quality probe, and a calibrated anomaly penalty: per-tag severity × confidence × precision, where confidence is graded *relative to that tag's acceptance threshold* (normalised onto `[threshold, 1]` before the `CONF_POWER` exponent, so a barely-accepted detection costs `EVIDENCE_FLOOR` of full severity for every tag regardless of where its gate sits, and full confidence is unchanged), noisy-OR over merge-alias duplicates only, then rank-decayed accumulation across distinct defects so defect *count* escalates the penalty; the raw score is soft-compressed rather than hard-clipped at the bottom so heavily penalised pictures stay ordered instead of tying at 1.0. Per-tag severity comes from the **user's** `User.smart_score_penalised_tags` (resolved from the **hub** by `resolve_penalised_tag_weights`, which takes the auth service rather than the scoring session — identity never lives in a vault, so resolving it from the scoring session found no user row on every call and silently scored with the seed; `DEFAULT_SMART_SCORE_PENALIZED_TAGS` is only the seed/fallback, and a tag absent from the user's table is not penalised at all), and a **model** prediction is charged only when the defect is genuinely visible in the picture's tag list: it must clear the tagger's per-label acceptance threshold **and** have a matching `Tag` row. The threshold alone used to stand in for both, but `TagPredictionBackfillTask` writes predictions against a picture's *existing* tag set and deliberately never writes a `Tag` row, and a stale-model prediction re-graded against a newer meta.json's lower threshold can clear a gate it never cleared when it was written; either way the picture was penalised for a defect that appears nowhere in the UI. Human POS/NEG decisions are honoured regardless of confidence *and* of tag membership: a human POS counts with no `Tag` row, a human NEG suppresses while the tag is still applied. The applied-tag check is applied unconditionally rather than inside the threshold branch, which is what puts tag membership into `anomaly_state_signature` (it reads with `apply_thresholds=None`) and so makes adding or removing an anomaly tag invalidate the cached score. See [`utils/quality/anomaly_penalty.py`](../pixlstash/utils/quality/anomaly_penalty.py), [`utils/service/anomaly_thresholds.py`](../pixlstash/utils/service/anomaly_thresholds.py) and [`docs/reviews/2026-06-smart-score-calibrated-anomaly-plan.md`](reviews/2026-06-smart-score-calibrated-anomaly-plan.md)) and character likeness scoring (face↔reference similarity via InsightFace embeddings). These two distinct features are split into `scoring/smart_score.py` and `scoring/character_likeness.py`; import the public names from `pixlstash.scoring`. |
 | [pixlstash/worker_config.py](../pixlstash/worker_config.py) | Global constants — `NUM_WORKERS`, per-task `*_MAX_INFLIGHT`, batch sizes. |
 | [pixlstash/startup_checks.py](../pixlstash/startup_checks.py) | Preflight: disk space, VRAM, CUDA, SSL. May force CPU mode. |
 | [pixlstash/event_types.py](../pixlstash/event_types.py) | `EventType` enum used by WebSocket event bus. |
 | [pixlstash/pixl_logging.py](../pixlstash/pixl_logging.py) | Uvicorn log config + coloured formatter. |
 | [pixlstash/stacking.py](../pixlstash/stacking.py) | Picture stacking (duplicates / variants). |
 | [pixlstash/image_loading_dataset_prepper.py](../pixlstash/image_loading_dataset_prepper.py) | Dataset preparation utilities for offline training scripts. |
+| [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (create/attach/detach/relocate/backup/rename) and `plugins` (install/list/remove). Only the `libraries` group opens the hub — see §8.1. |
+| [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it. See §8.1. |
 
 ---
 
@@ -468,6 +470,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/adapters                                                              | model_shelf     | List adapters on the shelf                                 |
 | GET    | /api/v1/adapters/{sha256}                                                     | model_shelf     | One adapter by hash                                        |
 | PUT    | /api/v1/adapters/{sha256}/attachments                                         | model_shelf     | Set which characters and sets use an adapter               |
+| GET    | /api/v1/adapters/{sha256}/file                                                | model_shelf     | Download one adapter's bytes                               |
 | GET    | /api/v1/characters                                                            | characters      | List characters                                            |
 | POST   | /api/v1/characters                                                            | characters      | Create character                                           |
 | POST   | /api/v1/characters/likeness-search                                            | characters      | Search characters by face likeness                         |
@@ -523,6 +526,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/model-stacks                                                          | model_shelf     | Collapse models into one stack                             |
 | GET    | /api/v1/model-stacks/proposals                                                | model_shelf     | Groups of loose adapters that look like one training run   |
 | PATCH  | /api/v1/models                                                                | model_shelf     | Correct what the shelf records about one or more models    |
+| GET    | /api/v1/models/base-models                                                    | model_shelf     | Completion targets for the base-model field                |
 | POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                         |
 | POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                       |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                         |
@@ -567,6 +571,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/impossible-tags/restore                                      | tags            | Undo a bulk impossible-tags clear                          |
 | POST   | /api/v1/pictures/likeness-search                                              | pictures        | Search by image likeness                                   |
 | PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                                   |
+| POST   | /api/v1/pictures/rotate                                                       | pictures        | Rotate pictures in place                                   |
 | POST   | /api/v1/pictures/score_character_likeness                                     | pictures        | Score uploaded images by character likeness                |
 | DELETE | /api/v1/pictures/scrapheap                                                    | pictures        | Permanently delete scrapheap pictures                      |
 | POST   | /api/v1/pictures/scrapheap/delete-preview                                     | pictures        | Preview a scrapheap delete-forever                         |
@@ -892,7 +897,129 @@ Located in [pixlstash/image_plugins/](../pixlstash/image_plugins/).
 
 Built-in plugins: `brightness_contrast`, `blur_sharpen`, `colour_filter`, `pixelate`, `rotate`, `scaling`, plus `plugin_template.py` as a starter for custom plugins.
 
-User-supplied image plugins are loaded from `user_data_dir("pixlstash")/image-plugins/user`. **The tagger plugins use the same discovery mechanism** (§9, "User-supplied plugins") — keep the two in step rather than letting them drift, and note where they already differ: taggers also accept a package folder, built-ins win a name collision instead of losing it, and `TaggerPluginManager.plugin_dirs()` returns a `{source: path}` dict (the JSON `GET /taggers/plugin-diagnostics` emits) where `ImagePluginManager.plugin_dirs()` returns a list of tuples it iterates internally. Neither folder is served on an `ANY_TOKEN` route: the tagger path is behind the `LOCAL_OWNER_ONLY` route named above, and for image plugins both the folders and the load errors — whose `file` field was the *full* path of the failing plugin — are no longer served at all (§16.3, 2026-08-15).
+User-supplied image plugins are loaded from `user_data_dir("pixlstash")/image-plugins/user` (`registry.user_plugin_dir()`). **The tagger plugins use the same discovery mechanism** (§9, "User-supplied plugins") — keep the two in step rather than letting them drift, and note where they already differ: taggers also accept a package folder, built-ins win a name collision instead of losing it, and `TaggerPluginManager.plugin_dirs()` returns a `{source: path}` dict (the JSON `GET /taggers/plugin-diagnostics` emits) where `ImagePluginManager.plugin_dirs()` returns a list of tuples it iterates internally. Neither folder is served on an `ANY_TOKEN` route: the tagger path is behind the `LOCAL_OWNER_ONLY` route named above, and for image plugins both the folders and the load errors — whose `file` field was the *full* path of the failing plugin — are no longer served at all (§16.3, 2026-08-15). A consequence worth knowing before debugging one: **a broken image plugin is now reported only in the server log**, where the tagger equivalent has a local-owner-only route to render it.
+
+[docs/writing-image-filter-plugins.md](writing-image-filter-plugins.md) is the contract, and its §10 tabulates every divergence from the tagger system. Three of those are silent rather than loud, and all three are the image side being the looser of the two: a **user plugin replaces a built-in of the same name** (taggers reject it), **only the first `ImagePlugin` subclass in a module is registered** and the search does not check where the class was defined, so an imported one wins over the one you wrote (taggers register every class the module *defines*), and the **parameter schema is a different schema** — a dropdown is `type: "string"` plus `enum`, with no `select` branch in `PluginParametersUI.vue` at all. `ImagePlugin.parameter_schema`'s docstring and the shipped template both described the `select`/`options` form that does not render; both were corrected when the guide was written.
+
+### 8.1 Installing plugins from the CLI (issue #958)
+
+`pixlstash-cli plugins install|list|remove` ([pixlstash/plugin_install.py](../pixlstash/plugin_install.py))
+puts a plugin in the right directory instead of asking the user to. The
+destination differs by kind *and* by shape, and getting it wrong fails silently:
+a folder in the image directory is skipped without a message, and a single
+module in the tagger directory named after the wrong thing simply never loads.
+
+| Detected | Destination | Installed as |
+|---|---|---|
+| Captioning, folder source with `__init__.py` | `tagger-plugins/user/<name>/` | the folder |
+| Captioning, single module | `tagger-plugins/user/<name>.py` | the file |
+| Image | `image-plugins/user/<name>.py` | the file, always |
+
+Four properties are load-bearing:
+
+- **Nothing is imported.** The kind, the plugin's `name` and the shape are read
+  out of the source with `ast`, because importing to classify means running
+  third-party code before the user has agreed to install it. The cost is that
+  some checks can only warn (a missing abstract method, a captioner with neither
+  capability flag, an image module defining more than one `ImagePlugin`
+  subclass, a folder image plugin whose sibling modules are being left behind);
+  `--strict` promotes them all to refusals, in `_analyse` for the per-file ones
+  and again at the end of `plan_install` for the ones about the plan itself.
+  The same choice is why `plugins list` cannot report an import-time failure
+  such as a missing `torch`: for a captioning plugin that surfaces in
+  `GET /taggers/plugin-diagnostics`, and for an image filter it surfaces
+  nowhere at all (the load errors were taken off `GET /pictures/plugins` in the
+  §8 sweep above), so the command points at the server log for that case.
+- **The destination is named after the plugin's `name`, not the source file**, so
+  `install ./Downloads/plugin(1).py` lands as `my_filter.py`. A computed or
+  non-snake_case `name` is a refusal, since it is also the collision key.
+- **Built-in names are refused**, and read out of the shipped sources
+  (`image_plugins/built-in/*.py`, `_FIRST_PARTY_PLUGINS`) rather than listed a
+  second time. The two kinds fail in opposite directions and both fail quietly:
+  a user image plugin *replaces* a built-in with no message anywhere, and a user
+  captioning plugin loses to one and never loads.
+- **`plugins remove` is the first CLI verb that deletes.** It is scoped by
+  location, not provenance — anything in the two user directories, however it
+  got there — so what it guarantees instead is containment, and it takes two
+  checks to hold: a name carrying a path separator is refused (so it can only
+  ever address a direct child), **and** a symlinked entry is refused rather than
+  followed (so nothing can reach out of the directory that way). Following the
+  link would stay inside the letter of "only delete plugin files" while deleting
+  a file the user did not name. Zip extraction is checked entry by entry the
+  same way — traversal and symlink both — before anything is written.
+- **Installing never deletes before it has the replacement.** The copy is staged
+  as `_<name>.installing` beside the destination and moved into place, so a copy
+  that fails part-way leaves the previous plugin intact; the leading underscore
+  keeps the staging entry out of both registries' scans. Installing a plugin
+  over itself (`install <the installed path> --force`, which a tab-completion
+  makes easy) is refused outright rather than deleting the only copy.
+
+`main()` opens the hub only for the `libraries` group (`needs_hub` on the group
+parser). Plugin installation touches no library, and a machine that has never
+started the server has no hub to open; opening one would exit `3` where the work
+would have succeeded.
+
+The two user directories are named in `plugin_install._SUBDIRS` rather than
+imported, because importing `image_plugins.registry` pulls in cv2 and Pillow on
+every CLI run. (The *tagger* registry is cheap and **is** imported, for
+`_FIRST_PARTY_PLUGINS` in `builtin_names` — so the rule is about cv2, not about
+registries in general.) `tests/test_plugin_install.py::test_the_installer_writes_where_the_registries_read`
+pins the duplicated paths to `tagger_plugins.registry.user_plugin_dir()` and
+`image_plugins.registry.user_plugin_dir()` so they cannot drift.
+
+**The `--ref` flag is validated, not just interpolated.** `requests` collapses
+dot segments before sending, so an unchecked ref (`../../../someone/evil/zip/main`)
+walks out of `PLUGINS_REPO` entirely and installs code this CLI then runs
+unsandboxed in the server process. `_REF_RE` plus an explicit `..` component
+check is what keeps "a named plugin from one repository" true.
+
+**There is deliberately no manifest.** An optional `pixlstash-plugin.toml` was
+considered and dropped: static detection already answers what the thing is and
+which kind, no plugin written so far ships one, so the parse path would be dead
+on arrival. The one thing it would genuinely add is a declared minimum
+PixlStash version — a captioning plugin installed on 1.9.0 lands on disk and can
+never load, and only a declaration could say so. Add it when there is something
+that writes it.
+
+### 8.2 Embedded metadata follows the source into the output
+
+**Provenance is inherited, not regenerated.** A plugin run creates a *new*
+picture, and the source's embedded metadata is the only copy of things that
+cannot be recomputed — above all the ComfyUI graph in a PNG's `workflow` /
+`prompt` / `parameters` text chunks, which `utils/comfyui_utilities.find_comfy_workflow`
+reads back as `metadata["png"][…]`. Saving the output without them destroyed
+them permanently, for every plugin, on every run.
+
+`service._save_output_images(image, source_format, source_path)` therefore
+re-reads the metadata **from the source file**, not from the in-memory image:
+`_load_input_images` builds its PIL image with `Image.fromarray(...)`, so
+`img.info` is already empty before any plugin sees it. The source path is
+carried in the 4-tuples `_load_input_images` returns and threaded into the save.
+
+| Output format | Carried | Mechanism |
+|---|---|---|
+| PNG | all tEXt/zTXt/iTXt chunks (`workflow`, `prompt`, `parameters`, …) | `_source_png_text` → `pnginfo=` |
+| JPEG, WebP | EXIF IFD0 + Exif sub-IFD, minus the fields below | `_source_exif_bytes` → `exif=` |
+| BMP, TIFF | nothing | — |
+| video source, or bytes a plugin already encoded | nothing — returned untouched | early return |
+
+**Dropped on purpose**, because a plugin may legitimately change geometry
+(`scaling` upscales, `rotate` swaps the axes) and a carried-over measurement
+would then be false:
+
+- **Orientation (`0x0112`) — the highest-risk one.** `ImageUtils.load_image_or_video`
+  applies `ImageOps.exif_transpose` on load, so the pixels a plugin returns are
+  *already upright*. Re-stamping the source's orientation would turn the output
+  a second time on display, and its displayed size would disagree with its
+  stored size.
+- `ImageWidth` (`0x0100`) / `ImageLength` (`0x0101`), and `PixelXDimension`
+  (`0xA002`) / `PixelYDimension` (`0xA003`) in the Exif sub-IFD.
+- The IFD1 thumbnail, which `Exif.tobytes()` does not write — it would show the
+  un-transformed image.
+
+Nothing is fabricated: a source with no metadata yields an output with none.
+Failing to read the source's metadata is logged at warning level and the run
+continues without it; it never fails the plugin.
 
 ---
 
@@ -930,6 +1057,9 @@ are load-bearing:
 - **Every concrete class the module *defines* is registered**, not just the first one found,
   so a package may bundle two engines. A subclass merely imported into the module is
   excluded by comparing `__module__`.
+- **`pixlstash-cli plugins install` writes here**, working the destination out
+  from the source rather than asking for it — §8.1. It is the same directory and
+  the same two shapes; nothing about discovery changes.
 - **Start-up scan only.** There is no reload endpoint: re-instantiating a plugin whose model
   is resident would orphan the model and make `is_loaded()` lie. Adding a plugin requires a
   restart, which the guide and the Auto-tagging settings section both say. The directory is
@@ -2408,6 +2538,16 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
     **Both tagger routes are also on the second belt**, `READ_BLOCKED_GET_PATHS` in `pixlstash/auth.py` — the middleware list that refuses a READ token a GET outright, where `GET /filesystem/browse` already sits. The gate alone is enough while it is enforcing, and that is the point: `AUTHZ_GATE_ENFORCING = False` is a documented one-line rollback, and with the gate off the diagnostics route served the owner's home directory to a share token. The review reproduced exactly that. `tests/test_authz_host_capability_16_3.py::test_the_plugin_routes_survive_the_documented_gate_rollback` turns the gate off deliberately and asserts both routes stay 403 for a share token while the owner still reaches them. The membership is **derived** rather than written down — `test_every_untemplated_locality_get_is_on_the_read_blocked_belt` asserts that every untemplated locality-tier GET is on the belt, so the next one fails the build instead of waiting for a review. Running that derivation for the first time found `GET /api/v1/model-moves` off it, which is fixed here: it serves the move queue's source and destination folders, so the rollback handed those to a READ token. `GET /pictures/plugins` is deliberately **not** on the belt: it is `owner_only` at the gate for the third-party text it serves, but `ImagePluginManager.list_plugins()` returns `plugin_schema()` and nothing else — no host path, no user settings — so it is not what this list is for. **What stays open** is the templated half: the frozenset matches literal paths, so `GET /model-folders/{folder_id}/runs` and its `samples/{filename}` sibling cannot join it at all. They are pinned as a known pair by the same test (a third fails it), and closing the gap needs prefix matching rather than another frozenset line. The follow-up is recorded in `tests/test_model_shelf_api.py`. Arithmetic, not judgement.
 
+  - **Updated 2026-08-15 (the ComfyUI adapter loader's server half) — the locality total is now `33 = 28 local + 5 loopback`.** `GET /api/v1/adapters/{sha256}/file` streams one registered adapter's bytes, so a generator on another machine can *use* what this one catalogues. Without it the interop story stops at metadata: `GET /adapters` serves `locations[].folder_path` and `relpath`, but those are **this** host's paths and name nothing on the machine that asked, so a ComfyUI elsewhere on the network could see every LoRA and load none of them.
+
+    **It is the first shelf *read* off the `owner_only` tier, and the sentence that kept the others on it is what puts this one here.** That sentence is "they surface host paths but take none". This route takes none either — a sha256 the scanner already registered is the whole input, and the join of `model_folder.path` with `model_file.relpath` never touches caller data — but it does not *surface* a path: it returns the **raw bytes of a file inside a registered model folder**. That is `GET /model-folders/{folder_id}/runs/{run_name}/samples/{filename}`'s authority class exactly (reads inside a registered host root, writes nothing), and the correction recorded against that route in the 2026-08-11 note applies here too: bytes are a new capability rather than a narrower view of the metadata route beside it, so the "it is a subset of what `GET /adapters` already serves" argument is not available and is not being made.
+
+    The tier costs the feature nothing it needs. Loopback, RFC1918 LAN and Tailscale all pass, which is every deployment the route exists for — a generator on the owner's own machine or their own network, PixlStash in a container reached over the docker bridge. A genuinely remote generator needs `allow_remote_host_ops`, which is the safe direction to fail in for a route whose output is a multi-gigabyte file.
+
+    Three narrowings inside the handler, none of them the authz tier: only a `present` copy is served (`missing` says the scan looked and found nothing, `unreachable` says the drive is unplugged, and a forgotten folder leaves its rows **tombstoned rather than deleted** — so serving on any other state would hand out bytes from a folder the owner un-registered); a checkpoint hash is refused with the same 404 as the detail route beside it; and the join is contained with `path_is_within` even though neither half is caller-supplied, because on *this* route a `..` from a faulty scan or a restored hub would be an arbitrary-file reader rather than a wrong row — the same argument B7 makes for containing its writes. The containment is lexical first for the reason `path_is_within` documents: a model symlinked into a models directory is ordinary practice, and realpath-only containment refuses every one of them. A known hash with no readable copy is **409, not 404**, because "no such adapter" and "the file is not here right now" call for different behaviour from the caller. The digest is deliberately not re-verified on the way out: that reads every byte twice per request, and the caller addressed the file by the hash it can check itself. Both directions and both halves of the tier are pinned in `tests/test_model_shelf_api.py`; the share-token direction is asserted rather than reasoned about, because this is a **GET** and the `test_share_tokens_never_reach_a_folder_mutator` docstring warns in as many words that a GET on this tier is refused by the gate alone. Arithmetic, not judgement.
+
+    **It is the third member of the templated `READ_BLOCKED_GET_PATHS` gap, and the sharpest.** The belt matches literal paths, so no templated locality GET can be on it; the two already there serve a run listing and a preview image, and this one streams model weights. Under the documented `AUTHZ_GATE_ENFORCING = False` rollback a share token would therefore not read a directory but download every adapter on the shelf. It is recorded rather than closed here because closing it means prefix matching in a belt every request passes through — its own change with its own review — and a bespoke `startswith` for one route is the special case that rots. The gate refuses it today, proved by mutation in `tests/test_model_shelf_api.py::test_no_share_token_can_download_a_model_file`; `tests/test_authz_host_capability_16_3.py::test_every_untemplated_locality_get_is_on_the_read_blocked_belt` fails the build if a fourth is added without this decision being made again.
+
 **Correction to the historical claim.** The compensating-control line above ("remote `ALL` blocked by `require_local_for_write`") overstates the protection for this class as it stood. The `_require_local_for_write` **method** runs only at `/login` (`auth.py` — password-login path), not per-request on these handlers; the genuine per-request control was the middleware's separate remote-`ALL`-**token** block. A remote **cookie** owner session was therefore *not* locality-gated on these endpoints at all — the exact gap the `LOCAL_OWNER_ONLY` retarget closes (a remote cookie owner is now locality-checked, and the 3 red-line routes are loopback-only).
 
 **Reverse-proxy hardening (required).** Behind a reverse proxy the locality gate depends entirely on `trusted_proxies` being correct:
@@ -3035,7 +3175,9 @@ Instead of teaching each mutating endpoint how to invert itself, the log snapsho
 - The stored payload is exactly the `{before, after}` shape the roadmap specifies for the audit log, so the feed needs no second representation.
 - Restoring is idempotent: applying a state twice is a no-op, so a retried undo cannot corrupt anything.
 
-**Reversible facets** (the DAM 1.2 metadata scope, `FACETS` in [services/operation_log_service.py](../pixlstash/services/operation_log_service.py)): tags, the tag-prediction rows and their human-label ledger (see §21.2), description/caption, score (rating), picture-set membership, project membership (`PictureProjectMember` + the `Picture.project_id` FK), per-face character assignment + `pending_character_id`, stacking (`stack_id` / `stack_position`, with the stack's name so a dissolved stack can be recreated on undo; symmetrically, a `PictureStack` row a restore empties of its last member is deleted after all states are applied — `_delete_emptied_stacks` — never leaving an orphaned empty row, while a stack that still has members, e.g. a picture outside the restored operations, is kept), and the scrapheap soft-delete state (`deleted` + `deleted_at`, see §21.1). A file-mutating operation may be *recorded* with `undoable=False` for audit, but it is not reversible until copy-on-write versions land (v2.1).
+**Reversible facets** (the DAM 1.2 metadata scope, `FACETS` in [services/operation_log_service.py](../pixlstash/services/operation_log_service.py)): tags, the tag-prediction rows and their human-label ledger (see §21.2), description/caption, score (rating), picture-set membership, project membership (`PictureProjectMember` + the `Picture.project_id` FK), per-face character assignment + `pending_character_id`, stacking (`stack_id` / `stack_position`, with the stack's name so a dissolved stack can be recreated on undo; symmetrically, a `PictureStack` row a restore empties of its last member is deleted after all states are applied — `_delete_emptied_stacks` — never leaving an orphaned empty row, while a stack that still has members, e.g. a picture outside the restored operations, is kept), the scrapheap soft-delete state (`deleted` + `deleted_at`, see §21.1), and the EXIF **orientation** (see §21.5).
+
+**`undoable=True` iff the log stores the whole prior state.** That is the rule; "file-mutating operations are not undoable" is the consequence of it that holds for almost every file mutation, not the rule itself. A crop, a re-encode or a scale destroys information that exists nowhere but the prior file, so no snapshot short of the file itself can reverse them — they are *recorded* with `undoable=False` for audit and stay irreversible until copy-on-write versions land (v2.1). An in-place rotate is the one file mutation that does not: it replaces a single enumerated value 1–8 and copies the entropy-coded stream through byte for byte, so `{"orientation": n}` **is** the whole prior state and the ordinary facet machinery reverses it exactly (§21.5).
 
 **Derived values are re-derived, never snapshotted.** `Picture.anomaly_tag_uncertainty` is a function of the label state and `Picture.smart_score` is a cache of a function of it, so `apply_state_in_session` recomputes the first and drops the second — through the very same `recompute_anomaly_tag_uncertainty` / `invalidate_on_anomaly_change` guards the forward write paths use — instead of restoring a recorded copy. Snapshotting a derived value creates a second source of truth, and the moment its inputs are restored by one path and its cached value by another they drift.
 
@@ -3205,6 +3347,110 @@ Note the deliberate asymmetry between the two: an unusable *header* is dropped
 and ignored because a header is ambient; an unusable *body* field is a refusal,
 because the client named it on purpose and silently ignoring it would mis-group
 its undo.
+
+### 21.5 In-place rotate: orientation is a facet, not an inverse (#950)
+
+`POST /pictures/rotate` turns a photo by rewriting **only** its EXIF orientation
+tag. No pixel byte is re-encoded — `utils/image_processing/orientation.py` splices
+the JPEG APP1 segment or the PNG `eXIf` chunk and copies everything else through —
+so a JPEG takes no generational loss and a PNG keeps the `tEXt`/`iTXt` chunks the
+ComfyUI provenance lives in. A format with no writer (and any reference-folder
+original) is reported in `unsupported_picture_ids`, and the caller falls back to
+the `rotate` **image plugin**, which produces a rotated copy.
+
+| `op_type` | Recorded by | Undo | Redo | `summary` |
+|---|---|---|---|---|
+| `pictures.rotate` | `POST /pictures/rotate` (one row + a `batch_id`) | writes the orientation the files had | writes the orientation the rotate produced | "Rotated 5 pictures right" |
+
+**One `op_type` for all three directions, and the direction is not in the
+recorded state.** `before_state` / `after_state` of a `pictures.rotate` row
+contain exactly `{"orientation": n}` and nothing else. That is the whole design,
+and the alternative was built and rejected:
+
+- **A recorded *delta* ("this was turned CCW") is not idempotent.** Every other
+  restore in this log can be applied twice with no effect; a delta applied twice
+  turns the picture twice. Idempotence is not a nicety here — a retried undo is
+  ordinary.
+- **An empty diff would have walked around the locked-set freeze.** Encoding the
+  direction in the `op_type` and applying the inverse from a post-restore hook
+  (§21.3) leaves the recorded state empty, and `_restore` skips
+  `apply_state_in_session` entirely for an empty state — which is exactly where
+  `enforce_pictures_not_locked` lives. The rotate would have been the one write
+  path around a locked set.
+- **An absolute value converges.** If something outside PixlStash turned the file
+  in the meantime, `apply_orientation` reads what the file carries *now* and turns
+  it to the recorded value, rather than compounding a stale assumption.
+
+So there is no post-restore hook, no `empty_diff_target_ids`, no direction in the
+`op_type`, and **no second inverse function anywhere in the feature**:
+`operation_log_service.apply_orientation` is the single applier behind both the
+forward rotate and its undo/redo, which is what makes the two agree by
+construction rather than by review.
+
+**Backed by an additive `Picture.orientation` column** (migration
+`0104_add_picture_orientation`), which is a **mirror of the file, not the source
+of truth**. It exists because `capture_state_in_session` runs twice for every
+recorded operation over every affected picture: reading the tag off disk there
+would make a 2,700-row tag edit do 5,400 file opens on the single DB writer
+thread. The capture therefore reads the column; the *applier* reads the file.
+`MissingOrientationFinder` backfills rows predating the column, and the endpoint
+primes its own targets first — a target still `NULL` at capture time would record
+`{"orientation": null}` and its undo would have nothing to write back.
+
+**Everything except the orientation is derived and re-derived**, never
+snapshotted, exactly as §21's derived-value rule requires. `apply_orientation`
+re-derives, per picture:
+
+- `Face.bbox` **and** `Detection.bbox`. Both are stored in **EXIF-corrected**
+  space (the extraction tasks load through `load_image_bgr_reduced`, which runs
+  `ImageOps.exif_transpose`), so they move even though no pixel did. The corner
+  maths is *reused* from the `rotate` image plugin's `get_bbox_transform` rather
+  than copied. `Picture.width` / `height` are RAW and stay put; the display size
+  the transform needs is those two swapped iff the *current* orientation is one
+  of 5–8.
+- `pixel_sha` and `size_bytes` — the container changed even though the pixels
+  did not, so the tier-1 duplicate key must be recomputed (§22.6).
+- `thumbnail_width` / `thumbnail_height`, NULLed so `MissingThumbnailFinder`
+  regenerates the bitmap.
+
+**The thumbnail cache token had to grow an orientation component.**
+`ImageUtils.thumbnail_cache_token` was `"<W>x<H>"`, and thumbnails are served
+`Cache-Control: private, max-age=3600, must-revalidate`. A 180° rotate leaves W
+and H unchanged, as does a 90° rotate of a square picture — so the regenerated
+bitmap would have arrived at a byte-identical URL and the browser would have gone
+on painting the pre-rotate image for up to an hour. The token is now
+`"<W>x<H>o<orientation>"` for a rotated picture and unchanged for an unrotated
+one, so backfilling the mirror does not invalidate every thumbnail at once.
+
+**Authorization: `PICTURE_SCOPED` on `body_ids="picture_ids"`, the same tier and
+the same shape as `DELETE /pictures`.** It shipped `OWNER_ONLY` on the argument
+that an in-place write to the owner's original bytes is categorically different;
+that argument does not survive what the write actually is. The splice replaces one
+enumerated EXIF value and copies the entropy-coded stream through byte for byte,
+so the pixels are unchanged, `{"orientation": n}` **is** the whole prior state and
+the ordinary facet machinery reverses it exactly; a file on a reference folder is
+refused at the sink and reported `unsupported` rather than rewritten. A
+write-enabled grant that already reaches the picture is the right level for that,
+and holding the route at `OWNER_ONLY` was over-blocking rather than defence.
+
+Two layers, and only the second is this declaration. A **READ** token never
+reaches the gate on this route: the auth middleware refuses a non-GET from a READ
+token unless the path is in `READ_SAFE_POST_PATHS`, and this path deliberately is
+not (do not add it). That is what makes *write-enabled* the operative condition,
+leaving the gate to answer only *does this grant reach this picture*. The gate
+resolves `picture_ids` element by element and raises on the first id out of scope,
+before the handler body runs — so a batch naming one in-scope and one out-of-scope
+picture is refused **whole** and rotates neither file. Both directions, plus the
+mixed batch, are pinned in `tests/test_inline_rotate.py`. See the matrix row in
+`docs/authz-coverage-matrix.md`.
+
+**Known limits, stated rather than hidden.** `perceptual_hash` and
+`image_embedding` are computed from the *decoded* (transposed) image, so a rotate
+makes them stale; they are not invalidated here and near-duplicate detection can
+mis-group a rotated picture until they are recomputed. And the file write happens
+inside the DB transaction: if that transaction rolls back afterwards, the file
+stays turned while the mirror does not. The applier reads the file rather than the
+mirror precisely so the next rotate converges instead of compounding that.
 
 ---
 

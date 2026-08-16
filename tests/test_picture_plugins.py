@@ -326,3 +326,124 @@ def test_video_plugins_reencode_every_frame_and_size_output_from_the_transform()
             assert len(progress) == frames, (
                 f"{name} {params}: {len(progress)} progress events, want {frames}"
             )
+
+
+# ----------------------------------------------------------------------
+# Embedded metadata carried from the source file onto the plugin output
+# ----------------------------------------------------------------------
+
+
+def _rotate_output_bytes(source_path: str, source_format: str) -> bytes:
+    """Run the built-in rotate plugin and save it exactly as the service does."""
+    from pixlstash.image_plugins.registry import get_image_plugin_manager
+    from pixlstash.image_plugins.service import _save_output_images
+
+    plugin = get_image_plugin_manager().get_plugin("rotate")
+    assert plugin is not None
+    frame = ImageUtils.load_image_or_video(source_path)
+    assert frame is not None
+    pil_image = Image.fromarray(frame).convert("RGB")
+    outputs = plugin.run([pil_image], parameters={"direction": "90_right"})
+    output_bytes, _ext = _save_output_images(outputs[0], source_format, source_path)
+    return output_bytes
+
+
+def test_plugin_output_keeps_comfyui_png_text_chunks():
+    """A rotate run must not destroy the ComfyUI provenance chunks.
+
+    ``metadata["png"]["workflow"]`` / ``["prompt"]`` are unrecoverable once the
+    derived file is written without them.
+    """
+    from PIL import PngImagePlugin
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source = os.path.join(temp_dir, "comfy.png")
+        info = PngImagePlugin.PngInfo()
+        info.add_text("parameters", "a prompt, steps: 20")
+        info.add_text("workflow", '{"1": {"class_type": "KSampler", "inputs": {}}}')
+        Image.new("RGB", (24, 32), color=(10, 20, 30)).save(source, pnginfo=info)
+
+        with Image.open(BytesIO(_rotate_output_bytes(source, "PNG"))) as out:
+            assert out.text.get("parameters") == "a prompt, steps: 20"
+            assert (
+                out.text.get("workflow")
+                == '{"1": {"class_type": "KSampler", "inputs": {}}}'
+            )
+
+
+def test_plugin_output_keeps_jpeg_exif_description_fields():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source = os.path.join(temp_dir, "camera.jpg")
+        img = Image.new("RGB", (24, 32), color=(90, 90, 90))
+        exif = img.getexif()
+        exif[0x0110] = "PixlCam 9000"  # Model
+        exif.get_ifd(0x8769)[0x9003] = "2026:08:15 09:41:00"  # DateTimeOriginal
+        img.save(source, exif=exif)
+
+        with Image.open(BytesIO(_rotate_output_bytes(source, "JPEG"))) as out:
+            out_exif = out.getexif()
+            assert out_exif.get(0x0110) == "PixlCam 9000"
+            assert out_exif.get_ifd(0x8769).get(0x9003) == "2026:08:15 09:41:00"
+
+
+def test_plugin_output_drops_exif_orientation_so_it_is_not_rotated_twice():
+    """``load_image_or_video`` already applied the source's orientation.
+
+    Re-stamping tag 0x0112 onto the output would turn it a second time on
+    display, and the displayed size would then disagree with the stored size.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source = os.path.join(temp_dir, "sideways.jpg")
+        # 40x20 stored, orientation 6 => displayed upright as 20x40.
+        img = Image.new("RGB", (40, 20), color=(200, 30, 30))
+        exif = img.getexif()
+        exif[0x0112] = 6
+        exif[0x0110] = "PixlCam 9000"
+        img.save(source, exif=exif)
+
+        output_bytes = _rotate_output_bytes(source, "JPEG")
+        with Image.open(BytesIO(output_bytes)) as out:
+            stored_size = out.size
+            assert out.getexif().get(0x0112, 1) == 1, (
+                "output carried the source's orientation and will be double-rotated"
+            )
+            # Descriptive fields still survive; only orientation is stripped.
+            assert out.getexif().get(0x0110) == "PixlCam 9000"
+        with Image.open(BytesIO(output_bytes)) as out:
+            from PIL import ImageOps
+
+            assert ImageOps.exif_transpose(out).size == stored_size
+
+        # 40x20 stored + orientation 6 loads as 20x40; rotating 90° right => 40x20.
+        assert stored_size == (40, 20)
+
+
+def test_plugin_output_invents_no_metadata_when_the_source_has_none():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        for name, fmt in (("plain.png", "PNG"), ("plain.jpg", "JPEG")):
+            source = os.path.join(temp_dir, name)
+            Image.new("RGB", (24, 32), color=(5, 5, 5)).save(source)
+            with Image.open(BytesIO(_rotate_output_bytes(source, fmt))) as out:
+                assert not getattr(out, "text", None)
+                assert not out.getexif()
+
+
+def test_encoded_plugin_output_is_returned_untouched():
+    """Video sources and pre-encoded bytes must not be re-muxed for metadata."""
+    from pixlstash.image_plugins.service import _save_output_images
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source = os.path.join(temp_dir, "clip.mp4")
+        _write_test_video(source, 32, 24, 3)
+        with open(source, "rb") as handle:
+            encoded = handle.read()
+
+        assert _save_output_images(encoded, "MP4", source) == (encoded, ".mp4")
+        assert _save_output_images((encoded, "mp4"), "MP4", source) == (
+            encoded,
+            ".mp4",
+        )
+        assert _save_output_images(b"jpegbytes", "JPEG", source) == (
+            b"jpegbytes",
+            ".jpg",
+        )

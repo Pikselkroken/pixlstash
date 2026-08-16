@@ -15,7 +15,7 @@ test.describe('grid browsing', () => {
 
   test('lists sort options and reorders when direction flips (§3.2)', async ({ page, grid }) => {
     await grid.waitForThumbnailLoaded()
-    const before = await grid.firstThumbnailSrc()
+    const before = await grid.firstThumbnailKey()
 
     await grid.openSortMenu()
     const labels = await page
@@ -27,7 +27,7 @@ test.describe('grid browsing', () => {
     // Flipping the direction reverses the order, so the top-left picture changes.
     await grid.sortDirectionButton.click()
     await page.keyboard.press('Escape')
-    await expect.poll(() => grid.firstThumbnailSrc()).not.toBe(before)
+    await expect.poll(() => grid.firstThumbnailKey()).not.toBe(before)
   })
 
   test('reflows the grid when the column count changes (§3.1)', async ({ page, grid }) => {

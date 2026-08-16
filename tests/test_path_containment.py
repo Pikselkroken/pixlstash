@@ -30,8 +30,10 @@ from pixlstash.db_models import Picture
 from pixlstash.db_models.reference_folder import ReferenceFolder, ReferenceFolderStatus
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
+from pixlstash.services.operation_log_service import apply_orientation
 from pixlstash.services.scrapheap_service import remove_picture_files
 from pixlstash.utils.caption_file_utils import SIDECAR_TYPE_TAGS, writeback_path
+from pixlstash.utils.image_processing.orientation import read_orientation
 from pixlstash.utils.path_utils import path_is_within
 
 
@@ -286,3 +288,84 @@ def test_writeback_honours_a_legitimate_existing_path(tmp_path):
     image = os.path.join(image_root, "img.png")
     recorded = os.path.join(image_root, "img_tags.txt")
     assert writeback_path(image, SIDECAR_TYPE_TAGS, None, recorded) == recorded
+
+
+# ---------------------------------------------------------------------------
+# In-place rotate — the first sink that overwrites an ORIGINAL file (#950)
+# ---------------------------------------------------------------------------
+
+
+def _add_picture(server, file_path: str, reference_folder_id=None) -> int:
+    def _do(session):
+        pic = Picture(file_path=file_path, reference_folder_id=reference_folder_id)
+        session.add(pic)
+        session.commit()
+        return pic.id
+
+    return server.vault.db.run_task(_do)
+
+
+def _rotate_in_session(server, picture_id: int, orientation: int) -> bool:
+    def _do(session):
+        turned = apply_orientation(
+            session, picture_id, orientation, image_root=server.vault.image_root
+        )
+        session.commit()
+        return turned
+
+    return server.vault.db.run_task(_do)
+
+
+@pytest.mark.parametrize("escape", ["absolute", "dot-dot"])
+def test_rotate_refuses_to_overwrite_a_file_outside_the_vault_root(
+    server, tmp_path, escape
+):
+    """`Picture.file_path` is a database value, and rotate WRITES to it.
+
+    `resolve_picture_path` hands an absolute path straight back and joins a
+    relative one without normalising, so a wrong row — a faulty import, an
+    edited DB — resolves wherever it says. Every sibling destructive sink checks
+    containment first; this one overwrites the user's original bytes, so it is
+    the last place that should take the row's word for it.
+    """
+    victim = tmp_path / "outside" / "not-in-the-library.png"
+    _write_png(str(victim))
+    untouched = victim.read_bytes()
+
+    stored = (
+        str(victim)
+        if escape == "absolute"
+        else os.path.relpath(str(victim), server.vault.image_root)
+    )
+    picture_id = _add_picture(server, stored)
+
+    assert _rotate_in_session(server, picture_id, 6) is False
+    assert victim.read_bytes() == untouched
+    assert read_orientation(str(victim)) == 1
+
+
+def test_rotate_still_turns_an_ordinary_in_root_picture(server):
+    """Over-blocking regression: the containment check must not refuse the
+    normal case, which is every picture in the library."""
+    in_root = os.path.join(server.vault.image_root, "rotatable.png")
+    _write_png(in_root)
+    picture_id = _add_picture(server, "rotatable.png")
+
+    assert _rotate_in_session(server, picture_id, 6) is True
+    assert read_orientation(in_root) == 6
+
+
+def test_rotate_refuses_a_reference_folder_file_at_the_sink(server, tmp_path):
+    """Refused in the applier, not only in the route, so undo inherits it.
+
+    A picture rotated while library-managed and later re-homed to a reference
+    folder would otherwise have its external file rewritten by an undo.
+    """
+    ref_root = str(tmp_path / "external-refs")
+    external = os.path.join(ref_root, "theirs.png")
+    _write_png(external)
+    folder_id = _add_reference_folder(server, ref_root)
+    picture_id = _add_picture(server, external, reference_folder_id=folder_id)
+
+    assert _rotate_in_session(server, picture_id, 6) is False
+    assert read_orientation(external) == 1

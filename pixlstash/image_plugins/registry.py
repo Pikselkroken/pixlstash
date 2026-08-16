@@ -146,12 +146,21 @@ _PLUGIN_MANAGER: ImagePluginManager | None = None
 _PLUGIN_MANAGER_LOCK = Lock()
 
 
+def user_plugin_dir() -> str:
+    """Return the directory user-supplied image plugins are loaded from.
+
+    Named rather than inlined so `pixlstash-cli plugins` can install into the
+    same place without constructing a manager (which would import and run every
+    plugin on disk).
+    """
+    return os.path.join(user_data_dir("pixlstash"), "image-plugins", "user")
+
+
 def get_image_plugin_manager() -> ImagePluginManager:
     global _PLUGIN_MANAGER
     with _PLUGIN_MANAGER_LOCK:
         if _PLUGIN_MANAGER is None:
             built_in = os.path.join(os.path.dirname(__file__), "built-in")
-            user = os.path.join(user_data_dir("pixlstash"), "image-plugins", "user")
-            _PLUGIN_MANAGER = ImagePluginManager(built_in, user)
+            _PLUGIN_MANAGER = ImagePluginManager(built_in, user_plugin_dir())
             _PLUGIN_MANAGER.reload()
         return _PLUGIN_MANAGER

@@ -445,15 +445,55 @@ Detailed installation instructions on <a href="http://pixlstash.dev/upgrade.html
 
 PixlStash supports built-in plugins and user-created plugins.
 
+### With the CLI (recommended)
+
+```bash
+pixlstash-cli plugins install hello_world_stamp     # from the plugins repository
+pixlstash-cli plugins install ./my_captioner.zip    # a zip of a plugin folder
+pixlstash-cli plugins install ./my_captioner/       # an extracted folder
+pixlstash-cli plugins install ./my_filter.py        # a single module
+pixlstash-cli plugins list
+pixlstash-cli plugins remove my_captioner
+```
+
+The destination differs by kind (captioning plugin or image filter) and by
+shape, so `install` works it out from the source instead of asking you to type
+it: it reads the source without importing it, decides which base class it
+derives from, and names the installed file after the plugin's own `name`. It
+refuses a source that is not a plugin, one whose name collides with a built-in,
+and a zip whose entries would be unpacked outside the folder it is unpacked
+into.
+
+`--dry-run` prints the plan and stops, `--yes` skips the confirmation, `--force`
+replaces an existing plugin of the same name, and `--strict` turns the warnings
+into refusals. `--ref` picks a branch, tag or commit in the plugins repository
+and is ignored for local sources; it cannot point the download at a different
+repository. A plugin's `requirements.txt` is never installed unless you pass
+`--with-deps`. **Plugin code runs unsandboxed, in the server process, with your
+permissions** — install what you would run yourself.
+
+Captioning plugins load at server start, so restart PixlStash after installing
+one; image filters are re-scanned every time the Filters menu is listed.
+
 ### User plugin directory
 
-Place your `.py` plugin files in the platform-specific user data directory. PixlStash logs the exact path on startup.
+If you prefer to copy files by hand, they go in the platform-specific user data
+directory. PixlStash logs the exact path on startup, and
+`pixlstash-cli plugins list` prints it.
 
-| OS | Path |
-|----|------|
-| **Linux** | `~/.local/share/pixlstash/image-plugins/user/` |
-| **macOS** | `~/Library/Application Support/pixlstash/image-plugins/user/` |
-| **Windows** | `%LOCALAPPDATA%\pixlstash\image-plugins\user\` |
+| OS | Image filters | Captioning plugins |
+|----|---------------|--------------------|
+| **Linux** | `~/.local/share/pixlstash/image-plugins/user/` | `~/.local/share/pixlstash/tagger-plugins/user/` |
+| **macOS** | `~/Library/Application Support/pixlstash/image-plugins/user/` | `~/Library/Application Support/pixlstash/tagger-plugins/user/` |
+| **Windows** | `%LOCALAPPDATA%\pixlstash\pixlstash\image-plugins\user\` | `%LOCALAPPDATA%\pixlstash\pixlstash\tagger-plugins\user\` |
+
+The doubled `pixlstash\pixlstash` on Windows is not a typo: `platformdirs` puts
+the app under a vendor folder, and PixlStash passes no separate vendor name.
+This table used to show it singly, which is why copying a plugin there by hand
+appeared to do nothing.
+
+An image filter is always a single `.py` file. A captioning plugin may be a
+single `.py` file or a folder containing `__init__.py`.
 
 ### Writing a plugin
 

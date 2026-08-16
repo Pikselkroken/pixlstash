@@ -28,6 +28,10 @@ vi.mock("../../api/modelShelf", () => ({
     return listAdapters(...args);
   },
   listCheckpoints: (...args) => listCheckpoints(...args),
+  // The base-model field asks for its completion list as it opens. Answered
+  // with nothing here: the list is the widget's own suite's business, and left
+  // unmocked this is a network call on a double-click.
+  listBaseModelCompletions: vi.fn().mockResolvedValue([]),
 }));
 
 // The shelf reads the drives to band its folder groups. Left unmocked this
@@ -142,12 +146,17 @@ function adapter(overrides = {}) {
   };
 }
 
-async function mountShelf(rows, checkpoints = [], unclassified = []) {
+async function mountShelf(
+  rows,
+  checkpoints = [],
+  unclassified = [],
+  extra = {},
+) {
   listAdapters.mockResolvedValue(rows);
   listCheckpoints.mockResolvedValue(checkpoints);
   listEngines.mockResolvedValue([]);
   listUnclassified.mockResolvedValue(unclassified);
-  const wrapper = mount(ModelShelf, globalOpts);
+  const wrapper = mount(ModelShelf, { ...globalOpts, ...extra });
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
   return wrapper;
@@ -333,6 +342,175 @@ describe("renaming a row in place", () => {
       .find(".shelf-row-rename")
       .trigger("keydown", { key: "Enter" });
     expect(edit).toHaveBeenCalledWith([1, 2], { display_name: "Cyanwood" });
+  });
+});
+
+describe("editing a base model in place", () => {
+  it("opens the field on a double-click and commits it on Enter", async () => {
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    expect(field.exists()).toBe(true);
+    // Seeded from the stored value, unlike the name field: nothing infers a
+    // base model, so what the row shows is what the file said and a correction
+    // is one word rather than a retype.
+    expect(field.element.value).toBe("flux.1-dev");
+
+    await field.setValue("FLUX.2");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(edit).toHaveBeenCalledWith([7], { base_model: "FLUX.2" });
+    expect(wrapper.find(".shelf-row-base-edit").exists()).toBe(false);
+  });
+
+  it("opens on the `not set` chip too, which is a value like any other", async () => {
+    // The row that most needs this gesture is the one with nothing recorded,
+    // and a chip that cannot be double-clicked is exactly the row you have to
+    // go to a dialog for.
+    const wrapper = await mountShelf([adapter({ id: 7, base_model: null })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-chip--none").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    expect(field.element.value).toBe("");
+
+    await field.setValue("SDXL 1.0");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(edit).toHaveBeenCalledWith([7], { base_model: "SDXL 1.0" });
+  });
+
+  it("clears the column with an explicit null rather than an empty string", async () => {
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    await field.setValue("   ");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(edit).toHaveBeenCalledWith([7], { base_model: null });
+  });
+
+  it("gives the first Escape to the menu and the second to the edit", async () => {
+    // With a menu open the first Escape must only take the menu back, or one
+    // press aimed at a dropdown throws away what was typed. The completion list
+    // is seeded here for that reason: mocked empty, this test would pass while
+    // the two-stage Escape was broken.
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+    store.rows = [
+      ...store.rows,
+      { ...adapter({ id: 9 }), base_model: "Nope 1" },
+    ];
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    await field.setValue("Nope");
+    await field.trigger("keydown", { key: "Escape" });
+    expect(wrapper.find(".shelf-row-base-edit").exists()).toBe(true);
+
+    await field.trigger("keydown", { key: "Escape" });
+    expect(edit).not.toHaveBeenCalled();
+    expect(wrapper.find(".shelf-row-base-edit").exists()).toBe(false);
+  });
+
+  it("commits when the field loses focus, and only once", async () => {
+    // The riskiest line in the gesture: clicking away writes, with no undo and
+    // no prompt. It has to fire — and it must not fire a second time behind the
+    // Enter that already wrote, which is why the field closes before it writes.
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    await field.setValue("FLUX.2");
+    await field.trigger("blur");
+
+    expect(edit).toHaveBeenCalledWith([7], { base_model: "FLUX.2" });
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not write twice when Enter is followed by the unmount's blur", async () => {
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    await field.setValue("FLUX.2");
+    await field.trigger("keydown", { key: "Enter" });
+    await field.trigger("blur");
+
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands focus back to the row on a key, and leaves it alone on a click", async () => {
+    // The grid's tab stop roves, so a field that closes without giving focus
+    // back drops a keyboard reader at the top of the document — the defect the
+    // rename path fixed and this one had to inherit. A blur is the opposite
+    // case: the reader has already chosen where to go.
+    const wrapper = await mountShelf([adapter({ id: 7 })], [], [], {
+      attachTo: document.body,
+    });
+    const store = useModelShelfStore();
+    vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    const rowEl = wrapper.find(".shelf-row");
+    await rowEl.find(".shelf-col--base span").trigger("dblclick");
+    await wrapper.find(".shelf-row-base-edit").trigger("keydown", {
+      key: "Enter",
+    });
+    await wrapper.vm.$nextTick();
+    expect(document.activeElement).toBe(rowEl.element);
+
+    await rowEl.find(".shelf-col--base span").trigger("dblclick");
+    document.body.focus();
+    await wrapper.find(".shelf-row-base-edit").trigger("blur");
+    await wrapper.vm.$nextTick();
+    expect(document.activeElement).not.toBe(rowEl.element);
+    wrapper.unmount();
+  });
+
+  it("is reachable from the keyboard, like the name beside it", async () => {
+    // A double click is not a keyboard gesture, and the row advertises the key
+    // it answers to. Without this the field is pointer-only.
+    const wrapper = await mountShelf([adapter({ id: 7 })]);
+    const row = wrapper.find(".shelf-row");
+    expect(row.attributes("aria-keyshortcuts")).toContain("Shift+F2");
+
+    await row.trigger("keydown", { key: "F2", shiftKey: true });
+    expect(wrapper.find(".shelf-row-base-edit").exists()).toBe(true);
+    // And plain F2 still opens the OTHER field, not this one.
+    expect(wrapper.find(".shelf-row-rename").exists()).toBe(false);
+  });
+
+  it("keeps the field's keys off the list underneath", async () => {
+    const wrapper = await mountShelf([adapter({ id: 7 }), adapter({ id: 8 })]);
+    const store = useModelShelfStore();
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    await wrapper.find(".shelf-row-base-edit").trigger("keydown", { key: " " });
+    expect(store.selectedRows).toHaveLength(0);
+  });
+
+  it("writes every member of a run, which was trained against one base", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 1, stack_id: 5, training_step: 250 }),
+      adapter({ id: 2, stack_id: 5, training_step: 500 }),
+    ]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-col--base span").trigger("dblclick");
+    const field = wrapper.find(".shelf-row-base-edit");
+    await field.setValue("FLUX.2");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(edit).toHaveBeenCalledWith([1, 2], { base_model: "FLUX.2" });
   });
 });
 

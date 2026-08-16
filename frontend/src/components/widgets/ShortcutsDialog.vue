@@ -122,6 +122,10 @@ const open = computed({
               <td><kbd>T</kbd></td>
               <td>Add tag</td>
             </tr>
+            <tr :class="{ 'shortcut-disabled': isReadOnly }">
+              <td><kbd>[</kbd> / <kbd>]</kbd></td>
+              <td>Rotate 90° left / right (JPEG and PNG only)</td>
+            </tr>
             <tr>
               <td><kbd>Z</kbd></td>
               <td>Toggle zoom</td>

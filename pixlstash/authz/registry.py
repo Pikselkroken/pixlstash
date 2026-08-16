@@ -336,6 +336,21 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # product, and the attachment names stay per-vault.
     ("GET", "/api/v1/adapters"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/adapters/{sha256}"): RoutePolicy(_OWNER),
+    # The one shelf read that is NOT on the owner_only tier. Every other one
+    # surfaces host paths but takes none, which is why they stayed there; this
+    # one returns the **raw bytes** of a file inside a registered model folder,
+    # which is the GET .../runs/{run_name}/samples/{filename} class exactly —
+    # reads inside a registered host root, writes nothing, and is a new
+    # capability rather than a narrower view of the metadata beside it. It takes
+    # no host path at all (a sha256 the scanner already registered is the whole
+    # input), so it is on this tier for the authority it exercises, not for what
+    # it accepts. Loopback/LAN/Tailscale covers the case the route exists for —
+    # a generator on the owner's own network — and a genuinely remote one needs
+    # allow_remote_host_ops, which is the safe default direction.
+    ("GET", "/api/v1/adapters/{sha256}/file"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 serves the raw bytes of a model file out of a registered model folder — the same read-inside-a-registered-root authority as model-folders/{folder_id}/runs/{run_name}/samples/{filename}, and a new capability rather than a subset of GET /adapters, which serves metadata only. Takes no host path: the sha256 addresses a row the scanner wrote, the join is contained, and only a `present` copy is served; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     ("GET", "/api/v1/checkpoints"): RoutePolicy(_OWNER),
     # The assignment path. OWNER_ONLY, same pin: it WRITES the active vault's
     # adapter_attachment rows, so a token stamped for another library must not
@@ -351,6 +366,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # constraints would reject) and that is a data check, not a scope one.
     ("PATCH", "/api/v1/models"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/models/forget"): RoutePolicy(_OWNER),
+    # The base-model field's completion list. OWNER_ONLY on the same default
+    # pin as the rest of the shelf, and NOT ANY_TOKEN: it returns per-object
+    # data — the distinct `base_model` strings recorded on this machine's model
+    # rows — even though the shipped labels beside them are a constant.
+    ("GET", "/api/v1/models/base-models"): RoutePolicy(_OWNER),
     # ── model_folders.py (shelf plan B5; §16.3 host-capability for the writes)
     # The read is OWNER_ONLY like the rest of the shelf. Every mutator and the
     # rescan take — or walk — a caller-supplied host path, which is the
@@ -680,6 +700,27 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/pictures/scrapheap/delete-preview"): RoutePolicy(
         _OWNER,
         justification="Returns protected reference-original file paths; owner only",
+    ),
+    # PICTURE_SCOPED, like every other per-picture mutation on this surface, and
+    # shaped exactly like ("DELETE", "/api/v1/pictures") above. The in-place
+    # write is a metadata-only EXIF-orientation splice: the entropy-coded pixel
+    # stream is copied through byte for byte, the whole prior state is one
+    # enumerated value 1–8, so the operation is exactly reversible by the
+    # ordinary undo machinery (§21.5) — and a file on a reference folder is
+    # refused at the sink and reported ``unsupported`` rather than rewritten.
+    # None of that is a destructive edit of someone else's original, so a
+    # write-enabled grant that already reaches the picture is the right level.
+    # READ tokens never arrive here at all: the auth middleware refuses a
+    # non-GET from a READ token unless the path is in READ_SAFE_POST_PATHS, and
+    # this one deliberately is not — that is what makes "write-enabled" the
+    # operative condition and leaves the gate to answer "reaches this picture".
+    # The gate resolves body_ids element by element and raises on the first id
+    # out of scope, before the handler runs, so a mixed batch is refused whole
+    # and rotates nothing. (#950)
+    ("POST", "/api/v1/pictures/rotate"): RoutePolicy(
+        _PIC,
+        body_ids="picture_ids",
+        justification="In-place rotate splices only the EXIF orientation (pixels byte-identical, exactly reversible, reference-folder files refused at the sink), so a write-enabled picture-scoped grant is the right level. READ tokens are refused earlier by the middleware: POST not in READ_SAFE. Gate loops enforce_picture_scope over every id",
     ),
     # ── tags.py: single-picture tag mutations (enforce_picture_scope) ────────
     ("POST", "/api/v1/pictures/{id}/tags"): RoutePolicy(_PIC, id_param="id"),

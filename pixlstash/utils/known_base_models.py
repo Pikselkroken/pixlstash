@@ -10,13 +10,17 @@ never constrains what can be stored. It does two jobs:
 * **seeds tab-completion** with models we already know about, so the field is
   useful on a fresh install with an empty library.
 
-**Nothing folds what is stored, and nothing calls this yet.** The shelf's *Base
-model* sort is still ``m.base_model COLLATE NOCASE`` and its filter is an exact
-match on the raw column, so the grouping above is what :func:`fold` makes
-possible, not what the shelf does today. Wiring it in is open work and a
-decision rather than a rename: folding inside the sort needs either a SQLite
-function registered per hub connection or a canonical column the scanner
-maintains. Do not read this docstring as a description of the shelf.
+**Nothing folds what is STORED.** Two callers read this module today and neither
+writes through it: ``GET /adapters`` and ``GET /checkpoints`` carry
+:func:`fold`'s answer beside the raw column as ``base_model_folded``, which is
+where the shelf's grouping and faceting get their buckets, and
+``GET /models/base-models`` serves :func:`completions` to the *Set base model*
+field. The stored column stays free text either way, the shelf's *Base model*
+sort is still ``m.base_model COLLATE NOCASE`` and its filter is still an exact
+match on the raw column. Folding those two needs either a SQLite function
+registered per hub connection or a canonical column the scanner maintains, and
+that is still open work. Do not read this docstring as a description of the
+whole shelf.
 
 An unrecognised string is not an error. It is stored verbatim, displayed
 verbatim, and — the moment it lands on a ``model`` row — becomes a completion

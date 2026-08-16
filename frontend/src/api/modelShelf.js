@@ -78,6 +78,22 @@ export async function listCheckpoints({ baseModel, q } = {}) {
 }
 
 /**
+ * Completion targets for the free-text `base_model` field.
+ *
+ * Both halves in one flat sorted list: the labels the server ships (so the
+ * field completes on a fresh install, where nothing has been recorded yet) and
+ * every distinct string this machine already records that folds to none of
+ * them. The whole list, not a per-keystroke query — it is a few dozen strings
+ * and the field filters it as the user types.
+ *
+ * @returns {Promise<Array<string>>} the `base_models` array of the body.
+ */
+export async function listBaseModelCompletions() {
+  const body = await unwrap(apiClient.get("/models/base-models"));
+  return Array.isArray(body?.base_models) ? body.base_models : [];
+}
+
+/**
  * Write curated columns onto one or more models.
  *
  * Three of the shelf's verbs land here — Rename, Set base model, Set kind —

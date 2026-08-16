@@ -69,6 +69,7 @@ _SHELF_ROUTES = (
     ("GET", "/api/v1/adapters"),
     ("GET", "/api/v1/adapters/{sha256}"),
     ("GET", "/api/v1/checkpoints"),
+    ("GET", "/api/v1/models/base-models"),
 )
 
 
@@ -407,6 +408,37 @@ def test_base_model_filter_carries_not_set_as_an_explicit_value(shelf_env):
     assert _names(r.json()["adapters"]) == {"alice.safetensors"}
 
 
+def test_base_model_completions_carry_the_shipped_labels_and_the_users_own(
+    shelf_env,
+):
+    """The field completes against both halves, and neither hides the other.
+
+    A fresh install has no recorded base model at all, which is why the shipped
+    labels are in the list; a string this machine invented is nowhere in that
+    table, which is why the distinct column is in it too. Asserted on identity
+    rather than on a count, because the shipped half grows every few months.
+    """
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'Clementine ZIB 3B' "
+            "WHERE filename = 'dana.safetensors'"
+        )
+
+    r = shelf_env.owner.get(f"{API}/models/base-models")
+    assert r.status_code == 200, r.text
+    offered = r.json()["base_models"]
+
+    assert "Clementine ZIB 3B" in offered, (
+        "a base model this machine recorded is not offered back; the user's own "
+        "vocabulary is half of what makes the field completable"
+    )
+    assert "SDXL 1.0" in offered, "the shipped labels are missing"
+    # `SDXL 1.0` is seeded on two rows AND is a shipped label: neither path may
+    # produce a duplicate, or the dropdown offers one value twice.
+    assert len(offered) == len(set(offered))
+    assert "" not in offered
+
+
 def test_unknown_is_neither_adapter_nor_checkpoint_by_default(shelf_env):
     """DoD 5: ``unknown`` never renders as a checkpoint. It is absent from both
     lists until it is asked for by name, and ``/checkpoints`` never serves it."""
@@ -536,6 +568,7 @@ def _shelf_paths() -> list[str]:
         f"{API}/adapters/{ADAPTER_WITH_BASE}",
         f"{API}/checkpoints",
         f"{API}/model-stacks/proposals",
+        f"{API}/models/base-models",
     ]
 
 
@@ -969,6 +1002,14 @@ def test_share_tokens_never_reach_a_folder_mutator(shelf_env):
     a matching ``READ_BLOCKED_GET_PATHS`` entry is a real hole and nothing goes
     red. Tracked as a follow-up; do not read this docstring as saying the tier
     is safe by construction.
+
+    **Updated 2026-08-15:** "nothing goes red" is no longer true of this file.
+    ``test_no_share_token_can_download_a_model_file`` covers a GET on this tier
+    directly — ``GET /adapters/{sha256}/file``, whose templated path
+    ``READ_BLOCKED_GET_PATHS`` could not match in any case — and deleting
+    ``_enforce_unscoped_owner`` from the gate's ``LOCAL_OWNER_ONLY`` branch
+    fails it. The gap the paragraph above describes is real for a *new*
+    undeclared GET; it is not currently unmeasured.
 
     What this test does own: the block is real, the credential is live, and the
     routes exist. ``assert_real_route`` is load-bearing — middleware answers 403
@@ -4066,3 +4107,303 @@ def test_the_detail_route_answers_with_the_same_set_as_the_list(shelf_env):
     detail = shelf_env.owner.get(f"{API}/adapters/{listed['sha256']}")
     assert detail.status_code == 200, detail.text
     assert detail.json()["capabilities"] == listed["capabilities"] == ["search"]
+
+
+# ===========================================================================
+# GET /adapters/{sha256}/file — the shelf's one route that serves bytes
+# ===========================================================================
+#
+# The route exists so a generator on another machine can *use* an adapter this
+# one catalogues. `locations[].folder_path` is this host's path and means
+# nothing over there, which is why "the client can just read the path" was
+# never an answer.
+#
+# It is the only shelf read off the OWNER_ONLY tier — raw bytes out of a
+# registered model folder is the ai-toolkit sample route's authority class — so
+# both halves of LOCAL_OWNER_ONLY are asserted below, and the share-token
+# direction matters more here than on the folder mutators: this is a **GET**,
+# so the middleware's non-GET block says nothing about it and the gate's owner
+# check is the only thing refusing. That is precisely the hole
+# `test_share_tokens_never_reach_a_folder_mutator` warns a new GET on this tier
+# can open, so it is asserted rather than assumed.
+
+_FILE_ROUTE = ("GET", "/api/v1/adapters/{sha256}/file")
+
+
+def _file_url(sha256: str) -> str:
+    return f"{API}/adapters/{sha256}/file"
+
+
+def _seeded_folder_at(server, path: str) -> None:
+    """Repoint the seeded folder (id 1) at a real directory."""
+    with server.hub.transaction() as conn:
+        conn.execute("UPDATE model_folder SET path = ? WHERE id = 1", (path,))
+
+
+def _relpath_of(server, filename: str, relpath: str) -> None:
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET relpath = ? WHERE model_id = "
+            "(SELECT id FROM model WHERE filename = ?)",
+            (relpath, filename),
+        )
+
+
+def test_the_download_serves_the_bytes_the_named_hash_stands_for(shelf_env, tmp_path):
+    """The whole point of the route, end to end against a real scan.
+
+    Asserting the digest rather than the length is what makes this real: the
+    caller addressed the file by content, and a route that served *a* file of
+    the right size would pass a length check and hand a generator the wrong
+    weights.
+    """
+    folder_id, folder_path = _register_folder_with_adapters(
+        shelf_env, tmp_path, "downloadable", 1
+    )
+    assert (
+        shelf_env.owner.post(f"{API}/model-folders/{folder_id}/rescan").status_code
+        == 202
+    )
+    _await_scan(shelf_env, folder_id)
+
+    listed = [
+        row
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+        if row["filename"] == "a0.safetensors"
+    ]
+    assert listed, "the scan registered nothing to download"
+    sha = listed[0]["sha256"]
+
+    r = shelf_env.owner.get(_file_url(sha))
+    assert r.status_code == 200, r.text
+    assert hashlib.sha256(r.content).hexdigest() == sha
+    with open(os.path.join(folder_path, "a0.safetensors"), "rb") as handle:
+        assert r.content == handle.read()
+
+
+def test_the_bytes_are_served_as_an_attachment_and_never_as_a_document(
+    shelf_env, tmp_path
+):
+    """Nothing in this app sets X-Content-Type-Options, so a served file is
+    sniffable. `attachment` is what keeps these bytes from being rendered as a
+    document on our own origin."""
+    folder = tmp_path / "disp"
+    folder.mkdir()
+    write_adapter(folder / "alice.safetensors")
+    _seeded_folder_at(shelf_env.server, str(folder))
+
+    r = shelf_env.owner.get(_file_url(ADAPTER_WITH_BASE))
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert r.headers["content-disposition"].startswith("attachment")
+
+
+def test_a_hash_the_shelf_has_never_seen_is_404(shelf_env):
+    r = shelf_env.owner.get(_file_url(_h("neverseen")))
+    assert r.status_code == 404, r.text
+
+
+def test_a_checkpoint_hash_is_not_downloadable_here(shelf_env):
+    """Same refusal as the detail route beside it: the two blocks stay separate,
+    and a 24 GB base model is not what this route is for."""
+    r = shelf_env.owner.get(_file_url(CHECKPOINT_HASHED))
+    assert r.status_code == 404, r.text
+    assert "checkpoint" in r.text
+
+
+def test_a_known_adapter_with_no_readable_copy_is_409_not_404(shelf_env):
+    """The distinction the caller cannot make for itself.
+
+    404 means "no such adapter" and tells a client to stop asking. This is the
+    other case — the shelf knows the adapter and the drive is unplugged or the
+    file was deleted — and it is worth a different code, because retrying later
+    is the right move for exactly one of the two. The seeded folder points at
+    `/models/loras`, which does not exist.
+    """
+    r = shelf_env.owner.get(_file_url(ADAPTER_WITH_BASE))
+    assert r.status_code == 409, r.text
+
+
+def test_a_copy_the_scan_marked_missing_is_never_served(shelf_env, tmp_path):
+    """`present` is the whole filter, and it is load-bearing rather than
+    decorative: a forgotten folder leaves its rows tombstoned rather than
+    deleted, so serving on state alone would hand out bytes from a folder the
+    owner un-registered."""
+    folder = tmp_path / "stale"
+    folder.mkdir()
+    write_adapter(folder / "alice.safetensors")
+    _seeded_folder_at(shelf_env.server, str(folder))
+
+    # The file is right there and the row is the only thing that says otherwise.
+    assert shelf_env.owner.get(_file_url(ADAPTER_WITH_BASE)).status_code == 200
+
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("UPDATE model_file SET state = 'missing'")
+    assert shelf_env.owner.get(_file_url(ADAPTER_WITH_BASE)).status_code == 409
+
+
+def test_a_relpath_that_escapes_its_folder_is_refused_rather_than_served(
+    shelf_env, tmp_path
+):
+    """Containment on a read, and the reason it is not paranoia.
+
+    Neither half of the join is caller-supplied — `folder_path` is registered
+    and `relpath` is the scanner's — so a `..` can only arrive from a faulty
+    scan, a restored hub or a bug. But this route streams the result to the
+    network, so that bug would be an arbitrary-file reader rather than a wrong
+    row. The positive control in the same test is what proves the refusal is
+    the containment check and not a broken fixture.
+    """
+    folder = tmp_path / "contained"
+    folder.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    write_adapter(folder / "alice.safetensors")
+    write_adapter(outside / "stolen.safetensors")
+    secret = (outside / "stolen.safetensors").read_bytes()
+    _seeded_folder_at(shelf_env.server, str(folder))
+
+    _relpath_of(shelf_env.server, "alice.safetensors", "../outside/stolen.safetensors")
+    r = shelf_env.owner.get(_file_url(ADAPTER_WITH_BASE))
+    assert r.status_code == 409, r.text
+    assert r.content != secret, "the route read a file outside the registered folder"
+
+    _relpath_of(shelf_env.server, "alice.safetensors", "alice.safetensors")
+    assert shelf_env.owner.get(_file_url(ADAPTER_WITH_BASE)).status_code == 200
+
+
+def test_a_model_symlinked_into_the_folder_is_still_served(shelf_env, tmp_path):
+    """Symlinking a large model into a models directory is ordinary practice.
+
+    The containment is lexical first for exactly this reason: realpath-only
+    containment would refuse every such file as an escape attempt, which is an
+    over-block, and over-blocking is its own regression.
+    """
+    folder = tmp_path / "linked"
+    folder.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    real = elsewhere / "real.safetensors"
+    write_adapter(real)
+    os.symlink(real, folder / "alice.safetensors")
+    _seeded_folder_at(shelf_env.server, str(folder))
+
+    r = shelf_env.owner.get(_file_url(ADAPTER_WITH_BASE))
+    assert r.status_code == 200, r.text
+    assert r.content == real.read_bytes()
+
+
+# ---- authorization: this route is on the §16.3 locality tier ---------------
+
+
+def test_the_download_is_declared_local_owner_only(shelf_env):
+    """§16.1: the declaration IS the enforcement, so pin the cell itself. It is
+    deliberately not the OWNER_ONLY tier every other shelf read sits on."""
+    assert _FILE_ROUTE in ROUTE_POLICIES, f"{_FILE_ROUTE} has no ROUTE_POLICIES entry"
+    declared = ROUTE_POLICIES[_FILE_ROUTE]
+    assert declared.policy is AccessPolicy.LOCAL_OWNER_ONLY, declared.policy
+    assert declared.justification, (
+        "LOCAL_OWNER_ONLY requires a justification; the gate boot-fails without one"
+    )
+
+
+def test_a_local_owner_downloads_from_loopback_lan_and_tailscale(shelf_env, tmp_path):
+    """The positive half of the tier. The Tailscale case is the one that was a
+    false deny before the scoped predicate, and it is the realistic deployment
+    for this route: a generator on the owner's own network."""
+    folder = tmp_path / "local"
+    folder.mkdir()
+    write_adapter(folder / "alice.safetensors")
+    _seeded_folder_at(shelf_env.server, str(folder))
+
+    for headers in ({}, _xff("192.168.1.9"), _xff("100.64.0.5")):
+        r = shelf_env.owner.get(_file_url(ADAPTER_WITH_BASE), headers=headers)
+        assert r.status_code == 200, (
+            f"{headers or 'loopback'} was refused: {r.status_code} {r.text}"
+        )
+
+
+def test_a_remote_owner_is_refused_and_the_message_names_the_flag(shelf_env, tmp_path):
+    folder = tmp_path / "remote"
+    folder.mkdir()
+    write_adapter(folder / "alice.safetensors")
+    _seeded_folder_at(shelf_env.server, str(folder))
+
+    r = shelf_env.owner.get(_file_url(ADAPTER_WITH_BASE), headers=_xff("8.8.8.8"))
+    assert r.status_code == 403, r.text
+    assert "allow_remote_host_ops" in r.text
+
+
+def test_a_remote_owner_downloads_when_the_flag_is_set(shelf_env, tmp_path):
+    """The flag is what separates this tier from the loopback red line. If it
+    did nothing here the route would silently be on the stricter one."""
+    folder = tmp_path / "flagged"
+    folder.mkdir()
+    write_adapter(folder / "alice.safetensors")
+    _seeded_folder_at(shelf_env.server, str(folder))
+
+    config = shelf_env.server.auth._server_config
+    previous = config.get("allow_remote_host_ops")
+    config["allow_remote_host_ops"] = True
+    try:
+        r = shelf_env.owner.get(_file_url(ADAPTER_WITH_BASE), headers=_xff("8.8.8.8"))
+        assert r.status_code == 200, r.text
+    finally:
+        if previous is None:
+            config.pop("allow_remote_host_ops", None)
+        else:
+            config["allow_remote_host_ops"] = previous
+
+
+def test_no_share_token_can_download_a_model_file(shelf_env, tmp_path):
+    """The direction that has to be asserted rather than reasoned about.
+
+    `test_share_tokens_never_reach_a_folder_mutator` explains why its own
+    refusals come from the auth middleware's non-GET rule, and warns in as many
+    words that a **GET** added to this tier without a `READ_BLOCKED_GET_PATHS`
+    entry is a real hole that turns nothing red. This route is that GET, and its
+    path is templated, so that frozenset — which matches literal paths — could
+    not cover it even if one were added. So the gate's owner check is the only
+    thing standing here, and this is the test that says whether it holds.
+
+    Both share-token shapes, each with a live-credential control in front of it,
+    against a file that genuinely serves 200 for the owner in the same test.
+    """
+    folder = tmp_path / "shared"
+    folder.mkdir()
+    write_adapter(folder / "alice.safetensors")
+    _seeded_folder_at(shelf_env.server, str(folder))
+    weights = (folder / "alice.safetensors").read_bytes()
+    url = _file_url(ADAPTER_WITH_BASE)
+    assert shelf_env.owner.get(url).status_code == 200, (
+        "the owner cannot download it either; the refusals below would prove nothing"
+    )
+    assert_real_route(shelf_env.server.api, "GET", url)
+
+    scoped = _mint(
+        shelf_env.owner,
+        "adapter download probe",
+        resource_type="character",
+        resource_id=shelf_env.character_id,
+    )
+    unscoped = _mint(shelf_env.owner, "adapter download global read")
+    for name, token in (("resource-scoped", scoped), ("unscoped READ", unscoped)):
+        client = _bearer(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200, (
+            f"the {name} token is dead; the refusal below would prove nothing"
+        )
+        r = client.get(url)
+        assert r.status_code == 403, (
+            f"a {name} share token downloaded a model file: {r.status_code} {r.text}"
+        )
+        assert r.content != weights, "the file's bytes were served anyway"
+
+
+def test_an_unauthenticated_caller_cannot_download(shelf_env, tmp_path):
+    folder = tmp_path / "anon"
+    folder.mkdir()
+    write_adapter(folder / "alice.safetensors")
+    _seeded_folder_at(shelf_env.server, str(folder))
+
+    anon = TestClient(shelf_env.server.api)
+    assert anon.get(_file_url(ADAPTER_WITH_BASE)).status_code == 401

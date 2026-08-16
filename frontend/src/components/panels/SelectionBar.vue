@@ -225,6 +225,7 @@
             :selected-multiple-stack-ids="props.selectedMultipleStackIds"
             :keep-cover-only-stack-count="props.keepCoverOnlyStackCount"
             :keep-cover-only-lock-reason="props.keepCoverOnlyLockReason"
+            :rotate-block-reason="props.rotateBlockReason"
             :show-remove-from-stack="props.showRemoveFromStack"
             @close="selectionMenuOpen = false"
             @set-project="$emit('set-project', $event)"
@@ -242,6 +243,8 @@
             @open-comfyui-panel="openComfyuiPanel()"
             @reverse-image-search="$emit('reverse-image-search')"
             @segment="$emit('segment')"
+            @rotate-left="$emit('rotate-left')"
+            @rotate-right="$emit('rotate-right')"
             @remove-from-group="$emit('remove-from-group')"
             @keep-cover-only="$emit('keep-cover-only')"
             @delete-selected="$emit('delete-selected')"
@@ -360,6 +363,9 @@ const props = defineProps({
   // only, never as a top-level pill button.
   keepCoverOnlyStackCount: { type: Number, default: 0 },
   keepCoverOnlyLockReason: { type: String, default: null },
+  // Forwarded straight to SelectionMenu, like the two above: the rotate pair
+  // lives in the overflow only, never as a top-level pill button.
+  rotateBlockReason: { type: String, default: null },
   groupingLockReason: { type: String, default: null },
   availablePlugins: { type: Array, default: () => [] },
   taggerPlugins: { type: Array, default: () => [] },
@@ -390,6 +396,8 @@ const emit = defineEmits([
   "generate-description",
   "reverse-image-search",
   "segment",
+  "rotate-left",
+  "rotate-right",
   "selection-menu-open",
   "clear-impossible-tags",
 ]);

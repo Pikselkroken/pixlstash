@@ -224,6 +224,10 @@ class Vault:
             engine_getter=lambda: self._engine,
             image_root=self.image_root,
             path_mapper=path_mapper,
+            # So a regenerated thumbnail can announce itself. Passed as the bound
+            # method rather than the vault, to keep the finders' surface to what
+            # they actually use.
+            notifier=self.notify,
         )
         from pixlstash.tasks import (
             TaskType,

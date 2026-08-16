@@ -52,7 +52,13 @@ const SERVER_COMPUTED_SORT_FIELDS = new Set([
 // object boxes from `img.detections` (ImageGrid.getDetectionBboxOverlays, gated
 // on the `showDetections` prop), and a user-triggered Segment completes the same
 // way for every tab regardless of who started it.
-const CARD_CONTENT_FIELDS = new Set(["detections"]);
+// `pixels` belongs here for the same reason: an in-place rotate (or the undo of
+// one) rewrites the file and therefore the card's thumbnail, while its sort and
+// filter position are untouched — a turned photo does not move in the grid. It
+// needs one thing `detections` does not, handled at the branch below: the
+// thumbnail URL lives on the batch-thumbnail endpoint, not on /metadata, so a
+// card refresh alone repaints the pre-rotate bitmap.
+const CARD_CONTENT_FIELDS = new Set(["detections", "pixels"]);
 
 // Stack membership. `stack_count` is the number of LIVE members a card's stack
 // badge renders, and it is the one facet neither of the branches above can
@@ -372,6 +378,19 @@ export function useGridRealtimeSync(deps) {
       grid.refreshSmartScoreForImage?.(id);
       return;
     }
+    // The picture's own BYTES changed — an in-place rotate, or an undo/redo of
+    // one arriving over the socket. The card is the same card, but its thumbnail
+    // URL has to be re-read, and `refreshGridImage` cannot do it: the metadata
+    // endpoint carries no thumbnail URL, so on its own it repaints the
+    // pre-rotate bitmap. Same reasoning as `stack_count` — a listing-only value
+    // a per-card metadata read cannot repair.
+    if (fields.includes("pixels")) {
+      void (async () => {
+        await grid.refreshGridImage?.(id);
+        await grid.refreshThumbnailUrls?.([id]);
+      })();
+      return;
+    }
     // Any other change (incl. a score change): refresh the card's metadata in
     // place. refreshGridImage re-fetches so the new value is reflected.
     grid.refreshGridImage?.(id);
@@ -597,6 +616,12 @@ export function useGridRealtimeSync(deps) {
         };
       }
       for (const id of pictureIds) grid.refreshGridImage?.(id);
+      // A `pixels` change rewrote the FILE, so the card also needs its thumbnail
+      // URL re-read from the server. One batched call for the whole event, and
+      // only when the file actually changed — `detections` leaves it alone.
+      if (fields.includes("pixels")) {
+        grid.refreshThumbnailUrls?.(pictureIds);
+      }
       return { action: TARGETED, reason: "card-content-refresh" };
     }
 
