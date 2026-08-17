@@ -4634,7 +4634,7 @@ button.shelf-head-cell:hover {
   box-shadow: inset 3px 0 0 rgb(var(--v-theme-primary));
 }
 
-/* ── The two kinds of absence ──────────────────────────────────────────────
+/* ── The three kinds of absence ────────────────────────────────────────────
    BROKEN is a fault: the file was registered and is gone. It takes the error
    rail and the error glyph in front of the name.
 
@@ -4643,6 +4643,10 @@ button.shelf-head-cell:hover {
    deliberately NEVER the error colour — the offline case is the common one for
    anyone keeping adapters on an external disk, and painting it as a failure is
    what trains a reader to ignore both.
+
+   NOT DOWNLOADED is not a fault either: one of PixlStash's own declared engines
+   that nothing has needed yet, which is the normal state of about half of them.
+   It takes NO rail, muted ink and a download glyph (#926).
 
    They are told apart in GREYSCALE, which is what makes this a treatment and
    not a hue: solid rail, dashed rail, no rail, plus two different glyphs. */
