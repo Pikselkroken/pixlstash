@@ -101,8 +101,10 @@ fourth distinct occurrence of that bug in this codebase.
   want `dark-surface-error` (4.12:1). Pre-existing, mechanical, large enough to want its
   own eyeball pass.
 - **`SelectionBar`'s `6px` block padding** stays off-grid until the action-bar height
-  reconciliation (34 / 40 / 48 / 56px → `--bar-height`), which is UI/UX-gated because it
-  moves pixels on the app's most-used control.
+  reconciliation (34 / 36 / 40 / 48 / 56px → `--bar-height`), which is UI/UX-gated
+  because it moves pixels on the app's most-used control. The three **view toolbars**
+  are out of that list: they were reconciled with each other at 36px rather than onto
+  the token (`toolbar-responsive-decisions.md` Amendment #5).
 - **The 40+ raw z-index call sites.** The ladder is shipped; retrofitting is
   opportunistic (touch a rule, move it onto the ladder). The ladder's own values and the
   migration of the remaining squatters are owned by the concurrent layering lane — read
