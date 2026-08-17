@@ -809,7 +809,7 @@ class JoyCaptionPlugin(TaggerPlugin):
         image_paths: list,
         parameters: dict[str, Any],
         preloaded=None,
-        stop_event=None,
+        stop_event: threading.Event | None = None,
     ) -> dict[str, list[TagResult]]:
         """Generate Danbooru-style tags for each image.
 
@@ -862,6 +862,9 @@ class JoyCaptionPlugin(TaggerPlugin):
 
         for path in image_paths:
             if stop_event is not None and stop_event.is_set():
+                logger.debug(
+                    "JoyCaption generate tags stop-event reached, ending early."
+                )
                 break
             path_str = str(path)
             ext = os.path.splitext(path_str)[1].lower()
@@ -890,7 +893,7 @@ class JoyCaptionPlugin(TaggerPlugin):
         self,
         image_paths: list,
         parameters: dict[str, Any],
-        stop_event=None,
+        stop_event: threading.Event | None = None,
     ) -> dict[str, Optional[str]]:
         """Generate natural-language descriptions for each image.
 
@@ -912,6 +915,9 @@ class JoyCaptionPlugin(TaggerPlugin):
 
         for path in image_paths:
             if stop_event is not None and stop_event.is_set():
+                logger.debug(
+                    "JoyCaption generate descriptions stop-event reached, ending early."
+                )
                 break
             path_str = str(path)
             ext = os.path.splitext(path_str)[1].lower()

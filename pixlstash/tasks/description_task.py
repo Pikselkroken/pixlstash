@@ -222,7 +222,8 @@ class DescriptionTask(BaseTask):
                 self._release_idle_cpu_spillover_engine(force=False)
 
         if not batch_results:
-            if self._engine_override:
+            # Only log plugins as having failed if they were not cancelled
+            if not self._cancel_event.is_set() and self._engine_override:
                 logger.error(
                     "DescriptionTask: plugin %r failed for ids=%s; "
                     "description will be cleared.",
@@ -239,7 +240,20 @@ class DescriptionTask(BaseTask):
             if description:
                 pic.description = description
             else:
-                logger.error("Failed to generate description for picture %s", pic.id)
+                # Only log caption generation as having failed if it was not cancelled
+                if not self._cancel_event.is_set():
+                    logger.error(
+                        "Failed to generate description for picture %s", pic.id
+                    )
                 pic.description = ""
             descriptions_generated.append(pic)
         return descriptions_generated
+
+    def on_cancel(self) -> None:
+        if self._cancel_event.is_set():
+            return
+
+        super().on_cancel()
+        if self._cancel_event.is_set():
+            logger.warning("Description task cancelled.")
+            self._workflow.on_cancel()

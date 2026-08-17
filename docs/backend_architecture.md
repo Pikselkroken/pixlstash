@@ -1269,10 +1269,12 @@ folder's absolute host path needs somewhere to be served from, which is why
 
 **The plugin lifecycle is not fully wired for third parties, and the guide says so.**
 `ModelLifecycleManager` unloads the four built-in *services* by name and does not walk the
-registry, so nothing calls `TaggerPlugin.unload()` on a user plugin; `DescriptionWorkflow`
-charges the VRAM budget for Florence-2 only, so `estimated_vram_mb()` is never consulted;
-and `generate_descriptions` is called without a `stop_event` (the tag path does pass one).
-Closing any of these is a separate change to the workflow, not to discovery.
+registry, so nothing calls `TaggerPlugin.unload()` on a user plugin; and
+`DescriptionWorkflow` charges the VRAM budget for Florence-2 only, so
+`estimated_vram_mb()` is never consulted. Closing either is a separate change to the
+workflow, not to discovery. The third gap listed here — `generate_descriptions` being
+called without a `stop_event` — is closed: `DescriptionWorkflow` now passes one on both
+paths, so a plugin that honours it stops between images instead of running the batch out.
 
 #### Florence-2 checkpoint selection (issue #512)
 

@@ -74,6 +74,7 @@ class BaseTask(ABC):
         self.attempts_used = 0
         self.vram_oom_attempts = 0
         self._done_event = threading.Event()
+        self._cancel_event = threading.Event()
 
     def run(
         self,
@@ -96,11 +97,16 @@ class BaseTask(ABC):
                 raised.
 
         Returns:
-            Whatever ``_run_task`` returned.
+            Whatever ``_run_task`` returned, or ``None`` when the task was
+            cancelled before it started.
         """
-        self.started_at = datetime.utcnow()
-        self.status = TaskStatus.RUNNING
         try:
+            if self._cancel_event.is_set():
+                self.status = TaskStatus.CANCELLED
+                return None
+
+            self.started_at = datetime.utcnow()
+            self.status = TaskStatus.RUNNING
             for attempt in range(1, self.VRAM_OOM_ATTEMPTS + 1):
                 # Recorded before the attempt runs, so whatever ends the task —
                 # success, a different exception, a shutdown — the count says
@@ -108,7 +114,11 @@ class BaseTask(ABC):
                 self.attempts_used = attempt
                 try:
                     self.result = self._run_task()
-                    self.status = TaskStatus.COMPLETED
+                    self.status = (
+                        TaskStatus.CANCELLED
+                        if self._cancel_event.is_set()
+                        else TaskStatus.COMPLETED
+                    )
                     return self.result
                 except Exception as exc:
                     # GPU-queue tasks only. Re-running ``_run_task`` from the top
@@ -131,6 +141,12 @@ class BaseTask(ABC):
                     )
                     if on_vram_oom is not None:
                         on_vram_oom(self, attempt, exc)
+                    # A cancelled task has nothing to retry for: the next
+                    # attempt would re-enter ``_run_task`` only to return
+                    # straight back out on the same cancel event.
+                    if self._cancel_event.is_set():
+                        self.status = TaskStatus.CANCELLED
+                        return None
         except Exception as exc:
             self.error = str(exc)
             self.status = TaskStatus.FAILED
@@ -162,6 +178,12 @@ class BaseTask(ABC):
         return None
 
     def on_cancel(self) -> None:
+        if self.status not in (
+            TaskStatus.CANCELLED,
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+        ):
+            self._cancel_event.set()
         return None
 
     @abstractmethod

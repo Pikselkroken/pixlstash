@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import os
 from typing import TYPE_CHECKING
 
@@ -36,6 +37,7 @@ class DescriptionWorkflow:
     def __init__(self, engine: "InferenceEngine", image_root: str | None) -> None:
         self._engine = engine
         self._image_root = image_root
+        self._describe_cancel = threading.Event()
 
     def generate_batch(
         self, pictures: list, engine_override: str | None = None
@@ -56,6 +58,9 @@ class DescriptionWorkflow:
             captions are stored as ``None``.  An empty dict is returned when
             *pictures* is empty.
         """
+        if self._describe_cancel.is_set():
+            return {}
+
         if not pictures:
             return {}
 
@@ -145,7 +150,9 @@ class DescriptionWorkflow:
             path_to_id[picture_path] = picture.id
 
         try:
-            captions = plugin.generate_descriptions(image_paths, parameters=params)
+            captions = plugin.generate_descriptions(
+                image_paths, parameters=params, stop_event=self._describe_cancel
+            )
             for path, caption in captions.items():
                 pic_id = path_to_id.get(str(path))
                 if pic_id is not None:
@@ -185,17 +192,19 @@ class DescriptionWorkflow:
             ext = os.path.splitext(picture_path)[1].lower()
             if ext in _VIDEO_EXTS:
                 results[picture.id] = self._engine.florence_service.generate_caption(
-                    picture_path, _retry_on_cpu=False
+                    picture_path, _retry_on_cpu=False, stop_event=self._describe_cancel
                 )
             else:
                 batch_items.append((picture.id, picture_path))
 
         batch_size = self._engine.florence_service.description_batch_size()
         for idx in range(0, len(batch_items), batch_size):
+            if self._describe_cancel.is_set():
+                break
             chunk = batch_items[idx : idx + batch_size]
             chunk_paths = [picture_path for _, picture_path in chunk]
             captions = self._engine.florence_service.generate_captions_batch(
-                chunk_paths
+                chunk_paths, stop_event=self._describe_cancel
             )
             for picture_id, picture_path in chunk:
                 results[picture_id] = captions.get(picture_path)
@@ -228,3 +237,8 @@ class DescriptionWorkflow:
         if service.is_loaded():
             return int(FLORENCE_PER_IMAGE_VRAM_MB * batch)
         return int(service.base_vram_mb + FLORENCE_PER_IMAGE_VRAM_MB * batch)
+
+    def on_cancel(self) -> None:
+        if not self._describe_cancel.is_set():
+            logger.debug("Description workflow cancelled.")
+            self._describe_cancel.set()
