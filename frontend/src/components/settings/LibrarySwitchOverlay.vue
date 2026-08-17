@@ -1,5 +1,5 @@
 <script setup>
-import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { VDialog, VIcon, VProgressCircular } from "vuetify/components";
 
@@ -15,6 +15,19 @@ const { phase, targetLibrary, currentLibrary, error, overlayOpen } =
 const panel = ref(null);
 const stayButton = ref(null);
 let restoreOverlayInertness = null;
+
+// Only one phase renders at a time, so a single heading id is always resolvable
+// and the accessible name follows the phase instead of going stale in one of
+// them. The error paragraph exists in the failed phase only; naming it while it
+// is absent would leave a dangling IDREF.
+const titleId = useId();
+const descriptionId = useId();
+const errorId = useId();
+const describedBy = computed(() =>
+  phase.value === "failed"
+    ? `${descriptionId} ${errorId}`
+    : descriptionId,
+);
 
 watch(
   [overlayOpen, phase],
@@ -49,13 +62,19 @@ function blockEscape(event) {
     persistent
     :scrim="true"
     :max-width="520"
+    role="alertdialog"
+    :aria-labelledby="titleId"
+    :aria-describedby="describedBy"
     @keydown="blockEscape"
   >
+    <!--
+      Vuetify's overlay root already carries the dialog role and aria-modal, so
+      the naming goes there (the attrs above fall through to it) rather than on
+      a second, nested dialog element here.
+    -->
     <section
       ref="panel"
       class="library-switch-overlay"
-      role="alertdialog"
-      aria-modal="true"
       aria-live="assertive"
       aria-atomic="true"
       tabindex="-1"
@@ -63,8 +82,10 @@ function blockEscape(event) {
       <template v-if="phase === 'switching'">
         <v-progress-circular indeterminate size="32" width="3" />
         <div>
-          <h2>Switching to {{ targetLibrary?.name }}…</h2>
-          <p>
+          <h2 :id="titleId">
+            Switching to {{ targetLibrary?.name }}…
+          </h2>
+          <p :id="descriptionId">
             PixlStash is finishing or cancelling work, then it will reload this
             window. Keep it open.
           </p>
@@ -76,12 +97,16 @@ function blockEscape(event) {
           mdi-alert-circle-outline
         </v-icon>
         <div class="library-switch-overlay__failure">
-          <h2>Could not switch to {{ targetLibrary?.name }}</h2>
-          <p>
+          <h2 :id="titleId">
+            Could not switch to {{ targetLibrary?.name }}
+          </h2>
+          <p :id="descriptionId">
             PixlStash is still using
             <strong>{{ currentLibrary?.name ?? "the current library" }}</strong>.
           </p>
-          <p class="library-switch-overlay__detail">{{ error }}</p>
+          <p :id="errorId" class="library-switch-overlay__detail">
+            {{ error }}
+          </p>
           <div class="library-switch-overlay__actions">
             <AppButton
               ref="stayButton"
