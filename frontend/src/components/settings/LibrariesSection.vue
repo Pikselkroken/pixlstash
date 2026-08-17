@@ -12,7 +12,7 @@
  * reload rather than a store refresh: picture ids do not mean the same thing in
  * another library, and every open view describes the old one.
  */
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { VCard, VDialog, VProgressCircular } from "vuetify/components";
 
@@ -22,6 +22,7 @@ import {
   useLibrariesStore,
   useLibrarySwitchStore,
 } from "../../stores/useLibrariesStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { copyText } from "../../utils/clipboard";
 import AppButton from "../widgets/AppButton.vue";
 import SettingsSection from "./SettingsSection.vue";
@@ -35,6 +36,7 @@ const props = defineProps({
 const { confirm } = useConfirm();
 const librariesStore = useLibrariesStore();
 const switchStore = useLibrarySwitchStore();
+const noticeStore = useNoticeStore();
 const {
   libraries,
   canManage,
@@ -47,6 +49,7 @@ const {
 } = storeToRefs(librariesStore);
 const { targetLibrary, overlayOpen } = storeToRefs(switchStore);
 const copiedCommand = ref("");
+let copyResetTimer = 0;
 // The four commands carry an absolute interpreter path each, so inline they
 // dominated a panel whose actual job is listing and switching libraries. They
 // are reference material consulted once, not part of that flow, so they live
@@ -132,12 +135,32 @@ function togglePath(libraryUuid) {
 }
 
 async function copyCommand(command) {
-  await copyText(command);
-  copiedCommand.value = command;
-  window.setTimeout(() => {
-    if (copiedCommand.value === command) copiedCommand.value = "";
-  }, 2000);
+  if (await copyText(command)) {
+    copiedCommand.value = command;
+    window.clearTimeout(copyResetTimer);
+    copyResetTimer = window.setTimeout(() => {
+      if (copiedCommand.value === command) copiedCommand.value = "";
+    }, 2000);
+    return;
+  }
+  // The clipboard refuses on an insecure context and the execCommand fallback
+  // can be denied too. Claiming "Copied" then leaves the user pasting whatever
+  // was on the clipboard before, and this command is the one thing on the
+  // screen nobody can retype from memory. The shared notice surface owns the
+  // failure, as it does for the identical copy in OverlayDescriptionPanel.
+  noticeStore.error(
+    "Couldn't copy the command. Select the text and press Ctrl+C, or Command-C on a Mac.",
+    { key: "libraries-cli-copy" },
+  );
 }
+
+// Reopening the dialog otherwise shows "Copied" — and announces it — for a
+// button nobody pressed this time.
+watch(commandsOpen, (isOpen) => {
+  if (!isOpen) copiedCommand.value = "";
+});
+
+onUnmounted(() => window.clearTimeout(copyResetTimer));
 </script>
 
 <template>
