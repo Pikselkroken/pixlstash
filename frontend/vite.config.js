@@ -57,6 +57,12 @@ export default defineConfig({
     // jsdom has no layout, so the observer APIs any measuring component needs
     // are stubbed once here rather than re-declared per suite.
     setupFiles: ['src/testing/setup.js'],
+    // Vitest's default is 5 s, which the heaviest component mounts sit just
+    // under on this machine (ModelShelf's tab-switch test: ~1.4 s) and cross on
+    // a loaded GitHub runner, where they red the gate as a timeout rather than
+    // an assertion. Nothing here asserts a render budget, so the number is
+    // arbitrary — give it headroom instead of leaving the gate to luck.
+    testTimeout: 20000,
     server: {
       deps: {
         // Vuetify ships its component CSS as sibling `.css` imports, which Node
