@@ -264,18 +264,17 @@ class Florence2Service:
         }
 
     def generate_caption(
-        self,
-        image_path: str,
-        _retry_on_cpu: bool = True,
-        stop_event: threading.Event | None = None,
+        self, image_path: str, _retry_on_cpu: bool = True
     ) -> Optional[str]:
         """Generate a natural language caption for a single image or video file.
+
+        There is no ``stop_event`` here: one caption is a single inference with
+        nothing to interrupt part-way, so cancellation is the caller's check
+        before it asks for the next one.
 
         Args:
             image_path: Path to the image or video file.
             _retry_on_cpu: When True, retry on CPU if a CUDA error occurs.
-            stop_event: Optional :class:`threading.Event` to interrupt
-                inference mid-batch.
 
         Returns:
             Caption string, or None on failure.
@@ -314,13 +313,6 @@ class Florence2Service:
 
         except Exception as e:
             if _retry_on_cpu and self._is_cuda_error(e):
-                if stop_event and stop_event.is_set():
-                    logger.warning(
-                        "Florence-2 captioning failed on GPU (%s); will not retry as"
-                        " a stop-event has been reached.",
-                        e,
-                    )
-                    return None
                 logger.warning(
                     "Florence-2 captioning failed on GPU (%s); retrying on CPU.", e
                 )
@@ -427,10 +419,17 @@ class Florence2Service:
 
             logger.error("Florence-2 batch captioning failed: %s", e)
             logger.debug(traceback.format_exc())
-            return {
-                image_path: self.generate_caption(image_path, _retry_on_cpu=False)
-                for image_path in image_paths
-            }
+            captions = {}
+            for image_path in image_paths:
+                if stop_event and stop_event.is_set():
+                    logger.debug(
+                        "Florence-2 per-image fallback stop-event reached, ending early"
+                    )
+                    break
+                captions[image_path] = self.generate_caption(
+                    image_path, _retry_on_cpu=False
+                )
+            return captions
 
     def detect_objects(
         self,
@@ -1045,7 +1044,7 @@ class Florence2Plugin(TaggerPlugin):
             ext = os.path.splitext(path_str)[1].lower()
             if ext in _VIDEO_EXTS:
                 results[path_str] = self.service.generate_caption(
-                    path_str, _retry_on_cpu=False, stop_event=stop_event
+                    path_str, _retry_on_cpu=False
                 )
             else:
                 batch_items.append(path_str)

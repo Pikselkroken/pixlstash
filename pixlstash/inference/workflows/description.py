@@ -214,7 +214,7 @@ class DescriptionWorkflow:
             ext = os.path.splitext(picture_path)[1].lower()
             if ext in _VIDEO_EXTS:
                 results[picture.id] = self._engine.florence_service.generate_caption(
-                    picture_path, _retry_on_cpu=False, stop_event=stop_event
+                    picture_path, _retry_on_cpu=False
                 )
             else:
                 batch_items.append((picture.id, picture_path))

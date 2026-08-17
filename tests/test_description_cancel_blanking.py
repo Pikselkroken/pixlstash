@@ -8,9 +8,11 @@ neither. So a cancel must persist nothing for the pictures it skipped, while a
 genuine failure must still blank — that is what stops an uncaptionable picture
 being retried for ever.
 
-The last two tests cover the routing rather than the writes: the cancel event is
-the task's (the workflow object running a batch is not always the one the task
-holds), and it is checked per picture in the Florence video loop.
+Three tests cover the routing rather than the writes: the cancel event is the
+task's own (the workflow object running a batch is not always the one the task
+was constructed with), it is checked per picture in the Florence video loop, and
+``BaseTask.run`` refuses a task cancelled before it started while still reporting
+COMPLETED for one that returned normally.
 
 Deliberately Server-free. An in-memory SQLite engine and a two-method stub are
 everything ``DescriptionTask`` and the finder's query touch, so this file builds
@@ -25,6 +27,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from pixlstash.db_models import Picture
 from pixlstash.inference.workflows.description import DescriptionWorkflow
+from pixlstash.tasks.base_task import BaseTask, TaskStatus
 from pixlstash.tasks.description_task import DescriptionTask
 from pixlstash.tasks.missing_description_finder import MissingDescriptionFinder
 
@@ -187,7 +190,7 @@ def test_a_cancel_stops_the_florence_video_loop_before_the_next_video():
     stop = threading.Event()
     captioned: list[str] = []
 
-    def generate_caption(path, _retry_on_cpu=True, stop_event=None):
+    def generate_caption(path, _retry_on_cpu=True):
         captioned.append(path)
         stop.set()  # the cancel lands while the first video is being captioned
         return "first-video"
@@ -215,3 +218,50 @@ def test_a_cancel_stops_the_florence_video_loop_before_the_next_video():
         "checked in the per-picture loop"
     )
     assert 2 not in results
+
+
+def test_run_refuses_a_task_cancelled_before_it_started():
+    """``BaseTask.on_cancel`` sets the event and ``run()`` reads it before the
+    first attempt, so a task cancelled while queued and then picked up by a
+    worker does no work at all."""
+
+    class _CountingTask(BaseTask):
+        def __init__(self):
+            super().__init__(task_type="CountingTask")
+            self.attempts = 0
+
+        def _run_task(self):
+            self.attempts += 1
+            return "did the work"
+
+    task = _CountingTask()
+    task.on_cancel()
+
+    assert task.run() is None
+    assert task.attempts == 0
+    assert task.status == TaskStatus.CANCELLED
+
+    # And a requeue is a fresh run: on_queued clears the event, or the task
+    # would refuse its work for the rest of the process.
+    task.on_queued()
+    assert task.run() == "did the work"
+    assert task.attempts == 1
+    assert task.status == TaskStatus.COMPLETED
+
+
+def test_a_cancel_landing_after_the_work_still_reports_completed():
+    """The cancel event is set by the shutdown thread and can land at any
+    instant, including after ``_run_task`` has committed its rows. Reporting
+    CANCELLED there would race a finished task — and ``Vault._on_task_complete``
+    fires only for COMPLETED, so it would swallow the notification for work that
+    is already in the database."""
+
+    class _SelfCancellingTask(BaseTask):
+        def _run_task(self):
+            self.on_cancel()  # what TaskRunner.stop() does mid-flight
+            return "committed before the cancel"
+
+    task = _SelfCancellingTask(task_type="SelfCancellingTask")
+
+    assert task.run() == "committed before the cancel"
+    assert task.status == TaskStatus.COMPLETED

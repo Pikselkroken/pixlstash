@@ -215,10 +215,12 @@ def tag_images(self, image_paths, parameters, preloaded=None, stop_event=None):
 - **Map a path to `None` to report a per-image failure.** That is the documented signal;
   the rest of the batch is still stored. Raising instead loses the whole batch.
 - `stop_event` is a `threading.Event` set when the user cancels or the server shuts
-  down. Both the tag and the description path pass one. **Check it between images and
-  return what you have** — a batch that runs to the end regardless holds up shutdown
-  for as long as your slowest image takes. It may still be `None` if something calls
-  your plugin directly, so guard the access.
+  down. **Check it between images and return what you have** — a batch that runs to
+  the end regardless holds up shutdown for as long as your slowest image takes.
+  `DescriptionWorkflow.generate_batch` passes one to `generate_descriptions`; the tag
+  path does **not** pass one to `tag_images` yet (`TagTask` calls
+  `TaggingWorkflow.tag_images` without it), and nothing stops a caller invoking your
+  plugin directly. So it can still be `None` — guard the access.
 - `TagResult.confidence` may be `None` for models that do not produce probabilities.
 
 ## 6. Downloads

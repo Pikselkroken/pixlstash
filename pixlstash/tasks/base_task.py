@@ -114,11 +114,13 @@ class BaseTask(ABC):
                 self.attempts_used = attempt
                 try:
                     self.result = self._run_task()
-                    self.status = (
-                        TaskStatus.CANCELLED
-                        if self._cancel_event.is_set()
-                        else TaskStatus.COMPLETED
-                    )
+                    # Deliberately COMPLETED even when the cancel event is set.
+                    # A task that returned normally did whatever work it did,
+                    # and reporting CANCELLED here would race the cancel against
+                    # a task that had already finished — and suppress
+                    # ``Vault._on_task_complete``, which only fires for
+                    # COMPLETED, over rows ``_run_task`` has already committed.
+                    self.status = TaskStatus.COMPLETED
                     return self.result
                 except Exception as exc:
                     # GPU-queue tasks only. Re-running ``_run_task`` from the top
@@ -141,12 +143,6 @@ class BaseTask(ABC):
                     )
                     if on_vram_oom is not None:
                         on_vram_oom(self, attempt, exc)
-                    # A cancelled task has nothing to retry for: the next
-                    # attempt would re-enter ``_run_task`` only to return
-                    # straight back out on the same cancel event.
-                    if self._cancel_event.is_set():
-                        self.status = TaskStatus.CANCELLED
-                        return None
         except Exception as exc:
             self.error = str(exc)
             self.status = TaskStatus.FAILED
@@ -166,6 +162,11 @@ class BaseTask(ABC):
         return QueueType.CPU
 
     def on_queued(self) -> None:
+        # A task object that is queued again is a fresh run: without this a
+        # requeue after ``TaskRunner._cancel_queued_task`` would return from
+        # ``run()`` on the old cancel and never do its work. The four tasks
+        # that carry their own cancel event clear it here for the same reason.
+        self._cancel_event.clear()
         return None
 
     def estimated_vram_mb(self) -> int:
