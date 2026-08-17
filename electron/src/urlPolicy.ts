@@ -2,10 +2,12 @@ import { resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * A URL safe to write to the log: scheme, host, port and path, never the
- * `user:password@` userinfo a blocked URL may carry (and never an unbounded
- * `data:` payload). Schemes with no origin (`file:`, `mailto:`, `blob:`, …)
- * report origin `null`, so they are rendered from the protocol instead.
+ * A URL safe to write to the log: enough to identify what was blocked, never
+ * the `user:password@` userinfo the URL may carry and never a page-authored
+ * payload. Schemes with no origin report origin `null`; of those only `file:`
+ * has a path worth logging (it names a real file), while a `data:` or
+ * `javascript:` "path" IS the attacker-controlled body, so it is dropped and
+ * only the scheme (plus the `data:` media type) is kept.
  */
 export function redactUrl(target: string): string {
   let url: URL;
@@ -14,7 +16,16 @@ export function redactUrl(target: string): string {
   } catch {
     return '<unparseable URL>';
   }
-  const rendered = url.origin === 'null' ? url.protocol + url.pathname : url.origin + url.pathname;
+  let rendered: string;
+  if (url.origin !== 'null') {
+    rendered = url.origin + url.pathname;
+  } else if (url.protocol === 'file:') {
+    rendered = `file://${url.pathname}`;
+  } else if (url.protocol === 'data:') {
+    rendered = `data:${url.pathname.split(',')[0]},<redacted>`;
+  } else {
+    rendered = `${url.protocol}<redacted>`;
+  }
   return rendered.length > 200 ? `${rendered.slice(0, 200)}…` : rendered;
 }
 

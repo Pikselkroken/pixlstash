@@ -102,7 +102,15 @@ describe('redactUrl', () => {
     const withCreds = 'http://someone:example-password@127.0.0.1:8723/x';
     assert.equal(redactUrl(withCreds), 'http://127.0.0.1:8723/x');
     assert.equal(redactUrl('not a url'), '<unparseable URL>');
-    assert.match(redactUrl('data:text/plain,' + 'a'.repeat(500)), /…$/);
+  });
+
+  it('never echoes a page-authored payload back into the log', () => {
+    assert.equal(redactUrl('data:text/plain,' + 'a'.repeat(500)), 'data:text/plain,<redacted>');
+    assert.equal(redactUrl('javascript:alert(document.cookie)'), 'javascript:<redacted>');
+    assert.equal(redactUrl('about:blank'), 'about:<redacted>');
+    // A file: path names a real file and is what a nav failure is debugged with.
+    const filePage = pathToFileURL(resolve('/opt/pixlstash/x.html')).href;
+    assert.ok(redactUrl(filePage).endsWith('x.html'));
   });
 });
 
@@ -117,7 +125,8 @@ describe('main.ts window-open wiring', () => {
     assert.match(source, /setWindowOpenHandler\(openHandler\)/);
   });
 
-  it('never classifies a target by string prefix', () => {
-    assert.equal(/startsWith\(\s*['"`]http/.test(source), false);
+  it('never classifies a target by the loopback string prefix (#1020)', () => {
+    const loopbackPrefix = /startsWith\(\s*['"`]https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/;
+    assert.equal(loopbackPrefix.test(source), false);
   });
 });
