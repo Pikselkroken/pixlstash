@@ -51,6 +51,7 @@ from typing import Optional
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import (
     MOVABLE_FIXED,
+    STATE_NOT_DOWNLOADED,
     DeclaredEntry,
     declare_folder,
 )
@@ -59,6 +60,7 @@ from pixlstash.services.model_features import (
     OUR_REPOS,
     features_for_repo,
 )
+from pixlstash.services.model_folder_scanner import STATE_PRESENT
 from pixlstash.utils.adapter_header import (
     FILE_CHECKPOINT,
     FILE_ENGINE,
@@ -286,7 +288,11 @@ def declare_insightface_packs(hub, folder_path: str) -> Optional[int]:
                 display_name=f"InsightFace {pack}",
                 role="face",
                 size=_directory_size(absolute) if present else None,
-                present=present,
+                # The listing above succeeded, so an absent pack is a fact we
+                # read rather than one we could not look at: `not_downloaded`,
+                # never `unreachable`. A directory we could not list at all
+                # returns early instead of declaring anything.
+                state=STATE_PRESENT if present else STATE_NOT_DOWNLOADED,
             )
         )
     return declare_folder(hub, folder_path, entries)
@@ -366,7 +372,8 @@ def declare_huggingface_cache(hub, folder_path: str) -> Optional[int]:
                 display_name=repo.repo_id,
                 role=capabilities[0],
                 size=int(repo.size_on_disk),
-                present=True,
+                # Every repo the cache index yields is one it holds bytes for.
+                state=STATE_PRESENT,
                 capabilities=capabilities,
                 file_kind=(
                     FILE_ENGINE

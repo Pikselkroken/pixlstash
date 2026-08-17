@@ -1678,6 +1678,19 @@ the one exception and still writes `missing`: a row the declaration no longer
 `huggingface-cli delete-cache` — is gone rather than pending, because nothing
 will fetch it back.
 
+**Only ENOENT is "not downloaded".** `declare_builtin_models` `stat`s each
+engine, and a `FileNotFoundError` is the one absence that means *nobody has
+fetched this yet*. Any other `OSError` — a permission denial, an IO error, a
+mount that has gone strange — is us being unable to **look**, which is
+`unreachable`, and it is logged with the path and the error. Folding those into
+`not_downloaded` would hide a real filesystem fault behind a download glyph,
+which is the same false-reassurance failure in the other direction from the one
+#926 reported. `DeclaredEntry` therefore carries the resolved `state` rather
+than a `present` flag: only the caller knows which of the three its own root
+means, and the InsightFace and HuggingFace roots — both of which read a listing
+before declaring anything, and both of which bail out entirely if that listing
+fails — can only ever mean the other two.
+
 **The unclaimed readout.** `unclaimed_files()` reports what is present and *not*
 declared — on a measured machine, `best.pt` at 339 MB, which nothing in the tree
 references by name or by pattern. It is called "not claimed by anything in this
