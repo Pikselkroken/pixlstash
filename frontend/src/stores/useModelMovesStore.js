@@ -15,6 +15,16 @@ import { useNoticeStore } from "./useNoticeStore";
 
 /** How often the job is re-read while one is running. */
 const POLL_MS = 1000;
+/**
+ * The longest a run of unreadable statuses may push the next reading out to.
+ *
+ * A failed read is "status unknown", not "the move stopped" (#1018), so the
+ * loop keeps going — but a backend that is down for a minute must not be asked
+ * sixty times, so each consecutive failure doubles the wait up to this ceiling.
+ * Fifteen seconds is late enough to be cheap and early enough that a move which
+ * finished during the outage is still reported while the owner is looking.
+ */
+const POLL_MAX_MS = 15000;
 
 /**
  * What each per-item status means in a receipt, and whether it is bad news.
@@ -123,6 +133,7 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
    */
   const failure = ref("");
   let pollHandle = null;
+  let pollDelay = POLL_MS;
   let epoch = 0;
   // Set the moment a job is started or observed running, cleared when its
   // finish has been reported. Without it a `finished` job read on the first
@@ -152,14 +163,47 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
   );
 
   function stopPolling() {
+    pollDelay = POLL_MS;
     if (pollHandle === null) return;
-    clearInterval(pollHandle);
+    clearTimeout(pollHandle);
     pollHandle = null;
   }
 
+  /**
+   * Watch the job until it reaches a terminal status.
+   *
+   * A self-scheduling timeout and not an interval: the next reading is booked
+   * only once the current one has landed, so a slow status read can never have
+   * a second one queued behind it, and an unreadable one can simply wait longer
+   * before trying again. The loop ends on a terminal status, a session reset or
+   * disposal — never on a failed read, which is what left the tab permanently
+   * busy (#1018).
+   */
   function startPolling() {
     if (pollHandle !== null) return;
-    pollHandle = setInterval(poll, POLL_MS);
+    scheduleNextPoll();
+  }
+
+  function scheduleNextPoll() {
+    const startedAt = epoch;
+    // `pollHandle` is deliberately NOT cleared when the timeout fires: it is
+    // what `adopt()` and `startPolling()` test to know a loop already owns this
+    // job, and a window where it reads null across the in-flight read would let
+    // a second loop start on top of this one. `stopPolling()` clears it.
+    pollHandle = setTimeout(async () => {
+      const read = await poll();
+      // A reset while the read was in flight owns the store now; anything this
+      // loop does from here would be about somebody else's session.
+      if (startedAt !== epoch) return;
+      // `watching` is cleared by the reading that consumed a terminal status
+      // and reported it, and by nothing else — an unread status leaves it up,
+      // and we try again. Testing the job's status instead would end the loop
+      // on a failed read whenever the last snapshot was already terminal, which
+      // a job that finished before its own POST returned can be.
+      if (!watching) return;
+      pollDelay = read ? POLL_MS : Math.min(pollDelay * 2, POLL_MAX_MS);
+      scheduleNextPoll();
+    }, pollDelay);
   }
 
   /**
@@ -168,6 +212,8 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
    * The refresh on completion is BOTH stores: `model_file` rows were repointed,
    * so the shelf's locations are stale, and the folders' file counts and
    * `shelf_bytes` moved with them, so the drive bands are too.
+   *
+   * @returns {Promise<boolean>} whether a status was actually read.
    */
   async function poll() {
     const startedAt = epoch;
@@ -175,20 +221,20 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     try {
       snapshot = await getModelMoveStatus();
     } catch (err) {
-      // A poll that fails is not a move that failed. Stop watching rather than
-      // reporting an outcome we did not read, and leave the last snapshot up.
+      // A poll that fails is not a move that failed, and it is not a move that
+      // stopped either: the server is still copying. Leave the last snapshot up
+      // and say only that this reading did not happen.
       console.warn("[modelMoves] could not read the move status:", err);
-      stopPolling();
-      return;
+      return false;
     }
-    if (startedAt !== epoch) return;
+    if (startedAt !== epoch) return false;
     job.value = snapshot;
     if (snapshot?.status === "running") {
       watching = true;
-      return;
+      return true;
     }
     stopPolling();
-    if (!watching) return;
+    if (!watching) return true;
     watching = false;
     const results = snapshot?.results || [];
     const receipt = moveReceipt(results, Boolean(snapshot?.cancel_requested));
@@ -196,10 +242,20 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     // a run that lost files holds the panel until it is read.
     if (results.some((r) => r.status === "failed")) failure.value = receipt;
     else useNoticeStore().push({ level: "success", text: receipt });
-    await Promise.all([
-      useModelShelfStore().fetchRows(),
-      useModelFoldersStore().refresh({ quiet: true }),
-    ]);
+    try {
+      await Promise.all([
+        useModelShelfStore().fetchRows(),
+        useModelFoldersStore().refresh({ quiet: true }),
+      ]);
+    } catch (err) {
+      // The move itself landed and has been reported; only the repaint behind
+      // it did not. Caught here because the caller is usually a timer callback,
+      // where a rejection is nobody's to handle and surfaces as an unhandled
+      // one. The stale rows are the shelf's own problem and it refetches on the
+      // next mount.
+      console.warn("[modelMoves] could not refresh after the move:", err);
+    }
+    return true;
   }
 
   /**

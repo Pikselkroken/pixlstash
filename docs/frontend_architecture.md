@@ -2841,6 +2841,27 @@ checked before either started. `busy` is what every entry point tests first.
 same-drive move, because those are renames — a byte-based bar would sit at 0%
 through the entire fastest case and then jump.
 
+**The watch is a self-scheduling timeout, and a failed reading does not end it
+(#1018).** The next status read is booked only once the current one has landed,
+so a slow read can never have a second queued behind it. A read that fails
+means *status unknown*, not *the move stopped*: the last snapshot stays up and
+the loop tries again, each consecutive failure doubling the wait to a 15 s
+ceiling. Giving up on one blip used to leave `busy` true off a stale `running`
+snapshot, which disabled every move entry point **and** `adopt()` — the one
+path that could have recovered it — so a reload was the only way back. What
+this buys is *recovery*, not a timeout: while the server stays unreachable the
+tab is still busy, because the move genuinely is still running as far as anyone
+here knows. It comes back on its own the moment a reading lands.
+
+**The loop ends on the reading that CONSUMED a terminal status, not on the job
+not being `running`** — plus a session reset and disposal, and nothing else.
+The distinction is a real case: `POST /model-moves` reads the job back on its
+way out, and a same-drive rename of a few files can finish before it does, so
+the accepted job can arrive already `finished`. Ending on the status would then
+end the loop on the first failed reading, losing the receipt and both refreshes
+for a move that actually completed. `watching` is cleared by the reading that
+reported the finish and by nothing else, so it is what the loop tests.
+
 **Two ways in, one dialog, and a drop does not move on release.** The selection
 bar's Move button and a drag onto a folder header **or onto a drive band's
 capacity meter** all resolve to the same list of copies and all open
