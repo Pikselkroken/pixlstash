@@ -324,6 +324,12 @@ function scannedLabel(folder) {
 
 function forgetReason(folder) {
   if (remoteReason.value) return remoteReason.value;
+  // Same guard and same reason as `relocateReason` below: forgetting deletes
+  // the very `model_file` rows a running move or import is writing, so the
+  // server takes the one machine-wide slot for it too and answers a second
+  // caller with a 409 (#1017). Saying so beforehand beats a red error toast on
+  // a button that looked enabled.
+  if (moves.busy) return MOVE_RUNNING_REASON;
   // The scanner thread is still writing rows against this folder id.
   return isScanning(folder) ? "This folder is being scanned right now." : "";
 }
@@ -347,7 +353,15 @@ function rowReason(folder) {
   else if (isScanning(folder) && (canForget(folder) || folder.relocatable)) {
     reasons.push("This folder is being scanned right now.");
   }
-  if (!remoteReason.value && folder.relocatable && moves.busy) {
+  // `canForget` as well as `relocatable`: a running move blocks both verbs now,
+  // and an ordinary `user` folder is forgettable without being relocatable —
+  // gating this on `relocatable` alone left exactly those rows with a blocked
+  // Forget and no note saying why.
+  if (
+    !remoteReason.value &&
+    (folder.relocatable || canForget(folder)) &&
+    moves.busy
+  ) {
     reasons.push(MOVE_RUNNING_REASON);
   }
   return reasons.join(" ");

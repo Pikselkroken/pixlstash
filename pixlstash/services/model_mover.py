@@ -52,9 +52,27 @@ same residue the same-drive rename window already accepts, and never a row
 naming a file that is gone. Raising the pragma to ``FULL`` would fsync every
 tiny hub write in the product to narrow that one window, which is not the trade.
 
+**The unlink is authorised by exactly one committed row, and that is checked**
+(#1017). "Commit first" above means the ``model_file`` row actually moved from
+the source key to the destination key — but SQL reports an ``UPDATE`` that
+matched nothing as success, so the commit could be a no-op and the unlink would
+run anyway, leaving the destination bytes with no row naming them. That is the
+dangling residue inverted: not a row without a file, a file without a row, and
+after the source is gone. It happened because forgetting a folder deletes its
+location rows and was not serialized against a running move. Both halves are
+closed, and only the first of them is a guarantee: :meth:`ModelMover._repoint`
+requires **exactly one** affected row and raises :class:`RepointLost` otherwise,
+so the caller undoes its copy or its rename and fails the file before the
+unlink; and ``DELETE /model-folders/{id}`` now takes the same
+:data:`SHELF_IO_LOCK` slot, which stops the reported interleaving from starting
+but is a slot rather than a general exclusion — a rescan writes the same rows
+outside this lock by design, and a multi-run import is a sequence of separate
+lock-taking requests. The rowcount check is what holds in every case.
+
 **One move or import at a time, machine-wide** (:data:`SHELF_IO_LOCK`), and the
 destination is re-checked at execution time rather than trusted from the plan.
-Both are below, with the reasoning.
+Both are below, with the reasoning. Forgetting a model folder takes the same
+slot, because it deletes the rows a move is in the middle of repointing.
 
 **Space is checked before the first byte**, and for the whole batch at once:
 :meth:`ModelMover.plan` refuses a job that would not fit rather than filling the
@@ -139,6 +157,25 @@ class MoveRefused(ValueError):
     def __init__(self, message: str, status_code: int = 400) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class RepointLost(RuntimeError):
+    """The location row this move was authorised by is no longer there.
+
+    The unlink at the end of a move is authorised by exactly one thing: the
+    ``model_file`` row moving from the source key to the destination key. If
+    that row is gone by the time the commit runs — the source folder was
+    forgotten mid-move, a delete removed the copy, a restored hub no longer has
+    it — the ``UPDATE`` matches nothing and reports success in silence, and the
+    mover would then unlink the source and leave the destination bytes with no
+    row naming them. So :meth:`ModelMover._repoint` requires **exactly one**
+    affected row and raises this otherwise; the caller undoes what it wrote and
+    fails the file (#1017).
+
+    Deliberately **not** a ``sqlite3`` error: nothing is wrong with the
+    database, and the two undo paths need to tell this apart from the UNIQUE
+    violation they already handle, whose diagnosis and log line are different.
+    """
 
 
 @dataclass(frozen=True)
@@ -934,7 +971,7 @@ class ModelMover:
             return self._copy_verify_repoint_unlink(
                 move, plan, delete_source=delete_source
             )
-        except (OSError, sqlite3.IntegrityError) as exc:
+        except (OSError, sqlite3.IntegrityError, RepointLost) as exc:
             logger.error(
                 "Moving %s -> %s failed: %s. The source is untouched.",
                 move.source_path,
@@ -960,6 +997,23 @@ class ModelMover:
         os.rename(move.source_path, move.destination_path)
         try:
             self._repoint(move, plan)
+        except RepointLost:
+            # The row that authorised this move is gone — its folder was
+            # forgotten, or the copy was deleted, while the rename ran. Same
+            # undo as the key-taken case below: put the file back at the path
+            # the (now absent) registration named, which is where re-adding that
+            # folder will find it again. Leaving it renamed away would hide it
+            # from both folders.
+            logger.error(
+                "The location row for (folder %s, %r) vanished between the plan "
+                "and the commit; renaming %s back and failing this file.",
+                move.source_folder_id,
+                move.source_relpath,
+                move.destination_path,
+                exc_info=True,
+            )
+            os.rename(move.destination_path, move.source_path)
+            raise
         except sqlite3.IntegrityError:
             # Somebody registered this destination key between the check above
             # and this commit — a rescan, which is deliberately not under
@@ -1020,6 +1074,22 @@ class ModelMover:
         # Durable before the unlink, and *only* then the unlink.
         try:
             self._repoint(move, plan, delete_source=delete_source)
+        except RepointLost:
+            # Nothing has been unlinked yet — that is the whole point of the
+            # ordering — so the undo is to drop the copy. The source file is
+            # still where it was, unregistered, exactly as forgetting its folder
+            # left every other file in it.
+            logger.error(
+                "The location row for (folder %s, %r) vanished between the plan "
+                "and the commit; discarding the copy at %s and failing this "
+                "file. The source is untouched.",
+                move.source_folder_id,
+                move.source_relpath,
+                move.destination_path,
+                exc_info=True,
+            )
+            discard_partial(move.destination_path)
+            raise
         except sqlite3.IntegrityError:
             # See ``_rename``. Here the undo is simply to drop the copy we just
             # made: the source has not been touched and its row still names it.
@@ -1058,12 +1128,36 @@ class ModelMover:
         A move repoints the existing row; a copy-in (``delete_source=False``)
         inserts a second one, because both copies then exist and the shelf's
         whole model is that one content row can have several locations.
+
+        **The repointing branch requires exactly one affected row** and rolls
+        back and raises :class:`RepointLost` otherwise. ``UPDATE`` reports zero
+        rows as success, so without the check a source folder forgotten mid-move
+        — its location rows deleted — let the mover unlink the source and report
+        ``moved`` with nothing registering the bytes it had just written
+        (#1017).
+
+        **The predicate is the source key and nothing else**, deliberately.
+        ``model_file`` is ``PRIMARY KEY (model_folder_id, relpath)``, so the key
+        already matches at most one row and adding ``model_id`` cannot narrow a
+        real ambiguity — it can only *miss*. It would, too:
+        :class:`~pixlstash.tasks.checkpoint_hash_task.CheckpointHashTask` folds
+        duplicate checkpoints by rewriting ``model_file.model_id`` to the
+        survivor, it runs on the task runner outside ``SHELF_IO_LOCK``, and
+        hashing a large checkpoint overlaps a multi-minute copy easily. The row
+        is still there and still names this file; only its model was
+        consolidated. Failing on that would discard a finished copy and report a
+        legitimate move failed.
+
+        The insert branch needs no check either: an ``INSERT`` that does not
+        raise inserted its row, and a destination folder or model that went away
+        in the meantime is a foreign-key error, handled with the UNIQUE one
+        below.
         """
         now = _utcnow()
         mtime = os.stat(move.destination_path).st_mtime_ns
         with self._hub.transaction() as conn:
             if delete_source:
-                conn.execute(
+                cursor = conn.execute(
                     "UPDATE model_file SET model_folder_id = ?, relpath = ?, "
                     "state = ?, seen_at = ?, file_mtime = ? "
                     "WHERE model_folder_id = ? AND relpath = ?",
@@ -1077,6 +1171,22 @@ class ModelMover:
                         move.source_relpath,
                     ),
                 )
+                affected = int(cursor.rowcount or 0)
+                if affected != 1:
+                    # Raised inside the ``with``, so the transaction rolls back
+                    # and nothing is half-written. The key is the primary key,
+                    # so this can only ever be zero — spelled ``!= 1`` because
+                    # what the unlink is authorised by is *one* row moving, and
+                    # a schema change that widened the key must fail here rather
+                    # than quietly repoint several.
+                    raise RepointLost(
+                        f"Repointing (folder {move.source_folder_id}, "
+                        f"{move.source_relpath!r}) to "
+                        f"(folder {plan.destination_folder_id}, "
+                        f"{move.destination_relpath!r}) affected {affected} "
+                        "row(s), not exactly 1; the registration this move was "
+                        "authorised by is gone."
+                    )
             else:
                 # No ``ON CONFLICT``: the destination key was checked free
                 # twice, so a conflict here means a racing writer took it, and

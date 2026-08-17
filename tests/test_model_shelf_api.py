@@ -2523,6 +2523,45 @@ def test_forgetting_an_ordinary_folder_still_works(shelf_env, managed_folder):
     )
 
 
+def test_forgetting_a_folder_takes_the_same_job_slot_as_a_move_and_an_import(
+    shelf_env, managed_folder
+):
+    """One shelf I/O slot machine-wide (#1017).
+
+    Forgetting a folder deletes exactly the ``model_file`` rows a running move is
+    repointing. Let it interleave and the move's UPDATE matches nothing, which
+    SQL reports as success — so the source got unlinked and the destination bytes
+    ended up registered nowhere. The mover refuses such a commit on its own side
+    too; this is the half that stops the interleaving from ever starting.
+    """
+    assert SHELF_IO_LOCK.acquire(blocking=False), "the slot was left held"
+    try:
+        r = shelf_env.owner.delete(f"{API}/model-folders/{managed_folder.plain_id}")
+        assert r.status_code == 409, r.text
+        # Which 409: this route has three, and the other two are permanent
+        # refusals of the row rather than "try again in a moment".
+        assert "move or an import is running" in r.json()["detail"], r.text
+        assert (
+            shelf_env.server.hub.fetchone(
+                "SELECT id FROM model_folder WHERE id = ?", (managed_folder.plain_id,)
+            )
+            is not None
+        ), "the folder was forgotten despite the 409"
+    finally:
+        SHELF_IO_LOCK.release()
+
+    # Positive control: with the slot free the same forget is accepted, and the
+    # slot is handed back rather than stranded for the life of the process.
+    assert (
+        shelf_env.owner.delete(
+            f"{API}/model-folders/{managed_folder.plain_id}"
+        ).status_code
+        == 200
+    )
+    assert SHELF_IO_LOCK.acquire(blocking=False), "the slot was not released"
+    SHELF_IO_LOCK.release()
+
+
 def test_the_managed_kind_cannot_be_created_over_http(shelf_env, tmp_path):
     """The refusal above is only worth anything if a second managed row cannot
     be made in the first place."""
