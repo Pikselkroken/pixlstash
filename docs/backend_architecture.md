@@ -245,8 +245,6 @@ Background processing is **data-driven**: each task type has a *finder* that que
 | Inference runtime | **onnxruntime** ≥ 1.24 |
 | Face detection | **insightface** ≥ 0.7.3 |
 | Text embeddings | **sentence_transformers** ≥ 5.2 |
-| NLP | **spacy** ≥ 3.8 |
-| Tensor utils | **einops** ≥ 0.8 |
 
 #### ML import discipline — these libraries are imported *inside functions*
 
