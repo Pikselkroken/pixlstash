@@ -326,20 +326,27 @@ def publish_no_clobber(temporary_path: str, destination_path: str) -> None:
     same single file a rename would have left. The publication the backup writer
     already uses (``library_backup_service._publish_private_temp``).
 
-    **Every failure restores the state the call started in.** A claim that fails
-    has written nothing. A claim that succeeded and could not then drop the
-    temporary name — Windows refuses to unlink a file another process holds
-    open, which is exactly what ComfyUI does with a loaded model — removes the
-    name it just claimed and re-raises, because leaving it would be an
+    **A failure never replaces anything, and tries to leave the name free.** A
+    claim that fails has written nothing at all. A claim that succeeded and could
+    not then drop the temporary name — Windows refuses to unlink a file another
+    process holds open, which is exactly what ComfyUI does with a loaded model —
+    gives the claim back before re-raising, because leaving it would be an
     unregistered copy at the destination *and* a name that refuses every later
-    move of that model. That rollback is the one ``os.rename`` got for free by
-    being a single syscall, and the reason the backup writer has one too.
+    move of that model. That rollback is what ``os.rename`` got for free by being
+    a single syscall, and the reason the backup writer has one too.
+
+    **The rollback itself is best effort**, because it runs through
+    :func:`discard_partial` while an error is already on its way to the caller
+    and must not replace it. A destination whose unlink *also* fails keeps the
+    claimed name, and the warning ``discard_partial`` logs is the only trace: the
+    move is reported failed either way, and the next attempt at the same
+    destination is refused until somebody removes it.
 
     Raises:
         OSError: The name was taken (``FileExistsError``), or the file could not
-            be published. Both files are as they were either way: the caller
-            still owns *temporary_path* and nothing at *destination_path* was
-            replaced.
+            be published. Nothing at *destination_path* was replaced either way,
+            and *temporary_path* is still the caller's unless the drop is what
+            failed.
     """
     if not _claim_destination(temporary_path, destination_path):
         return
@@ -348,8 +355,9 @@ def publish_no_clobber(temporary_path: str, destination_path: str) -> None:
     except OSError:
         # The claim is not ours to keep if the move it belongs to cannot finish.
         logger.error(
-            "Published %s but could not drop %s; removing the publication so "
-            "the destination name stays free.",
+            "Published %s but could not drop %s; trying to give the destination "
+            "name back so the move can be retried. A warning follows if that "
+            "removal fails too, and the name then stays taken.",
             destination_path,
             temporary_path,
             exc_info=True,

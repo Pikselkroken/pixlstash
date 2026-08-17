@@ -1604,12 +1604,16 @@ the sentence above as covering them.
   destination, the source and the hub row exactly as they were. It is the
   publication the backup writer already used
   (`library_backup_service._publish_private_temp`).
-- **Publication rolls back what it claimed** if it then cannot drop the
+- **Publication gives back what it claimed** if it then cannot drop the
   temporary name. That failure is ordinary on Windows, where a file another
   process holds open cannot be unlinked and ComfyUI holds loaded models open;
   without the rollback it would leave an unregistered copy at the destination
   *and* a name that refuses every later move of that model, which `os.rename`
-  could never produce because it was one syscall. The two-attempt claim is the
+  could never produce because it was one syscall. The rollback is **best
+  effort**: it runs through `discard_partial` with an error already on its way
+  to the caller, so a destination that will not unlink either keeps the claimed
+  name and says so in a warning. The move is reported failed in both cases; only
+  the retry differs. The two-attempt claim is the
   only place the two shapes differ in residue: a **crash** between the
   reservation and the replace (never the link) leaves an empty file at the final
   name, which is the price of moving at all on a filesystem without hard links.
