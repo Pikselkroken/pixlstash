@@ -3107,6 +3107,23 @@ checkpoints. A run that has *vanished* — imported from another window, or
 deleted — drops the selection instead, or the import bar would point at a run
 that is no longer there.
 
+**And it must not land out of order.** Mount, the output-root watcher,
+`visibilitychange` and `window.focus` all start a read and none of them cancels
+the last, so two are in flight whenever one is slow. `loadRuns` therefore
+allocates a generation and captures the folder id it asks about — the request is
+made against the captured id, never a re-read of the store — and every
+completion (rows, count, error, spinner) is dropped unless its generation is
+still the newest.
+
+**Changing the output root clears the rows, the count and the selection
+immediately**, before the new read starts. That, and not the response ordering,
+is what closes #1019: leaving the old root's cards up until the new listing
+replaces them puts them under the new root's path with Import live, and a run
+name means nothing outside the root it was read under — so a tick surviving that
+window sends the new root's id with the old root's run name. `submit` then
+captures the folder id once for the whole batch, because the batch is sequential
+and the registry can change between two of its requests.
+
 **The card grid is built on a promise the listing route makes**, and the promise
 is what must not be eroded: `GET /model-folders/{id}/runs` reads filenames and
 one `config.yaml` per run, and hashes, copies, moves and writes nothing. So the

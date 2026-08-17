@@ -492,6 +492,172 @@ describe("staying current without moving the ground", () => {
     expect(checked).toEqual(["Foxglove"]);
   });
 
+  // Mount, a folder change, a visibility change and a window focus each start a
+  // read, and none of them cancels the last, so two are in flight whenever one
+  // is slow. Ordering is not promised: the older read can answer last, and what
+  // it carries is another folder's runs — or the same folder's, from before the
+  // run that just finished existed.
+  describe("with two reads in flight", () => {
+    const SOURCE_B = {
+      id: 4,
+      path: "/other-runs",
+      kind: "source",
+      delete_after_import: false,
+    };
+
+    function deferred() {
+      let resolve;
+      let reject;
+      const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    /** Mount against folder 1 with its read held, then register folder 4. */
+    async function switchSource() {
+      const a = deferred();
+      const b = deferred();
+      listRuns.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+      const store = useModelFoldersStore();
+      store.folders = FOLDERS;
+      store.loaded = true;
+      const wrapper = mount(TrainingRuns, globalOpts);
+      mounted.push(wrapper);
+      await wrapper.vm.$nextTick();
+      expect(listRuns).toHaveBeenNthCalledWith(1, 1);
+
+      store.folders = [SOURCE_B, FOLDERS[1], FOLDERS[2]];
+      await wrapper.vm.$nextTick();
+      expect(listRuns).toHaveBeenNthCalledWith(2, 4);
+      return { wrapper, a, b };
+    }
+
+    it("takes the old folder's rows down the moment the folder changes", async () => {
+      // The window that makes #1019 reachable without any response ordering at
+      // all: the new folder's walk takes as long as it takes, and until it
+      // lands the OLD folder's cards are sitting under the NEW folder's path
+      // with Import live. A tick that survives that sends the new folder's id
+      // with a run name read from the old one.
+      const wrapper = await openWith([run(), run("Foxglove")]);
+      await tick(wrapper, "Clementine");
+
+      let release;
+      listRuns.mockReturnValue(new Promise((r) => (release = r)));
+      useModelFoldersStore().folders = [SOURCE_B, FOLDERS[1], FOLDERS[2]];
+      await wrapper.vm.$nextTick();
+
+      expect(wrapper.findAll(".tr-card")).toHaveLength(0);
+      expect(importBtn(wrapper)).toBeUndefined();
+      expect(wrapper.emitted("count").at(-1)).toEqual([null]);
+      expect(wrapper.find(".tr-loading").exists()).toBe(true);
+
+      release([run("Hazel")]);
+      await settle(wrapper);
+      expect(wrapper.findAll(".tr-card-name").map((n) => n.text())).toEqual([
+        "Hazel",
+      ]);
+    });
+
+    it("keeps the new folder's runs when the old folder answers last", async () => {
+      const { wrapper, a, b } = await switchSource();
+
+      b.resolve([run("Foxglove")]);
+      await settle(wrapper);
+      a.resolve([run("Clementine")]);
+      await settle(wrapper);
+
+      expect(wrapper.findAll(".tr-card-name").map((n) => n.text())).toEqual([
+        "Foxglove",
+      ]);
+      expect(wrapper.emitted("count").at(-1)).toEqual([1]);
+    });
+
+    it("does not report the current read finished when an older one ends", async () => {
+      const { wrapper, a } = await switchSource();
+
+      a.resolve([run("Clementine")]);
+      await settle(wrapper);
+
+      // Folder 4's read is still running, so the panel must still say so
+      // rather than showing folder 1's grid or an empty one.
+      expect(wrapper.findAll(".tr-card")).toHaveLength(0);
+      expect(wrapper.find(".tr-loading").exists()).toBe(true);
+    });
+
+    it("does not show the old folder's failure against the new folder", async () => {
+      const { wrapper, a, b } = await switchSource();
+
+      b.resolve([run("Foxglove")]);
+      await settle(wrapper);
+      a.reject(new Error("gone"));
+      await settle(wrapper);
+
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+      expect(wrapper.findAll(".tr-card")).toHaveLength(1);
+    });
+
+    it("imports from the folder the chosen runs were read under", async () => {
+      // The batch is sequential and each request is awaited, so the registry
+      // can change between two of them. Every run in the batch came out of ONE
+      // listing, and both roots can hold a run of the same name — so naming
+      // whichever folder is registered when its turn arrives is how run 2 gets
+      // imported from a folder its row was never read from.
+      const wrapper = await openWith([run(), run("Foxglove")]);
+      await tick(wrapper, "Clementine");
+      await tick(wrapper, "Foxglove");
+
+      const store = useModelFoldersStore();
+      importRun.mockImplementation(async () => {
+        store.folders = [SOURCE_B, FOLDERS[1], FOLDERS[2]];
+        return { run_name: "x", files: [] };
+      });
+      await importBtn(wrapper).trigger("click");
+      await settle(wrapper);
+
+      expect(importRun.mock.calls.map((c) => c[0].sourceFolderId)).toEqual([
+        1, 1,
+      ]);
+    });
+
+    it("drops the selection when the folder changes, rather than re-matching names", async () => {
+      const wrapper = await openWith([run(), run("Foxglove")]);
+      await tick(wrapper, "Clementine");
+      expect(wrapper.findAll(".tr-card--checked")).toHaveLength(1);
+
+      listRuns.mockResolvedValue([run(), run("Foxglove")]);
+      useModelFoldersStore().folders = [SOURCE_B, FOLDERS[1], FOLDERS[2]];
+      await settle(wrapper);
+
+      expect(wrapper.findAll(".tr-card")).toHaveLength(2);
+      expect(wrapper.findAll(".tr-card--checked")).toHaveLength(0);
+    });
+
+    it("keeps the newer listing when the same folder is read twice", async () => {
+      // Two focus events, no folder change: the older read still must not win,
+      // or a run that has just finished importing comes back.
+      const wrapper = await openWith([run()]);
+      const first = deferred();
+      const second = deferred();
+      listRuns
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise);
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      await wrapper.vm.$nextTick();
+
+      second.resolve([run("Foxglove")]);
+      await settle(wrapper);
+      first.resolve([run(), run("Foxglove"), run("Hazel")]);
+      await settle(wrapper);
+
+      expect(wrapper.findAll(".tr-card-name").map((n) => n.text())).toEqual([
+        "Foxglove",
+      ]);
+    });
+  });
+
   it("stops listening once it is left", async () => {
     // The listeners are on `document` and `window`, so an unmounted view that
     // kept them would keep fetching runs for a screen nobody is looking at.
