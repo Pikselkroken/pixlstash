@@ -36,6 +36,7 @@ import {
   offlineFolders,
   stackReceipt,
   unstackReceipt,
+  releaseReceipt,
   modelVersion,
   versionSortKey,
   trainingStep,
@@ -1102,6 +1103,20 @@ describe("collapseStacks", () => {
     expect(out[0].memberIds).toEqual([1, 2, 3]);
   });
 
+  it("sorts a member with no position LAST, as the server does", () => {
+    // NULL sorts first in SQLite too, and the server spells `stack_position IS
+    // NULL` to stop that. `?? 0` here put an unpositioned member level with
+    // the cover and, on a stable sort, ahead of it — so the two ends disagreed
+    // about which file is the face of the run.
+    const out = collapseStacks([
+      member(1, 7, 0),
+      member(2, 7, null),
+      member(3, 7, 1),
+    ]);
+    expect(out[0].memberIds).toEqual([1, 3, 2]);
+    expect(out[0].id).toBe(1);
+  });
+
   it("keeps the cover's own fields on the folded row", () => {
     const out = collapseStacks([
       member(2, 7, 1, { display_name: "Step" }),
@@ -1243,6 +1258,37 @@ describe("unstackReceipt", () => {
       "Nothing was ungrouped. 2 stacks could not be, and the files are unchanged.",
     );
     expect(unstackReceipt(0, 0)).toBe("Nothing to ungroup.");
+  });
+});
+
+describe("releaseReceipt", () => {
+  it("says where the files went, like the ungroup receipt does", () => {
+    expect(releaseReceipt(1, 0, 0)).toBe(
+      "Took 1 file out; still on the shelf.",
+    );
+    expect(releaseReceipt(2, 0, 0)).toBe(
+      "Took 2 files out; still on the shelf.",
+    );
+  });
+
+  it("names the runs that stopped existing", () => {
+    // The outcome nobody asked for: taking one file out of a pair leaves a run
+    // of one, which is not a run, so its last file comes loose too. A receipt
+    // that said only "took 1 file out" would send the reader looking for a
+    // stack that is gone.
+    expect(releaseReceipt(2, 1, 0)).toBe(
+      "Took 2 files out; still on the shelf. 1 run had a single file left and stopped being a run.",
+    );
+  });
+
+  it("counts the ones that were refused", () => {
+    expect(releaseReceipt(1, 0, 1)).toBe(
+      "Took 1 file out; still on the shelf. 1 file could not be taken out.",
+    );
+    expect(releaseReceipt(0, 0, 2)).toBe(
+      "Nothing was taken out. 2 files could not be, and the runs are unchanged.",
+    );
+    expect(releaseReceipt(0, 0, 0)).toBe("Nothing to take out.");
   });
 });
 

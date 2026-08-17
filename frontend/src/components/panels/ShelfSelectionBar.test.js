@@ -554,3 +554,117 @@ describe("Open in file manager", () => {
     expect(wrapper.emitted("open-location")).toHaveLength(1);
   });
 });
+
+describe("the two verbs that act inside a run", () => {
+  // Cover and Take-out are the only verbs whose subject is ONE file of a
+  // stack, so the gate they share is the one worth asserting: a whole run
+  // selected is somebody else's business (Ungroup's), and a loose row is in no
+  // run at all.
+
+  /** A two-member run on the shelf, with only the ids given selected. */
+  function selectInRun(ids) {
+    const store = useModelShelfStore();
+    store.rows = [
+      row(1, "present", { stack_id: 7, stack_position: 0 }),
+      row(2, "present", { stack_id: 7, stack_position: 1 }),
+    ];
+    store.clearSelection();
+    for (const id of ids) store.toggleSelected(id);
+    return store;
+  }
+
+  function menuItem(wrapper, text) {
+    return wrapper.findAll(".shelf-mi").find((b) => b.text().includes(text));
+  }
+
+  it("offers both verbs on one member of a run", () => {
+    selectInRun([2]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.vm.coverable).toBe(true);
+    expect(wrapper.vm.releasable).toBe(true);
+    expect(
+      menuItem(wrapper, "Make this the cover").attributes("disabled"),
+    ).toBeUndefined();
+    expect(
+      menuItem(wrapper, "Take out of this run").attributes("disabled"),
+    ).toBeUndefined();
+  });
+
+  it("refuses to make the cover the cover, and says so rather than hiding", () => {
+    selectInRun([1]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.vm.coverable).toBe(false);
+    const entry = menuItem(wrapper, "Make this the cover");
+    expect(entry.attributes("disabled")).toBeDefined();
+    expect(entry.attributes("title")).toContain("already stands for its run");
+    // Still releasable: the cover is a file of the run like any other, and
+    // taking it out promotes the one behind it.
+    expect(wrapper.vm.releasable).toBe(true);
+  });
+
+  it("refuses both on a whole run, and points at Ungroup", () => {
+    // Every member selected IS the run — that is what selecting a collapsed
+    // row does — and "take a run out of itself" is not a gesture.
+    selectInRun([1, 2]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.vm.selectedMembers).toHaveLength(0);
+    expect(wrapper.vm.coverable).toBe(false);
+    expect(wrapper.vm.releasable).toBe(false);
+    expect(
+      menuItem(wrapper, "Take out of this run").attributes("title"),
+    ).toContain("Ungroup");
+  });
+
+  it("refuses a cover on two files at once: a run has one", () => {
+    const store = useModelShelfStore();
+    store.rows = [
+      row(1, "present", { stack_id: 7, stack_position: 0 }),
+      row(2, "present", { stack_id: 7, stack_position: 1 }),
+      row(3, "present", { stack_id: 7, stack_position: 2 }),
+    ];
+    store.clearSelection();
+    store.toggleSelected(2);
+    store.toggleSelected(3);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.vm.coverable).toBe(false);
+    // Taking two files out at once is fine, though: they are two files.
+    expect(wrapper.vm.releasable).toBe(true);
+    expect(menuItem(wrapper, "Take out of their runs")).toBeDefined();
+  });
+
+  it("refuses to Ungroup a run the reader only picked one file of", () => {
+    // The gate `stack_id != null` is true of a member too, so on its own it
+    // would let picking one checkpoint break up the whole run of six. Take-out
+    // is the verb for one file; this one is for the run.
+    selectInRun([2]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.vm.unstackable).toBe(false);
+    expect(verb(wrapper, "unstack").attributes("title")).toContain(
+      "select the run itself",
+    );
+
+    // ...and the run itself still ungroups, which is the positive control.
+    selectInRun([1, 2]);
+    const whole = mount(ShelfSelectionBar, globalOpts);
+    expect(whole.vm.unstackable).toBe(true);
+  });
+
+  it("refuses on a loose row, because there is no run to act inside", () => {
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.vm.coverable).toBe(false);
+    expect(wrapper.vm.releasable).toBe(false);
+    expect(
+      menuItem(wrapper, "Take out of this run").attributes("title"),
+    ).toContain("not part of a run");
+  });
+
+  it("emits rather than calling, like every other verb here", async () => {
+    selectInRun([2]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    await menuItem(wrapper, "Make this the cover").trigger("click");
+    await menuItem(wrapper, "Take out of this run").trigger("click");
+    expect(wrapper.emitted("make-cover")).toHaveLength(1);
+    expect(wrapper.emitted("remove-from-stack")).toHaveLength(1);
+  });
+});

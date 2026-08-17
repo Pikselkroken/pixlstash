@@ -928,7 +928,7 @@
                     row.memberCount > 1 ? isStackOpen(row.stack_id) : undefined
                   "
                   :aria-selected="store.isSelected(row.id)"
-                  aria-keyshortcuts="F2 Shift+F2"
+                  aria-keyshortcuts="F2 Shift+F2 Shift+F10"
                   :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
                   :data-row-key="row.rowKey"
                   :draggable="
@@ -1043,6 +1043,28 @@
                         >mdi-chevron-right</v-icon
                       >
                     </button>
+                    <!-- Which file the run is being drawn from, said in words
+                         rather than by position: once the strip is open the
+                         reader is looking at six rows and choosing between
+                         them, and "the top one" is not an answer a screen
+                         reader can hear. Only while the stack is OPEN — on a
+                         collapsed run the cover is the only row there is, so
+                         the chip would be noise on every stacked row of the
+                         shelf. And only on the REAL cover: a filter can hide
+                         position 0, and `collapseStacks` then draws the lowest
+                         surviving member at the top — which is the run's
+                         stand-in for the moment, not the file the owner
+                         chose. -->
+                    <span
+                      v-if="
+                        row.memberCount > 1 &&
+                        isStackOpen(row.stack_id) &&
+                        row.stack_position === 0
+                      "
+                      class="shelf-chip"
+                      title="This file is what the shelf draws for the whole run."
+                      >Cover</span
+                    >
                     <!-- The step, on any row that is not a stack cover.
                          `deriveModelName` strips the trailing step from the
                          filename on the stated grounds that "the step is parsed
@@ -1144,18 +1166,32 @@
                    `StackExpansionStrip`: that component draws picture thumbnails
                    for the dedup queue, and a model file has no thumbnail. A
                    stack's members already ARE shelf rows, so they are drawn as
-                   shelf rows — indented, and not selectable on their own, because
-                   stacks are atomic here and a member cannot be acted on apart
-                   from its run. -->
+                   shelf rows — indented, and now selectable, with the same three
+                   gestures and the same verb menu the cover rows carry.
+                   Selecting the collapsed row still means the whole run: a
+                   member is reached only by opening the run and pointing inside
+                   it, which is what makes "take this one out" and "make this the
+                   cover" gestures at all. -->
                 <template
                   v-if="row.memberCount > 1 && isStackOpen(row.stack_id)"
                 >
                   <li
                     v-for="member in row.members.slice(1)"
-                    :key="`${row.rowKey}:${member.id}`"
+                    :key="memberKey(row, member)"
                     class="shelf-row shelf-row--member"
+                    :class="{
+                      'shelf-row--selected': store.isSelected(member.id),
+                    }"
                     role="row"
                     aria-level="2"
+                    aria-keyshortcuts="Shift+F10"
+                    :aria-selected="store.isSelected(member.id)"
+                    :tabindex="memberKey(row, member) === rovingRowKey ? 0 : -1"
+                    :data-row-key="memberKey(row, member)"
+                    @click="pickMember(row, member, $event)"
+                    @contextmenu.prevent="openMemberMenu(row, member, $event)"
+                    @keydown="onMemberKeydown(row, member, $event)"
+                    @focus="focusedRowKey = memberKey(row, member)"
                   >
                     <span role="gridcell" class="shelf-row-ident">
                       <v-icon size="14">mdi-subdirectory-arrow-right</v-icon>
@@ -1231,6 +1267,8 @@
         @set-kind="editVerb = 'kind'"
         @stack="confirmStack"
         @unstack="confirmUnstack"
+        @make-cover="makeCover"
+        @remove-from-stack="confirmRemoveFromStack"
         @move="openMove(store.selectedRows)"
         @open-location="openLocation"
         @set-icon="pickIcon"
@@ -1332,7 +1370,12 @@ import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import { useConfirm } from "../../composables/useConfirm";
 import { addModelFile } from "../../api/modelFiles";
 import { openModelLocation } from "../../api/modelShelf";
-import { createStack, unstackStack } from "../../api/modelStacks";
+import {
+  createStack,
+  removeStackMember,
+  setStackCover,
+  unstackStack,
+} from "../../api/modelStacks";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import {
   DEFAULT_COLUMN_WIDTHS,
@@ -1372,6 +1415,7 @@ import {
   GROUP_BY_LABELS,
   modelVersion,
   movableCopies,
+  releaseReceipt,
   SORT_LABELS,
   stackReceipt,
   trainingStep,
@@ -2144,6 +2188,87 @@ async function confirmUnstack() {
   });
 }
 
+/**
+ * Make the selected member the file the shelf draws for its run.
+ *
+ * **No confirmation.** Nothing is moved, renamed or regrouped — one column
+ * changes and the strip re-sorts under the reader's eyes — and the gesture is
+ * its own undo: the old cover is still in the strip, one right-click away from
+ * taking the role back. A prompt in front of that would spend the vocabulary
+ * the destructive verbs need.
+ *
+ * The choice sticks. Detection only ever looks at loose adapters, so no later
+ * scan recomputes the order and picks the filename's answer again.
+ */
+async function makeCover() {
+  const member = store.selectedRows[0];
+  if (!member || member.stack_id == null) return;
+  const notices = useNoticeStore();
+  try {
+    await setStackCover(member.stack_id, member.id);
+    await store.fetchRows();
+    notices.push({
+      level: "success",
+      text: `${member.filename} now stands for this run.`,
+    });
+  } catch (err) {
+    notices.push({
+      level: "error",
+      text: errorDetail(err) || "That file could not be made the cover.",
+    });
+  }
+}
+
+/**
+ * Take the selected members out of their runs, leaving them loose.
+ *
+ * The single-file counterpart to Ungroup, for the checkpoint that turns out to
+ * be a different subject — and confirmed for the same reason Ungroup is: it is
+ * a structural edit to something somebody assembled, and the sentence is worth
+ * reading because a run left with one member dissolves entirely rather than
+ * becoming a stack of one.
+ *
+ * One call per member, so one refusal does not discard the rest.
+ */
+async function confirmRemoveFromStack() {
+  const members = store.selectedRows.filter(
+    (row) => row.stack_id != null && !row.members,
+  );
+  if (!members.length) return;
+  const ok = await confirm({
+    title:
+      members.length === 1
+        ? "Take this file out of its run?"
+        : `Take ${members.length} files out of their runs?`,
+    message:
+      "It goes back to being a separate row on the shelf. Nothing is moved, " +
+      "renamed or deleted — and a run left with a single file stops being a " +
+      "run at all, so both of its files come loose.",
+    confirmLabel: members.length === 1 ? "Take it out" : "Take them out",
+  });
+  if (!ok) return;
+  const notices = useNoticeStore();
+  const results = await Promise.allSettled(
+    members.map((member) => removeStackMember(member.stack_id, member.id)),
+  );
+  const failed = results.filter((r) => r.status === "rejected");
+  const landed = results.filter((r) => r.status === "fulfilled");
+  const dissolved = landed.filter((r) => r.value?.dissolved).length;
+  // The server's own count, not the number of calls: taking one file out of a
+  // pair dissolves the run and sends BOTH of them loose, and a receipt saying
+  // "1 file" over two moved rows is the half of the outcome the reader did not
+  // ask for going unreported.
+  const released = landed.reduce(
+    (total, r) => total + (Number(r.value?.released) || 1),
+    0,
+  );
+  await store.fetchRows();
+  notices.push({
+    level: failed.length === results.length ? "error" : "success",
+    text: releaseReceipt(released, dissolved, failed.length),
+  });
+}
+
 async function closeStacks() {
   stacksOpen.value = false;
   await nextTick();
@@ -2450,7 +2575,18 @@ const drawnRows = computed(() => {
   const rows = [];
   for (const group of shownGroups.value) {
     if (grouped.value && store.isCollapsed(group.key)) continue;
-    for (const row of group.rows) rows.push({ key: row.rowKey, id: row.id });
+    for (const row of group.rows) {
+      rows.push({ key: row.rowKey, id: row.id });
+      // An OPEN stack's members are drawn rows like any other, so the cursor
+      // walks into the strip and a Shift-range spans it. Closed, they are not
+      // on screen — and a range that swept up files nobody can see is the one
+      // thing `visibleRows` exists to prevent.
+      if (row.memberCount > 1 && isStackOpen(row.stack_id)) {
+        for (const member of row.members.slice(1)) {
+          rows.push({ key: memberKey(row, member), id: member.id });
+        }
+      }
+    }
   }
   return rows;
 });
@@ -2468,9 +2604,19 @@ const orderedRowIds = computed(() => [
  * tabindex introduces if nothing seeds it.
  */
 const focusedRowKey = ref(null);
-const rovingRowKey = computed(
-  () => focusedRowKey.value ?? drawnRows.value[0]?.key ?? null,
-);
+const rovingRowKey = computed(() => {
+  // Checked against what is DRAWN, not merely non-null. A remembered key can
+  // stop existing under the reader — closing a run they were standing inside,
+  // a filter, or a verb that removed the row — and a stale one beats the
+  // fallback, leaving no row at `tabindex="0"` and the whole list out of the
+  // tab order until something is clicked.
+  const remembered = focusedRowKey.value;
+  const drawn = drawnRows.value;
+  if (remembered && drawn.some((row) => row.key === remembered)) {
+    return remembered;
+  }
+  return drawn[0]?.key ?? null;
+});
 
 /**
  * Click, Ctrl+click, Shift+click — the grid's own three gestures.
@@ -2577,6 +2723,11 @@ function onRowKeydown(row, event) {
     );
     return;
   }
+  if (isMenuKey(event)) {
+    event.preventDefault();
+    openMenuAtRow(event.currentTarget);
+    return;
+  }
   // Escape is NOT handled here. It is owned by a window listener, so it works
   // wherever focus happens to be — on a row, on the toolbar, on the sidebar, or
   // nowhere at all — rather than only while a row holds the roving tab stop,
@@ -2654,6 +2805,108 @@ function openRowMenu(row, event) {
     store.selectFromClick(row.id, {}, orderedRowIds.value);
   }
   selBarRef.value?.openContextMenu(event.clientX, event.clientY);
+}
+
+/**
+ * The context-menu key, which a row owes as much as it owes the right button.
+ *
+ * Two spellings, because two platforms spell it differently and a browser
+ * reports whichever the keyboard sent: the dedicated Menu key, and Shift+F10.
+ */
+function isMenuKey(event) {
+  return event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
+}
+
+/** Open the verb menu over a row's own box, for the keyboard's sake. */
+function openMenuAtRow(el) {
+  const box = el?.getBoundingClientRect?.();
+  selBarRef.value?.openContextMenu(
+    box ? box.left + 24 : 0,
+    box ? box.bottom : 0,
+  );
+}
+
+/**
+ * The key a member row is drawn and focused by.
+ *
+ * The cover's own row key carries the group, so a model catalogued in two
+ * folders is two draws with two keys; a member hangs off whichever draw it was
+ * expanded under, and gets a distinct tab stop for each.
+ */
+function memberKey(row, member) {
+  return `${row.rowKey}:${member.id}`;
+}
+
+/**
+ * Click a member of an open run: the same three gestures the cover rows have.
+ *
+ * The member is selected on its OWN, never as the run — that is the whole
+ * distinction the strip is for. Clicking the collapsed row still takes the run
+ * whole, so nothing about the atomic gesture is lost; this is the second one,
+ * reached only by opening the stack.
+ */
+function pickMember(row, member, event) {
+  focusedRowKey.value = memberKey(row, member);
+  store.selectFromClick(
+    member.id,
+    { ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey },
+    orderedRowIds.value,
+  );
+}
+
+/** Right-click a member: the same file-manager rule `openRowMenu` follows. */
+function openMemberMenu(row, member, event) {
+  focusedRowKey.value = memberKey(row, member);
+  if (!store.isSelected(member.id)) {
+    store.selectFromClick(member.id, {}, orderedRowIds.value);
+  }
+  selBarRef.value?.openContextMenu(event.clientX, event.clientY);
+}
+
+/**
+ * The keyboard on a member row.
+ *
+ * The cover's own handler minus the two keys a member has no answer for: F2
+ * renames the RUN, and Right opens a stack this row is already inside. Left
+ * closes the run and takes the cursor back up to it, which is the tree-grid
+ * convention and the only way out of a strip that just stopped existing.
+ */
+function onMemberKeydown(row, member, event) {
+  const key = memberKey(row, member);
+  const drawn = drawnRows.value;
+  const index = drawn.findIndex((drawnRow) => drawnRow.key === key);
+  const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
+  if (step !== undefined) {
+    const next = drawn[index + step];
+    if (next === undefined) return;
+    event.preventDefault();
+    focusedRowKey.value = next.key;
+    if (event.shiftKey) {
+      store.selectFromClick(next.id, { shift: true }, orderedRowIds.value);
+    }
+    nextTick(() => focusDrawnRow(next.key));
+    return;
+  }
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    toggleStack(row.stack_id);
+    focusedRowKey.value = row.rowKey;
+    nextTick(() => focusDrawnRow(row.rowKey));
+    return;
+  }
+  if (event.key === " " || event.key === "Enter") {
+    event.preventDefault();
+    store.selectFromClick(
+      member.id,
+      { ctrl: event.key === " " || event.ctrlKey || event.metaKey },
+      orderedRowIds.value,
+    );
+    return;
+  }
+  if (isMenuKey(event)) {
+    event.preventDefault();
+    openMenuAtRow(event.currentTarget);
+  }
 }
 
 function endRename() {
@@ -4690,11 +4943,11 @@ button.shelf-head-cell:hover {
 }
 
 /* A run's other steps. Indented past the identity column so the arrow reads as
-   belonging to the row above it, and quieter than a row because it is detail
-   rather than something to act on — the members are not selectable, stacks
-   being atomic here. */
+   belonging to the row above it, and quieter than a cover because it is one
+   file of a run rather than the run — but a row like any other: it is picked,
+   focused and right-clicked, so it takes the row cursor and the row's own
+   selected treatment. */
 .shelf-row--member {
-  cursor: default;
   padding-left: var(--space-7);
   color: rgb(var(--v-theme-on-surface-variant));
 }

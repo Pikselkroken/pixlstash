@@ -1,9 +1,13 @@
 // Collapsing loose adapters into stacks — /model-stacks.
 //
-// Two calls and the split between them is the contract: **detection proposes,
+// The split between the first two calls is the contract: **detection proposes,
 // it never applies.** `listStackProposals` reads the shelf and writes nothing,
 // so the whole dry run is drawn before the owner decides; `createStack` is the
 // only half that writes and is reached only after they have seen it.
+//
+// The rest edit a stack that exists: `unstackStack` breaks one up, and
+// `setStackCover` / `removeStackMember` act on one file inside it — the two
+// gestures the expanded strip is for.
 
 import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
@@ -67,4 +71,48 @@ export async function createStack(
  */
 export async function unstackStack(stackId) {
   return unwrap(apiClient.delete(`/model-stacks/${stackId}`));
+}
+
+/**
+ * Choose which member the shelf draws for a run.
+ *
+ * The one call that lets a person pick the cover. `createStack` deliberately
+ * recomputes the order from the filenames, which is right for a heuristic and
+ * wrong once the owner knows the run's best checkpoint is not the file the
+ * trainer wrote last.
+ *
+ * The choice sticks: nothing recomputes a stack's order after it is built, so
+ * it survives a re-scan and a re-import.
+ *
+ * @param {number} stackId - hub `adapter_stack.id`.
+ * @param {number} modelId - hub `model.id`, already a member of that stack.
+ * @returns {Promise<{stack_id: number, model_ids: Array<number>}>} the members
+ *   in their new order, cover first.
+ */
+export async function setStackCover(stackId, modelId) {
+  return unwrap(
+    apiClient.patch(`/model-stacks/${stackId}/cover`, { model_id: modelId }),
+  );
+}
+
+/**
+ * Take one model out of a stack, leaving it loose on the shelf.
+ *
+ * The single-file counterpart to {@link unstackStack}, for the checkpoint that
+ * turned out to be a different subject. **Nothing on disk is touched.** The
+ * survivors are renumbered so the run keeps a cover, and removing the cover
+ * promotes whichever member was behind it.
+ *
+ * A stack of one is not a stack, so taking out the second-to-last member
+ * dissolves the whole thing and both files go loose — which is what
+ * `dissolved` reports.
+ *
+ * @param {number} stackId - hub `adapter_stack.id`.
+ * @param {number} modelId - hub `model.id`, already a member of that stack.
+ * @returns {Promise<{released: number, dissolved: boolean}>}
+ */
+export async function removeStackMember(stackId, modelId) {
+  return unwrap(
+    apiClient.delete(`/model-stacks/${stackId}/members/${modelId}`),
+  );
 }

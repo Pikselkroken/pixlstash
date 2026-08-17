@@ -36,6 +36,7 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.services import model_mover as mover_module
 from pixlstash.services import run_importer as importer_module
 from pixlstash.services.model_mover import MoveRefused
+from pixlstash.services.stack_detector import set_cover
 from pixlstash.services.run_importer import (
     PROVENANCE_TRAINED,
     STATUS_CANCELLED,
@@ -243,6 +244,46 @@ def test_a_run_lands_as_one_stack_with_the_final_as_its_cover(shelf):
     assert rows["Clementine_000000500.safetensors"]["training_step"] == 500
     assert rows["Clementine.safetensors"]["training_step"] is None
     assert_no_dangling_rows(shelf["hub"])
+
+
+def test_re_importing_a_run_keeps_the_cover_its_owner_chose(shelf):
+    """The claim `set_cover` rests on, tested against the path that could break it.
+
+    A hand-picked cover is `stack_position` 0 and nothing else — no column
+    records that a person chose it — so the whole design depends on the
+    importer's `COALESCE` leaving an existing position alone. Re-importing the
+    same run is the one routine way those rows get written again.
+    """
+    RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], delete_source=False
+    )
+    rows = models(shelf["hub"])
+    stack_id = rows["Clementine.safetensors"]["stack_id"]
+    chosen = rows["Clementine_000000500.safetensors"]["id"]
+    set_cover(shelf["hub"], stack_id, chosen)
+
+    # Into a SECOND folder, because importing a run back into the folder it is
+    # already in is refused outright by the collision check. Same files, same
+    # digests, so this is the upsert path — the one that rewrites the columns
+    # the cover lives in.
+    second = shelf["destination_dir"].parent / "loras-2"
+    second.mkdir()
+    with shelf["hub"].transaction() as conn:
+        second_id = int(
+            conn.execute(
+                "INSERT INTO model_folder (path, kind, movable, created_at) "
+                "VALUES (?, 'user', 'per_item', '2026-08-16T00:00:00+00:00')",
+                (str(second),),
+            ).lastrowid
+        )
+    RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), second_id, delete_source=False
+    )
+
+    after = models(shelf["hub"])
+    assert after["Clementine_000000500.safetensors"]["stack_position"] == 0
+    assert after["Clementine.safetensors"]["stack_position"] == 1
+    assert after["Clementine_000000250.safetensors"]["stack_position"] == 2
 
 
 def test_an_import_records_trained_provenance_and_the_config_base_model(shelf):

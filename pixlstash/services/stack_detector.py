@@ -32,11 +32,19 @@ Only *unstacked* adapters are considered. A run imported from ai-toolkit is
 already a stack (:mod:`pixlstash.services.run_importer` builds one), and a
 stack the owner has ratified must never be re-proposed — the risk is in
 creating groupings nobody has seen, not in extending one they have.
+
+**Three functions curate a stack that already exists**, and none of them is
+detection: :func:`set_cover` is the owner overruling the filenames about which
+file the shelf draws for a run, :func:`remove_member` takes one file back out
+of one, and :func:`repair_stacks` is what every *other* way a member can leave
+— Forget, Delete, a duplicate merge — has to call so the run it left is still
+a run. Like :func:`unstack`, not one of them touches a byte on disk.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -542,6 +550,211 @@ def unstack(hub: HubDatabase, stack_id: int) -> int:
         "Unstacked adapter_stack %d, releasing %d model(s).", stack_id, released
     )
     return released
+
+
+def set_cover(hub: HubDatabase, stack_id: int, model_id: int) -> list[int]:
+    """Promote one member of a stack to ``stack_position`` 0.
+
+    The names decide the cover when a stack is built, and they are usually
+    right — but only the owner knows that the run's best checkpoint is step
+    1500 rather than the one the trainer wrote last. This is the override, and
+    it is the only way a cover is ever chosen by hand.
+
+    **The choice sticks, and needs no column of its own to say it was made.**
+    Nothing renumbers a stack after it is built: :func:`apply_stack` writes
+    positions once, :func:`propose_stacks` reads *loose* adapters only, and the
+    run importer's upsert keeps an existing ``stack_position`` with
+    ``COALESCE``. A member's row can still *disappear* — deleted, forgotten, or
+    merged away as a duplicate by the checkpoint-hash task — and
+    :func:`repair_stacks` closes the gap that leaves; a chosen cover survives
+    all of it unless the chosen file is itself what went.
+
+    The other members keep their relative order and close the gap behind the
+    promoted one, exactly as ``PATCH /stacks/{id}/members/{picture_id}`` does
+    for a picture stack. Nothing on disk is touched.
+
+    Args:
+        hub: The hub database.
+        stack_id: The ``adapter_stack`` whose cover is being set.
+        model_id: The member to promote. Must already be in that stack.
+
+    Returns:
+        The stack's member ids in their new order, cover first.
+
+    Raises:
+        StackRefused: If the stack has no members, or the model is not one.
+    """
+    with hub.transaction() as conn:
+        # NULLs sort first in SQLite, which would silently make an unpositioned
+        # member the head of the order this renumbers from. Ordered last
+        # instead, then given a real position like every other member.
+        ids = [
+            int(row["id"])
+            for row in conn.execute(
+                "SELECT id FROM model WHERE stack_id = ? "
+                "ORDER BY stack_position IS NULL, stack_position, id",
+                (stack_id,),
+            ).fetchall()
+        ]
+        if not ids:
+            # Covers both "no such stack" and the inert empty row an
+            # interrupted import can leave behind: neither has a member to
+            # promote, and both are a wrong address rather than a refusal.
+            raise StackRefused(
+                f"Stack {stack_id} has no members; nothing was changed.",
+                reason="no_such_stack",
+            )
+        if model_id not in ids:
+            raise StackRefused(
+                f"Model {model_id} is not in stack {stack_id}; nothing was changed.",
+                reason="not_a_member",
+            )
+        ordered = [model_id] + [i for i in ids if i != model_id]
+        for position, member_id in enumerate(ordered):
+            conn.execute(
+                "UPDATE model SET stack_position = ? WHERE id = ? AND stack_id = ?",
+                (position, member_id, stack_id),
+            )
+        conn.execute(
+            "UPDATE adapter_stack SET updated_at = ? WHERE id = ?",
+            (_utcnow(), stack_id),
+        )
+    logger.info("Model %d is now the cover of adapter_stack %d.", model_id, stack_id)
+    return ordered
+
+
+def remove_member(hub: HubDatabase, stack_id: int, model_id: int) -> tuple[int, bool]:
+    """Take one model out of a stack, leaving it loose on the shelf.
+
+    :func:`unstack` breaks a whole stack up; this releases a single member,
+    which is what the owner wants when one checkpoint of a run turns out to be
+    a different subject. **Nothing on disk is touched** — two hub columns are
+    cleared — and the released model becomes loose, so :func:`propose_stacks`
+    may offer to regroup it, exactly as it may after an unstack.
+
+    **A stack of one is not a stack**, so removing the second-to-last member
+    dissolves the whole thing: both files go loose and the ``adapter_stack``
+    row is deleted. The survivors are otherwise renumbered contiguously, so
+    removing the cover promotes whichever member was behind it.
+
+    Args:
+        hub: The hub database.
+        stack_id: The ``adapter_stack`` to take the model out of.
+        model_id: The member to release.
+
+    Returns:
+        ``(released, dissolved)`` — how many models are loose again, and
+        whether the stack itself is gone.
+
+    Raises:
+        StackRefused: If the stack has no members, or the model is not one.
+    """
+    with hub.transaction() as conn:
+        ids = [
+            int(row["id"])
+            for row in conn.execute(
+                "SELECT id FROM model WHERE stack_id = ? "
+                "ORDER BY stack_position IS NULL, stack_position, id",
+                (stack_id,),
+            ).fetchall()
+        ]
+        if not ids:
+            raise StackRefused(
+                f"Stack {stack_id} has no members; nothing was changed.",
+                reason="no_such_stack",
+            )
+        if model_id not in ids:
+            raise StackRefused(
+                f"Model {model_id} is not in stack {stack_id}; nothing was changed.",
+                reason="not_a_member",
+            )
+
+        remaining = [i for i in ids if i != model_id]
+        dissolved = len(remaining) < MIN_GROUP_SIZE
+        conn.execute(
+            "UPDATE model SET stack_id = NULL, stack_position = NULL "
+            "WHERE id = ? AND stack_id = ?",
+            (model_id, stack_id),
+        )
+        # The renumber and the dissolve are :func:`repair_stacks`' rule rather
+        # than a second copy of it: a run that loses a member because its file
+        # was deleted has to end up in exactly the state one that lost it to
+        # this verb does, and two implementations of "what a stack looks like
+        # after a member leaves" is how those two drift apart.
+        repair_stacks(conn, [stack_id])
+        released = 1 + (len(remaining) if dissolved else 0)
+    logger.info(
+        "Released %d model(s) from adapter_stack %d%s.",
+        released,
+        stack_id,
+        "; the stack is gone" if dissolved else "",
+    )
+    return released, dissolved
+
+
+def repair_stacks(conn, stack_ids: Iterable[int]) -> None:
+    """Put the named stacks back in a state the shelf can draw, on an open conn.
+
+    **A member can leave a run without asking this module.** Deleting its file
+    and forgetting its row both end at
+    :func:`~pixlstash.services.model_shelf_service._purge`, which drops the
+    ``model`` row and knows nothing about stacks. Left alone that yields a run
+    whose positions read ``0, 2, 3``, or one with **no** position 0 at all
+    because the cover is what went, or a stack of one — which the shelf draws
+    as a plain row while still holding a grouping nobody can see or undo.
+
+    So this is the repair, and it is the one statement of the rule: renumber
+    the survivors contiguously from 0 keeping their order, and dissolve any
+    stack left with fewer than two members.
+
+    Empty ``adapter_stack`` rows are deliberately **left alone**. An interrupted
+    import leaves one and :mod:`pixlstash.services.run_importer` documents it as
+    inert; more to the point, that module inserts the stack row before its
+    members, so deleting empty ones here would race a live import into removing
+    the row it is about to point at.
+
+    Args:
+        conn: An open hub connection, inside the caller's transaction — the
+            repair has to land with whatever removed the member.
+        stack_ids: The stacks to check. An id that names no stack, and a stack
+            that is already tidy, cost one read and change nothing.
+    """
+    for stack_id in sorted({int(i) for i in stack_ids if i is not None}):
+        members = [
+            (int(row["id"]), row["stack_position"])
+            for row in conn.execute(
+                "SELECT id, stack_position FROM model WHERE stack_id = ? "
+                "ORDER BY stack_position IS NULL, stack_position, id",
+                (stack_id,),
+            ).fetchall()
+        ]
+        if not members:
+            continue
+        if len(members) < MIN_GROUP_SIZE:
+            conn.execute(
+                "UPDATE model SET stack_id = NULL, stack_position = NULL "
+                "WHERE stack_id = ?",
+                (stack_id,),
+            )
+            conn.execute("DELETE FROM adapter_stack WHERE id = ?", (stack_id,))
+            logger.info(
+                "adapter_stack %d was left with one member and is gone.", stack_id
+            )
+            continue
+        changed = False
+        for position, (member_id, recorded) in enumerate(members):
+            if recorded == position:
+                continue
+            conn.execute(
+                "UPDATE model SET stack_position = ? WHERE id = ? AND stack_id = ?",
+                (position, member_id, stack_id),
+            )
+            changed = True
+        if changed:
+            conn.execute(
+                "UPDATE adapter_stack SET updated_at = ? WHERE id = ?",
+                (_utcnow(), stack_id),
+            )
 
 
 def _utcnow() -> str:

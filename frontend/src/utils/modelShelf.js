@@ -1393,8 +1393,15 @@ export function collapseStacks(rows) {
     }
     if (emitted.has(row.stack_id)) continue;
     emitted.add(row.stack_id);
+    // A member with no position sorts LAST, matching the server's
+    // `ORDER BY stack_position IS NULL, stack_position` — `?? 0` put it level
+    // with the cover and, on a stable sort, ahead of it, so an unpositioned
+    // row could be drawn as the face of a run the server does not agree it
+    // covers.
     const members = [...byStack.get(row.stack_id)].sort(
-      (a, b) => (a.stack_position ?? 0) - (b.stack_position ?? 0),
+      (a, b) =>
+        (a.stack_position ?? Infinity) - (b.stack_position ?? Infinity) ||
+        a.id - b.id,
     );
     const cover = members[0];
     out.push({
@@ -1468,6 +1475,35 @@ export function unstackReceipt(released, failed) {
   }
   const note = failed ? ` ${stacks(failed)} could not be ungrouped.` : "";
   return `Ungrouped ${stacks(released)}; the files are still on the shelf.${note}`;
+}
+
+/**
+ * Say how many files were taken out of their runs, and what that cost.
+ *
+ * Names the **dissolved** runs separately, because that is the one outcome the
+ * reader did not literally ask for: taking one file out of a pair leaves a run
+ * of one, which is not a run, so its last file comes loose too. A receipt that
+ * said only "took 1 file out" would leave them looking for a stack that is no
+ * longer there.
+ *
+ * @param {number} released - members taken out.
+ * @param {number} dissolved - runs that stopped existing as a result.
+ * @param {number} failed - members the server refused.
+ * @returns {string}
+ */
+export function releaseReceipt(released, dissolved, failed) {
+  const files = (n) => `${n.toLocaleString()} ${n === 1 ? "file" : "files"}`;
+  const runs = (n) => `${n.toLocaleString()} ${n === 1 ? "run" : "runs"}`;
+  if (!released) {
+    return failed
+      ? `Nothing was taken out. ${files(failed)} could not be, and the runs are unchanged.`
+      : "Nothing to take out.";
+  }
+  const gone = dissolved
+    ? ` ${runs(dissolved)} had a single file left and stopped being a run.`
+    : "";
+  const note = failed ? ` ${files(failed)} could not be taken out.` : "";
+  return `Took ${files(released)} out; still on the shelf.${gone}${note}`;
 }
 
 /**

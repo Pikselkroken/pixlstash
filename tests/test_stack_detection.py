@@ -17,6 +17,9 @@ from pixlstash.services.stack_detector import (
     StackRefused,
     apply_stack,
     propose_stacks,
+    remove_member,
+    repair_stacks,
+    set_cover,
     unstack,
 )
 
@@ -903,3 +906,298 @@ def test_fusing_up_to_the_ceiling_still_works(hub, tmp_path):
     fused = apply_stack(hub, [first[0], second[0]], "Fused", fuse=True)
 
     assert len(_members(hub, fused)) == MAX_MEMBERS_PER_STACK
+
+
+# ── choosing the cover, and taking a member out ─────────────────────────────
+
+
+def test_choosing_a_cover_promotes_it_and_keeps_the_rest_in_order(hub, tmp_path):
+    """The filename heuristic is a default, not a verdict.
+
+    The owner knows step 1000 is the good checkpoint; the names cannot. What
+    the promotion must NOT do is shuffle everything else, so the assertion is
+    on the whole order rather than on position 0 alone.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    final = _adapter(hub, folder, "Foxglove.safetensors")
+    high = _adapter(hub, folder, "Foxglove_000002000.safetensors")
+    low = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    stack_id = apply_stack(hub, [final, high, low], "Foxglove")
+    assert _members(hub, stack_id) == [final, high, low]
+
+    assert set_cover(hub, stack_id, low) == [low, final, high]
+    assert _members(hub, stack_id) == [low, final, high]
+
+
+def test_choosing_the_cover_that_is_already_the_cover_changes_nothing(hub, tmp_path):
+    folder = _folder(hub, str(tmp_path / "loras"))
+    final = _adapter(hub, folder, "Foxglove.safetensors")
+    step = _adapter(hub, folder, "Foxglove_000002000.safetensors")
+    stack_id = apply_stack(hub, [final, step], "Foxglove")
+
+    assert set_cover(hub, stack_id, final) == [final, step]
+    assert _members(hub, stack_id) == [final, step]
+
+
+def test_choosing_a_cover_from_another_stack_is_refused(hub, tmp_path):
+    """A member of somebody else's run must not be dragged into this one."""
+    folder = _folder(hub, str(tmp_path / "loras"))
+    mine = [
+        _adapter(hub, folder, "Foxglove.safetensors"),
+        _adapter(hub, folder, "Foxglove_000001000.safetensors"),
+    ]
+    theirs = [
+        _adapter(hub, folder, "Clementine.safetensors"),
+        _adapter(hub, folder, "Clementine_000001000.safetensors"),
+    ]
+    stack_id = apply_stack(hub, mine, "Foxglove")
+    other = apply_stack(hub, theirs, "Clementine")
+
+    with pytest.raises(StackRefused) as exc:
+        set_cover(hub, stack_id, theirs[1])
+    assert exc.value.reason == "not_a_member"
+
+    assert _members(hub, stack_id) == mine
+    assert _members(hub, other) == theirs
+
+
+def test_choosing_a_cover_in_a_stack_that_is_not_there_is_refused(hub, tmp_path):
+    folder = _folder(hub, str(tmp_path / "loras"))
+    one = _adapter(hub, folder, "Foxglove.safetensors")
+    two = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    stack_id = apply_stack(hub, [one, two], "Foxglove")
+
+    with pytest.raises(StackRefused) as exc:
+        set_cover(hub, stack_id + 999, one)
+    assert exc.value.reason == "no_such_stack"
+
+    assert _members(hub, stack_id) == [one, two]
+
+
+def test_a_chosen_cover_is_not_re_proposed_or_reordered(hub, tmp_path):
+    """The choice sticks, which is the whole point of making it.
+
+    Detection only ever looks at loose adapters, so nothing recomputes the
+    order of a stack that already exists. Asserted rather than assumed: a
+    future finder that renumbered stacked rows would silently undo every cover
+    the owner ever set.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    final = _adapter(hub, folder, "Foxglove.safetensors")
+    step = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    stack_id = apply_stack(hub, [final, step], "Foxglove")
+    set_cover(hub, stack_id, step)
+
+    assert propose_stacks(hub) == []
+    assert _members(hub, stack_id) == [step, final]
+
+
+def test_removing_a_member_leaves_it_loose_and_renumbers_the_rest(hub, tmp_path):
+    folder = _folder(hub, str(tmp_path / "loras"))
+    final = _adapter(hub, folder, "Foxglove.safetensors")
+    high = _adapter(hub, folder, "Foxglove_000002000.safetensors")
+    low = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    stack_id = apply_stack(hub, [final, high, low], "Foxglove")
+
+    assert remove_member(hub, stack_id, high) == (1, False)
+
+    released = hub.fetchone(
+        "SELECT stack_id, stack_position FROM model WHERE id = ?", (high,)
+    )
+    assert released["stack_id"] is None
+    assert released["stack_position"] is None
+    # Contiguous from 0, so the survivors still have exactly one cover.
+    rows = hub.fetchall(
+        "SELECT id, stack_position FROM model WHERE stack_id = ? "
+        "ORDER BY stack_position",
+        (stack_id,),
+    )
+    assert [(int(r["id"]), r["stack_position"]) for r in rows] == [
+        (final, 0),
+        (low, 1),
+    ]
+
+
+def test_removing_the_cover_promotes_the_member_behind_it(hub, tmp_path):
+    folder = _folder(hub, str(tmp_path / "loras"))
+    final = _adapter(hub, folder, "Foxglove.safetensors")
+    high = _adapter(hub, folder, "Foxglove_000002000.safetensors")
+    low = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    stack_id = apply_stack(hub, [final, high, low], "Foxglove")
+
+    remove_member(hub, stack_id, final)
+
+    assert _members(hub, stack_id) == [high, low]
+
+
+def test_removing_the_second_to_last_member_dissolves_the_stack(hub, tmp_path):
+    """One file is not a run, and a stack of one is a grouping nobody can see."""
+    folder = _folder(hub, str(tmp_path / "loras"))
+    one = _adapter(hub, folder, "Foxglove.safetensors")
+    two = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    stack_id = apply_stack(hub, [one, two], "Foxglove")
+
+    assert remove_member(hub, stack_id, one) == (2, True)
+
+    for model_id in (one, two):
+        row = hub.fetchone(
+            "SELECT stack_id, stack_position FROM model WHERE id = ?", (model_id,)
+        )
+        assert row["stack_id"] is None
+        assert row["stack_position"] is None
+    assert (
+        hub.fetchone("SELECT id FROM adapter_stack WHERE id = ?", (stack_id,)) is None
+    )
+
+
+def test_removing_a_member_touches_no_file_row(hub, tmp_path):
+    """The `model_file` rows are untouched, which is the recorded half.
+
+    Stated as what it proves rather than as "nothing on disk": this asserts the
+    rows, and the reason no file moves is that the function contains no
+    filesystem call at all.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    one = _adapter(hub, folder, "Foxglove.safetensors")
+    two = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    three = _adapter(hub, folder, "Foxglove_000002000.safetensors")
+    stack_id = apply_stack(hub, [one, two, three], "Foxglove")
+    before = hub.fetchall(
+        "SELECT model_id, model_folder_id, relpath, state FROM model_file "
+        "ORDER BY model_id"
+    )
+
+    remove_member(hub, stack_id, two)
+
+    after = hub.fetchall(
+        "SELECT model_id, model_folder_id, relpath, state FROM model_file "
+        "ORDER BY model_id"
+    )
+    assert [tuple(r) for r in after] == [tuple(r) for r in before]
+
+
+def test_removing_a_model_that_is_not_in_the_stack_changes_nothing(hub, tmp_path):
+    folder = _folder(hub, str(tmp_path / "loras"))
+    one = _adapter(hub, folder, "Foxglove.safetensors")
+    two = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    loose = _adapter(hub, folder, "Clementine.safetensors")
+    stack_id = apply_stack(hub, [one, two], "Foxglove")
+
+    with pytest.raises(StackRefused) as exc:
+        remove_member(hub, stack_id, loose)
+    assert exc.value.reason == "not_a_member"
+
+    assert _members(hub, stack_id) == [one, two]
+
+
+def test_a_removed_member_can_be_stacked_again(hub, tmp_path):
+    """It is loose, not marked. Removing undoes a grouping, not a decision."""
+    folder = _folder(hub, str(tmp_path / "loras"))
+    one = _adapter(hub, folder, "Foxglove.safetensors")
+    two = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    three = _adapter(hub, folder, "Foxglove_000002000.safetensors")
+    stack_id = apply_stack(hub, [one, two, three], "Foxglove")
+
+    remove_member(hub, stack_id, three)
+
+    assert (
+        apply_stack(
+            hub, [three, _adapter(hub, folder, "Clementine.safetensors")], "Regrouped"
+        )
+        > 0
+    )
+
+
+def test_a_member_with_no_position_is_never_promoted_by_accident(hub, tmp_path):
+    """NULL sorts FIRST in SQLite, and that is the trap.
+
+    A member with no recorded position must not be read as the cover of the
+    order a promotion renumbers from, or promoting one file would silently
+    reshuffle the rest around an accident. Written with a NULL in the middle so
+    both halves of `ORDER BY stack_position IS NULL, stack_position` are load
+    bearing: drop the first term and this order comes back different.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    final = _adapter(hub, folder, "Foxglove.safetensors")
+    high = _adapter(hub, folder, "Foxglove_000002000.safetensors")
+    low = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    stack_id = apply_stack(hub, [final, high, low], "Foxglove")
+    with hub.transaction() as conn:
+        conn.execute("UPDATE model SET stack_position = NULL WHERE id = ?", (high,))
+
+    assert set_cover(hub, stack_id, low) == [low, final, high]
+
+
+def test_repairing_a_stack_closes_the_gaps_a_deleted_member_left(hub, tmp_path):
+    """The state `_purge` leaves behind: holes, and no position 0.
+
+    Written against the columns directly rather than through a delete, because
+    what is being asserted is the repair itself — every caller that drops a
+    member reaches the same function.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    ids = [_adapter(hub, folder, f"Foxglove_00000{i}000.safetensors") for i in range(3)]
+    stack_id = apply_stack(hub, ids, "Foxglove")
+    with hub.transaction() as conn:
+        # The cover gone, a gap behind it, and one member never positioned.
+        conn.execute("UPDATE model SET stack_position = 4 WHERE id = ?", (ids[0],))
+        conn.execute("UPDATE model SET stack_position = 9 WHERE id = ?", (ids[1],))
+        conn.execute("UPDATE model SET stack_position = NULL WHERE id = ?", (ids[2],))
+
+    with hub.transaction() as conn:
+        repair_stacks(conn, [stack_id])
+
+    rows = hub.fetchall(
+        "SELECT id, stack_position FROM model WHERE stack_id = ? "
+        "ORDER BY stack_position",
+        (stack_id,),
+    )
+    assert [(int(r["id"]), r["stack_position"]) for r in rows] == [
+        (ids[0], 0),
+        (ids[1], 1),
+        (ids[2], 2),
+    ]
+
+
+def test_repairing_dissolves_a_stack_left_with_one_member(hub, tmp_path):
+    folder = _folder(hub, str(tmp_path / "loras"))
+    one = _adapter(hub, folder, "Foxglove.safetensors")
+    two = _adapter(hub, folder, "Foxglove_000001000.safetensors")
+    stack_id = apply_stack(hub, [one, two], "Foxglove")
+    with hub.transaction() as conn:
+        # Children first, as `_purge` does: `model_file` references `model`.
+        conn.execute("DELETE FROM model_file WHERE model_id = ?", (two,))
+        conn.execute("DELETE FROM model WHERE id = ?", (two,))
+        repair_stacks(conn, [stack_id])
+
+    survivor = hub.fetchone(
+        "SELECT stack_id, stack_position FROM model WHERE id = ?", (one,)
+    )
+    assert survivor["stack_id"] is None
+    assert survivor["stack_position"] is None
+    assert (
+        hub.fetchone("SELECT id FROM adapter_stack WHERE id = ?", (stack_id,)) is None
+    )
+
+
+def test_repairing_leaves_an_empty_stack_row_alone(hub, tmp_path):
+    """An import inserts its `adapter_stack` row BEFORE its members.
+
+    Deleting empty rows here would therefore race a live import into removing
+    the row it is about to point at. The interrupted-import leftover is inert
+    and documented as such; this is the assertion that keeps it that way.
+    """
+    with hub.transaction() as conn:
+        stack_id = int(
+            conn.execute(
+                "INSERT INTO adapter_stack (name, created_at, updated_at) "
+                "VALUES ('Mid-import', '2026-08-16T00:00:00Z', "
+                "'2026-08-16T00:00:00Z')"
+            ).lastrowid
+        )
+        repair_stacks(conn, [stack_id])
+
+    assert (
+        hub.fetchone("SELECT id FROM adapter_stack WHERE id = ?", (stack_id,))
+        is not None
+    )

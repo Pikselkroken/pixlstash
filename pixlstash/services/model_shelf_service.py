@@ -48,6 +48,7 @@ from pixlstash.services.model_features import (
     FEATURE_SEARCH,
     FEATURE_TAGGER,
 )
+from pixlstash.services.stack_detector import repair_stacks
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
@@ -705,10 +706,32 @@ def forget_models(hub, ids: list[int]) -> tuple[list[int], list[dict]]:
 
 
 def _purge(conn, ids: list[int]) -> None:
-    """Delete the given models and their child rows, on an open connection."""
+    """Delete the given models and their child rows, on an open connection.
+
+    Repairs the stacks they were in on the way out. A member's row can leave a
+    run through here — Forget and Delete both end at this function — and until
+    the shelf let a single member be selected that could not happen, so nothing
+    tidied up after it. Left alone it yields a run numbered ``0, 2, 3``, or one
+    with no cover at all because the cover is what went, or a stack of one,
+    which the shelf draws as a plain row while still holding a grouping nobody
+    can see. :func:`~pixlstash.services.stack_detector.repair_stacks` states
+    that rule once; this only has to remember to call it.
+    """
     if not ids:
         return
     marks = ", ".join("?" for _ in ids)
+    # Read before the delete, because afterwards the rows that named the stacks
+    # are gone. Only the stacks these models were in: repairing every stack on
+    # the shelf would race a live import, which inserts its `adapter_stack` row
+    # before the members that make it a stack.
+    stack_ids = [
+        int(row["stack_id"])
+        for row in conn.execute(
+            f"SELECT DISTINCT stack_id FROM model "
+            f"WHERE id IN ({marks}) AND stack_id IS NOT NULL",
+            tuple(ids),
+        ).fetchall()
+    ]
     # Children first: `model_file` and `model_capability` both reference
     # `model(id)`, and the delete order is what keeps this working without
     # turning foreign keys off. Missing either one does not leak a row, it
@@ -718,6 +741,7 @@ def _purge(conn, ids: list[int]) -> None:
         f"DELETE FROM model_capability WHERE model_id IN ({marks})", tuple(ids)
     )
     conn.execute(f"DELETE FROM model WHERE id IN ({marks})", tuple(ids))
+    repair_stacks(conn, stack_ids)
 
 
 def purge_deleted_models(hub, emptied: dict[int, list[tuple[int, str]]]) -> list[int]:

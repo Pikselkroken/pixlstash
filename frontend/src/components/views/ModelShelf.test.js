@@ -82,9 +82,16 @@ vi.mock("../../api/modelFiles", () => ({
 // having is which ids reach the route.
 const createStack = vi.fn();
 const unstackStack = vi.fn();
+// The two verbs that act inside a run: choosing its cover, and taking one file
+// back out of it. Mocked for the same reason — the assertion worth having is
+// which stack and which model reach the route.
+const setStackCover = vi.fn();
+const removeStackMember = vi.fn();
 vi.mock("../../api/modelStacks", () => ({
   createStack: (...args) => createStack(...args),
   unstackStack: (...args) => unstackStack(...args),
+  setStackCover: (...args) => setStackCover(...args),
+  removeStackMember: (...args) => removeStackMember(...args),
   listStackProposals: vi.fn(),
 }));
 
@@ -241,6 +248,10 @@ beforeEach(() => {
   addModelFile.mockReset();
   createStack.mockReset();
   unstackStack.mockReset();
+  setStackCover.mockReset().mockResolvedValue({ stack_id: 7, model_ids: [] });
+  removeStackMember
+    .mockReset()
+    .mockResolvedValue({ released: 1, dissolved: false });
   listCharacters.mockReset().mockResolvedValue([]);
   listPictureSets.mockReset().mockResolvedValue([]);
 });
@@ -3144,8 +3155,11 @@ describe("the manual stack verb", () => {
       stacked(4, "d", 8, 1),
     ]);
     const store = useModelShelfStore();
-    store.toggleSelected(1);
-    store.toggleSelected(3);
+    // Picked the way the list picks: a collapsed row takes its whole run, and
+    // Ctrl keeps the first one while the second is added. Ticking the cover's
+    // id alone is a different gesture now — it means that one file.
+    store.selectFromClick(1, { ctrl: true });
+    store.selectFromClick(3, { ctrl: true });
     await wrapper.vm.$nextTick();
 
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -3187,8 +3201,11 @@ describe("the manual stack verb", () => {
       stacked(4, "d", 8, 1),
     ]);
     const store = useModelShelfStore();
-    store.toggleSelected(1);
-    store.toggleSelected(3);
+    // Picked the way the list picks: a collapsed row takes its whole run, and
+    // Ctrl keeps the first one while the second is added. Ticking the cover's
+    // id alone is a different gesture now — it means that one file.
+    store.selectFromClick(1, { ctrl: true });
+    store.selectFromClick(3, { ctrl: true });
     await wrapper.vm.$nextTick();
 
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
@@ -3925,7 +3942,10 @@ describe("Delete", () => {
       }),
     ]);
     document.body.appendChild(wrapper.element);
-    useModelShelfStore().toggleSelected(1);
+    // The run, picked the way the list picks it: a collapsed row stands for
+    // every file behind it. Ticking the cover's id alone now means that one
+    // file, which is the gesture the expanded strip added.
+    useModelShelfStore().selectFromClick(1, { ctrl: true });
     await wrapper.vm.$nextTick();
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     deleteModels.mockResolvedValue({
@@ -4217,5 +4237,200 @@ describe("the view switcher does not resize when you switch", () => {
     for (const body of bodyOf(".shelf-viewseg")) {
       expect(body).not.toMatch(/(^|\s|;)font-weight\s*:/);
     }
+  });
+});
+
+describe("acting inside a run", () => {
+  // The strip stopped being a read-only listing (#1005). Its rows are pickable
+  // like any other, which is what makes "this checkpoint is the good one" and
+  // "this one is a different subject" gestures rather than shrugs.
+
+  const member = (id, position, overrides = {}) =>
+    adapter({
+      id,
+      sha256: String.fromCharCode(97 + id).repeat(64),
+      stack_id: 7,
+      stack_position: position,
+      filename: `Foxglove_00000${position}500.safetensors`,
+      locations: [
+        { state: "present", folder_id: 1, folder_path: "/m", relpath: `${id}` },
+      ],
+      ...overrides,
+    });
+
+  /** Mount a two-file run and open it, which is where every gesture starts. */
+  async function openRun(rows = [member(1, 0), member(2, 1)]) {
+    listModelFolders.mockResolvedValue([
+      { id: 1, path: "/m", kind: "user", movable: "per_item", deletable: true },
+    ]);
+    const wrapper = await mountShelf(rows);
+    document.body.appendChild(wrapper.element);
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
+    return wrapper;
+  }
+
+  it("says which file the run is being drawn from, once it is open", async () => {
+    const wrapper = await openRun();
+    const chips = wrapper
+      .findAll(".shelf-row:not(.shelf-row--member) .shelf-chip")
+      .map((c) => c.text());
+    expect(chips).toContain("Cover");
+    // Not on the member rows: exactly one file covers a run.
+    expect(
+      wrapper.findAll(".shelf-row--member .shelf-chip").map((c) => c.text()),
+    ).not.toContain("Cover");
+    wrapper.unmount();
+  });
+
+  it("picks ONE file when a member is clicked, not the whole run", async () => {
+    // The distinction the strip exists for. Clicking the collapsed row still
+    // takes the run whole — that is asserted by the delete suite — and this is
+    // the second gesture, reachable only with the run open.
+    const wrapper = await openRun();
+    const store = useModelShelfStore();
+
+    await wrapper.find(".shelf-row--member").trigger("click");
+
+    expect(store.selectedModelIds).toEqual([2]);
+    expect(store.selectedRows).toHaveLength(1);
+    expect(wrapper.find(".shelf-row--member").classes()).toContain(
+      "shelf-row--selected",
+    );
+    wrapper.unmount();
+  });
+
+  it("walks into the open strip with the arrow keys, and back out", async () => {
+    const wrapper = await openRun();
+    const cover = wrapper.find(".shelf-row:not(.shelf-row--member)");
+
+    await cover.trigger("keydown", { key: "ArrowDown" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-row--member").attributes("tabindex")).toBe("0");
+
+    // Left closes the run from inside it: the strip the cursor is standing in
+    // is about to stop existing, so focus goes back to the row that owns it.
+    await wrapper.find(".shelf-row--member").trigger("keydown", {
+      key: "ArrowLeft",
+    });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-row--member").exists()).toBe(false);
+    expect(
+      wrapper.find(".shelf-row:not(.shelf-row--member)").attributes("tabindex"),
+    ).toBe("0");
+    wrapper.unmount();
+  });
+
+  it("keeps a tab stop when the strip the cursor was in closes", async () => {
+    // A remembered row key that has stopped being drawn beats the fallback, so
+    // nothing carries `tabindex="0"` and the whole list drops out of the tab
+    // order until something is clicked.
+    const wrapper = await openRun();
+    const cover = wrapper.find(".shelf-row:not(.shelf-row--member)");
+    await cover.trigger("keydown", { key: "ArrowDown" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-row--member").attributes("tabindex")).toBe("0");
+
+    // Closed from the badge, which is not the path that hands focus back.
+    await wrapper.find(".shelf-stack-badge").trigger("click");
+    await wrapper.vm.$nextTick();
+    expect(
+      wrapper
+        .findAll(".shelf-row")
+        .filter((r) => r.attributes("tabindex") === "0"),
+    ).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("marks the cover only when the drawn top row really is it", async () => {
+    // A filter can hide position 0, and `collapseStacks` then draws the lowest
+    // surviving member at the top. That row stands in for the run; it is not
+    // the cover, and labelling it would answer the question wrongly.
+    const wrapper = await openRun([
+      member(1, 0, { base_model: "sdxl" }),
+      member(2, 1),
+      member(3, 2),
+    ]);
+    useModelShelfStore().setFilters({ baseModels: ["flux.1-dev"] });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.findAll(".shelf-chip").map((c) => c.text())).not.toContain(
+      "Cover",
+    );
+    wrapper.unmount();
+  });
+
+  it("reports both files when taking one out dissolved the run", async () => {
+    // The half the reader did not ask for: a run of two loses one file and the
+    // other comes loose with it. Counting the CALLS would say 1.
+    const wrapper = await openRun();
+    const notices = useNoticeStore();
+    await wrapper.find(".shelf-row--member").trigger("click");
+    removeStackMember.mockResolvedValue({ released: 2, dissolved: true });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    wrapper
+      .findComponent({ name: "ShelfSelectionBar" })
+      .vm.$emit("remove-from-stack");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const text = notices.notices.at(-1).text;
+    expect(text).toContain("2 files");
+    expect(text).toContain("stopped being a run");
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
+  it("makes the picked member the cover, with no prompt in the way", async () => {
+    const wrapper = await openRun();
+    const confirmSpy = vi.spyOn(window, "confirm");
+    await wrapper.find(".shelf-row--member").trigger("click");
+    const before = listAdapters.mock.calls.length;
+
+    wrapper.findComponent({ name: "ShelfSelectionBar" }).vm.$emit("make-cover");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(setStackCover).toHaveBeenCalledWith(7, 2);
+    // Refetched rather than reordered locally: the server owns the order, and
+    // the row's name, kind and base all move with the cover.
+    expect(listAdapters.mock.calls.length).toBeGreaterThan(before);
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
+  it("takes the picked members out of their run, once confirmed", async () => {
+    const wrapper = await openRun([member(1, 0), member(2, 1), member(3, 2)]);
+    const store = useModelShelfStore();
+    store.selectFromClick(2, {});
+    store.selectFromClick(3, { ctrl: true });
+    await wrapper.vm.$nextTick();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    wrapper
+      .findComponent({ name: "ShelfSelectionBar" })
+      .vm.$emit("remove-from-stack");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // One call per file, so one refusal cannot discard the others.
+    expect(removeStackMember).toHaveBeenCalledTimes(2);
+    expect(removeStackMember).toHaveBeenCalledWith(7, 2);
+    expect(removeStackMember).toHaveBeenCalledWith(7, 3);
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
+  it("does nothing at all when the prompt is declined", async () => {
+    const wrapper = await openRun();
+    await wrapper.find(".shelf-row--member").trigger("click");
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    wrapper
+      .findComponent({ name: "ShelfSelectionBar" })
+      .vm.$emit("remove-from-stack");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(removeStackMember).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+    wrapper.unmount();
   });
 });

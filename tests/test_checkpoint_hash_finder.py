@@ -179,6 +179,43 @@ class TestCollisionIsAMerge:
         assert surviving[0]["sha256"] is not None
         assert {row["model_id"] for row in locations(hub)} == {first_id}
 
+    def test_a_merge_that_empties_a_run_leaves_no_stack_of_one(self, hub, tmp_path):
+        # A duplicate can be one file of a run. The losing row is deleted here,
+        # which takes a member out of a stack without the stack module being
+        # asked — and a run of two left with one file is a grouping the shelf
+        # draws as a plain row and nobody can see or undo.
+        first = write_model(tmp_path / "one" / "a.safetensors")
+        second = write_model(tmp_path / "two" / "b.safetensors")
+        first_id = register(hub, first)
+        second_id = register(hub, second)
+        other_id = register(hub, write_model(tmp_path / "three" / "c.safetensors"))
+        with hub.transaction() as conn:
+            stack_id = int(
+                conn.execute(
+                    "INSERT INTO adapter_stack (name, created_at, updated_at) "
+                    "VALUES ('Run', 'now', 'now')"
+                ).lastrowid
+            )
+            for position, model_id in enumerate((other_id, second_id)):
+                conn.execute(
+                    "UPDATE model SET stack_id = ?, stack_position = ? WHERE id = ?",
+                    (stack_id, position, model_id),
+                )
+
+        CheckpointHashTask(
+            hub, [(first_id, str(first)), (second_id, str(second))]
+        ).run()
+
+        survivor = hub.fetchone(
+            "SELECT stack_id, stack_position FROM model WHERE id = ?", (other_id,)
+        )
+        assert survivor["stack_id"] is None
+        assert survivor["stack_position"] is None
+        assert (
+            hub.fetchone("SELECT id FROM adapter_stack WHERE id = ?", (stack_id,))
+            is None
+        )
+
     def test_the_merge_keeps_what_only_the_dropped_row_knew(self, hub, tmp_path):
         first = write_model(tmp_path / "one" / "a.safetensors")
         second = write_model(tmp_path / "two" / "b.safetensors")
