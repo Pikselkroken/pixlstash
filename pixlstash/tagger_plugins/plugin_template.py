@@ -66,6 +66,7 @@ See ``docs/writing-tagger-plugins.md`` for the full contract.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from pixlstash.tagger_plugins.base import TaggerPlugin
@@ -203,7 +204,7 @@ class MyCaptioner(TaggerPlugin):
         self,
         image_paths: list[str],
         parameters: dict[str, Any],
-        stop_event=None,
+        stop_event: threading.Event | None = None,
     ) -> dict[str, str | None]:
         """Caption a batch of images.
 
@@ -211,9 +212,10 @@ class MyCaptioner(TaggerPlugin):
             image_paths: Absolute image/video paths, in order.
             parameters: Values keyed by the ``name`` in ``parameter_schema``,
                 already merged over your defaults.
-            stop_event: ``threading.Event`` set when the user cancels.  The
-                description workflow does not pass one today, so this is
-                always ``None`` here — guard the access, as below.
+            stop_event: ``threading.Event`` set when the user cancels or the
+                server shuts down.  Check it between images and return what you
+                have, as below; it may be ``None`` if something calls the plugin
+                directly, so guard the access.
 
         Returns:
             ``{path: caption}``.  Map a path to ``None`` to report a

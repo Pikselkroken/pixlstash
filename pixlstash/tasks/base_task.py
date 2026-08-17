@@ -74,6 +74,7 @@ class BaseTask(ABC):
         self.attempts_used = 0
         self.vram_oom_attempts = 0
         self._done_event = threading.Event()
+        self._cancel_event = threading.Event()
 
     def run(
         self,
@@ -96,11 +97,16 @@ class BaseTask(ABC):
                 raised.
 
         Returns:
-            Whatever ``_run_task`` returned.
+            Whatever ``_run_task`` returned, or ``None`` when the task was
+            cancelled before it started.
         """
-        self.started_at = datetime.utcnow()
-        self.status = TaskStatus.RUNNING
         try:
+            if self._cancel_event.is_set():
+                self.status = TaskStatus.CANCELLED
+                return None
+
+            self.started_at = datetime.utcnow()
+            self.status = TaskStatus.RUNNING
             for attempt in range(1, self.VRAM_OOM_ATTEMPTS + 1):
                 # Recorded before the attempt runs, so whatever ends the task —
                 # success, a different exception, a shutdown — the count says
@@ -108,6 +114,12 @@ class BaseTask(ABC):
                 self.attempts_used = attempt
                 try:
                     self.result = self._run_task()
+                    # Deliberately COMPLETED even when the cancel event is set.
+                    # A task that returned normally did whatever work it did,
+                    # and reporting CANCELLED here would race the cancel against
+                    # a task that had already finished — and suppress
+                    # ``Vault._on_task_complete``, which only fires for
+                    # COMPLETED, over rows ``_run_task`` has already committed.
                     self.status = TaskStatus.COMPLETED
                     return self.result
                 except Exception as exc:
@@ -150,6 +162,11 @@ class BaseTask(ABC):
         return QueueType.CPU
 
     def on_queued(self) -> None:
+        # A task object that is queued again is a fresh run: without this a
+        # requeue after ``TaskRunner._cancel_queued_task`` would return from
+        # ``run()`` on the old cancel and never do its work. The four tasks
+        # that carry their own cancel event clear it here for the same reason.
+        self._cancel_event.clear()
         return None
 
     def estimated_vram_mb(self) -> int:
@@ -162,6 +179,12 @@ class BaseTask(ABC):
         return None
 
     def on_cancel(self) -> None:
+        if self.status not in (
+            TaskStatus.CANCELLED,
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+        ):
+            self._cancel_event.set()
         return None
 
     @abstractmethod

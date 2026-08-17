@@ -858,6 +858,14 @@ The retry lives in `run()` rather than in the worker loop so a task settles — 
 
 **The consequence for callers: an OOM must be allowed to propagate.** `DescriptionWorkflow` and `DescriptionTask` re-raise it instead of falling into their "clear the description" path, because clearing a caption over a transient condition destroys data the retry would have produced; the picture keeps its sentinel and a later sweep picks it up. This only reaches as far as the OOMs that actually surface: a plugin that catches per image internally (JoyCaption) or falls back to CPU inside the service (Florence-2) reports a `None` caption instead, which is indistinguishable from "this image cannot be described" and is still cleared.
 
+**A cancel is not a failure, and the event belongs to the task.** `BaseTask` carries a `_cancel_event` that its default `on_cancel()` sets and its `on_queued()` clears, so a task needing cancellation does not have to build its own — `DescriptionTask` uses it by *not* overriding `on_cancel`. The ten task classes that do override it (`TagTask`, `QualityTask`, `FaceExtractionTask` and friends) keep their own events and never call `super().on_cancel()`, so for those the base event stays unset; it is an available hook, not a property of every task. `run()` reads it in exactly one place — before the first attempt, so a task cancelled while queued and then picked up by a worker does no work at all.
+
+**A task that returned normally reports `COMPLETED`, cancel event or not.** The event is set by the shutdown thread and can land at any instant, including after `_run_task` committed its rows; marking such a task `CANCELLED` would race a task that had already finished, and `Vault._on_task_complete` fires only for `COMPLETED`, so the notification for work already in the database would be swallowed. Cancellation is expressed by what the work *does* — return early — not by rewriting the status of work that finished.
+
+Long-running work threads the event downward as a `stop_event`: `DescriptionTask` passes its own to `DescriptionWorkflow.generate_batch()`, which checks it per picture and hands it to the plugin, so a shutdown stops between images instead of running a 32-image JoyCaption batch out. **The event is a parameter, never workflow state:** with CPU spillover the batch runs on a `DescriptionWorkflow` that `InferenceEngine.description_workflow` builds fresh on every access, so an event stored on the workflow would be set on an object nobody is running. (`TagTask` does not yet pass one to `TaggingWorkflow.tag_images`; the same treatment is owed there.)
+
+The write path has to tell the two apart. Blanking a description is how a picture the model genuinely cannot caption stops being retried for ever — `MissingDescriptionFinder` selects only `NULL` or a `__description::` sentinel, so an empty string is a permanent, silent exclusion. A cancel says nothing about the pictures it skipped, so `DescriptionTask` persists nothing for them and the finder picks them up on the next sweep; a real failure still clears.
+
 **A raising finder costs only its own turn.** The planner catches per finder, not per cycle, so one failing `find_task()` is logged and skipped while the rest of the sweep continues; only shutdown abandons a cycle.
 
 **`on_all_tasks_complete()` fires from either edge.** "Exhausted and idle" can be entered by the last task completing *or* by the finder reporting no more work, whichever happens second. `WorkPlanner._claim_drain` is armed on submit and claimed under `_lock` by whichever edge sees the condition first, so the drain (a GPU session teardown for `MissingTagFinder`) is announced exactly once per burst and is not announced over a task that has just been taken.
@@ -1269,10 +1277,12 @@ folder's absolute host path needs somewhere to be served from, which is why
 
 **The plugin lifecycle is not fully wired for third parties, and the guide says so.**
 `ModelLifecycleManager` unloads the four built-in *services* by name and does not walk the
-registry, so nothing calls `TaggerPlugin.unload()` on a user plugin; `DescriptionWorkflow`
-charges the VRAM budget for Florence-2 only, so `estimated_vram_mb()` is never consulted;
-and `generate_descriptions` is called without a `stop_event` (the tag path does pass one).
-Closing any of these is a separate change to the workflow, not to discovery.
+registry, so nothing calls `TaggerPlugin.unload()` on a user plugin; and
+`DescriptionWorkflow` charges the VRAM budget for Florence-2 only, so
+`estimated_vram_mb()` is never consulted. Closing either is a separate change to the
+workflow, not to discovery. The third gap listed here — `generate_descriptions` being
+called without a `stop_event` — is closed: `DescriptionWorkflow` now passes one on both
+paths, so a plugin that honours it stops between images instead of running the batch out.
 
 #### Florence-2 checkpoint selection (issue #512)
 

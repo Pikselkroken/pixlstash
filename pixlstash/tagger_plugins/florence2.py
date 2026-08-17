@@ -268,6 +268,10 @@ class Florence2Service:
     ) -> Optional[str]:
         """Generate a natural language caption for a single image or video file.
 
+        There is no ``stop_event`` here: one caption is a single inference with
+        nothing to interrupt part-way, so cancellation is the caller's check
+        before it asks for the next one.
+
         Args:
             image_path: Path to the image or video file.
             _retry_on_cpu: When True, retry on CPU if a CUDA error occurs.
@@ -320,13 +324,18 @@ class Florence2Service:
             return None
 
     def generate_captions_batch(
-        self, image_paths: list, _retry_on_cpu: bool = True
+        self,
+        image_paths: list,
+        _retry_on_cpu: bool = True,
+        stop_event: threading.Event | None = None,
     ) -> dict:
         """Generate captions for a batch of still images.
 
         Args:
             image_paths: List of file paths (non-video only).
             _retry_on_cpu: When True, retry on CPU if a CUDA error occurs.
+            stop_event: Optional :class:`threading.Event` to interrupt
+                inference mid-batch.
 
         Returns:
             Dict mapping file path → caption string (or None on failure).
@@ -343,6 +352,11 @@ class Florence2Service:
         try:
             valid_items = []
             for image_path in image_paths:
+                if stop_event and stop_event.is_set():
+                    logger.debug(
+                        "Florence-2 generate captions batch stop-event reached, ending early"
+                    )
+                    return {}
                 try:
                     image = Image.open(image_path).convert("RGB")
                     image = _resize_to_max_dim(image, max_dim=640)
@@ -366,6 +380,12 @@ class Florence2Service:
             )
             inputs = _move_inputs_to_device(inputs, self._model_device, self._dtype)
             logger.debug("Batch inputs moved to %s", self._model_device)
+
+            if stop_event and stop_event.is_set():
+                logger.debug(
+                    "Florence-2 generate captions batch stop-event reached, ending early"
+                )
+                return {}
 
             with torch.inference_mode():
                 generated_ids = self._model.generate(
@@ -394,15 +414,22 @@ class Florence2Service:
                 )
                 if self._reload_on_cpu(cause=e):
                     return self.generate_captions_batch(
-                        image_paths, _retry_on_cpu=False
+                        image_paths, _retry_on_cpu=False, stop_event=stop_event
                     )
 
             logger.error("Florence-2 batch captioning failed: %s", e)
             logger.debug(traceback.format_exc())
-            return {
-                image_path: self.generate_caption(image_path, _retry_on_cpu=False)
-                for image_path in image_paths
-            }
+            captions = {}
+            for image_path in image_paths:
+                if stop_event and stop_event.is_set():
+                    logger.debug(
+                        "Florence-2 per-image fallback stop-event reached, ending early"
+                    )
+                    break
+                captions[image_path] = self.generate_caption(
+                    image_path, _retry_on_cpu=False
+                )
+            return captions
 
     def detect_objects(
         self,
@@ -985,17 +1012,20 @@ class Florence2Plugin(TaggerPlugin):
         self,
         image_paths: list,
         parameters: dict,
-        stop_event=None,
+        stop_event: threading.Event | None = None,
     ) -> dict:
         """Generate captions for a batch of image/video paths.
 
         Args:
             image_paths: Ordered list of absolute image/video paths.
             parameters: Plugin parameters (uses ``max_new_tokens``).
-            stop_event: Not used by Florence-2 (kept for interface compatibility).
+            stop_event: Optional :class:`threading.Event`.  Checked before each
+                video and before each still-image chunk, so a cancel returns
+                the captions produced so far rather than running the batch out.
 
         Returns:
             ``{path: caption_str}`` — value is ``None`` on per-image failure.
+            A cancelled batch simply omits the paths it never reached.
         """
         _VIDEO_EXTS = frozenset(
             {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
@@ -1008,6 +1038,11 @@ class Florence2Plugin(TaggerPlugin):
         batch_items: list[str] = []
 
         for path in image_paths:
+            if stop_event and stop_event.is_set():
+                logger.debug(
+                    "Florence-2 generate descriptions stop-event reached, ending early."
+                )
+                return results
             path_str = str(path)
             ext = os.path.splitext(path_str)[1].lower()
             if ext in _VIDEO_EXTS:
@@ -1019,8 +1054,15 @@ class Florence2Plugin(TaggerPlugin):
 
         batch_size = self.service.description_batch_size()
         for idx in range(0, len(batch_items), batch_size):
+            if stop_event and stop_event.is_set():
+                logger.debug(
+                    "Florence-2 generate descriptions stop-event reached, ending early."
+                )
+                return results
             chunk = batch_items[idx : idx + batch_size]
-            captions = self.service.generate_captions_batch(chunk)
+            captions = self.service.generate_captions_batch(
+                chunk, stop_event=stop_event
+            )
             for path_str in chunk:
                 results[path_str] = captions.get(path_str)
 

@@ -190,8 +190,14 @@ class DescriptionTask(BaseTask):
 
         descriptions_generated = []
         try:
+            # The event is the task's own, not the workflow's: with CPU
+            # spillover the batch runs on a workflow object built fresh on
+            # access (InferenceEngine.description_workflow), so a cancel stored
+            # on the workflow would be set on something nobody is running.
             batch_results = active_workflow.generate_batch(
-                pictures, engine_override=self._engine_override
+                pictures,
+                engine_override=self._engine_override,
+                stop_event=self._cancel_event,
             )
         except Exception as exc:
             if is_vram_oom(exc):
@@ -221,7 +227,17 @@ class DescriptionTask(BaseTask):
                     self._cpu_spillover_last_used_at = time.perf_counter()
                 self._release_idle_cpu_spillover_engine(force=False)
 
+        # Blanking is how a picture the model genuinely cannot caption stops
+        # being retried for ever — MissingDescriptionFinder selects only NULL
+        # or a ``__description::`` sentinel, so an empty string is a permanent
+        # exclusion. A cancel is not a failure: it says nothing about these
+        # pictures, so leave them exactly as they were and let the finder pick
+        # them up on the next run.
+        cancelled = self._cancel_event.is_set()
+
         if not batch_results:
+            if cancelled:
+                return []
             if self._engine_override:
                 logger.error(
                     "DescriptionTask: plugin %r failed for ids=%s; "
@@ -238,6 +254,9 @@ class DescriptionTask(BaseTask):
             description = batch_results.get(pic.id)
             if description:
                 pic.description = description
+            elif cancelled:
+                # Skipped by the cancel, never attempted. Persist nothing.
+                continue
             else:
                 logger.error("Failed to generate description for picture %s", pic.id)
                 pic.description = ""

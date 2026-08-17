@@ -1108,7 +1108,7 @@ def test_description_regeneration_skips_locked_pic():
 
         # (2) Write-side: even if a task is handed both, the locked pic is skipped.
         class _StubWorkflow:
-            def generate_batch(self, pictures, engine_override=None):
+            def generate_batch(self, pictures, engine_override=None, stop_event=None):
                 return {p.id: "regenerated-caption" for p in pictures}
 
             def estimate_vram_mb(self, n):
