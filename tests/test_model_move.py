@@ -735,6 +735,150 @@ def test_a_destination_row_that_appears_at_commit_time_leaves_no_dangling_row(
     assert (two_folders["destination_id"], "alice.safetensors") in locations(hub)
 
 
+@pytest.mark.parametrize("force_copy", [False, True], ids=["rename", "copy"])
+def test_forgetting_the_source_folder_mid_move_never_unlinks_the_source(
+    two_folders, hub, monkeypatch, force_copy
+):
+    """Forget lands *inside* the move: the commit must refuse, not report zero rows.
+
+    ``DELETE /model-folders/{id}`` drops the folder and every ``model_file`` row
+    in it. If that lands after the copy and before ``_repoint``, the UPDATE
+    matches nothing — and SQL calls that success, so the mover used to unlink the
+    source and report ``moved`` with the destination bytes registered nowhere at
+    all (#1017). That is the dangling residue inverted: a file no row names,
+    after the only other copy was deleted.
+
+    Simulated by running the forget from inside ``_repoint``, which is the exact
+    instant it has to land on. The route cannot reach here any more — it takes
+    ``SHELF_IO_LOCK`` — so this pins the mover's own half of the guard, which is
+    what has to hold for a delete, a restored hub or a bug that gets there by
+    another door.
+    """
+    if force_copy:
+        monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+    original_repoint = ModelMover._repoint
+
+    def forget_then_repoint(self, move, plan, **kwargs):
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM model_file WHERE model_folder_id = ?",
+                (two_folders["source_id"],),
+            )
+            conn.execute(
+                "DELETE FROM model_folder WHERE id = ?", (two_folders["source_id"],)
+            )
+        return original_repoint(self, move, plan, **kwargs)
+
+    monkeypatch.setattr(ModelMover, "_repoint", forget_then_repoint)
+    mover = ModelMover(hub)
+    report = mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_FAILED], (
+        "a move whose registration vanished reported success"
+    )
+    # The bytes are where the forget left every other file in that folder: on
+    # disk at the source path, unregistered. Renamed back on the rename path,
+    # the copy discarded on the copy path — the undo the ordering already had.
+    assert os.path.exists(two_folders["source_path"]), (
+        "the source was unlinked on the strength of a commit that moved no row"
+    )
+    assert not os.path.exists(two_folders["destination_path"])
+    assert not os.path.exists(two_folders["destination_path"] + PARTIAL_SUFFIX)
+    assert locations(hub) == {}, "the forget's own deletion did not stand"
+    assert_no_dangling_rows(hub)
+
+
+@pytest.mark.parametrize("force_copy", [False, True], ids=["rename", "copy"])
+def test_a_duplicate_fold_during_the_move_does_not_fail_it(
+    two_folders, hub, monkeypatch, force_copy
+):
+    """The over-blocking direction of the #1017 guard, and it is the live one.
+
+    ``CheckpointHashTask`` folds two rows that hash the same by rewriting
+    ``model_file.model_id`` to the survivor, on the task runner and deliberately
+    outside ``SHELF_IO_LOCK``, so it overlaps a multi-minute copy freely. The row
+    is still there and still names this file — only its model was consolidated —
+    so the move must commit.
+
+    An earlier revision of the guard matched on ``model_id`` as well as the
+    source key, which turned every one of these into a failed move with a
+    finished copy thrown away. The key is ``PRIMARY KEY (model_folder_id,
+    relpath)``: it already matches at most one row, so the extra predicate could
+    only ever miss.
+    """
+    if force_copy:
+        monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+    original_repoint = ModelMover._repoint
+
+    def fold_then_repoint(self, move, plan, **kwargs):
+        with hub.transaction() as conn:
+            survivor = int(
+                conn.execute(
+                    "INSERT INTO model (file_kind, kind, sha256, filename, "
+                    "provenance, file_size, created_at) VALUES ('adapter', "
+                    "'lora', ?, 'alice.safetensors', 'external', 9, "
+                    "'2026-08-09T00:00:00+00:00')",
+                    ("d" * 64,),
+                ).lastrowid
+            )
+            conn.execute(
+                "UPDATE model_file SET model_id = ? WHERE model_id = ?",
+                (survivor, two_folders["model_id"]),
+            )
+        return original_repoint(self, move, plan, **kwargs)
+
+    monkeypatch.setattr(ModelMover, "_repoint", fold_then_repoint)
+    mover = ModelMover(hub)
+    report = mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_MOVED], (
+        "a legitimate move was failed because another writer consolidated the "
+        "row's model_id"
+    )
+    assert not os.path.exists(two_folders["source_path"])
+    assert os.path.exists(two_folders["destination_path"])
+    assert set(locations(hub)) == {(two_folders["destination_id"], "alice.safetensors")}
+    assert_no_dangling_rows(hub)
+
+
+def test_forgetting_the_source_folder_before_the_move_refuses_at_plan_time(
+    two_folders, hub, cross_device
+):
+    """The other ordering, and the one that was always safe.
+
+    Forget first and there is no folder to plan from, so the batch is refused
+    before the first byte rather than half-executed. Pinned because the fix for
+    the interleaved ordering must not be read as the only thing standing between
+    a forgotten folder and a lost file.
+    """
+    with hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM model_file WHERE model_folder_id = ?",
+            (two_folders["source_id"],),
+        )
+        conn.execute(
+            "DELETE FROM model_folder WHERE id = ?", (two_folders["source_id"],)
+        )
+
+    with pytest.raises(MoveRefused):
+        ModelMover(hub).plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    assert os.path.exists(two_folders["source_path"])
+    assert not os.path.exists(two_folders["destination_path"])
+
+
 def test_an_existing_destination_file_is_never_overwritten(two_folders, cross_device):
     """There is no undo for shelf operations, so a move must not destroy a file
     the caller never named."""

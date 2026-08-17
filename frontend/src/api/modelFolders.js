@@ -113,7 +113,10 @@ export async function createModelFolder({
  * Forget a registered folder.
  *
  * Nothing on disk is touched and no curation is lost, so this needs no
- * confirmation prompt. The managed store answers 409 instead.
+ * confirmation prompt. The managed store answers 409 instead, and so does a
+ * folder asked for while a move or an import is running — that job is writing
+ * the very location rows this drops, so it is a "try again in a moment", not a
+ * refusal of the gesture. The store shows the server's `detail` either way.
  *
  * @param {number|string} id
  * @returns {Promise<Object>} the response body, whose `tombstoned_files` is how

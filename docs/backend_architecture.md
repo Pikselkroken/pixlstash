@@ -2179,7 +2179,8 @@ the shelf when the call returns and the owner never has to rescan.
   SHA-256 → register the row and commit.** Every interruption leaves either
   nothing or an unregistered file in the store, never a row naming a file that
   is not there — and it takes the same machine-wide `SHELF_IO_LOCK` slot as a
-  move and an import, so two writers cannot race for one destination filename.
+  move, an import and forgetting a folder, so two writers cannot race for one
+  destination filename.
 - **It is the one shelf route that takes a host path in its body**, which the
   import block beside it deliberately does not (a run is *named*, and the server
   joins the name to a registered root). That cannot be avoided here: the whole
@@ -2372,12 +2373,49 @@ longer wants was a file manager and then a rescan.
   `escapes_its_folder`: a broken row, never a request to unlink somebody's file
   elsewhere on the disk.
 - **It holds the machine-wide `SHELF_IO_LOCK`** for the whole call, the same
-  slot an add, a move and an import take, so nothing can be copying into a
-  folder this is emptying.
+  slot an add, a move, an import and — since #1017 — forgetting a folder take,
+  so nothing can be copying into a folder this is emptying.
 - Authorization is `LOCAL_OWNER_ONLY` (§16.3). It takes no host path — the body
   is a list of hub `model.id` — so it is on that tier for the destruction
   alone, which is the unlink half of `POST /model-moves` without the copy that
   justifies it.
+
+#### The unlink is authorised by exactly one committed row (#1017)
+
+`ModelMover`'s ordering — copy → verify → repoint and commit → **then** unlink —
+rests on "the row moved". SQL does not: an `UPDATE` that matches nothing reports
+success, so a `model_file` row deleted between the plan and the commit let the
+mover unlink the source and report `moved` with the destination bytes registered
+nowhere at all. That is the dangling residue inverted, and worse — a file no row
+names, after the only other copy was removed.
+
+- **`ModelMover._repoint` requires exactly one affected row** and raises
+  `RepointLost` otherwise, inside the transaction, so it rolls back. `_rename`
+  renames the file back, `_copy_verify_repoint_unlink` discards the copy, and
+  `_move_one` reports that file `failed`. Nothing is unlinked. **This is the
+  guarantee**; everything below is defence in depth.
+- **The predicate is the source key and nothing else.** `model_file` is
+  `PRIMARY KEY (model_folder_id, relpath)`, so the key already matches at most
+  one row. Adding `model_id` cannot narrow a real ambiguity and *would* miss:
+  `CheckpointHashTask` folds duplicate checkpoints by rewriting
+  `model_file.model_id` to the survivor, on the task runner and outside
+  `SHELF_IO_LOCK`, and hashing a large checkpoint overlaps a multi-minute copy
+  easily. The row is still there and still names the file; only its model was
+  consolidated. Failing on that would discard a finished copy and report a
+  legitimate move failed — pinned in both directions in
+  `tests/test_model_move.py`.
+- **`DELETE /model-folders/{folder_id}` takes the `SHELF_IO_LOCK` slot** and
+  answers 409 while it is held. That is the second, transient 409 on that route
+  (the managed-row refusal above is the other one). It is a slot, not a general
+  exclusion: a rescan writes the same rows outside this lock by design, and a
+  multi-run import is a sequence of separate lock-taking requests, so a forget
+  can still land between two of them. What it buys is a clean 4xx before the
+  batch starts instead of a file failed halfway through forty.
+- **The UI says so beforehand.** `ModelFoldersDialog`'s `forgetReason` blocks
+  Forget while `useModelMovesStore().busy`, the same guard `relocateReason`
+  already carried, and the row's note explains it — an ordinary `user` folder is
+  forgettable without being relocatable, so a guard written only for Move left
+  exactly those rows clickable and failing.
 
 ### Hub and library identity
 

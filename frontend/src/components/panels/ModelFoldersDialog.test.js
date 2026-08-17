@@ -264,6 +264,45 @@ describe("relocation", () => {
   });
 });
 
+describe("forgetting", () => {
+  function forgetButton(wrapper) {
+    return wrapper
+      .findAll("button")
+      .find((b) => (b.attributes("aria-label") || "").startsWith("Forget"));
+  }
+
+  it("blocks the verb while a move is running rather than taking the 409", async () => {
+    // Forgetting deletes the very location rows a move is repointing, so the
+    // server takes the one machine-wide slot for it too (#1017). The row that
+    // matters is this one: an ordinary `user` folder is forgettable and NOT
+    // relocatable, so a guard written only for Move leaves it clickable and the
+    // owner gets a red error toast from a button that looked available.
+    moveBusy = true;
+    const wrapper = await open([folder()]);
+    const forget = forgetButton(wrapper);
+    expect(forget.attributes("aria-disabled")).toBe("true");
+    expect(forget.attributes("disabled")).toBeUndefined();
+    await forget.trigger("click");
+    expect(forgetModelFolder).not.toHaveBeenCalled();
+    // And the row says why. `rowReason` used to gate this on `relocatable`, so
+    // this row was blocked and silent — the exact combination that reads as a
+    // broken button.
+    expect(wrapper.get(".mf-row .helptip").classes()).not.toContain(
+      "helptip--empty",
+    );
+  });
+
+  it("still lets it through with no move running", async () => {
+    // Over-blocking is its own regression: the slot is free far more often than
+    // it is held, and Forget is the shelf's only tombstone.
+    const wrapper = await open([folder()]);
+    const forget = forgetButton(wrapper);
+    expect(forget.attributes("aria-disabled")).toBeUndefined();
+    await forget.trigger("click");
+    expect(forgetModelFolder).toHaveBeenCalledWith(1);
+  });
+});
+
 describe("a remote owner", () => {
   it("sees the mutators, blocked, described, and still focusable", async () => {
     // The read is owner-only and succeeds from anywhere; only the writes are
