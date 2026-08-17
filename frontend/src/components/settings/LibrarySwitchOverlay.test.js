@@ -43,10 +43,10 @@ describe("LibrarySwitchOverlay", () => {
     await nextTick();
     await nextTick();
 
-    const dialog = wrapper.find('[role="alertdialog"]');
-    expect(dialog.attributes("aria-live")).toBe("assertive");
+    const panel = wrapper.find(".library-switch-overlay");
+    expect(panel.attributes("aria-live")).toBe("assertive");
     expect(wrapper.text()).toContain("Switching to Client work");
-    await dialog.trigger("keydown", { key: "Escape" });
+    await panel.trigger("keydown", { key: "Escape" });
     expect(store.phase).toBe("switching");
 
     rejectSwitch({ response: { data: { detail: "Drive went away" } } });

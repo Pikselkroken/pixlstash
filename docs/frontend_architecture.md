@@ -562,6 +562,16 @@ Enter/Escape through `AppDialog`, restores invoking focus on cancel, and names
 outgoing live share links before any switch request is sent. After acceptance,
 `LibrarySwitchOverlay.vue` owns the persistent assertive switching/failure
 surface above Settings; it deliberately has no Escape or outside-click exit.
+Because Escape is blocked, being unnamed is worse here than elsewhere, so the
+`role="alertdialog"`, `aria-labelledby` and `aria-describedby` sit on the
+`<v-dialog>` rather than on the panel inside it: Vuetify's `VDialog` authors
+`role="dialog"` + `aria-modal` onto the `.v-overlay` root, and attributes on
+`<v-dialog>` fall through to that same element, so the naming lands on the one
+authoritative dialog instead of creating a second, nested one. The ids come
+from `useId()` and the heading/description ids are re-used by both phases (only
+one renders at a time), so the name tracks the phase. `LibrarySwitchOverlay.a11y.test.js`
+mounts the real Vuetify and asserts the resolved name and description in both
+phases — it is the guard on that fall-through if Vuetify's markup ever moves.
 
 Emits: `update:public-url`
 
