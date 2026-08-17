@@ -439,6 +439,49 @@ def test_electron_apple_signing_requires_validated_release_tag():
     )
 
 
+def test_model_cache_saves_every_path_it_restores():
+    """A path only the restore step lists is warmed on every run and never kept.
+
+    The Windows ``downloaded_models`` directory was in the restore list and
+    absent from the save list, so ``warm_models_windows`` downloaded the WD14
+    and PixlStash taggers and saved an entry without them. That entry then went
+    on hitting its primary key, so the save step (`hit != 'true'`) never ran
+    again and could never repair it — every Windows shard re-fetched the
+    taggers, which is the HuggingFace stampede the warm job exists to prevent.
+    """
+    action = yaml.safe_load(
+        (REPO_ROOT / ".github" / "actions" / "model-cache" / "action.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    steps = {}
+    for step in action["runs"]["steps"]:
+        uses = step.get("uses", "")
+        for mode in ("restore", "save"):
+            if f"/cache/{mode}@" in uses:
+                assert mode not in steps, f"Two {mode} steps in one path list"
+                steps[mode] = step
+
+    assert steps.keys() == {"restore", "save"}
+    # Both are guarded on `mode`, or one of them runs in the wrong direction.
+    assert steps["restore"]["if"] == "inputs.mode != 'save'"
+    assert steps["save"]["if"] == "inputs.mode == 'save'"
+
+    # One path per line, not `.split()`: a Windows path can contain a space.
+    paths = {
+        mode: {
+            line.strip() for line in step["with"]["path"].splitlines() if line.strip()
+        }
+        for mode, step in steps.items()
+    }
+    assert paths["restore"] == paths["save"], (
+        "Restore and save must cover the same model paths on every platform; "
+        f"restore-only: {sorted(paths['restore'] - paths['save'])}, "
+        f"save-only: {sorted(paths['save'] - paths['restore'])}"
+    )
+    assert "~/AppData/Local/pixlstash/pixlstash/downloaded_models" in paths["save"]
+
+
 def _shard_matrix(job: dict) -> list:
     """Return the ``shard`` matrix values declared by *job*."""
     matrix = job.get("strategy", {}).get("matrix", {})
