@@ -61,6 +61,15 @@ runs:
     # itself, so any change to the model set busts it. restore-keys keeps the
     # previous set warm across unrelated commits, so a bust only costs the
     # delta.
+    #
+    # `-v2-` is a manual bust, and it is not decoration. `actions/cache` writes
+    # only on a key MISS and `warm_models*` skips its save on a hit, so widening
+    # the path list alone can never reach an entry that keeps hitting: the
+    # Windows entry saved without `downloaded_models` would have gone on hitting
+    # forever, exactly as CLIP did (see the header). Widening the paths and
+    # bumping this literal are one change, never two. restore-keys deliberately
+    # stays on the unversioned prefix, so the bust falls back to the previous
+    # entry and costs only the delta.
     - name: Restore the model cache
       id: restore
       if: inputs.mode != 'save'
@@ -70,7 +79,7 @@ runs:
           ~/.cache/huggingface
           ~/.local/share/pixlstash/downloaded_models
           ~/AppData/Local/pixlstash/pixlstash/downloaded_models
-        key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/tagger_plugins/clip_service.py', 'pixlstash/tagger_plugins/sbert.py', 'pixlstash/tagger_plugins/wd14.py', 'pixlstash/tagger_plugins/pixlstash_tagger.py', 'pixlstash/tagger_plugins/florence2.py', 'scripts/prefetch_ci_models.py') }}
+        key: hf-models-${{ runner.os }}-v2-${{ hashFiles('pixlstash/tagger_plugins/clip_service.py', 'pixlstash/tagger_plugins/sbert.py', 'pixlstash/tagger_plugins/wd14.py', 'pixlstash/tagger_plugins/pixlstash_tagger.py', 'pixlstash/tagger_plugins/florence2.py', 'scripts/prefetch_ci_models.py') }}
         restore-keys: hf-models-${{ runner.os }}-
 
     - name: Save the model cache
@@ -80,4 +89,5 @@ runs:
         path: |
           ~/.cache/huggingface
           ~/.local/share/pixlstash/downloaded_models
+          ~/AppData/Local/pixlstash/pixlstash/downloaded_models
         key: ${{ inputs.key }}
