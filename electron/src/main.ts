@@ -16,13 +16,13 @@ import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { detectHardware, gpuUpgrades, Hardware } from './backend/HardwareDetector';
 import { BackendManager, OVERLAY_ACCELS, launchWithOverlayFallback } from './backend/BackendManager';
 import { uniqueDownloadPath } from './downloads';
 import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
+import { isAllowedNavigation, redactUrl } from './urlPolicy';
 import { ServerProcess, devInterpreter } from './backend/ServerProcess';
 import {
   Accel,
@@ -140,57 +140,9 @@ function sendPhase(payload: Record<string, unknown>): void {
   mainWindow?.webContents.send('app:phase', payload);
 }
 
-/**
- * Decide whether the window may navigate (top-level) to `target`. The privileged
- * `pixlstashDesktop` preload bridge stays injected across same-window navigation,
- * so any off-origin page that loaded here could call high-impact IPC
- * (setServerSettings, commitSetup, installAccelerator, …). We therefore allow
- * ONLY the content we load ourselves and block everything else (deny-by-default):
- *
- *  - `file://` — ONLY files inside our own packaged renderer directory
- *    (renderer/index.html splash, renderer/setup.html, their assets). A blanket
- *    `file:` allow would let a navigated page load any local HTML under the
- *    privileged preload, so we resolve the target path and require it to live
- *    under RENDERER_DIR.
- *  - the live loopback backend origin — http://127.0.0.1:<ephemeral port>. The
- *    port is chosen fresh per backend launch, so the allowed origin is derived
- *    from the URL we actually loaded (`currentUrl`), never hardcoded. Before the
- *    backend is up `currentUrl` is null; we then permit only the loopback host
- *    (127.0.0.1 / localhost over http) so an in-flight load isn't broken, while
- *    still excluding every non-loopback origin.
- */
-function isAllowedNavigation(target: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(target);
-  } catch (e) {
-    console.warn(`[nav] blocking navigation to unparseable URL ${target}:`, e);
-    return false;
-  }
-  // Local bundled pages (splash / setup wizard): allow ONLY our own renderer
-  // files, never an arbitrary file:// path (which would still carry the preload).
-  if (url.protocol === 'file:') {
-    try {
-      const path = resolve(fileURLToPath(url));
-      return path === RENDERER_DIR.slice(0, -1) || path.startsWith(RENDERER_DIR);
-    } catch (e) {
-      console.warn(`[nav] blocking unresolvable file:// URL ${target}:`, e);
-      return false;
-    }
-  }
-  // The running backend, pinned to the exact loopback origin we loaded.
-  if (currentUrl) {
-    try {
-      if (url.origin === new URL(currentUrl).origin) return true;
-    } catch (e) {
-      console.warn(`[nav] could not parse current backend URL ${currentUrl}:`, e);
-    }
-  }
-  // Fallback before the backend URL is known: only the loopback host over http.
-  if (url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === 'localhost')) {
-    return true;
-  }
-  return false;
+/** Bind the shared origin policy (see `./urlPolicy`) to this process's state. */
+function isAllowedTarget(target: string): boolean {
+  return isAllowedNavigation(target, currentUrl, RENDERER_DIR);
 }
 
 /**
@@ -202,7 +154,7 @@ function isAllowedNavigation(target: string): boolean {
  * we allow `https:` and `mailto:` and block (and log) everything else —
  * deny-by-default. Plain `http:` is intentionally excluded for outbound opens:
  * the only legitimate http target here is the loopback backend, which is handled
- * in-app (setWindowOpenHandler 'allow' / isAllowedNavigation), never opened
+ * in-app (setWindowOpenHandler 'allow' / isAllowedTarget), never opened
  * externally. Used by BOTH setWindowOpenHandler and the navigation guard so the
  * scheme policy lives in one place.
  */
@@ -211,14 +163,16 @@ function openExternalSafely(url: string): void {
   try {
     ({ protocol } = new URL(url));
   } catch (e) {
-    console.warn(`[external] refusing to open unparseable URL ${url}:`, e);
+    console.warn(`[external] refusing to open unparseable URL ${redactUrl(url)}:`, e);
     return;
   }
   if (protocol === 'https:' || protocol === 'mailto:') {
     void shell.openExternal(url);
     return;
   }
-  console.warn(`[external] blocked openExternal for disallowed scheme '${protocol}': ${url}`);
+  console.warn(
+    `[external] blocked openExternal for disallowed scheme '${protocol}': ${redactUrl(url)}`,
+  );
 }
 
 /** The accelerator the bundled (installer-shipped) runtime provides. */
@@ -266,14 +220,16 @@ function createMainWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
-  // Open external links in the user's browser, not inside the app window.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) {
-      return { action: 'allow' };
-    }
+  // Open external links in the user's browser, not inside the app window. A
+  // child window is only allowed for content we load ourselves, decided by the
+  // same parsed-origin policy as in-window navigation — a string prefix test
+  // would classify http://127.0.0.1.example.com/ as loopback (#1020).
+  const openHandler = ({ url }: { url: string }): { action: 'allow' | 'deny' } => {
+    if (isAllowedTarget(url)) return { action: 'allow' };
     openExternalSafely(url);
     return { action: 'deny' };
-  });
+  };
+  mainWindow.webContents.setWindowOpenHandler(openHandler);
   // Lock down TOP-LEVEL navigation so the privileged preload bridge can never
   // end up under an untrusted origin. setWindowOpenHandler above only covers
   // window.open / new windows; in-window navigation (link clicks, meta-refresh,
@@ -281,15 +237,23 @@ function createMainWindow(): void {
   // own local content or the live loopback backend is cancelled and, if it's a
   // real external link, handed to the OS browser instead.
   const guardNavigation = (event: Electron.Event, url: string): void => {
-    if (isAllowedNavigation(url)) return;
+    if (isAllowedTarget(url)) return;
     event.preventDefault();
-    console.warn(`[nav] blocked in-window navigation to off-origin URL: ${url}`);
+    console.warn(`[nav] blocked in-window navigation to off-origin URL: ${redactUrl(url)}`);
     // Hand a real external link to the OS browser, but only through the scheme
     // allowlist (https/mailto) — never a raw file:/smb:/custom-handler URL.
     openExternalSafely(url);
   };
   mainWindow.webContents.on('will-navigate', guardNavigation);
   mainWindow.webContents.on('will-redirect', guardNavigation);
+  // A child window inherits the parent's webPreferences (preload included), so
+  // its navigation must be governed too: validating only the URL it opened with
+  // would let it navigate off-origin one hop later, bridge and all.
+  mainWindow.webContents.on('did-create-window', (child) => {
+    child.webContents.setWindowOpenHandler(openHandler);
+    child.webContents.on('will-navigate', guardNavigation);
+    child.webContents.on('will-redirect', guardNavigation);
+  });
 }
 
 /** Bring the main window to the front, recreating it if it was destroyed. */
