@@ -55,11 +55,56 @@ from pixlstash.db_models import (
 from pixlstash.db_models.reference_folder import ReferenceFolder
 from pixlstash.server import Server
 from pixlstash.services import operation_log_service
+from pixlstash.tasks import TaskType
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.orientation import read_orientation
 from tests.utils import upload_pictures_and_wait
 
 API = "/api/v1"
+
+
+# The two finders whose whole job is to undo what a rotate does to the derived
+# columns. ``apply_orientation`` NULLs them precisely so these sweeps re-derive
+# them, which makes "the column is NULL" a state with a background thread racing
+# to end it — the sweep interval floors at 0.05 s while there is work, and the
+# uploads this module makes keep the planner in exactly that fast cycle.
+#
+# That is not a product bug to fix, it is the product working; the assertions
+# below just cannot be read from a live planner. Detached, the NULL stands still
+# and "the rotate NULLed it" is what the assertion actually observes.
+_REGENERATION_FINDERS = (
+    # ThumbnailGenerationTask selects on `thumbnail_width IS NULL` and writes the
+    # regenerated bitmap's dimensions back. On a loaded runner it landed between
+    # the rotate's response and the row read, and shard 8 of the CI gate failed
+    # on `assert 48 is None` — 48 being the width of the *re*-derived 48x64
+    # bitmap, not the stale 64x48 one, so the sweep was demonstrably the writer.
+    TaskType.THUMBNAIL_GENERATION,
+    # ImageEmbeddingTask selects on `image_embedding IS NULL` and owns the
+    # perceptual hash beside it — the same race, one assertion further down.
+    TaskType.IMAGE_EMBEDDING,
+)
+
+
+def _disable_regeneration_finders(server):
+    """Take the re-derivation sweeps out of this module's planner.
+
+    The planner keeps running: ``POST /pictures/import`` refuses a picture
+    outright unless a ``TaskType.FACE_EXTRACTION`` finder is registered
+    (``vault.worker_unavailable_reason``), and nearly every test here uploads.
+    Only the two finders above go, and neither is consulted by the import path.
+
+    Thumbnail columns are still populated — the import writes them itself
+    (``ImageUtils`` renders the bitmap from the uploaded bytes), so a picture
+    still arrives with dimensions for the rotate to clear.
+
+    Returns the names of the finders it removed, so ``reset_operation_log`` can
+    re-check before every test that they are still gone.
+    """
+    for task_type in _REGENERATION_FINDERS:
+        server.vault._planner_work_finders.pop(task_type)
+    # detach_finders() edits the planner's finder structures under its own lock,
+    # so this is safe against the loop thread that is running right now.
+    return server.vault._work_planner.detach_finders(_REGENERATION_FINDERS)
 
 
 # ---------------------------------------------------------------------------
@@ -77,14 +122,17 @@ def _env():
         with open(server_config_path, "w") as handle:
             handle.write(json.dumps({"port": 8000}))
         server = Server(server_config_path)
+        disabled_finders = _disable_regeneration_finders(server)
         try:
             client = TestClient(server.api)
             resp = client.post(
                 "/login", json={"username": "testuser", "password": "testpassword"}
             )
             assert resp.status_code == 200
-            yield client, server
+            yield client, server, disabled_finders
         finally:
+            # The detachment does not need undoing: it edits this server's own
+            # planner, and closing the server destroys it.
             server.close()
     finally:
         temp_dir.cleanup()
@@ -113,14 +161,24 @@ def reset_operation_log(_env):
     ``picture`` is deliberately not wiped. Each test uploads its own picture and
     asserts on that id, and wiping would force the schedulers to be stopped first
     (SQLite reuses ids, and a finder that has claimed one never releases it).
+
+    The second check is that the re-derivation finders are still detached, so a
+    later test cannot silently run with a sweep refilling the columns a rotate
+    NULLs. It lives here rather than in a "runs last" canary because the CI gate
+    shards tests individually — a canary would only guard its own shard.
     """
-    _client, server = _env
+    _client, server, disabled_finders = _env
 
     def _reset(session):
         session.exec(delete(Operation))
         session.commit()
 
     server.vault.db.run_task(_reset)
+    running = server.vault._work_planner.registered_finder_names()
+    assert running.isdisjoint(disabled_finders), (
+        "a finder that re-derives the columns a rotate NULLs is running again: "
+        f"{sorted(running & disabled_finders)}"
+    )
     assert _operations(server) == [], (
         "the operation log must be empty at the start of every test; the "
         "truncation above is what makes this module's shared Server safe"
@@ -293,6 +351,10 @@ def test_rotate_rewrites_the_file_and_re_derives_what_follows(client, server):
     """The pixels are copied through; the container key and thumbnail are not."""
     picture_id = _upload(client)
     before = _picture_row(server, picture_id)
+    assert before["thumbnail_width"] is not None, (
+        "the import populates the thumbnail dimensions; without them the NULL "
+        "asserted below would prove nothing about the rotate"
+    )
     original_pixels = Image.open(_file_path(server, picture_id)).tobytes()
 
     assert _rotate(client, [picture_id], "cw").status_code == 200
