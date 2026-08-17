@@ -172,6 +172,13 @@ const isModelsView = computed(() => MODEL_SHELF_ROUTES.includes(route.name));
 const READ_ONLY_DEDUP_HINT =
   "Duplicate review is only available in your own library";
 
+// The shelf is the same shape of refusal: every /models, /adapters,
+// /checkpoints and /model-* route is owner-only, because the shelf lists files
+// on the machine PixlStash runs on. Same show-but-disable rule as Duplicates —
+// the destination stays visible and says why (issue #1014).
+const READ_ONLY_SHELF_HINT =
+  "The model shelf is only available in your own library";
+
 const props = defineProps({
   backendUrl: { type: String, default: () => API_BASE_URL },
   installType: { type: String, default: "pip" },
@@ -4940,15 +4947,20 @@ defineExpose({
           </div>
 
           <!-- The shelf's dock mirror. Same <button> reasoning as the
-               expanded row. -->
+               expanded row, and the same read-only treatment as Duplicates
+               above it. -->
           <div :class="['sidebar-collapsed-row', { active: isModelsView }]">
             <button
               type="button"
               class="sidebar-collapsed-item sidebar-destination-btn"
-              :class="{ active: isModelsView }"
+              :class="{
+                active: isModelsView,
+                'sidebar-collapsed-item--unavailable': isReadOnly,
+              }"
               :aria-current="isModelsView ? 'page' : undefined"
-              title="Models"
-              @click="emit('select-models')"
+              :aria-disabled="isReadOnly || undefined"
+              :title="isReadOnly ? READ_ONLY_SHELF_HINT : 'Models'"
+              @click="isReadOnly || emit('select-models')"
             >
               <v-icon>mdi-layers-outline</v-icon>
             </button>
@@ -5407,14 +5419,27 @@ defineExpose({
                  and checkpoints on this machine, which no picture view can
                  express. A <button>, unlike the rows above it, because a new
                  destination must not be born unreachable by keyboard; the
-                 other three are filed to follow. -->
+                 other three are filed to follow.
+
+                 Inert rather than hidden for a READ session, exactly like
+                 Duplicates above and for the same reason: the demo site is a
+                 READ session, and hiding a feature there advertises a smaller
+                 product than PixlStash is (`e2e/specs/read-only-features.spec.js`).
+                 Every /models route is owner-only, so the row must be quiet as
+                 well as inert — it can carry no count and start no fetch
+                 (issue #1014). -->
             <div class="sidebar-all-pictures-row">
               <button
                 type="button"
                 class="sidebar-list-item sidebar-destination-btn"
-                :class="{ active: isModelsView }"
+                :class="{
+                  active: isModelsView,
+                  'sidebar-list-item--unavailable': isReadOnly,
+                }"
                 :aria-current="isModelsView ? 'page' : undefined"
-                @click="emit('select-models')"
+                :aria-disabled="isReadOnly || undefined"
+                :title="isReadOnly ? READ_ONLY_SHELF_HINT : undefined"
+                @click="isReadOnly || emit('select-models')"
               >
                 <span class="sidebar-list-icon sidebar-list-icon--toplevel"
                   ><v-icon size="18">mdi-layers-outline</v-icon></span

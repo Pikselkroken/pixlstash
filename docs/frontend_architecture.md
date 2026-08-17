@@ -1545,6 +1545,45 @@ express that. Like Duplicates it is excluded from `selectionOwnsHighlight` in
 `SideBar.vue`, or the underlying picture selection would light a second active
 destination in the rail.
 
+**It is owner-only, and a READ session sees it without reaching it.** Every
+backend route the shelf calls — `/adapters*`, `/checkpoints`, `/models*`,
+`/model-folders*`, `/model-icons/*`, `/model-moves`, `/model-stacks*`,
+`/model-imports`, `/model-files*` — sits on an owner-only tier (`OWNER_ONLY`, or
+the §16.3 local/loopback variants where it touches the filesystem). So a share
+session is refused by all of them: nothing leaks, but it was offered the
+destination anyway, and a pasted `/models` URL mounted the shelf so it could fire
+a burst of requests it could never satisfy (issue #1014). Three parts fix it:
+
+- **The sidebar entries stay visible and go inert**, expanded row and collapsed
+  dock, on exactly the `Duplicates` pattern beside them —
+  `sidebar-list-item--unavailable`, `aria-disabled`, and a title saying why. Not
+  hidden: the demo site is a READ session, and hiding a feature there advertises
+  a smaller product than PixlStash is (`e2e/specs/read-only-features.spec.js`,
+  which is where Undo and Duplicates stopped being hidden).
+- **`isModelsView` in `useAppNavigation` folds in `!isReadOnly`**, so `App.vue`
+  never mounts `ModelShelf` and not one model request is issued.
+- **A pasted URL is bounced** to `all-pictures` — a **watcher, not a router
+  guard**: the router's first navigation resolves at mount, before `Root.vue` has
+  fetched the session context, and this session then never navigates again, so a
+  guard would see "not read-only" on exactly the boot it exists to catch and
+  never run again. It goes through `replaceAppRoute`, which carries `?token=`
+  forward like every other navigation in the file — the only session that can
+  reach that line is one whose credential lives in the query string. The watcher
+  writes no store state, so `useViewStore` remains the app's only route→store
+  watcher.
+
+  **This is the one place the shelf diverges from Duplicates**, which mounts and
+  renders an explanatory body instead (`dedup-read-only`). The queue can do that
+  because its toolbar is small and its body is a list of the library's own
+  pictures; the shelf's body IS the host machine's filesystem, so a read-only
+  render would be an empty state under a live toolbar of owner-only verbs — Add,
+  the stack sweep, Model folders, the scan. The row above is where the
+  destination explains itself, which is where a visitor meets it.
+
+`SideBar` keeps its own ungated `isModelsView` for `aria-current` and
+`selectionOwnsHighlight`, which want the narrower "is this a shelf route";
+`routeNames.js` records why the pair differ.
+
 **The shelf has TWO views, and `/models/runs` is the second one.** The ai-toolkit
 training runs are models too — still in the output folder rather than on the
 shelf, and importing one is the act of moving it from here to there — so they

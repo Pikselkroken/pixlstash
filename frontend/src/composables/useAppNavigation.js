@@ -1,6 +1,7 @@
 import { MODEL_SHELF_ROUTES } from "../router/routeNames";
-import { computed, nextTick } from "vue";
+import { computed, nextTick, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { isReadOnly } from "../utils/apiClient";
 import { useSelectionStore } from "../stores/useSelectionStore";
 import { useProjectStore } from "../stores/useProjectStore";
 import { useSearchStore } from "../stores/useSearchStore";
@@ -216,14 +217,28 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   // ============================================================
 
   /**
+   * Carry the share token onto a route target. A share session's credential
+   * lives in `?token=`, so a navigation that drops it leaves the visitor on a
+   * URL that 401s on the next reload.
+   */
+  function withShareToken(target) {
+    if (route.query.token) {
+      target.query = { token: route.query.token, ...target.query };
+    }
+    return target;
+  }
+
+  /**
    * Push a route without cluttering history on duplicate navigations.
    * Swallows NavigationDuplicated errors (vue-router throws on same-route push).
    */
   function pushAppRoute(target) {
-    if (route.query.token) {
-      target.query = { token: route.query.token, ...target.query };
-    }
-    router.push(target).catch(() => {});
+    router.push(withShareToken(target)).catch(() => {});
+  }
+
+  /** Same, replacing the current entry rather than adding one. */
+  function replaceAppRoute(target) {
+    router.replace(withShareToken(target)).catch(() => {});
   }
 
   /**
@@ -352,7 +367,41 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
   // Both of the shelf's views. `/models/runs` is the ai-toolkit runs waiting to
   // be imported — the same destination, a second tab — so the sidebar's Models
   // entry stays the current page across both and no second destination lights.
-  const isModelsView = computed(() => MODEL_SHELF_ROUTES.includes(route.name));
+  // A READ session is never showing it: the shelf lists the owner's machine and
+  // every route behind it is owner-only, so mounting it would only fire requests
+  // the credential can never satisfy (issue #1014). Gating the predicate rather
+  // than the component keeps the decision in the one place that already answers
+  // "is the shelf showing".
+  const isModelsView = computed(
+    () => !isReadOnly.value && MODEL_SHELF_ROUTES.includes(route.name),
+  );
+
+  // …and a pasted /models URL is bounced to the library rather than left on a
+  // route that renders the grid under a Models heading. The sidebar row cannot
+  // reach this: it is inert for a READ session, so the only way in is an
+  // address bar.
+  //
+  // A watcher and not a router guard. The router's first navigation resolves at
+  // mount, before `Root.vue` has fetched the session context, and for this
+  // session nothing ever navigates a second time — so a guard would see "not
+  // read-only" on exactly the boot it exists to catch, and never run again.
+  //
+  // It writes no selection or project state, so `useViewStore` remains the only
+  // route→store watcher; this one only navigates, which is this file's job.
+  //
+  // `replace` and not `push`, so Back leaves the app rather than returning to
+  // the bounce — and through the same token-preserving path every other
+  // navigation here uses, because the ONLY session that reaches this line is
+  // one whose credential lives in `?token=`. Dropping it would leave a share
+  // visitor on a URL that 401s the moment they reload or bookmark it.
+  watch(
+    [isReadOnly, () => route.name],
+    ([readOnly, name]) => {
+      if (readOnly && MODEL_SHELF_ROUTES.includes(name))
+        replaceAppRoute({ name: "all-pictures" });
+    },
+    { immediate: true },
+  );
 
   /** Open the model shelf. */
   function handleSelectModels() {

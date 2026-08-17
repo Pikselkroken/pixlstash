@@ -17,5 +17,12 @@
  * sidebar half silently: on `/models/runs` the Models entry went dark AND the
  * underlying selection lit a second destination, which is the exact
  * two-active-destinations defect the sidebar guard exists to prevent.
+ *
+ * The two predicates built from this list are deliberately not identical:
+ * `useAppNavigation`'s also requires `!isReadOnly`, because it decides whether
+ * `App.vue` MOUNTS the shelf and a READ session must never mount it (#1014).
+ * `SideBar`'s answers the narrower "is the route a shelf route", which is what
+ * `aria-current` and `selectionOwnsHighlight` want. The route list is the part
+ * that has to agree, and it is the part this constant holds.
  */
 export const MODEL_SHELF_ROUTES = ["models", "models-runs"];
