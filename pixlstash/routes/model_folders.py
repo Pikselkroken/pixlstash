@@ -12,6 +12,22 @@ removal skip a confirmation prompt (shelf plan §7): nothing a person typed is
 destroyed by it. If this ever hard-deletes ``model`` rows, the confirmation comes
 back.
 
+**Forgetting takes the machine-wide** ``SHELF_IO_LOCK`` **and 409s if it is
+held** (#1017). It is harmless to the models, but it deletes exactly the
+``model_file`` rows a running move or import is writing, and a move whose source
+row disappeared mid-flight would unlink the source with nothing left registering
+the copy it had just made.
+
+**It is a slot, not a general exclusion, and the mover is what actually
+guarantees the invariant.** A rescan writes the same rows and is deliberately
+*outside* this lock (backend architecture §"MODEL_FOLDER_SCAN"), and a
+multi-run import is a sequence of separate lock-taking requests, so a forget can
+still land between two of them. What closes the hole in every case is
+``ModelMover._repoint`` refusing a commit that does not move exactly one row.
+This half stops the *move-versus-forget* interleaving the report was about, and
+turns a file failed halfway through a 40-file batch into a clean 4xx before the
+batch starts.
+
 **Exactly one ``managed`` folder always exists and cannot be forgotten.** It
 is PixlStash's own model storage — created on first run, the default destination
 for a drop or an import — so there is no association to dissolve and ``DELETE``
@@ -59,6 +75,7 @@ from pixlstash.services.managed_model_store import (
     deletes_unclaimed_files,
     relocatable_identity,
 )
+from pixlstash.services.model_mover import SHELF_IO_LOCK
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.model_folder_scan_task import ModelFolderScanTask
 from pixlstash.utils.host_path_utils import is_absolute_host_path, normalize_host_path
@@ -713,7 +730,9 @@ def create_router(server) -> APIRouter:
             "attachments, so re-adding the folder re-links them by content. "
             "Nothing on disk is touched. The managed store cannot be forgotten: "
             "it is PixlStash's own storage rather than a folder the owner "
-            "associated, so there is nothing to disassociate."
+            "associated, so there is nothing to disassociate. Answers 409 while "
+            "a move or an import is running: those write the very location rows "
+            "this deletes."
         ),
         tags=["model_shelf"],
         response_model=ModelFolderDeleteResponse,
@@ -749,16 +768,38 @@ def create_router(server) -> APIRouter:
                     "associated. Move it instead."
                 ),
             )
-        with server.hub.transaction() as conn:
-            cursor = conn.execute(
-                "DELETE FROM model_file WHERE model_folder_id = ?", (folder_id,)
+        # The same machine-wide slot a move and an import take, and for the
+        # reason at ``SHELF_IO_LOCK``'s own note: this deletes the very
+        # ``model_file`` rows a running move is about to repoint. Forgetting a
+        # source folder mid-move used to leave the move's UPDATE matching
+        # nothing, the source unlinked anyway and the destination bytes
+        # registered nowhere (#1017). The mover now refuses a repoint that does
+        # not move exactly one row — that is the guarantee — and this is what
+        # turns it into a clean 4xx before the batch starts rather than a file
+        # failed halfway through forty.
+        if not SHELF_IO_LOCK.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A move or an import is running. Forgetting a folder now "
+                    "would delete the location rows it is writing. Wait for it "
+                    "to finish and try again."
+                ),
             )
-            tombstoned = int(cursor.rowcount or 0)
-            conn.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
-        # Drop the remembered scan with the folder. SQLite reuses rowids, so a
-        # folder registered later could otherwise inherit this one's outcome.
-        with _scans_lock:
-            _scans.pop(folder_id, None)
+        try:
+            with server.hub.transaction() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM model_file WHERE model_folder_id = ?", (folder_id,)
+                )
+                tombstoned = int(cursor.rowcount or 0)
+                conn.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
+            # Drop the remembered scan with the folder. SQLite reuses rowids, so
+            # a folder registered later could otherwise inherit this one's
+            # outcome.
+            with _scans_lock:
+                _scans.pop(folder_id, None)
+        finally:
+            SHELF_IO_LOCK.release()
         logger.info(
             "Model folder %s (id=%s) forgotten; %d location row(s) tombstoned, "
             "model rows and their curation kept.",

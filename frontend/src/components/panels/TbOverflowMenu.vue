@@ -15,6 +15,7 @@
     <div
       v-if="open"
       class="tbm tbo-panel"
+      :class="`tbo-panel--${align}`"
       role="menu"
       aria-label="More actions"
     >
@@ -41,6 +42,21 @@
 // `.tbm-action` recipe.
 
 import { onBeforeUnmount, onMounted, ref } from "vue";
+
+defineProps({
+  /**
+   * Which edge the panel hangs from. `end` (the default) opens leftward and
+   * suits a trigger near the bar's right side; `start` opens rightward, which
+   * is what a trigger sitting near the LEFT edge needs — a 220px panel
+   * right-anchored to it would open off-screen (the Duplicates bar's ⋯,
+   * amendment #4).
+   */
+  align: {
+    type: String,
+    default: "end",
+    validator: (value) => ["start", "end"].includes(value),
+  },
+});
 
 const open = ref(false);
 const wrapEl = ref(null);
@@ -78,7 +94,18 @@ onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onDocumentPointerDown);
 });
 
-defineExpose({ close });
+/**
+ * Whether the panel is showing. A host whose surface owns the keyboard needs
+ * this to tell "a key pressed inside my open menu" from "a key pressed with
+ * the closed trigger focused" — the second one still belongs to the host.
+ *
+ * @returns {boolean}
+ */
+function isOpen() {
+  return open.value;
+}
+
+defineExpose({ close, isOpen });
 </script>
 
 <style scoped>
@@ -87,12 +114,10 @@ defineExpose({ close });
   display: none;
 }
 
-/* The trigger appears with the host's FIRST fold step; the host raises this
-   flag class from its own ladder (`selbar ≤700`, `dqbar ≤720`), because only
-   the host knows when its first control folds. */
-.tbo-wrap--folding {
-  display: flex;
-}
+/* The trigger appears with the host's FIRST fold step, and the host owns that
+   rule from its own ladder (`.tb-overflow` at selbar ≤700, `.dq-overflow` at
+   dqbar ≤1040): only the host knows when its first control folds. The rule
+   lives there rather than here because the breakpoint differs per bar. */
 
 /* Mirrors `.bar-btn` from the hosts' bars (their scoped styles cannot cross
    the component boundary — same note as UndoControl carries). */
@@ -125,13 +150,21 @@ defineExpose({ close });
 .tbo-panel {
   position: absolute;
   top: calc(100% + var(--space-2));
-  right: 0;
   z-index: var(--z-dropdown);
   min-width: 220px;
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+}
+
+/* Which edge the panel hangs from; see the `align` prop. */
+.tbo-panel--end {
+  right: 0;
+}
+
+.tbo-panel--start {
+  left: 0;
 }
 
 </style>

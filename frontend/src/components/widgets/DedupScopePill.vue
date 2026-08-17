@@ -61,6 +61,9 @@ const countText = computed(() =>
   line-height: var(--leading-snug);
   color: rgb(var(--v-theme-on-surface));
   max-width: 100%;
+  /* The containing block for the clipped label at the narrow end (below),
+     which would otherwise anchor to whatever positioned ancestor it found. */
+  position: relative;
 }
 
 .scope-pill__ico {
@@ -100,11 +103,22 @@ const countText = computed(() =>
    The pill never folds while a scope is active — a filtered list that does
    not say it is filtered is the bug this pill exists to prevent — so on a
    narrow bar it compresses to the kind icon + dismiss, the full label
-   surviving as the pill's tooltip. ─────────────────────────────────────── */
-@container toolbar (max-width: 600px) {
+   surviving as the pill's tooltip.
+
+   CLIPPED, not `display: none` (amendment #4): a tooltip reaches neither a
+   screen reader nor a touch user, and the scope's name is the whole point of
+   the pill. Clipping keeps the name in the accessibility tree at every
+   width. ──────────────────────────────────────────────────────────────── */
+@container toolbar (max-width: 820px) {
   .scope-pill__label,
   .scope-pill__count {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 }
 </style>
