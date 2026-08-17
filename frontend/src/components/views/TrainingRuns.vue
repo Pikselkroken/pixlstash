@@ -431,9 +431,15 @@ const confirmLabel = computed(() => {
     : `Import ${n} runs · ${fileCountLabel.value}`;
 });
 
+// An import needs BOTH ends named. The destination has always been stated
+// here; the source root is stated beside it so `submit` cannot reach its loop
+// without one and send a request whose `sourceFolderId` is missing — a
+// round-trip that can only come back refused, reported per run as if the run
+// were at fault.
 const canSubmit = computed(
   () =>
     !working.value &&
+    source.value?.id != null &&
     chosenRuns.value.length > 0 &&
     fileTotal.value > 0 &&
     destinationId.value != null,
@@ -701,8 +707,9 @@ async function submit() {
   // between two of its requests. The rows and the tick are dropped the moment
   // the root changes (see the watcher), so what is captured here is the root
   // the chosen runs were read under — and every request in the batch names it,
-  // rather than whichever folder is registered when its turn arrives.
-  const sourceId = source.value?.id;
+  // rather than whichever folder is registered when its turn arrives. Non-null
+  // by `canSubmit`, which is checked above.
+  const sourceId = source.value.id;
   const batch = [...chosenRuns.value];
   const imported = [];
   const failed = [];

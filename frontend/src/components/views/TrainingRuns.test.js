@@ -445,6 +445,30 @@ describe("importing the batch", () => {
       await box.setValue(false);
     expect(importBtn(wrapper).attributes("disabled")).toBeDefined();
   });
+
+  it("cannot be submitted with no source root registered", async () => {
+    // Both ends have to be named. Without the source clause, `submit` reaches
+    // its loop with no `sourceFolderId` and spends a request per run to be
+    // told so — and the receipt reports each refusal against the run rather
+    // than against the missing folder.
+    //
+    // Asserted BEFORE the flush deliberately. The watcher empties the rows and
+    // the tick when the root goes away, so a tick later `chosenRuns` is empty
+    // and every other clause of `canSubmit` is false too — the assertion would
+    // then pass with the source clause deleted. This instant, with the folder
+    // already gone from the registry and the rows still up, is the only one
+    // where the clause is what answers.
+    const wrapper = await openWith([run()]);
+    await tick(wrapper, "Clementine");
+    expect(wrapper.vm.canSubmit).toBe(true);
+
+    useModelFoldersStore().folders = [FOLDERS[1], FOLDERS[2]];
+    expect(wrapper.vm.canSubmit).toBe(false);
+
+    await settle(wrapper);
+    expect(wrapper.vm.canSubmit).toBe(false);
+    expect(importRun).not.toHaveBeenCalled();
+  });
 });
 
 describe("staying current without moving the ground", () => {
