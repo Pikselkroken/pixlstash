@@ -996,7 +996,7 @@ describe("DuplicateQueue — the shell chrome", () => {
   });
 
   // Fold = CSS both ways: every control the ⋯ collapses exists as a bar
-  // button AND as a row, and the container query at ≤1040 flips which of the
+  // button AND as a row, and the container query at ≤1180 flips which of the
   // pair is visible. Nothing else may be in there — the tier gate, the scope
   // pill, the count and the app-wide tail all stay on the bar at every width.
   it("carries a row for each folded page toggle and nothing else", async () => {
@@ -1018,7 +1018,7 @@ describe("DuplicateQueue — the shell chrome", () => {
     // Each row's bar twin carries the fold class that hides it at the same
     // width, so exactly one of the pair is ever on screen.
     for (const toggle of wrapper.findAll(".dq-toolbar .qdecided")) {
-      expect(toggle.classes()).toContain("dq-fold-1040");
+      expect(toggle.classes()).toContain("dq-fold-1180");
     }
     wrapper.unmount();
   });
@@ -1059,26 +1059,26 @@ describe("DuplicateQueue — the shell chrome", () => {
 
     const back = wrapper.find(".dq-toolbar .qdecided");
     expect(back.attributes("aria-label")).toBe("Back to review");
-    expect(back.classes()).not.toContain("dq-fold-1040");
+    expect(back.classes()).not.toContain("dq-fold-1180");
     expect(wrapper.find(".dq-overflow").exists()).toBe(false);
     wrapper.unmount();
   });
 
   // The separator amendments: D-S1's left flank is populated at every width —
-  // by the toggles above 1040 and by the ⋯ that replaces them below it — so
+  // by the toggles above 1180 and by the ⋯ that replaces them below it — so
   // both rules render at all widths and neither carries a fold class.
   it("both separators render at all widths, neither carrying a fold class", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
     const separators = wrapper.findAll(".dq-toolbar .dq-tb-sep");
     expect(separators).toHaveLength(2);
     for (const separator of separators) {
-      expect(separator.classes()).not.toContain("dq-fold-1040");
       expect(separator.classes()).not.toContain("dq-fold-1180");
+      expect(separator.classes()).not.toContain("dq-fold-1040");
     }
     wrapper.unmount();
   });
 
-  // The Decided toggle folds at ≤1040 and compresses to an arrow while it is
+  // The Decided toggle folds at ≤1180 and compresses to an arrow while it is
   // the way back, so it must carry its own accessible name and keep its
   // pressed state at every width.
   it("the Decided toggle exposes its label and keeps aria-pressed", async () => {
@@ -1106,7 +1106,7 @@ describe("DuplicateQueue — the shell chrome", () => {
   });
 
   // The tier trigger's label ellipsizes under pressure and hides entirely at
-  // ≤1040, so the button must carry its own accessible name at every width
+  // ≤1180, so the button must carry its own accessible name at every width
   // (WCAG 4.1.2 — a hidden span would leave it empty).
   it("the tier button exposes its label as title and aria-label", async () => {
     const { wrapper } = await mountQueue([group("g1")]);

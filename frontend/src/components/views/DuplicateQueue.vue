@@ -63,7 +63,7 @@
         >
         <!-- The flip side of the queue: review what was already decided and
              clear a decision. -->
-        <!-- Folds into the ⋯ at ≤1040 (amendment #4), where it keeps its label
+        <!-- Folds into the ⋯ at ≤1180 (amendment #4), where it keeps its label
              — icon-only, `mdi-history` says nothing on its own. The exception
              is the way BACK: while the Decided page is showing, this button is
              the visible exit from a sub-page, so it stays on the bar and
@@ -74,7 +74,7 @@
           class="qdecided"
           :class="{
             'qdecided--on': store.showingDecided,
-            'dq-fold-1040': pageTogglesFold,
+            'dq-fold-1180': pageTogglesFold,
           }"
           :title="decidedToggleLabel"
           :aria-label="decidedToggleLabel"
@@ -102,7 +102,7 @@
           class="qdecided"
           :class="{
             'qdecided--on': store.showingMixed,
-            'dq-fold-1040': pageTogglesFold,
+            'dq-fold-1180': pageTogglesFold,
           }"
           :title="mixedToggleTitle"
           :aria-label="mixedToggleTitle"
@@ -128,7 +128,7 @@
              toggles and nothing else — the tier gate, the scope pill, the
              count and the app-wide tail all stay on the bar at every width.
              Fold = CSS both ways: a row and its bar button carry the same
-             condition, and the container query at ≤1040 flips which of the
+             condition, and the container query at ≤1180 flips which of the
              pair
              is visible. The panel opens rightward (`align="start"`), because
              this trigger sits near the bar's left edge. -->
@@ -184,7 +184,7 @@
         </TbOverflowMenu>
 
         <!-- Separator D-S1: renders at ALL widths (amendment #2). Its left
-             flank is always populated — by the toggles above 1040, by the ⋯
+             flank is always populated — by the toggles above 1180, by the ⋯
              below it, and on an empty queue by whichever of the two is
              showing. The tail's D-S2 stays at every width too. -->
         <span class="dq-tb-sep" aria-hidden="true"></span>
@@ -197,7 +197,7 @@
           class="dq-tier-wrap"
           @keydown.esc.stop.prevent="closeTierMenu()"
         >
-          <!-- The label ellipsizes under pressure and hides at ≤1040 (the
+          <!-- The label ellipsizes under pressure and hides at ≤1180 (the
                compressed form is [filter icon][chevron], the grid Filter
                trigger's grammar), so the button carries its own accessible
                name at every width — without it the hidden span would leave
@@ -257,7 +257,7 @@
              so a size control there would be a control with nothing to buy. -->
         <div
           v-if="store.hasGroups && !store.showingMixed"
-          class="dq-size dq-fold-1180"
+          class="dq-size dq-fold-1040"
         >
           <v-icon size="16" aria-hidden="true"
             >mdi-image-size-select-large</v-icon
@@ -281,7 +281,7 @@
 
         <!-- Compresses with the bar rather than folding: a bulk action with
              an accent fill must stay a visible target. Full label → short
-             "Auto-stack N" (≤1180) → icon + count (≤820), the sentence
+             "Auto-stack N" (≤1040) → icon + count (≤820), the sentence
              surviving as tooltip and accessible name throughout. -->
         <button
           v-if="store.exactCount > 0 && !readOnly && !store.showingMixed"
@@ -312,7 +312,7 @@
              the app-wide tail never folds at any width. The queue's own ⋯
              lives in the left group, where the controls it collapses stood.
              Auto-stack compresses to an icon form and the size slider hides
-             at ≤1180, its value persisting in the store. -->
+             at ≤1040, its value persisting in the store. -->
         <UndoControl />
         <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
@@ -1166,7 +1166,7 @@ const maxSizeLevel = MAX_THUMBNAIL_SIZE_LEVEL;
 const sizeLabel = computed(() => sizeLabelForLevel(store.sizeLevel));
 
 /**
- * Whether the two page toggles are the kind that folds into the ⋯ at ≤1040.
+ * Whether the two page toggles are the kind that folds into the ⋯ at ≤1180.
  * They are, on the review queue, where both are forward navigation. On the
  * Decided and Mixed pages the surviving toggle reads "Back to review" and is
  * the visible way out of a sub-page, so it stays on the bar (amendment #4) —
@@ -1177,7 +1177,7 @@ const pageTogglesFold = computed(
 );
 
 /** What the Decided toggle says: the visible label on a wide bar, the
- * tooltip and accessible name at every width (folded into the ⋯ at ≤1040). */
+ * tooltip and accessible name at every width (folded into the ⋯ at ≤1180). */
 const decidedToggleLabel = computed(() =>
   store.showingDecided ? "Back to review" : "Decided",
 );
@@ -3484,7 +3484,7 @@ defineExpose({ windowedGroups, tierLabel });
 
 /* ── The collapse ladder (docs/design/toolbar-responsive-decisions.md,
    amendment #4, which measured what amendment #2 assumed). The ⋯ takes the
-   two page toggles at ≤1040; everything else compresses or hides in its own
+   two page toggles at ≤1180; everything else compresses or hides in its own
    group. Floor: count (ellipsizing), ⋯, separator, tier gate (icon +
    chevron), scope pill (compressed, if scoped), Auto-stack (icon + count, if
    present), separator, Undo, Settings, Stats — measured clean down to 320px
@@ -3520,29 +3520,15 @@ defineExpose({ windowedGroups, tierLabel });
   }
 }
 
-/* Rung 2. The size control goes entirely — no replacement row: the value
-   persists in the store and comes back with the width — and Auto-stack drops
-   its sentence for "Auto-stack N", the full one surviving as its tooltip and
-   accessible name. */
+/* Rung 2. What has somewhere to go, goes first: the page toggles fold into
+   the ⋯, which appears in their place, and that buys more bar (~346px) than
+   anything else on it. A toggle showing "Back to review" never carries the
+   fold class, so the way out of a sub-page stays on the bar and compresses to
+   its arrow. The tier trigger compresses to [filter icon][chevron] in the same
+   step, the grid Filter trigger's grammar; its title/aria-label carry the
+   name. */
 @container dqbar (max-width: 1180px) {
   .dq-fold-1180 {
-    display: none;
-  }
-  .dq-auto-full {
-    display: none;
-  }
-  .dq-auto-short {
-    display: inline;
-  }
-}
-
-/* Rung 3. The page toggles fold into the ⋯, which appears in their place; a
-   toggle showing "Back to review" never carries the fold class, so the way
-   out of a sub-page stays on the bar and compresses to its arrow. The tier
-   trigger compresses to [filter icon][chevron] in the same step, the grid
-   Filter trigger's grammar; its title/aria-label carry the name. */
-@container dqbar (max-width: 1040px) {
-  .dq-fold-1040 {
     display: none;
   }
   .dq-overflow {
@@ -3555,6 +3541,24 @@ defineExpose({ windowedGroups, tierLabel });
      says what it does without its label. */
   .qdecided-label {
     display: none;
+  }
+}
+
+/* Rung 3, and the size control is here rather than a rung earlier for a
+   reason: it has no fold destination, so hiding it costs the user the control
+   outright, while the toggles above only move. It goes when the folding has
+   run out — no replacement row, the value persists in the store and comes back
+   with the width — and Auto-stack drops its sentence for "Auto-stack N" in the
+   same step, the full one surviving as its tooltip and accessible name. */
+@container dqbar (max-width: 1040px) {
+  .dq-fold-1040 {
+    display: none;
+  }
+  .dq-auto-full {
+    display: none;
+  }
+  .dq-auto-short {
+    display: inline;
   }
 }
 
