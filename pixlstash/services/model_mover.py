@@ -33,12 +33,16 @@ serviceable, a dangling row is not — but nobody should read them as self-heali
 
 **Same-drive is a rename and skips all of it**, per the ruling. Nothing is
 copied, nothing is verified and no space is needed, because no second copy is
-made. Its residue is narrower but not identical: ``os.rename`` is atomic, so a
-crash between the rename and the commit leaves the file only at the destination
-with the row still naming the source — a ``missing`` row and an unregistered
-file, which a manual rescan of either folder repairs by content, because
-``model`` is keyed by sha256 and the row keeps its curation. The window is the
-microseconds between two syscalls rather than the minutes a 24 GB copy takes,
+made. Its residue is narrower but not identical: the publication claims the
+destination name and then drops the source one (:func:`publish_no_clobber`), so
+a crash between it and the commit leaves the file at the destination — and, if
+the crash lands between those two syscalls, at the source as well — with the row
+still naming the source. That is a ``missing`` row and an unregistered file, or
+a plain duplicate, and a manual rescan of either folder repairs both by content,
+because ``model`` is keyed by sha256 and the row keeps its curation. An *error*
+in that gap is not a residue at all: the publication removes the name it claimed
+and the move fails with both files where they were. The window is the
+microseconds between a few syscalls rather than the minutes a 24 GB copy takes,
 which is the trade the ruling makes.
 
 **Durability: the hub runs ``PRAGMA synchronous=NORMAL``** (``hub/db.py``), so
@@ -95,6 +99,7 @@ here either; what is contained is the ``open(…, "wb")`` and the ``os.unlink``.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import shutil
@@ -114,8 +119,8 @@ logger = get_logger(__name__)
 _COPY_CHUNK_BYTES = 1024 * 1024
 
 # Written next to the destination, in the destination directory, so the
-# ``os.replace`` onto the final name is a rename within one filesystem and
-# therefore atomic. A crash while this file is being written leaves a `.partial`
+# publication onto the final name stays within one filesystem and needs no
+# second copy. A crash while this file is being written leaves a `.partial`
 # that no ``model_file`` row names and that the scanner ignores (it is not a
 # ``.safetensors``), rather than a truncated model at the real name.
 PARTIAL_SUFFIX = ".pixlstash-partial"
@@ -339,6 +344,132 @@ def discard_partial_tree(partial: str) -> None:
             partial,
             exc,
         )
+
+
+def publish_no_clobber(temporary_path: str, destination_path: str) -> None:
+    """Put *temporary_path* at *destination_path*, or fail if the name is taken.
+
+    The last step of every move, and the only one that can destroy somebody
+    else's file. ``os.replace`` — and ``os.rename`` on POSIX — overwrite in
+    silence, which makes the execution-time free check only as good as the gap
+    that follows it, and on the copy path that gap is a whole checkpoint's copy
+    and digest. A trainer or ComfyUI writing the final name inside that gap had
+    its file replaced and the move still reported ``moved`` (#1012).
+
+    **Claiming the name is one syscall, and it is the whole point.**
+    :func:`_claim_destination` either creates *destination_path* or raises
+    ``FileExistsError``; there is no instant in which an existing file is gone
+    and ours is not yet there. Dropping the temporary name afterwards leaves the
+    same single file a rename would have left. The publication the backup writer
+    already uses (``library_backup_service._publish_private_temp``).
+
+    **A failure never replaces anything, and tries to leave the name free.** A
+    claim that fails has written nothing at all. A claim that succeeded and could
+    not then drop the temporary name — Windows refuses to unlink a file another
+    process holds open, which is exactly what ComfyUI does with a loaded model —
+    gives the claim back before re-raising, because leaving it would be an
+    unregistered copy at the destination *and* a name that refuses every later
+    move of that model. That rollback is what ``os.rename`` got for free by being
+    a single syscall, and the reason the backup writer has one too.
+
+    **The rollback itself is best effort**, because it runs through
+    :func:`discard_partial` while an error is already on its way to the caller
+    and must not replace it. A destination whose unlink *also* fails keeps the
+    claimed name, and the warning ``discard_partial`` logs is the only trace: the
+    move is reported failed either way, and the next attempt at the same
+    destination is refused until somebody removes it.
+
+    Raises:
+        OSError: The name was taken (``FileExistsError``), or the file could not
+            be published. Nothing at *destination_path* was replaced either way,
+            and *temporary_path* is still the caller's unless the drop is what
+            failed.
+    """
+    if not _claim_destination(temporary_path, destination_path):
+        return
+    try:
+        os.unlink(temporary_path)
+    except OSError:
+        # The claim is not ours to keep if the move it belongs to cannot finish.
+        logger.error(
+            "Published %s but could not drop %s; trying to give the destination "
+            "name back so the move can be retried. A warning follows if that "
+            "removal fails too, and the name then stays taken.",
+            destination_path,
+            temporary_path,
+            exc_info=True,
+        )
+        discard_partial(destination_path)
+        raise
+
+
+def _destination_taken(destination_path: str) -> FileExistsError:
+    """The refusal, worded for the owner rather than for a syscall.
+
+    Built the three-argument way so ``errno`` and ``filename`` survive for any
+    handler that has to tell EEXIST from the EPERM a filesystem without hard
+    links raises; ``str(exc)`` — what the outcome detail and the HTTP body carry
+    — then reads ``[Errno 17] <sentence>: '<path>'``, so the path is not
+    repeated inside the sentence.
+    """
+    return FileExistsError(
+        errno.EEXIST,
+        "was created while PixlStash was writing into that folder, so it was "
+        "left alone and nothing was moved onto it",
+        destination_path,
+    )
+
+
+def _claim_destination(temporary_path: str, destination_path: str) -> bool:
+    """Make *temporary_path*'s content answer to *destination_path*, or refuse.
+
+    ``os.link`` is the no-clobber primitive: it never replaces an existing name,
+    a symlink standing at that name included, and it leaves the content
+    reachable under both names so the caller decides when the old one goes.
+
+    Hard links are not universal, and a move that used to work must not start
+    failing because of the fix: a destination on exFAT/FAT or an SMB share has
+    no links to give, and ``fs.protected_hardlinks`` (on by default) refuses a
+    link to a file the caller neither owns nor can write — a model owned by
+    another uid, which a Docker ComfyUI or a NAS mount produces, and which
+    ``os.rename`` moved happily because it only ever needed the *directory*.
+    So the second attempt reserves the name with ``O_CREAT|O_EXCL``, which is
+    equally no-clobber and equally one syscall, and replaces its own
+    reservation. The residue it accepts and the link does not is a crash in
+    between, which leaves an empty file at the final name — narrow enough to
+    trade for the alternative, which is refusing to move at all.
+
+    Returns:
+        True when *temporary_path* is still a second name for the content and
+        the caller has to drop it — the hard-link branch. False when the claim
+        consumed it, which the reservation branch does by replacing itself with
+        it, so there is nothing left for the caller to unlink.
+    """
+    try:
+        os.link(temporary_path, destination_path)
+        return True
+    except FileExistsError as exc:
+        raise _destination_taken(destination_path) from exc
+    except OSError as exc:
+        logger.info(
+            "Could not hard-link %s to %s (%s); reserving the name instead.",
+            temporary_path,
+            destination_path,
+            exc,
+        )
+    try:
+        handle = os.open(destination_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError as exc:
+        raise _destination_taken(destination_path) from exc
+    os.close(handle)
+    try:
+        os.replace(temporary_path, destination_path)
+    except OSError:
+        # Only ever the empty file this function just created: nothing else can
+        # have that name, because O_EXCL is what put it there.
+        discard_partial(destination_path)
+        raise
+    return False
 
 
 def move_directory(source_path: str, destination_path: str) -> None:
@@ -798,9 +929,11 @@ class ModelMover:
         # calls ``realpath``, so a dangling ``dest/alice.safetensors ->
         # /elsewhere/alice.safetensors`` is refused here — and only here, since
         # ``os.path.exists`` is False for a dangling link and the collision check
-        # below would wave it through, straight into an ``os.replace`` that
-        # writes outside the registered folder. Asserted at both ends in
-        # ``tests/test_model_move.py``.
+        # below would wave it through. Before #1012 that led straight into an
+        # ``os.replace`` writing outside the registered folder; publication now
+        # refuses the taken name as well, but this is where the refusal is a 4xx
+        # naming the file rather than a failed item on a worker thread. Asserted
+        # at both ends in ``tests/test_model_move.py``.
         destination_relpath = os.path.basename(relpath) if flatten else relpath
         try:
             resolved_destination = resolve_path_within(
@@ -857,8 +990,14 @@ class ModelMover:
         immediately before the write, because the plan ran in the POST and the
         write runs minutes later on the worker thread. ``SHELF_IO_LOCK`` keeps
         the other shelf operation out of that gap; the owner, ComfyUI or a
-        trainer is not under any lock of ours, and both ``os.replace`` and
-        ``os.rename`` overwrite in silence.
+        trainer is not under any lock of ours.
+
+        Neither run is what makes a move safe — a check is a moment and the copy
+        that follows it takes minutes. :func:`publish_no_clobber` is what makes
+        it safe, by refusing at the instant of publication. These two exist to
+        refuse *early*, with a message naming the file, and to catch the case the
+        filesystem cannot see at all: a hub row already holding the destination
+        key with no file behind it.
         """
         if os.path.exists(destination):
             raise MoveRefused(
@@ -984,7 +1123,7 @@ class ModelMover:
             )
 
     def _rename(self, move: PlannedMove, plan: MovePlan) -> MoveOutcome:
-        """Same filesystem: one atomic syscall, then repoint.
+        """Same filesystem: publish the destination name, then repoint.
 
         No copy, no verify and no space check, because no second copy is made —
         the ruling. The residue of a crash between the two steps is a file at the
@@ -993,8 +1132,12 @@ class ModelMover:
         curation intact. That is narrower than the copy path's guarantee, and it
         is bought with a window measured in syscalls rather than in minutes of
         I/O.
+
+        The publication is :func:`publish_no_clobber` rather than ``os.rename``
+        because a rename would silently replace a file that appeared at the
+        destination name since the check above (#1012).
         """
-        os.rename(move.source_path, move.destination_path)
+        publish_no_clobber(move.source_path, move.destination_path)
         try:
             self._repoint(move, plan)
         except RepointLost:
@@ -1030,6 +1173,11 @@ class ModelMover:
                 move.destination_path,
                 exc_info=True,
             )
+            # ``os.rename`` and not :func:`publish_no_clobber`: this is putting
+            # our own file back at the name our own row still holds, and the row
+            # naming content it does not describe is the state this module
+            # exists to prevent. Refusing here because something appeared at the
+            # source name in the meantime would leave exactly that.
             os.rename(move.destination_path, move.source_path)
             raise
         # After the row is committed, exactly as the copy path does it: a
@@ -1066,7 +1214,7 @@ class ModelMover:
                     f"registered as {move.sha256}; rescan its folder before "
                     "moving it."
                 )
-            os.replace(partial, move.destination_path)
+            publish_no_clobber(partial, move.destination_path)
         except OSError:
             discard_partial(partial)
             raise

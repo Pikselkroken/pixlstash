@@ -66,6 +66,7 @@ from pixlstash.services.model_mover import (
     discard_partial,
     discard_partial_tree,
     file_digest,
+    publish_no_clobber,
     require_space,
     samples_relpath,
     unlink_source,
@@ -361,10 +362,10 @@ class RunImporter:
                 # yields ``scandir`` entry names, but ``resolve_path_within``
                 # calls ``realpath``, so a *symlink standing at the destination
                 # filename* is refused here. A dangling one is refused **only**
-                # here — ``os.path.exists`` below is False for it, so the
-                # collision check would wave it through into an ``os.replace``
-                # that writes outside the registered folder. Asserted in
-                # ``tests/test_model_run_import.py``.
+                # here with a 4xx naming the run — ``os.path.exists`` below is
+                # False for it, so the collision check waves it through, and
+                # publication then refuses it as a taken name on the worker
+                # thread. Asserted in ``tests/test_model_run_import.py``.
                 target = resolve_path_within(destination, relpath)
             except ValueError as exc:
                 raise MoveRefused(
@@ -462,21 +463,15 @@ class RunImporter:
                     f"Copy of {checkpoint.path} did not verify; the copy was "
                     "discarded and the original is untouched."
                 )
-            # Re-checked here and not only in :meth:`_resolve_targets`, for the
-            # same reason the mover re-checks in ``_move_one``: the plan ran in
-            # the POST and this runs minutes later on the worker thread, and
-            # ``os.replace`` overwrites in silence. ``SHELF_IO_LOCK`` keeps the
-            # other shelf operation out of that gap; the owner, ComfyUI or a
-            # trainer is under no lock of ours. ``lexists`` rather than
-            # ``exists`` so a symlink that appeared at the name is refused too:
-            # it is still a thing the caller did not name.
-            if os.path.lexists(target):
-                raise OSError(
-                    f"{os.path.basename(target)} appeared in the destination "
-                    "folder after the import was planned; the copy was discarded "
-                    "rather than written over it."
-                )
-            os.replace(partial, target)
+            # Published rather than replaced, for the same reason the mover
+            # publishes: the plan ran in the POST and this runs minutes later on
+            # the worker thread, and a check followed by ``os.replace`` still
+            # has a gap between them to lose a file in (#1012). ``SHELF_IO_LOCK``
+            # keeps the other shelf operation out of that gap; the owner,
+            # ComfyUI or a trainer is under no lock of ours. A symlink that
+            # appeared at the name is refused too: publication never replaces an
+            # existing name, whatever kind of thing is standing at it.
+            publish_no_clobber(partial, target)
         except OSError as exc:
             discard_partial(partial)
             logger.error(
@@ -507,8 +502,8 @@ class RunImporter:
             # alternative repoints somebody else's location row at this file,
             # which is a silent overwrite of bookkeeping rather than of bytes.
             # Their row is left for the rescan that owns it; the copy discarded
-            # here is unambiguously ours, because the re-check above refused a
-            # target that already had anything at it.
+            # here is unambiguously ours, because publication refuses a name
+            # anything else was standing at.
             logger.error(
                 "The destination key (folder %s, %r) was registered between the "
                 "check and the commit; discarding the copy at %s and failing "

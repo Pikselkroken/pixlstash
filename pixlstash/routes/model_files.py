@@ -92,6 +92,7 @@ from pixlstash.services.model_mover import (
     copy_and_digest,
     discard_partial,
     file_digest,
+    publish_no_clobber,
     require_space,
     samples_relpath,
 )
@@ -657,16 +658,11 @@ def create_router(server) -> APIRouter:
                         f"The copy of {source} did not verify; it was discarded "
                         "and the original is untouched."
                     )
-                # Re-checked after the copy for the same reason the mover
-                # re-checks: ``os.replace`` overwrites in silence, and the owner,
-                # ComfyUI or a trainer is under no lock of ours.
-                if os.path.lexists(target):
-                    raise OSError(
-                        f"{relpath} appeared in the destination folder while the "
-                        "copy was running; the copy was discarded rather than "
-                        "written over it."
-                    )
-                os.replace(partial, target)
+                # Published rather than replaced, for the same reason the mover
+                # publishes: the owner, ComfyUI or a trainer is under no lock of
+                # ours, and a check followed by ``os.replace`` still has a gap
+                # between them to lose a file in (#1012).
+                publish_no_clobber(partial, target)
             except OSError as exc:
                 discard_partial(partial)
                 logger.error(

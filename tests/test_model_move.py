@@ -644,12 +644,15 @@ def test_a_destination_taken_after_planning_is_refused_not_clobbered(
 ):
     """The plan-time check is not enough, on either path.
 
-    ``plan`` runs inside the POST and ``os.replace`` / ``os.rename`` run minutes
-    later on the worker thread, and both overwrite in silence. Before the
-    execution-time re-check this destroyed the file that arrived in between and
-    reported ``moved``. Reproduced deterministically — write the destination
-    between ``plan`` and ``execute`` — rather than by threading, because the
-    window is the whole gap and needs no timing to enter.
+    ``plan`` runs inside the POST and the write runs minutes later on the worker
+    thread. Before the execution-time re-check this destroyed the file that
+    arrived in between and reported ``moved``. Reproduced deterministically —
+    write the destination between ``plan`` and ``execute`` — rather than by
+    threading, because the window is the whole gap and needs no timing to enter.
+
+    Publication refuses this too (the test below), so the detail is asserted as
+    well as the status: it is the re-check's message, and it is what keeps this
+    a refusal naming the file rather than a failure on the worker thread.
     """
     if force_copy:
         monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
@@ -665,6 +668,9 @@ def test_a_destination_taken_after_planning_is_refused_not_clobbered(
     report = mover.execute(plan)
 
     assert [outcome.status for outcome in report.outcomes] == [STATUS_FAILED]
+    assert "already exists in the destination folder" in (
+        report.outcomes[0].detail or ""
+    ), "the refusal did not come from the execution-time re-check"
     with open(two_folders["destination_path"], "rb") as handle:
         assert handle.read() == arrived, "the move overwrote a file it never named"
     assert os.path.exists(two_folders["source_path"])
@@ -672,6 +678,179 @@ def test_a_destination_taken_after_planning_is_refused_not_clobbered(
         (two_folders["source_id"], "alice.safetensors")
     }
     assert_no_dangling_rows(two_folders["hub"])
+
+
+@pytest.mark.parametrize("force_copy", [False, True], ids=["rename", "copy"])
+def test_a_destination_created_at_publication_time_is_refused_not_clobbered(
+    two_folders, monkeypatch, force_copy
+):
+    """The window the execution-time check cannot close (#1012).
+
+    The check above runs *before* a copy and digest that takes minutes on a real
+    checkpoint; publication happens after it. A file written into the destination
+    name inside that gap was silently replaced by ``os.replace`` (copy path) or
+    ``os.rename`` (rename path), and the move reported ``moved`` and removed the
+    source. Only the publication itself can refuse it, which is what
+    ``publish_no_clobber`` does.
+
+    Entered deterministically at the instant that matters — the destination is
+    created from inside the publication call, after the copy has been written and
+    verified — rather than by threading. That barrier proves the refusal happens
+    at publication rather than at the check minutes earlier; it cannot prove the
+    claim is one syscall, because nothing in-process can be scheduled between a
+    syscall's entry and its return. The two tests below cover what a claim that
+    is not one syscall would leave behind instead.
+    """
+    if force_copy:
+        monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+    original_publish = mover_module.publish_no_clobber
+    arrived = b"written by a trainer while the move was copying"
+
+    def racing_publish(temporary_path, destination_path):
+        with open(destination_path, "wb") as handle:
+            handle.write(arrived)
+        return original_publish(temporary_path, destination_path)
+
+    monkeypatch.setattr(mover_module, "publish_no_clobber", racing_publish)
+    with open(two_folders["source_path"], "rb") as handle:
+        source_bytes = handle.read()
+
+    mover = ModelMover(two_folders["hub"])
+    report = mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_FAILED]
+    with open(two_folders["destination_path"], "rb") as handle:
+        assert handle.read() == arrived, "the move overwrote a file it never named"
+    with open(two_folders["source_path"], "rb") as handle:
+        assert handle.read() == source_bytes, "the source did not survive the refusal"
+    assert not os.path.exists(two_folders["destination_path"] + PARTIAL_SUFFIX)
+    # No hub row moved, so no receipt claiming this file is in the destination.
+    assert set(locations(two_folders["hub"])) == {
+        (two_folders["source_id"], "alice.safetensors")
+    }
+    assert_no_dangling_rows(two_folders["hub"])
+
+
+@pytest.mark.parametrize("force_copy", [False, True], ids=["rename", "copy"])
+def test_a_publication_that_cannot_drop_its_source_leaves_the_name_free(
+    two_folders, monkeypatch, force_copy
+):
+    """The half-state the old single ``os.rename`` could not produce.
+
+    Publication is a claim and then a drop, and on Windows the drop is what
+    fails: a file another process holds open cannot be unlinked, and that is
+    exactly what ComfyUI does with a loaded model. Leaving the claim behind would
+    put an unregistered copy at the destination *and* make that name refuse every
+    later move of the same model — a move that fails and then cannot be retried.
+    So the claim is removed and the failure reported.
+    """
+    if force_copy:
+        monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+
+    # Only the *drop* fails — the first unlink of the run. The rollback's own
+    # unlink has to work, which is the whole thing under test, and patching
+    # ``os.unlink`` wholesale would break it and pass for the wrong reason.
+    real_unlink = os.unlink
+    dropped = []
+
+    def refuse_the_first_unlink(path):
+        dropped.append(path)
+        if len(dropped) == 1:
+            raise PermissionError(f"{path} is held open by another process")
+        real_unlink(path)
+
+    monkeypatch.setattr(mover_module.os, "unlink", refuse_the_first_unlink)
+    with open(two_folders["source_path"], "rb") as handle:
+        source_bytes = handle.read()
+
+    mover = ModelMover(two_folders["hub"])
+    report = mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_FAILED]
+    with open(two_folders["source_path"], "rb") as handle:
+        assert handle.read() == source_bytes
+    assert not os.path.exists(two_folders["destination_path"]), (
+        "the destination name is still claimed, so the move can never be retried"
+    )
+    assert set(locations(two_folders["hub"])) == {
+        (two_folders["source_id"], "alice.safetensors")
+    }
+    assert_no_dangling_rows(two_folders["hub"])
+
+
+@pytest.mark.parametrize("force_copy", [False, True], ids=["rename", "copy"])
+def test_a_move_still_lands_where_hard_links_are_refused(
+    two_folders, monkeypatch, force_copy
+):
+    """exFAT, a share, or ``fs.protected_hardlinks`` over a file of another uid.
+
+    ``os.rename`` never needed a link — only write on the two directories — so
+    refusing to move at all would be this fix breaking folders that worked. The
+    reservation is the second attempt and is no-clobber for the same reason:
+    ``O_CREAT|O_EXCL`` either creates the name or raises.
+    """
+    if force_copy:
+        monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
+
+    def no_hard_links(*args, **kwargs):
+        raise PermissionError("the destination filesystem has no hard links")
+
+    monkeypatch.setattr(mover_module.os, "link", no_hard_links)
+    with open(two_folders["source_path"], "rb") as handle:
+        source_bytes = handle.read()
+
+    mover = ModelMover(two_folders["hub"])
+    report = mover.execute(
+        mover.plan(
+            [(two_folders["source_id"], "alice.safetensors")],
+            two_folders["destination_id"],
+        )
+    )
+
+    assert [outcome.status for outcome in report.outcomes] == [STATUS_MOVED]
+    with open(two_folders["destination_path"], "rb") as handle:
+        assert handle.read() == source_bytes
+    assert not os.path.exists(two_folders["source_path"])
+    assert set(locations(two_folders["hub"])) == {
+        (two_folders["destination_id"], "alice.safetensors")
+    }
+    assert_no_dangling_rows(two_folders["hub"])
+
+
+def test_the_reservation_refuses_a_taken_name_too(two_folders, monkeypatch):
+    """The fallback is only worth having if it is no-clobber as well.
+
+    Without this, a filesystem that cannot hard-link would quietly get the
+    check-then-replace behaviour #1012 is about.
+    """
+
+    def no_hard_links(*args, **kwargs):
+        raise PermissionError("the destination filesystem has no hard links")
+
+    monkeypatch.setattr(mover_module.os, "link", no_hard_links)
+    arrived = b"already at the destination name"
+    with open(two_folders["destination_path"], "wb") as handle:
+        handle.write(arrived)
+    partial = two_folders["destination_path"] + PARTIAL_SUFFIX
+    with open(partial, "wb") as handle:
+        handle.write(b"the finished copy, waiting to be published")
+
+    with pytest.raises(FileExistsError, match="was created while PixlStash"):
+        mover_module.publish_no_clobber(partial, two_folders["destination_path"])
+
+    with open(two_folders["destination_path"], "rb") as handle:
+        assert handle.read() == arrived
+    assert os.path.exists(partial), "the caller still owns its own copy"
 
 
 @pytest.mark.parametrize("force_copy", [False, True], ids=["rename", "copy"])
