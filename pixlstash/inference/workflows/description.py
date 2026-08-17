@@ -43,7 +43,7 @@ class DescriptionWorkflow:
         pictures: list,
         engine_override: str | None = None,
         stop_event: threading.Event | None = None,
-    ) -> dict[int, str]:
+    ) -> dict[int, str | None]:
         """Generate captions for a batch of picture-like objects.
 
         Dispatches to the active description plugin (from tagger_settings).
@@ -100,7 +100,7 @@ class DescriptionWorkflow:
         plugin_name: str,
         explicit: bool = False,
         stop_event: threading.Event | None = None,
-    ) -> dict[int, str]:
+    ) -> dict[int, str | None]:
         """Dispatch description generation to a named TaggerPlugin."""
         from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 
@@ -189,7 +189,7 @@ class DescriptionWorkflow:
 
     def _generate_batch_florence(
         self, pictures: list, stop_event: threading.Event | None = None
-    ) -> dict[int, str]:
+    ) -> dict[int, str | None]:
         """Caption a batch using Florence-2 (original implementation)."""
         if not pictures:
             return {}

@@ -1019,10 +1019,13 @@ class Florence2Plugin(TaggerPlugin):
         Args:
             image_paths: Ordered list of absolute image/video paths.
             parameters: Plugin parameters (uses ``max_new_tokens``).
-            stop_event: Not used by Florence-2 (kept for interface compatibility).
+            stop_event: Optional :class:`threading.Event`.  Checked before each
+                video and before each still-image chunk, so a cancel returns
+                the captions produced so far rather than running the batch out.
 
         Returns:
             ``{path: caption_str}`` — value is ``None`` on per-image failure.
+            A cancelled batch simply omits the paths it never reached.
         """
         _VIDEO_EXTS = frozenset(
             {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
@@ -1036,7 +1039,7 @@ class Florence2Plugin(TaggerPlugin):
 
         for path in image_paths:
             if stop_event and stop_event.is_set():
-                logger.warning(
+                logger.debug(
                     "Florence-2 generate descriptions stop-event reached, ending early."
                 )
                 return results
@@ -1052,7 +1055,7 @@ class Florence2Plugin(TaggerPlugin):
         batch_size = self.service.description_batch_size()
         for idx in range(0, len(batch_items), batch_size):
             if stop_event and stop_event.is_set():
-                logger.warning(
+                logger.debug(
                     "Florence-2 generate descriptions stop-event reached, ending early."
                 )
                 return results
