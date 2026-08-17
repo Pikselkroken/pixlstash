@@ -241,6 +241,31 @@ describe("watching one to its end", () => {
     expect(getModelMoveStatus).toHaveBeenCalledTimes(1);
   });
 
+  it("does not let a reading throw out of the timer callback", async () => {
+    // A terminal snapshot whose `results` is not a list: the tally of "did
+    // anything fail?" throws on it, from inside a timer callback where there is
+    // nobody left to catch it. That receipt is lost either way — an unhandled
+    // rejection that also strands the loop is the part that must not happen.
+    const store = useModelMovesStore();
+    await store.start(2, ITEMS);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    getModelMoveStatus.mockResolvedValue(
+      snapshot({ status: "finished", results: {} }),
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
+
+    // The store is idle rather than wedged, and the next move gets a loop.
+    expect(store.busy).toBe(false);
+    startModelMove.mockResolvedValue(snapshot());
+    getModelMoveStatus.mockClear().mockResolvedValue(snapshot());
+    expect(await store.start(3, ITEMS)).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(getModelMoveStatus).toHaveBeenCalledTimes(1);
+  });
+
   it("still reports a job that finished before its own POST returned", async () => {
     // A same-drive rename of a handful of files can beat the read the start
     // route does on its way out, so the accepted job comes back ALREADY

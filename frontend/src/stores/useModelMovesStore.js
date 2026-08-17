@@ -191,7 +191,18 @@ export const useModelMovesStore = defineStore("modelMoves", () => {
     // job, and a window where it reads null across the in-flight read would let
     // a second loop start on top of this one. `stopPolling()` clears it.
     pollHandle = setTimeout(async () => {
-      const read = await poll();
+      let read = false;
+      try {
+        read = await poll();
+      } catch (err) {
+        // A rejection out of a timer callback is nobody's to catch, and one
+        // thrown before the finish is reported would end the loop still holding
+        // `pollHandle` and `watching` — the stuck-busy shape this whole change
+        // is about, arriving by another door. A snapshot whose `results` is not
+        // a list gets here today. Treated as an unreadable status: said out
+        // loud, backed off, still watching.
+        console.error("[modelMoves] the move watch threw:", err);
+      }
       // A reset while the read was in flight owns the store now; anything this
       // loop does from here would be about somebody else's session.
       if (startedAt !== epoch) return;
