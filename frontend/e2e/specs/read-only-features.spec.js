@@ -40,8 +40,20 @@ test.describe('read-only session: owner-only features stay visible', () => {
     page.on('response', (res) => {
       const url = res.url()
       if (res.status() !== 403) return
-      if (/\/api\/v1\/(operations|dedup|adapters|checkpoints|models|model-)/.test(url))
+      if (
+        /\/api\/v1\/(operations|dedup|adapters|checkpoints|models|model-)/.test(
+          url,
+        )
+      )
         forbidden.push(url)
+    })
+
+    // Every path the SPA has been on, including the history pushes vue-router
+    // makes without a document load. An inert destination must never appear
+    // here, even for the moment it would take a guard elsewhere to undo it.
+    const visited = []
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) visited.push(new URL(frame.url()).pathname)
     })
 
     try {
@@ -87,9 +99,29 @@ test.describe('read-only session: owner-only features stay visible', () => {
         'title',
         'The model shelf is only available in your own library',
       )
+      // Unlike the Duplicates row above, this one is a <button>, so
+      // `aria-disabled` reaches the accessibility tree as a real disabled
+      // state — which is the point of using a button, and which a screen
+      // reader announces. Asserted rather than assumed.
+      await expect(models).toBeDisabled()
+      // …but it stays tabbable, so a keyboard user can land on it and hear the
+      // explanation. That is why `aria-disabled` and not the native attribute.
+      await expect(models).not.toHaveAttribute('disabled', /.*/)
 
-      await models.click()
+      // `force`, because Playwright refuses to click a control the a11y tree
+      // reports as disabled — correctly, and that refusal is asserted above.
+      // Forcing it through is what proves the second guard: the handler itself
+      // declines, so even an activation that got past the disabled state
+      // navigates nowhere.
+      await models.click({ force: true })
       await page.waitForTimeout(500)
+      // Asserted on where the page WENT, not on where it ended up. The shelf
+      // route is guarded twice for this session — the row refuses to emit, and
+      // `useAppNavigation` bounces the route if anything else reaches it — so a
+      // final-URL check passes with the row's guard deleted and only tests the
+      // bounce. `visited` sees the push that a broken row would make, before the
+      // bounce undoes it.
+      expect(visited).not.toContain('/models')
       expect(new URL(page.url()).pathname).not.toContain('models')
 
       // ── None of the three woke the owner-only API ──────────────────────
@@ -149,12 +181,15 @@ test.describe('read-only session: owner-only features stay visible', () => {
     try {
       await page.goto(`/models?token=${encodeURIComponent(token)}`)
 
-      // Landed somewhere it may actually use…
-      await expect(page.locator('.sidebar-list-item').first()).toBeVisible({
+      // Landed somewhere it may actually use. Waiting on the navigation rather
+      // than on the sidebar: the bounce is queued in `App.vue`'s setup, so the
+      // rail paints a tick before the URL settles and sampling `page.url()` off
+      // the render reads the route the visitor is being moved OFF.
+      await page.waitForURL((u) => new URL(u).pathname === '/', {
         timeout: 15_000,
       })
+      await expect(page.locator('.sidebar-list-item').first()).toBeVisible()
       const url = new URL(page.url())
-      expect(url.pathname).toBe('/')
       // …still holding its credential. The bounce is the only navigation that
       // fires exclusively for a share session, so dropping `?token=` here would
       // break the link on the visitor's next reload and nobody else's.
