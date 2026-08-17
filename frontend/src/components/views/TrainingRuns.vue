@@ -431,9 +431,15 @@ const confirmLabel = computed(() => {
     : `Import ${n} runs · ${fileCountLabel.value}`;
 });
 
+// An import needs BOTH ends named. The destination has always been stated
+// here; the source root is stated beside it so `submit` cannot reach its loop
+// without one and send a request whose `sourceFolderId` is missing — a
+// round-trip that can only come back refused, reported per run as if the run
+// were at fault.
 const canSubmit = computed(
   () =>
     !working.value &&
+    source.value?.id != null &&
     chosenRuns.value.length > 0 &&
     fileTotal.value > 0 &&
     destinationId.value != null,
@@ -542,11 +548,27 @@ function onGridKeydown(event) {
  * scroll offset is restored, and every still-present run keeps its tick. Runs
  * that have VANISHED (imported from another window, or deleted) drop out of the
  * selection rather than leaving it pointing at nothing.
+ *
+ * Reads overlap — mount, a folder change, a visibility change and a window
+ * focus all start one, and none of them cancels the last — so every completion
+ * is checked against the generation before it writes anything. An older read
+ * answering last would otherwise replace the newer one's rows, and the
+ * selection reconciled below would be filtering the newer listing's names
+ * against the older one's. The folder id is captured too and the request is
+ * made against THAT rather than re-read from the store, so a read is always
+ * asking about the folder it was started for.
  */
+let generation = 0;
 async function loadRuns() {
-  if (source.value?.id == null) {
+  const sourceId = source.value?.id ?? null;
+  const gen = ++generation;
+  const current = () => gen === generation;
+  if (sourceId == null) {
     runs.value = [];
     emit("count", null);
+    // This read is over, and it owns the flag as much as any other: an
+    // in-flight one is now stale and will decline to clear it.
+    loading.value = false;
     return;
   }
   const scrollTop = gridEl.value?.scrollTop ?? 0;
@@ -555,7 +577,9 @@ async function loadRuns() {
   loading.value = true;
   error.value = "";
   try {
-    runs.value = await listRuns(source.value.id);
+    const found = await listRuns(sourceId);
+    if (!current()) return;
+    runs.value = found;
     emit("count", runs.value.length);
     const names = new Set(runs.value.map((run) => run.name));
     chosen.value = keep.filter((name) => names.has(name));
@@ -566,12 +590,15 @@ async function loadRuns() {
     await nextTick();
     if (gridEl.value) gridEl.value.scrollTop = scrollTop;
   } catch (err) {
+    if (!current()) return;
     error.value = errorDetail(err) || "Could not read that folder.";
     runs.value = [];
     emit("count", null);
     clearSelection();
   } finally {
-    loading.value = false;
+    // Only the current read owns the spinner: an older one clearing it would
+    // report the newer, still-running read as finished.
+    if (current()) loading.value = false;
   }
 }
 
@@ -592,10 +619,22 @@ function reload() {
  *
  * `loadRuns` clears and reports an empty count when the id goes away, so
  * forgetting the folder is the same edge handled by the same call.
+ *
+ * The old root's rows and its selection are dropped FIRST, before the new read
+ * is even started. Waiting for the new listing to replace them leaves the old
+ * root's cards on screen under the new root's path for as long as the walk
+ * takes, with Import live: a run name means nothing outside the root it was
+ * read under, so a tick surviving that window sends the new root's id with the
+ * old root's run name — which is issue #1019 whatever the response ordering
+ * does. Same reason the count is cleared rather than left describing a folder
+ * the shelf is no longer pointing at.
  */
 watch(
   () => source.value?.id,
   () => {
+    runs.value = [];
+    emit("count", null);
+    clearSelection();
     loadRuns();
   },
 );
@@ -664,6 +703,13 @@ onBeforeUnmount(() => {
 async function submit() {
   if (!canSubmit.value) return;
   const notices = useNoticeStore();
+  // Captured once, because the batch is sequential and the registry can change
+  // between two of its requests. The rows and the tick are dropped the moment
+  // the root changes (see the watcher), so what is captured here is the root
+  // the chosen runs were read under — and every request in the batch names it,
+  // rather than whichever folder is registered when its turn arrives. Non-null
+  // by `canSubmit`, which is checked above.
+  const sourceId = source.value.id;
   const batch = [...chosenRuns.value];
   const imported = [];
   const failed = [];
@@ -675,7 +721,7 @@ async function submit() {
         : (run.checkpoints || []).map((cp) => cp.step ?? null);
       try {
         const report = await importRun({
-          sourceFolderId: source.value.id,
+          sourceFolderId: sourceId,
           runName: run.name,
           destinationFolderId: destinationId.value,
           steps,
