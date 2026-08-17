@@ -1,12 +1,16 @@
 """A cancelled description batch must not blank the pictures it skipped.
 
-Cancelling mid-batch makes the workflow return early with a partial result.
+Cancelling mid-batch makes the workflow return early with a partial result. If
 ``DescriptionTask`` then writes ``""`` to every picture the workflow did not
-caption, and ``MissingDescriptionFinder`` selects only ``NULL`` or a
-``__description::`` sentinel — so those pictures are permanently uncaptionable.
+caption, those pictures are permanently uncaptionable: ``MissingDescriptionFinder``
+selects only ``NULL`` or a ``__description::`` sentinel, and an empty string is
+neither. So a cancel must persist nothing for the pictures it skipped, while a
+genuine failure must still blank — that is what stops an uncaptionable picture
+being retried for ever.
 
-Two of these three tests fail as things stand; they are the specification for
-the fix, not a description of current behaviour.
+The last two tests cover the routing rather than the writes: the cancel event is
+the task's (the workflow object running a batch is not always the one the task
+holds), and it is checked per picture in the Florence video loop.
 
 Deliberately Server-free. An in-memory SQLite engine and a two-method stub are
 everything ``DescriptionTask`` and the finder's query touch, so this file builds
@@ -14,11 +18,13 @@ no environment (CLAUDE.md, "Tests: reuse the environment, don't rebuild it") and
 costs milliseconds rather than the ~1.35 s a ``Server`` does.
 """
 
+import threading
 import types
 
 from sqlmodel import Session, SQLModel, create_engine
 
 from pixlstash.db_models import Picture
+from pixlstash.inference.workflows.description import DescriptionWorkflow
 from pixlstash.tasks.description_task import DescriptionTask
 from pixlstash.tasks.missing_description_finder import MissingDescriptionFinder
 
@@ -63,17 +69,16 @@ class _CancelledMidBatchWorkflow:
 
     def __init__(self):
         self.task = None
+        self.stop_event = None
 
-    def generate_batch(self, pictures, engine_override=None):
+    def generate_batch(self, pictures, engine_override=None, stop_event=None):
         first = pictures[0]
         self.task.on_cancel()  # what TaskRunner.stop() does to an active task
+        self.stop_event = stop_event
         return {first.id: "captioned-before-the-cancel"}
 
     def estimate_vram_mb(self, image_count):
         return 0
-
-    def on_cancel(self):
-        return None
 
 
 def _run_cancelled_batch(db, picture_ids):
@@ -82,7 +87,7 @@ def _run_cancelled_batch(db, picture_ids):
     task = DescriptionTask(db, workflow, pics)
     workflow.task = task
     task._run_task()
-    return task
+    return task, workflow
 
 
 def _descriptions(db, picture_ids):
@@ -106,8 +111,14 @@ def test_cancelled_batch_leaves_skipped_pictures_uncaptioned_not_blank():
     db = _StubDB()
     captioned, skipped = _seed(db, 2)
 
-    _run_cancelled_batch(db, [captioned, skipped])
+    task, workflow = _run_cancelled_batch(db, [captioned, skipped])
     got_captioned, got_skipped = _descriptions(db, [captioned, skipped])
+
+    assert workflow.stop_event is task._cancel_event, (
+        "the task must hand the workflow its own cancel event; a workflow that "
+        "owns the event is the wrong object under CPU spillover, which builds a "
+        "fresh DescriptionWorkflow on every access"
+    )
 
     assert got_captioned == "captioned-before-the-cancel"
     assert got_skipped is None, (
@@ -155,14 +166,11 @@ def test_a_genuine_failure_still_clears_the_description():
     (failed,) = _seed(db, 1)
 
     class _FailingWorkflow:
-        def generate_batch(self, pictures, engine_override=None):
+        def generate_batch(self, pictures, engine_override=None, stop_event=None):
             return {}
 
         def estimate_vram_mb(self, image_count):
             return 0
-
-        def on_cancel(self):
-            return None
 
     pics = [types.SimpleNamespace(id=failed, description=None)]
     DescriptionTask(db, _FailingWorkflow(), pics)._run_task()
@@ -170,3 +178,40 @@ def test_a_genuine_failure_still_clears_the_description():
     (got,) = _descriptions(db, [failed])
     assert got == ""
     assert failed not in _selectable(db)
+
+
+def test_a_cancel_stops_the_florence_video_loop_before_the_next_video():
+    """Videos are captioned one at a time in ``_generate_batch_florence``'s first
+    loop, and a video is the slowest single item there is — so the check has to
+    be in that loop, not only on the still-image chunks after it."""
+    stop = threading.Event()
+    captioned: list[str] = []
+
+    def generate_caption(path, _retry_on_cpu=True, stop_event=None):
+        captioned.append(path)
+        stop.set()  # the cancel lands while the first video is being captioned
+        return "first-video"
+
+    engine = types.SimpleNamespace(
+        tagger_settings={"active_description_plugin": "florence2"},
+        ensure_captioning_ready=lambda: None,
+        florence_service=types.SimpleNamespace(
+            generate_caption=generate_caption,
+            description_batch_size=lambda: 8,
+            generate_captions_batch=lambda paths, stop_event=None: {},
+        ),
+    )
+    pictures = [
+        types.SimpleNamespace(id=1, file_path="/nonexistent/one.mp4"),
+        types.SimpleNamespace(id=2, file_path="/nonexistent/two.mp4"),
+    ]
+
+    results = DescriptionWorkflow(engine, image_root=None).generate_batch(
+        pictures, stop_event=stop
+    )
+
+    assert captioned == ["/nonexistent/one.mp4"], (
+        "the cancelled batch captioned a second video: the stop event is not "
+        "checked in the per-picture loop"
+    )
+    assert 2 not in results

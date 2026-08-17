@@ -269,7 +269,7 @@ def test_a_shutdown_abandons_the_remaining_attempts():
 
 
 class _OomWorkflow:
-    def generate_batch(self, pictures, engine_override=None):
+    def generate_batch(self, pictures, engine_override=None, stop_event=None):
         raise _FakeOom()
 
 
