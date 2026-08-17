@@ -1,5 +1,13 @@
 # Toolbar decisions: undo/redo placement and responsive collapse (2026-07-30)
 
+> **Read this file as a log, newest last.** Amendment #4 (2026-08-17) is the
+> current record for the **Duplicates** bar: it measured the ladder the earlier
+> sections designed, found the bar had never fitted its own container at any
+> width, and replaced every rung. Any width given for that bar before amendment
+> #4 — 860 / 720 / 600, and the fold classes named after them — is history, not
+> the shipped CSS. The grid bar's ladder is unchanged, and amendment #2 remains
+> the record for it.
+
 ## Current state (verified, not assumed)
 
 **Grid toolbar** (`Toolbar.vue`, `.selection-bar-overlay`, 36px band, container
@@ -71,6 +79,11 @@ No ResizeObserver, no JS measurement. Existing touch-mode overrides untouched.
 
 ### Duplicates ladder (container dqbar / shared toolbar)
 
+> **SUPERSEDED by amendment #4 (2026-08-17).** Every width in this subsection
+> is obsolete: the rungs were placed against an inventory rather than a
+> measurement, and the bar overflowed at all of them. The shipped ladder is
+> the table in amendment #4.
+
 - dqbar ≤860px: qsub ("N done this session") hides entirely (no overflow row);
   the dq-size-value label hides (the slider keeps its aria-label).
 - dqbar ≤720px: ⋯ appears before UndoControl; the Decided toggle + size slider
@@ -90,6 +103,9 @@ surfaced at all widths.
 
 ### Ranking tables
 
+> The Duplicates ranking below is **superseded by amendment #4**; the grid
+> ranking still stands, with amendment #2's corrections.
+
 Grid ranking: 1 Sort (never folds) / 2 Filter (never folds) / 3 Search (never
 folds) / 4 Undo (never folds or hides) / 5 Redo (hides last step) / 6 History
 chevron (folds to row at 480) / 7 View (folds 600) / 8 Stats (folds 600, dot
@@ -104,6 +120,10 @@ folds) / 6 Redo+chevron (shared 420/480) / 7 Decided toggle (folds 720) /
 shared) / 10 qsub (hides 860, no row).
 
 ## Implementation checklist
+
+> Historical: this was the plan for the 2026-07-30 change. Items 5 and 6 (the
+> dq ladder's widths, and what the tests can cover) were overtaken by
+> amendment #4.
 
 1. `Toolbar.vue`: the move + separator; the container-name addition; the ≤700
    fold rules; mount TbOverflowMenu with mirrored rows; the View fold at 600.
@@ -204,7 +224,9 @@ boundary.
 7. Floor:
    `Sort(icons) Filter │G-S1│ Search ⋯ …gap… Review │G-S4│ Undo Settings Stats`.
 
-**Duplicates — the burger DISSOLVES:** every foldable found an own-group
+**Duplicates — the burger DISSOLVES** (REVERSED by amendment #4, which
+measured it: the own-group answers left a floor ~100px wider than the burger
+does, and the bar never fitted): every foldable found an own-group
 answer, so the bar mounts no overflow at all.
 
 1. The TbOverflowMenu mount, all its rows, and the
@@ -251,6 +273,133 @@ chip becomes "K"; `aria-keyshortcuts` carries the full machine-readable set
 keys before, a shipped gap this closes. Compare's footer hint and its Keep
 separate `key-hint` follow; the queue's hidden help sentence reads "Enter or
 S stacks it. K keeps it separate. Down moves on without deciding."
+
+## Amendment #4 (2026-08-17): the Duplicates bar actually fits (issue #1009)
+
+**The finding, measured rather than argued.** The ladder above was written from
+an inventory, never from a measurement, and the Duplicates bar has never fitted
+its own container at any width. Rendering the shipped markup and the shipped
+`<style>` blocks in Chromium and stepping the container width gives:
+
+| bar width | bar overflow | Settings | Stats |
+|---|---|---|---|
+| 1400 | 170px | clipped | clipped |
+| 860 | 504px | clipped | clipped |
+| 720 | 149px | clipped | clipped |
+| 600 | 92px | clipped | clipped |
+| 480 | 180px | clipped | clipped |
+
+Two causes, both structural:
+
+1. **Nothing in the bar can shrink.** `.dq-tb-left` and `.dq-tb-right` are flex
+   items at the default `min-width: auto` holding `white-space: nowrap`
+   content, so both keep their intrinsic width whatever the container does.
+   The surplus leaves through the right edge, and the last children in DOM
+   order are the ones that walk off it: Settings, then Stats, then undo. The
+   controls do not fold, they *vanish*, with no signifier that anything is
+   missing (Nielsen #1, visibility of system status).
+2. **The ladder's floor is wider than the widths it fires at.** After every
+   shipped step the bar still measures ~690px at the 600px breakpoint. A
+   ladder that ends above its own last rung has no floor at all. Amendment #2's
+   "every foldable found an own-group answer" was reasoned, not measured: an
+   icon-only Decided plus an icon-only Mixed stacks plus a full-width count
+   headline is still ~100px wider than a burger holding both.
+
+**Decision 1 — the shrink chain is the guarantee, the ladder is the design.**
+`.dq-tb-left` gets `min-width: 0; flex: 0 1 auto` and its text members
+ellipsize; `.dq-tb-right` gets `flex: 0 0 auto` and never shrinks. The
+app-wide tail is then unreachable by any content the left group can hold: a
+pathological scope name or a seven-digit count eats itself before it can push
+Settings off the bar. The ladder still does the visible work; the chain only
+catches what the ladder did not foresee. **The bar must not take
+`overflow: hidden`** as a cheaper cure: the tier popover and the ⋯ panel are
+absolutely positioned inside it and would be clipped away.
+
+**Decision 2 — the burger comes back, for the left group's page toggles only.**
+Amendment #2's principle stands (a burger collapses its own visual group and
+stands where those controls stood); its conclusion does not. The ⋯ sits at the
+end of the toggle run, after the count and before D-S1, and holds exactly the
+Decided and Mixed stacks toggles, as labeled rows. This is narrower than the
+icon-only pair AND more legible: `mdi-history` and `mdi-alert-outline` with no
+label are mystery meat (Norman, signifiers), and an alert glyph on a bare bar
+reads as an error rather than as a place to go. The panel opens from its left
+edge in this bar (`align="start"`), because a right-anchored 220px panel hung
+off a trigger this close to the left edge would open off-screen.
+
+**A toggle that says "Back to review" never folds.** On the Decided and Mixed
+pages the toggle is the visible way out of a sub-page (Nielsen #3, user control
+and freedom); it stays on the bar and compresses to its `mdi-arrow-left`, which
+is the one glyph in this set that needs no label. So the bar button and its
+overflow row do not share a v-if verbatim here: one computed
+(`pageTogglesFold`) says whether the toggles are the folding kind, and it gates
+both the buttons' fold class and the mount of the ⋯ itself. The rows carry no
+condition of their own — the menu they sit in only exists while they apply,
+which is also what stops the ⋯ appearing with nothing in it on a sub-page.
+
+**Decision 3 — the ladder, revised, and each rung placed where the measurement
+puts it.** The old rungs were round numbers picked by eye. These are the widths
+at which the previous form stops fitting, measured on the shipped CSS with the
+worst content the bar can hold (a scope in force, exact matches to auto-stack,
+mixed stacks waiting):
+
+| rung | what gives | content after |
+|---|---|---|
+| — | everything on the bar | 1577px |
+| dqbar ≤1400 | qsub, the size value label | 1372px |
+| dqbar ≤1180 | the size control, Auto-stack's sentence → "Auto-stack N" | 1153px |
+| dqbar ≤1040 | the page toggles → ⋯, the tier label | 807px |
+| dqbar ≤820 | Auto-stack → flash + count, the scope pill → icon + dismiss | 630px |
+| toolbar ≤480 | the undo chevron (shared, unchanged) | 598px |
+| toolbar ≤420 | redo (shared); the two runs' gaps → `--space-2` | 526px |
+
+Between two rungs the count headline takes the difference: it ellipsizes from
+the right, so the number survives and "groups to review" is what goes. A
+`flex-shrink: 6` on it buys that order, because a clipped tail on a sentence
+reads better than "Mixed stac…" on a button.
+
+Floor: `128 ⋯ │ [filter ▾] [scope ×] …gap… [⚡ 42] │ [undo] [Settings] [Stats]`.
+The two numbers in the last row are not in conflict: 526px is what the bar
+holds with the count at its full width, and the count is the elastic member, so
+the bar goes on fitting below that by spending it. Measured with everything
+above present and nothing clipped or overlapping down to **320px of bar
+width**, where the count is down to its first digits — well under the shared
+ladder's last rung of 420, and under any width this shell is usable at. The
+bar's own 36px band and its insets are NOT this ladder's to spend: they are
+pinned equal to the grid bar's by a guardrail in `Toolbar.test.js`. (A rule for
+them here would be dead anyway — `.dq-toolbar` is the query's container, and a
+container query styles descendants, never the container itself.)
+
+**Duplicates ranking, revised:** 1 Undo (never folds or hides) / 2 Settings +
+Stats (never fold; the whole point of this amendment) / 3 Tier gate (never
+folds, compresses at 1040) / 4 Count (never folds; ellipsizes between rungs,
+the number never truncates) / 5 Scope pill (never folds while scoped,
+compresses at 820) / 6 Auto-stack (never folds, compresses at 1180 and 820) /
+7 Redo + chevron (shared 420/480) / 8 Decided + Mixed stacks (fold to ⋯ rows at
+1040, unless showing "Back to review") / 9 Size slider (hides at 1180) /
+10 qsub (hides at 1400).
+
+**Acceptance, and it is arithmetic rather than judgement.** At every container
+width, with the worst content the bar can hold: the bar does not overflow its
+own box (`scrollWidth === clientWidth`), no child of the left group paints past
+the right group's left edge, and Settings, Stats and undo all sit inside the
+bar.
+
+**What checks it, and what does not.** This has to be measured in a browser:
+jsdom evaluates neither container queries nor layout, so no unit test can see
+this class of bug at all — and the unit suite passes unchanged with every rung
+in this ladder inverted. It is kept for the DOM-level contracts only (each row
+mirrors its button, the fold classes, every control's accessible name, the
+tail's order, the ⋯ standing in its own group), and it should not be read as
+cover for the widths. The browser check is a case in
+`frontend/e2e/specs/dedup.spec.js`, which drives the real app from 1600 down to
+800px of window and asserts the three invariants above at each step. Its
+boundary, stated rather than implied: it stops at 800px because the shell's
+sidebar does not respond to width (below that the question is the sidebar's,
+not this bar's), and it runs on an unscoped queue, so the scope pill's own rung
+is not among what CI exercises. The rows in the rung table were measured by
+rendering the shipped `<style>` blocks against the bar's real markup in
+Chromium at each width; reproducing that is the way to re-check a rung after
+changing what the bar carries.
 
 ## (d) Deliberately rejected, and why
 

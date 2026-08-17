@@ -165,6 +165,54 @@ test.describe.serial('duplicates queue (§21)', () => {
     await expect(duplicates.compareDialog).toBeHidden()
   })
 
+  // Issue #1009. The bar could not shrink (two nowrap flex groups at the
+  // default `min-width: auto`), so the surplus left through the right edge and
+  // took the last children in DOM order with it: Settings, then the stats
+  // toggle, then undo, gone with no signifier that anything was missing. The
+  // ladder that was supposed to prevent it (docs/design/toolbar-responsive-
+  // decisions.md) had rungs at 860/720/600 for content measuring ~1570px.
+  //
+  // This case is a BROWSER one because it has to be: jsdom evaluates neither
+  // container queries nor layout, so no unit test can see the bug. Widths stop
+  // at 800 deliberately — the shell's sidebar does not respond, so a narrower
+  // window is a question about the sidebar rather than about this bar.
+  test('the toolbar keeps its chrome at every width it is used at', async ({
+    duplicates,
+  }) => {
+    await duplicates.goto()
+    const page = duplicates.page
+
+    for (const width of [1600, 1280, 1100, 960, 860, 800]) {
+      await page.setViewportSize({ width, height: 900 })
+      const fit = await page.evaluate(() => {
+        const bar = document.querySelector('.dq-toolbar')
+        const box = bar.getBoundingClientRect()
+        const right = bar.querySelector('.dq-tb-right').getBoundingClientRect()
+        const inside = (el) =>
+          Boolean(el) && el.getBoundingClientRect().right <= box.right + 0.5
+        // The left group's box can shrink while its children keep their width
+        // and paint over the tail, so zero overflow is not enough on its own.
+        const spill = [...bar.querySelectorAll('.dq-tb-left *')]
+          .map((el) => el.getBoundingClientRect())
+          .filter((b) => b.width > 0)
+          .reduce((worst, b) => Math.max(worst, b.right - right.left), -Infinity)
+        return {
+          overflow: Math.round(bar.scrollWidth - bar.clientWidth),
+          spill: Math.round(spill),
+          settings: inside(bar.querySelector('button[title="Settings"]')),
+          stats: inside(bar.querySelector('.tb-stats-btn')),
+          undo: inside(bar.querySelector('.uc-btn--undo')),
+        }
+      })
+
+      expect(fit.overflow, `bar overflows at ${width}px`).toBeLessThanOrEqual(1)
+      expect(fit.spill, `left group paints over the tail at ${width}px`).toBeLessThanOrEqual(1)
+      expect(fit.settings, `Settings is off the bar at ${width}px`).toBe(true)
+      expect(fit.stats, `the stats toggle is off the bar at ${width}px`).toBe(true)
+      expect(fit.undo, `undo is off the bar at ${width}px`).toBe(true)
+    }
+  })
+
   test('Enter stacks the focused group, auto-advances and moves the badge', async ({
     duplicates,
     apiContext,

@@ -445,10 +445,24 @@ Top/grid toolbar. Imports state directly from Pinia stores (`useGridStore`, `use
 (`UndoControl`, `TbGlobalActions`, `TbOverflowMenu`) writes scoped
 `@container toolbar (…)` rules so it degrades identically in both bars. Fold =
 CSS both ways: every foldable control exists as its bar button AND as a
-`TbOverflowMenu` row with the same `v-if`, and container queries flip which of
-the pair is visible — no ResizeObserver, no JS measurement. The ladder and the
+`TbOverflowMenu` row under the same condition, and container queries flip which
+of the pair is visible — no ResizeObserver, no JS measurement. Usually that
+condition is one `v-if` written twice; where a whole menu is gated on it
+instead (the Duplicates bar's ⋯ mounts only while its rows apply), one computed
+carries it and the rows inherit it from the mount. The ladder and the
 never-fold floor are recorded in `docs/design/toolbar-responsive-decisions.md`;
-undo never enters the overflow.
+undo never enters the overflow. **The Duplicates bar carries a shrink chain
+underneath the ladder** (amendment #4): its left group takes `min-width: 0` so
+its labels ellipsize, its right group takes `flex: 0 0 auto` so the app-wide
+tail is unreachable by any content the left group can hold. Without it a bar
+whose ladder runs out simply pushes Settings and Stats off its right edge,
+which is what issue #1009 was. **The grid bar has no such chain yet** —
+`.selection-bar-left` / `.selection-bar-right` are still `flex-shrink: 0` with
+no `min-width: 0`, so the same failure is available to it once its own content
+outgrows its ladder; that is a known gap, not a decision.
+`TbOverflowMenu`'s panel hangs from the edge its `align` prop names (`end` by
+default, `start` for a trigger near the bar's left edge), and it exposes
+`isOpen()` for a host whose surface owns the keyboard.
 
 Responsibilities:
 - Grid bar: sort selector, filter chips (tags, score, media type, resolution), column slider, stack controls, view mode toggles.
@@ -1597,7 +1611,13 @@ UndoControl moved out of the left group into the identical right-side tail
 `[separator] [UndoControl] [TbGlobalActions]`, so the position learned in one
 view holds in the other (`docs/design/toolbar-responsive-decisions.md`). Both
 bars also share the `toolbar` container name and the ⋯ overflow's collapse
-ladder, so the shared chrome degrades identically at every width. Undo/redo run through the shared
+ladder, so the shared chrome degrades identically at every width. The queue's
+own ⋯ sits at the end of its toggle run and holds the Decided and Mixed stacks
+toggles, which fold into it at ≤1040 — except while one of them reads "Back to
+review", when it is the visible way out of a sub-page and stays on the bar
+(amendment #4). Settings, the stats toggle and undo never fold at any width,
+and the bar's shrink chain makes that structural rather than a promise the
+ladder has to keep. Undo/redo run through the shared
 `useOperationStore` and its receipt exactly as everywhere else; the queue's
 one addition is a Pinia `$onAction` subscription on that store which, after an
 `undo`/`redo`/`undoTo`/`undoBatchById` that touched a `dedup.*` operation,
