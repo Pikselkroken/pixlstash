@@ -639,6 +639,73 @@ def test_a_180_rotate_changes_the_thumbnail_cache_version(client, server):
     assert after == "320x240o3"
 
 
+def test_the_thumbnail_route_regenerates_a_turned_bitmap_on_the_next_request(
+    client, server
+):
+    """The stored bitmap is stale the moment the file is turned, so serve a new one.
+
+    ``apply_orientation`` NULLs the dimensions to re-queue ``ThumbnailGenerationTask``
+    and leaves the ``_thumb.webp`` on disk. Until that sweep lands, ``GET
+    /pictures/thumbnails/{id}.webp`` used to hand the pre-rotate bitmap back —
+    its source-newer-than-thumbnail check ran only for reference-folder
+    pictures — and the grid painted the photo the wrong way round, correcting
+    itself later when the sweep announced. This module has that sweep detached
+    (``_REGENERATION_FINDERS``), so a bitmap that comes back turned can only
+    have been rebuilt by the route.
+
+    The 64x48 source thumbnails to a landscape bitmap; a quarter turn makes it
+    portrait, which is the cheapest thing to assert on the response bytes.
+    """
+    picture_id = _upload(client)
+
+    def _served_size():
+        resp = client.get(f"{API}/pictures/thumbnails/{picture_id}.webp")
+        assert resp.status_code == 200, resp.text
+        with Image.open(io.BytesIO(resp.content)) as bitmap:
+            return bitmap.size
+
+    before_w, before_h = _served_size()
+    assert before_w > before_h, "expected the 64x48 source to thumbnail landscape"
+
+    assert _rotate(client, [picture_id], "cw").status_code == 200
+
+    after_w, after_h = _served_size()
+    assert after_w < after_h, (
+        f"the thumbnail route served {after_w}x{after_h} after a quarter turn — "
+        f"the pre-rotate bitmap. The grid paints that until the background sweep "
+        f"gets round to the picture, which is the wrong-then-right refresh."
+    )
+
+
+def test_the_grid_projection_carries_the_orientation(client, server):
+    """The lightbox's cache-buster is built from a grid row, so it has to be in one.
+
+    ``mediaVersion`` (frontend/src/utils/media.js) keys the full-size media
+    URL's ``?v=`` on the orientation, and the grid's ``prefetchFullImage`` and
+    the lightbox's neighbour preloads build that URL from the same row. Drop the
+    field from ``Picture.grid_fields()`` — or from ``GridPicture``, which SILENTLY
+    strips anything it does not declare — and all three go back to agreeing on
+    one unchanging URL, so a turned picture opens on the prefetched pre-rotate
+    bytes.
+    """
+    picture_id = _upload(client)
+
+    def _grid_row():
+        resp = client.get(f"{API}/pictures", params={"fields": "grid"})
+        assert resp.status_code == 200, resp.text
+        rows = [row for row in resp.json() if row["id"] == picture_id]
+        assert rows, f"picture {picture_id} is not in the grid listing"
+        return rows[0]
+
+    assert "orientation" in _grid_row(), (
+        "the grid projection dropped `orientation`; GridPicture drops any key it "
+        "does not declare, so this fails silently at the response model too"
+    )
+
+    assert _rotate(client, [picture_id], "cw").status_code == 200
+    assert _grid_row()["orientation"] == 6
+
+
 # ---------------------------------------------------------------------------
 # 5. Concurrency
 # ---------------------------------------------------------------------------

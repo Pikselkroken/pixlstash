@@ -310,7 +310,7 @@ describe("ImageOverlay — the [ and ] shortcuts", () => {
 });
 
 describe("ImageOverlay — the picture on screen after a rotate", () => {
-  it("re-requests the file when 180° leaves pixel_sha alone", async () => {
+  it("re-requests the file when 180° leaves the pixels alone", async () => {
     // Two presses the same way is 180°. `pixel_sha` never moves across either
     // of them — the pixels are untouched — so if the buster were the sha alone
     // the `<img>` would keep the bytes it decoded before the first press.
@@ -333,18 +333,19 @@ describe("ImageOverlay — the picture on screen after a rotate", () => {
     expect(srcQuarter).not.toBe(srcBefore);
     expect(srcAfter).not.toBe(srcQuarter);
     expect(srcAfter).not.toBe(srcBefore);
-    // Still the same content hash on both sides of the turn: the orientation is
-    // the only thing carrying the change into the URL.
-    expect(srcAfter).toContain("sha-stable");
-    expect(srcAfter).toContain("o3");
+    // The orientation is the only thing carrying the change into the URL — the
+    // content hash is identical on both sides of the turn and is not in it.
+    expect(srcAfter).toContain("?v=o3");
+    expect(srcAfter).not.toContain("sha-stable");
   });
 
   it("leaves an unrotated picture's URL exactly as it was", async () => {
-    // Orientation 1 contributes nothing, and the shown buster stays pinned to
-    // whatever was on screen when the picture opened — here the cold route's
-    // un-busted URL. Both halves matter: a version that grew a suffix for every
-    // picture, or one that unpinned on merely LEARNING the orientation, would
-    // hand the HTTP cache a URL it has never seen the day this ships.
+    // Orientation 1 contributes nothing, so a picture that has never been
+    // turned keeps the bare URL — the same one `prefetchFullImage` and the
+    // neighbour preloads warm from a grid record. A version that grew a suffix
+    // for every picture would hand the HTTP cache a URL it has never seen the
+    // day this ships, and one that disagreed with those builders would read a
+    // stale prefetch back out of the memory cache.
     const wrapper = await openOverlay();
     await flush();
     expect(wrapper.find(".overlay-img").attributes("src")).toBe(

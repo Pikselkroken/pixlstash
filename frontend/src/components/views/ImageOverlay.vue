@@ -1309,9 +1309,9 @@ const rotateRightTitle = computed(() => rotateTitle("right", "]"));
  *     Anything the server refused rides that same pill as a second sentence —
  *     a separate notice would be the half the user dismisses;
  *   * the **overlay's own record**, so `orientation` moves and `mediaVersion`
- *     rebuilds the `<img>`'s cache-buster. A rotate leaves the pixels (and
- *     therefore `pixel_sha`) exactly where they were, so this read is the ONLY
- *     thing that can tell the browser the file it decoded is now sideways;
+ *     rebuilds the `<img>`'s cache-buster. A rotate leaves the pixels exactly
+ *     where they were, so the orientation is the ONLY thing that can tell the
+ *     browser the file it decoded is now sideways;
  *   * the **grid card behind us**, whose thumbnail URL carries a version only the
  *     server can recompute. `overlay-change` is the existing channel, and
  *     `fields.pixels` is what tells the grid this was a bitmap change rather
@@ -2974,93 +2974,15 @@ function buildFullImageSrc(data) {
   return getFullImageUrl(data);
 }
 
-/**
- * The version string baked into the media URL's `?v=`.
- *
- * `pixel_sha` alone stopped being enough when rotate-in-place shipped. That
- * rewrites the file's EXIF orientation tag and leaves every pixel exactly where
- * it was, so the sampled content hash does not move — and the browser, which
- * applies the orientation tag itself, would go on painting the bytes it had
- * already decoded. Folding the orientation into the buster is the same decision
- * the thumbnail version makes on the server (`ImageUtils.thumbnail_cache_version`),
- * for the same reason and in the same shape.
- *
- * Orientation 1 — and an orientation nobody has read yet — contributes nothing,
- * so a picture that has never been rotated keeps the URL it has always had.
- *
- * @param {Object|null} data - a picture record.
- * @returns {string|null} `null` when the record says nothing about the bytes.
- */
-function mediaVersion(data) {
-  const sha = data?.pixel_sha ?? null;
-  if (sha === null) return null;
-  const orientation = Number(data?.orientation);
-  return Number.isFinite(orientation) && orientation > 1
-    ? `${sha}o${orientation}`
-    : String(sha);
-}
-
-// The media URL carries `?v=<media version>` so an in-place edit busts any
-// cached copy. That version is not part of the grid payload, though, so on a
-// normal open it only arrives with fetchOverlayMetadata — a beat AFTER the
-// <img> has already started (usually finished) loading the un-busted URL.
-// Letting that late arrival rewrite the src remounts the element
-// (`:key="fullImageSrc"`) and refetches a URL the HTTP cache has never seen:
-// the blank-then-reload flash on the first view of a picture in a session. It
-// also wasted the neighbour preloads, which build the un-busted URL from the
-// same grid records.
-//
-// Learning the version is not an edit, so the buster baked into the shown URL
-// is pinned for as long as that picture keeps displaying the same bytes. It
-// only moves when the picture changes, when nothing was on screen yet (the cold
-// route, still waiting on the format), or when the version goes from one KNOWN
-// value to another — a genuine in-place edit (a rotate, a filter run), where
-// the reload is the point.
-// Freshness is not at risk in between: the media route answers `no-cache,
-// must-revalidate` with an mtime+size ETag, so the pinned URL is revalidated on
-// every load regardless of the buster.
-const displayedMediaVersion = ref(null); // baked into the URL currently rendered
-const knownMediaVersion = ref(null); // latest version observed for that picture
-
-watch(
-  () => {
-    const data = image.value;
-    return {
-      id: data?.id ?? null,
-      version: mediaVersion(data),
-      hasMedia: Boolean(buildFullImageSrc(data)),
-    };
-  },
-  (next, prev) => {
-    const samePicture =
-      prev && next.id !== null && String(next.id) === String(prev.id);
-    if (!samePicture || !prev.hasMedia) {
-      displayedMediaVersion.value = next.version;
-      knownMediaVersion.value = next.version;
-      return;
-    }
-    // A record that simply doesn't carry the fields (any grid-shaped refresh of
-    // the same picture) says nothing about the bytes — keep what we know.
-    if (next.version === null || next.version === knownMediaVersion.value) return;
-    const firstSighting = knownMediaVersion.value === null;
-    knownMediaVersion.value = next.version;
-    if (!firstSighting) displayedMediaVersion.value = next.version;
-  },
-  { immediate: true },
-);
-
-const fullImageSrc = computed(() => {
-  const data = image.value;
-  if (!data) return "";
-  const pinned = displayedMediaVersion.value;
-  // Rebuilt from the live record so a backend-url, format or share-token change
-  // still flows through; only the cache-buster is held back. The pinned version
-  // rides in as `pixel_sha` because that is the field `buildMediaUrl`
-  // interpolates — and it is substituted UNCONDITIONALLY, because the version is
-  // no longer the same string as the sha: leaving the live record alone when the
-  // two "agree" would drop the orientation half of the buster.
-  return buildFullImageSrc({ ...data, pixel_sha: pinned });
-});
+// The media URL carries `?v=o<orientation>` so an in-place rotate busts any
+// cached copy, and `orientation` rides the grid projection — so the version is
+// known from the first paint rather than arriving a beat later with
+// fetchOverlayMetadata. That is what lets this be a plain computed: the URL the
+// neighbour preloads warm (`preloadAdjacentImages`, and the grid's
+// `prefetchFullImage`) is the same URL rendered here, so there is nothing to
+// pin against a late arrival and no blank-then-reload flash to avoid. See
+// `mediaVersion` in utils/media.js.
+const fullImageSrc = computed(() => buildFullImageSrc(image.value));
 const overlayDims = ref({
   width: 1,
   height: 1,
@@ -3513,10 +3435,11 @@ async function fetchOverlayMetadata(imageId) {
     // The picture's own BYTES, where the server is unconditionally
     // authoritative and this component never holds an optimistic value. The
     // local-wins default above is right for everything the overlay can edit and
-    // wrong for these two: they are what `mediaVersion` builds the cache-buster
-    // from, so keeping a stale copy pins `fullImageSrc` to the file the `<img>`
-    // has already decoded. An in-place rotate moves `orientation` and nothing
-    // else, which is exactly the case a local-wins merge would swallow whole.
+    // wrong for these two: `orientation` is what `mediaVersion` builds the
+    // cache-buster from, so keeping a stale copy leaves `fullImageSrc` pointing
+    // at the file the `<img>` has already decoded. An in-place rotate moves it
+    // and nothing else, which is exactly the case a local-wins merge would
+    // swallow whole.
     for (const field of ["pixel_sha", "orientation"]) {
       if (data[field] !== undefined && data[field] !== null) {
         merged[field] = data[field];

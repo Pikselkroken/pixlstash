@@ -1166,6 +1166,7 @@ import {
   isVideo,
   getPictureId,
   buildMediaUrl,
+  displayedAspectRatio,
 } from "../../utils/media.js";
 import ImageImporter from "../io/ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
@@ -4003,11 +4004,20 @@ async function refreshThumbnailUrls(pictureIds) {
       url.startsWith("http") ? url : `${props.backendUrl}${url}`,
     );
     if (absolute === img.thumbnail) continue;
+    // The server's answer is taken VERBATIM, null included. A rotate NULLs the
+    // stored dimensions to re-queue the bitmap, and those are the dimensions of
+    // the bitmap that is now sideways: keeping them (the old `|| img.…`
+    // fallback) held the tile in its pre-rotate shape until the regeneration
+    // sweep landed, and then it jumped. Absent, `displayedAspectRatio` falls
+    // through to the raw dimensions and turns them by the orientation, which is
+    // the shape the regenerated bitmap will have.
+    const width = Number(record.thumbnail_width);
+    const height = Number(record.thumbnail_height);
     next[i] = {
       ...img,
       thumbnail: absolute,
-      thumbnail_width: Number(record.thumbnail_width) || img.thumbnail_width,
-      thumbnail_height: Number(record.thumbnail_height) || img.thumbnail_height,
+      thumbnail_width: width > 0 ? width : null,
+      thumbnail_height: height > 0 ? height : null,
     };
     changed = true;
   }
@@ -5149,23 +5159,8 @@ const allGridImagesLength = computed(() => allGridImages.value?.length ?? 0);
 // listing, not just fetched thumbnails). Missing/zero dimensions (unimported
 // pictures, unprobed videos) fall back to square so justified packing never
 // divides by zero.
-function getGridImageAspectRatio(img) {
-  if (!img) return 1;
-  const tw = Number(img.thumbnail_width);
-  const th = Number(img.thumbnail_height);
-  if (Number.isFinite(tw) && tw > 0 && Number.isFinite(th) && th > 0) {
-    return tw / th;
-  }
-  const w = Number(img.width);
-  const h = Number(img.height);
-  if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) {
-    return w / h;
-  }
-  return 1;
-}
-
 const gridAspectRatios = computed(() =>
-  (allGridImages.value || []).map(getGridImageAspectRatio),
+  (allGridImages.value || []).map(displayedAspectRatio),
 );
 
 const {

@@ -231,11 +231,11 @@ describe("ImageOverlay cold media bootstrap", () => {
     expect(wrapper.find(".overlay-img").exists()).toBe(false);
     expect(wrapper.find(".overlay-image-error").exists()).toBe(false);
 
-    resolveMetadata({ id: 7, format: "png", pixel_sha: "first", tags: [] });
+    resolveMetadata({ id: 7, format: "png", orientation: 6, tags: [] });
     await flush();
     await flush();
     expect(wrapper.find(".overlay-img").attributes("src")).toBe(
-      "http://test/pictures/7.png?v=first",
+      "http://test/pictures/7.png?v=o6",
     );
 
     await wrapper.find(".overlay-img").trigger("error");
@@ -246,16 +246,16 @@ describe("ImageOverlay cold media bootstrap", () => {
 
     expect(wrapper.find(".overlay-image-error").exists()).toBe(false);
     expect(wrapper.find(".overlay-img").attributes("src")).toBe(
-      "http://replacement/pictures/7.png?v=first",
+      "http://replacement/pictures/7.png?v=o6",
     );
   });
 
-  // The flash-and-reload regression: the grid record has no pixel_sha, so the
-  // <img> starts on the un-busted URL and the sha only lands with the metadata
-  // fetch. Adopting it there would swap the src (and, via :key, the element)
-  // for a URL nothing has cached — a blank frame plus a second download of
-  // bytes already on screen.
-  it("keeps the URL it is already loading when pixel_sha lands late", async () => {
+  // The flash-and-reload regression. `orientation` rides the grid projection
+  // (`Picture.grid_fields()`), so the <img> starts on the URL the metadata
+  // fetch will go on to confirm. Nothing about the src may move when that
+  // fetch lands: swapping it would swap the element too (`:key="fullImageSrc"`)
+  // — a blank frame plus a second download of bytes already on screen.
+  it("does not touch the URL when metadata confirms the orientation", async () => {
     let resolveMetadata;
     metadataResponse = new Promise((resolve) => {
       resolveMetadata = resolve;
@@ -265,7 +265,7 @@ describe("ImageOverlay cold media bootstrap", () => {
       props: {
         open: true,
         initialImageId: 7,
-        allImages: [{ id: 7, format: "png", tags: [] }],
+        allImages: [{ id: 7, format: "png", orientation: 6, tags: [] }],
         backendUrl: "http://test",
         tagUpdate: { key: 0, pictureIds: [] },
         descriptionUpdate: { key: 0, pictureIds: [] },
@@ -276,10 +276,16 @@ describe("ImageOverlay cold media bootstrap", () => {
     });
 
     const initialSrc = wrapper.find(".overlay-img").attributes("src");
-    expect(initialSrc).toBe("http://test/pictures/7.png");
+    expect(initialSrc).toBe("http://test/pictures/7.png?v=o6");
     const initialEl = wrapper.find(".overlay-img").element;
 
-    resolveMetadata({ id: 7, format: "png", pixel_sha: "first", tags: [] });
+    resolveMetadata({
+      id: 7,
+      format: "png",
+      orientation: 6,
+      pixel_sha: "first",
+      tags: [],
+    });
     await flush();
     await flush();
 
@@ -287,17 +293,17 @@ describe("ImageOverlay cold media bootstrap", () => {
     expect(wrapper.find(".overlay-img").element).toBe(initialEl);
   });
 
-  // The pin holds the buster steady, it does not disable it: once a sha is
-  // known, a DIFFERENT one means the pixels really were rewritten under the
-  // same id, and that reload is the whole point of the cache-buster.
-  it("does reload when a known pixel_sha changes to another", async () => {
-    metadataResponse = { id: 7, format: "png", pixel_sha: "first", tags: [] };
+  // …and it does reload when the orientation really moves. That is the whole
+  // point of the buster: an in-place rotate rewrites the EXIF tag and copies
+  // every pixel through, so nothing else about the file changes.
+  it("reloads when the orientation changes under the same id", async () => {
+    metadataResponse = { id: 7, format: "png", orientation: 1, tags: [] };
 
     const wrapper = mount(ImageOverlay, {
       props: {
         open: true,
         initialImageId: 7,
-        allImages: [{ id: 7, format: "png", tags: [] }],
+        allImages: [{ id: 7, format: "png", orientation: 1, tags: [] }],
         backendUrl: "http://test",
         tagUpdate: { key: 0, pictureIds: [] },
         descriptionUpdate: { key: 0, pictureIds: [] },
@@ -312,12 +318,12 @@ describe("ImageOverlay cold media bootstrap", () => {
       "http://test/pictures/7.png",
     );
 
-    // A record whose pixels were rewritten in place.
-    wrapper.vm.image = { ...wrapper.vm.image, pixel_sha: "second" };
+    // A record whose file was turned in place.
+    wrapper.vm.image = { ...wrapper.vm.image, orientation: 8 };
     await flush();
 
     expect(wrapper.find(".overlay-img").attributes("src")).toBe(
-      "http://test/pictures/7.png?v=second",
+      "http://test/pictures/7.png?v=o8",
     );
   });
 });
