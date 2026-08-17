@@ -1583,10 +1583,36 @@ the sentence above as covering them.
   standing at the destination filename** resolves outside the folder and is
   refused, which `basename` does nothing about. A *dangling* symlink is the
   sharp case: `os.path.exists` is False for it, so the collision check that
-  follows waves it through, and the containment is the only thing between the
-  request and an `os.replace` writing outside a registered folder. Both are
-  pinned by a negative that goes red when the guard is swapped for
-  `os.path.join`.
+  follows waves it through. Before #1012 the containment was the only thing
+  between the request and an `os.replace` writing outside a registered folder;
+  publication now refuses a taken name outright, so the containment's job is to
+  make that refusal a 4xx naming the file rather than a failed item on a worker
+  thread. Both are pinned by a negative that goes red when the guard is swapped
+  for `os.path.join`.
+- **Publication claims the destination name and never replaces it**
+  (`model_mover.publish_no_clobber`, #1012). Every shelf write that puts a file
+  at its final name — the same-drive move, the cross-drive copy,
+  `POST /model-files` and the ai-toolkit import — goes through one function.
+  `os.replace`, and `os.rename` on POSIX, overwrite in silence, which made the
+  free-destination check only as good as the gap that followed it: on the copy
+  path that gap is a whole checkpoint's copy and digest, and a trainer or
+  ComfyUI writing that name inside it had its file replaced while the move
+  reported `moved` and removed the source. **The claim is one syscall** — a hard
+  link, or an `O_CREAT|O_EXCL` reservation where the filesystem or
+  `fs.protected_hardlinks` will not give one — so there is no instant in which
+  an existing file is gone and ours is not yet there, and a conflict leaves the
+  destination, the source and the hub row exactly as they were. It is the
+  publication the backup writer already used
+  (`library_backup_service._publish_private_temp`).
+- **Publication rolls back what it claimed** if it then cannot drop the
+  temporary name. That failure is ordinary on Windows, where a file another
+  process holds open cannot be unlinked and ComfyUI holds loaded models open;
+  without the rollback it would leave an unregistered copy at the destination
+  *and* a name that refuses every later move of that model, which `os.rename`
+  could never produce because it was one syscall. The two-attempt claim is the
+  only place the two shapes differ in residue: a **crash** between the
+  reservation and the replace (never the link) leaves an empty file at the final
+  name, which is the price of moving at all on a filesystem without hard links.
 - **The relocation target is the one caller-supplied host path in the shelf**
   (`POST /model-folders/{folder_id}/relocate`). Owner-chosen paths are trusted
   here, as reference folders are, so the guard is deliberately narrow —
