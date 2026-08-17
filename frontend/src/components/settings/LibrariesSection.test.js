@@ -24,6 +24,7 @@ vi.mock("vuetify/components", () => ({
 import LibrariesSection from "./LibrariesSection.vue";
 import { listLibraries, setActiveLibrary } from "../../api/libraries";
 import { useLibrarySwitchStore } from "../../stores/useLibrariesStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { copyText } from "../../utils/clipboard";
 
 vi.mock("../../api/libraries", () => ({
@@ -98,6 +99,7 @@ beforeEach(() => {
   listLibraries.mockResolvedValue(structuredClone(LOCAL_RESPONSE));
   confirmMock.mockResolvedValue(true);
   setActiveLibrary.mockResolvedValue({ status: "ok" });
+  copyText.mockResolvedValue(true);
 });
 
 describe("listing", () => {
@@ -409,6 +411,97 @@ describe("teaching the CLI", () => {
     );
     expect(rows[0].find(".libraries-cli__copy").exists()).toBe(true);
     expect(rows[2].find(".libraries-cli__copy").exists()).toBe(true);
+  });
+
+  it("confirms the copy only once the clipboard actually took it", async () => {
+    const wrapper = await settle(mountPane());
+
+    await wrapper.findAll(".libraries-cli")[0].find("button").trigger("click");
+    await nextTick();
+
+    expect(wrapper.findAll(".libraries-cli")[0].text()).toContain("Copied");
+    expect(wrapper.find('[role="status"]').text()).toContain(
+      "Copied pixlstash-cli libraries list",
+    );
+    expect(useNoticeStore().notices).toHaveLength(0);
+  });
+
+  // The clipboard refuses on an insecure context, and "Copied" then leaves the
+  // user pasting whatever was there before.
+  it("says how to copy by hand when the clipboard refuses", async () => {
+    copyText.mockResolvedValue(false);
+    const wrapper = await settle(mountPane());
+
+    await wrapper.findAll(".libraries-cli")[0].find("button").trigger("click");
+    await nextTick();
+
+    expect(wrapper.findAll(".libraries-cli")[0].text()).not.toContain("Copied");
+    expect(wrapper.find('[role="status"]').text()).toBe("");
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("error");
+    // Actionable: it says what to do instead, on both platforms.
+    expect(notice.text).toContain("Ctrl+C");
+    expect(notice.text).toContain("Command-C");
+  });
+
+  // A failure landing late must not wipe a copy that has since succeeded — the
+  // same lie as the reported bug, pointing the other way.
+  it("leaves a later successful copy alone when an earlier one fails", async () => {
+    let failSlowCopy;
+    copyText.mockImplementationOnce(
+      () => new Promise((resolve) => (failSlowCopy = () => resolve(false))),
+    );
+    const wrapper = await settle(mountPane());
+    const rows = wrapper.findAll(".libraries-cli");
+
+    await rows[0].find("button").trigger("click");
+    await rows[1].find("button").trigger("click");
+    await nextTick();
+    expect(rows[1].text()).toContain("Copied");
+
+    failSlowCopy();
+    await nextTick();
+    await nextTick();
+
+    expect(rows[1].text()).toContain("Copied");
+    expect(wrapper.find('[role="status"]').text()).toContain(
+      "pixlstash-cli libraries create <folder>",
+    );
+  });
+
+  it("forgets the confirmation when the dialog closes", async () => {
+    const wrapper = await settle(mountPane());
+    // The stubbed dialog always renders its slot, so open it explicitly:
+    // otherwise closing is not a change and the watcher never runs.
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text() === "Show the commands")
+      .trigger("click");
+
+    await wrapper.findAll(".libraries-cli")[0].find("button").trigger("click");
+    await nextTick();
+    await wrapper.findAll(".libraries-cli-dialog__actions button")[0].trigger(
+      "click",
+    );
+    await nextTick();
+
+    expect(wrapper.find('[role="status"]').text()).toBe("");
+    expect(wrapper.findAll(".libraries-cli")[0].text()).not.toContain("Copied");
+  });
+
+  it("drops its feedback timer when the pane goes away", async () => {
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+    const wrapper = await settle(mountPane());
+
+    await wrapper.findAll(".libraries-cli")[0].find("button").trigger("click");
+    await nextTick();
+    const timer = setTimeoutSpy.mock.results.at(-1).value;
+    wrapper.unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(timer);
+    setTimeoutSpy.mockRestore();
+    clearTimeoutSpy.mockRestore();
   });
 
   it("only shows the one-library primer after a successful one-row response", async () => {
