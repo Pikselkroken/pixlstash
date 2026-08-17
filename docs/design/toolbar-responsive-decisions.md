@@ -365,8 +365,8 @@ mixed stacks waiting):
 |---|---|---|
 | — | everything on the bar | 1577px |
 | dqbar ≤1400 | qsub, the size value label | 1372px |
-| dqbar ≤1180 | the size control, Auto-stack's sentence → "Auto-stack N" | 1153px |
-| dqbar ≤1040 | the page toggles → ⋯, the tier label | 807px |
+| dqbar ≤1180 | the page toggles → ⋯, the tier label | 1026px † |
+| dqbar ≤1040 | the size control, Auto-stack's sentence → "Auto-stack N" | 807px |
 | dqbar ≤820 | Auto-stack → flash + count, the scope pill → icon + dismiss | 630px |
 | toolbar ≤480 | the undo chevron (shared, unchanged) | 598px |
 | toolbar ≤420 | redo (shared); the two runs' gaps → `--space-2` | 526px |
@@ -375,6 +375,27 @@ Between two rungs the count headline takes the difference: it ellipsizes from
 the right, so the number survives and "groups to review" is what goes. A
 `flex-shrink: 6` on it buys that order, because a clipped tail on a sentence
 reads better than "Mixed stac…" on a button.
+
+**Rung order: what has somewhere to go, goes first.** The toggles fold — they
+are still reachable, one click further away — while the size control has no
+destination and hiding it takes the control away outright, so the toggles must
+buy the width before the slider is asked to. They are also the bigger purchase
+(~346px against the slider's ~130px), which is why this order both keeps the
+slider ~140px of bar width longer *and* leaves more slack between every rung:
+the count has to absorb 103px less between 1180 and 1040 than the other order
+asked of it. A slider folded into the ⋯ as a row would keep it further still,
+and was left out: a drag target inside a menu that closes on click is a worse
+control than none, and the value survives the hide either way.
+
+† These two rungs were swapped after the first measurement pass, which had the
+slider going a rung before the toggles that could fold instead. The fold sets
+themselves did not change, so the middle figure is the harness's own measured
+savings re-applied in the new order (1372 − 346), and the floor is unchanged.
+What was re-measured is the shipped app rather than the harness: stepping the
+real Duplicates bar 1900 → 700px of window in 10px steps, the rungs fire at
+exactly 1180 and 1040 of container width, `scrollWidth === clientWidth` at
+every step, no left-group child reaches the tail (worst approach 11px), and the
+size slider is still on the bar down to 1045.
 
 Floor: `128 ⋯ │ [filter ▾] [scope ×] …gap… [⚡ 42] │ [undo] [Settings] [Stats]`.
 The two numbers in the last row are not in conflict: 526px is what the bar
@@ -390,12 +411,13 @@ container query styles descendants, never the container itself.)
 
 **Duplicates ranking, revised:** 1 Undo (never folds or hides) / 2 Settings +
 Stats (never fold; the whole point of this amendment) / 3 Tier gate (never
-folds, compresses at 1040) / 4 Count (never folds; ellipsizes between rungs,
+folds, compresses at 1180) / 4 Count (never folds; ellipsizes between rungs,
 the number never truncates) / 5 Scope pill (never folds while scoped,
-compresses at 820) / 6 Auto-stack (never folds, compresses at 1180 and 820) /
-7 Redo + chevron (shared 420/480) / 8 Decided + Mixed stacks (fold to ⋯ rows at
-1040, unless showing "Back to review") / 9 Size slider (hides at 1180) /
-10 qsub (hides at 1400).
+compresses at 820) / 6 Auto-stack (never folds, compresses at 1040 and 820) /
+7 Redo + chevron (shared 420/480) / 8 Size slider (hides at 1040; ranked above
+the toggles because hiding it removes a control, where folding them only moves
+one) / 9 Decided + Mixed stacks (fold to ⋯ rows at 1180, unless showing "Back
+to review") / 10 qsub (hides at 1400).
 
 **Acceptance, and it is arithmetic rather than judgement.** At every container
 width, with the worst content the bar can hold: the bar does not overflow its

@@ -3737,7 +3737,7 @@ view holds in the other (`docs/design/toolbar-responsive-decisions.md`). Both
 bars also share the `toolbar` container name and the ⋯ overflow's collapse
 ladder, so the shared chrome degrades identically at every width. The queue's
 own ⋯ sits at the end of its toggle run and holds the Decided and Mixed stacks
-toggles, which fold into it at ≤1040 — except while one of them reads "Back to
+toggles, which fold into it at ≤1180 — except while one of them reads "Back to
 review", when it is the visible way out of a sub-page and stays on the bar
 (amendment #4). Settings, the stats toggle and undo never fold at any width,
 and the bar's shrink chain makes that structural rather than a promise the
