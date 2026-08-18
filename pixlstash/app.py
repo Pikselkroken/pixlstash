@@ -177,7 +177,7 @@ def _prompt_legacy_identity_migration(library) -> bool:
             "them into the hub, or start PixlStash in an interactive terminal "
             "to be asked.",
             library.path,
-            library.path,
+            shlex.quote(library.path),
         )
         return False
 

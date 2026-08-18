@@ -280,7 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Approve moving one older library's owner and API tokens out of "
             "its vault.db and into the hub. Startup deliberately will not "
             "guess which vault to trust on its own; an interactive terminal "
-            "launch offers this same approval as a `[Y/n]` prompt instead, "
+            "launch offers this same approval as a `[y/N]` prompt instead, "
             "so this command is for a non-interactive upgrade (a service, a "
             "container, a script) or for approving it ahead of time. This "
             "records the approval and nothing else — the copy, the "
