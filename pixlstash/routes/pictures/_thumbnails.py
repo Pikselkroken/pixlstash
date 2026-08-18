@@ -86,6 +86,51 @@ def register_routes(router, server):
         thumbnail_memory_cache[picture_id] = data
         return data
 
+    def discard_stale_thumbnail(picture_id: int, file_path: str, thumb_path: str):
+        """Drop a cached thumbnail whose source file has been rewritten since.
+
+        Checked for EVERY picture, not only reference-folder ones. A reference
+        folder's source can be swapped under a stable container path, and an
+        in-place rotate rewrites a library-managed original the same way: the
+        pixels are copied through and only the EXIF orientation tag changes, so
+        the stored bitmap is now sideways relative to the file. ``apply_orientation``
+        NULLs ``thumbnail_width``/``height`` to re-queue the regeneration, but
+        that runs on a background sweep — until it lands this route was handing
+        back the pre-rotate bitmap, which is why a rotate used to paint the wrong
+        way round and only correct itself on a second refresh.
+
+        Both caches go, not just the file: the in-memory copy is keyed on the
+        picture id alone and would otherwise be served in its place.
+
+        Returns:
+            Whether the thumbnail was stale (and has now been discarded).
+        """
+        source_path = ImageUtils.resolve_picture_path(
+            server.vault.image_root, file_path
+        )
+        if not source_path or not os.path.exists(source_path):
+            return False
+        try:
+            if os.path.getmtime(source_path) <= os.path.getmtime(thumb_path):
+                return False
+        except OSError as exc:
+            logger.debug(
+                "Could not compare thumbnail mtime for id=%s (%s); serving the "
+                "cached bitmap",
+                picture_id,
+                exc,
+            )
+            return False
+        logger.debug(
+            "Thumbnail stale (source newer): id=%s source=%s", picture_id, source_path
+        )
+        thumbnail_memory_cache.pop(picture_id, None)
+        try:
+            os.remove(thumb_path)
+        except OSError as exc:
+            logger.warning("Failed to remove stale thumbnail %s: %s", thumb_path, exc)
+        return True
+
     def cache_thumbnail_bytes(picture_id: int, thumbnail_bytes: bytes) -> None:
         if not thumbnail_bytes:
             return
@@ -126,40 +171,7 @@ def register_routes(router, server):
 
         thumb_path = ImageUtils.get_thumbnail_path(vault.image_root, pic.file_path)
         if thumb_path and os.path.exists(thumb_path):
-            # For reference-folder pictures (absolute file_path) the source file
-            # can change when a Docker volume is remapped to a different host
-            # directory while the container path stays the same.  If the source
-            # file is newer than the cached thumbnail we treat it as stale and
-            # regenerate so the user always sees the correct image.
-            stale = False
-            if pic.file_path and os.path.isabs(pic.file_path):
-                source_path = ImageUtils.resolve_picture_path(
-                    vault.image_root, pic.file_path
-                )
-                if source_path and os.path.exists(source_path):
-                    try:
-                        source_mtime = os.path.getmtime(source_path)
-                        thumb_mtime = os.path.getmtime(thumb_path)
-                        if source_mtime > thumb_mtime:
-                            stale = True
-                            logger.debug(
-                                "Thumbnail stale (source newer): id=%s source=%s",
-                                id,
-                                source_path,
-                            )
-                            try:
-                                os.remove(thumb_path)
-                            except Exception as exc:
-                                logger.warning(
-                                    "Failed to remove stale thumbnail %s: %s",
-                                    thumb_path,
-                                    exc,
-                                )
-                    except Exception as exc:
-                        logger.debug(
-                            "Could not compare thumbnail mtime for id=%s: %s", id, exc
-                        )
-            if not stale:
+            if not discard_stale_thumbnail(id, pic.file_path, thumb_path):
                 elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
                 logger.debug(
                     "Thumbnail GET cache-hit: id=%s path=%s elapsed_ms=%.1f",
@@ -190,33 +202,9 @@ def register_routes(router, server):
         lock = get_thumbnail_lock(id)
         async with lock:
             if thumb_path and os.path.exists(thumb_path):
-                # Re-check staleness inside the lock.
-                recheck_stale = False
-                if pic.file_path and os.path.isabs(pic.file_path):
-                    source_path = ImageUtils.resolve_picture_path(
-                        vault.image_root, pic.file_path
-                    )
-                    if source_path and os.path.exists(source_path):
-                        try:
-                            if os.path.getmtime(source_path) > os.path.getmtime(
-                                thumb_path
-                            ):
-                                recheck_stale = True
-                                try:
-                                    os.remove(thumb_path)
-                                except Exception as exc:
-                                    logger.warning(
-                                        "Failed to remove stale thumbnail on recheck %s: %s",
-                                        thumb_path,
-                                        exc,
-                                    )
-                        except Exception as exc:
-                            logger.warning(
-                                "Failed to compare thumbnail mtime on recheck %s: %s",
-                                thumb_path,
-                                exc,
-                            )
-                if not recheck_stale:
+                # Re-check staleness inside the lock: another request may have
+                # regenerated it while this one waited.
+                if not discard_stale_thumbnail(id, pic.file_path, thumb_path):
                     elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
                     logger.debug(
                         "Thumbnail GET cache-hit-after-wait: id=%s path=%s elapsed_ms=%.1f",
@@ -302,7 +290,6 @@ def register_routes(router, server):
                 )
 
             if status == "memory-only" and thumbnail_bytes:
-                cache_thumbnail_bytes(id, thumbnail_bytes)
                 elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
                 logger.warning(
                     "Thumbnail GET generated-memory-only: id=%s source=%s elapsed_ms=%.1f",

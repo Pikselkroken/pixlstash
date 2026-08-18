@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   buildMediaUrl,
+  displayedAspectRatio,
   isFaceDrag,
   isFileDrag,
   isInternalImageDrag,
@@ -131,10 +132,69 @@ describe('buildMediaUrl', () => {
         backendUrl: '/api/v1',
         image: { id: 7, format: 'PNG', pixel_sha: 'abc' },
       }),
-    ).toBe('/api/v1/pictures/7.png?v=abc')
+    ).toBe('/api/v1/pictures/7.png')
+  })
+
+  // The buster is the EXIF orientation, not the content hash: an in-place
+  // rotate copies every pixel through, so the hash cannot express the one edit
+  // that needs busting — and `orientation` is in the grid projection, so the
+  // lightbox and both full-image preloaders build the same URL from the same
+  // record. A picture that has never been turned keeps its bare URL.
+  it('busts the URL on the orientation, not the content hash', () => {
+    expect(
+      buildMediaUrl({
+        backendUrl: '/api/v1',
+        image: { id: 7, format: 'PNG', pixel_sha: 'abc', orientation: 6 },
+      }),
+    ).toBe('/api/v1/pictures/7.png?v=o6')
+    expect(
+      buildMediaUrl({
+        backendUrl: '/api/v1',
+        image: { id: 7, format: 'PNG', orientation: 1 },
+      }),
+    ).toBe('/api/v1/pictures/7.png')
   })
 
   it('does not turn an id-only placeholder into a JSON endpoint media URL', () => {
     expect(buildMediaUrl({ backendUrl: '/api/v1', image: { id: 7 } })).toBe('')
+  })
+})
+
+describe('displayedAspectRatio', () => {
+  it('takes the thumbnail bitmap as-is — it is already EXIF-transposed', () => {
+    expect(
+      displayedAspectRatio({
+        thumbnail_width: 300,
+        thumbnail_height: 200,
+        width: 3000,
+        height: 2000,
+        orientation: 6,
+      }),
+    ).toBeCloseTo(1.5)
+  })
+
+  // The window an in-place rotate opens: apply_orientation NULLs the thumbnail
+  // dimensions to re-queue the bitmap, so a turned card sits on the RAW
+  // width/height — which do not swap — until the sweep lands. Unswapped here,
+  // the tile keeps its pre-rotate shape and then jumps.
+  it('swaps the raw dimensions for a quarter-turned picture', () => {
+    expect(displayedAspectRatio({ width: 4000, height: 3000 })).toBeCloseTo(4 / 3)
+    expect(
+      displayedAspectRatio({ width: 4000, height: 3000, orientation: 1 }),
+    ).toBeCloseTo(4 / 3)
+    // 3 and 2 are the 180deg / mirrored-horizontal cases: still landscape.
+    expect(
+      displayedAspectRatio({ width: 4000, height: 3000, orientation: 3 }),
+    ).toBeCloseTo(4 / 3)
+    for (const orientation of [5, 6, 7, 8]) {
+      expect(
+        displayedAspectRatio({ width: 4000, height: 3000, orientation }),
+      ).toBeCloseTo(3 / 4)
+    }
+  })
+
+  it('falls back to square rather than dividing by zero', () => {
+    expect(displayedAspectRatio(null)).toBe(1)
+    expect(displayedAspectRatio({ width: 0, height: 0 })).toBe(1)
   })
 })

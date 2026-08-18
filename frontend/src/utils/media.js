@@ -307,6 +307,80 @@ export function getPictureId(id) {
   return String(id);
 }
 
+/**
+ * The `?v=` token for a picture's full-size media URL, or `""` for none.
+ *
+ * **Keyed on `orientation` alone, and that is the whole point.** An in-place
+ * rotate rewrites the EXIF orientation tag and copies every pixel through, so
+ * the content hash does not move — and the browser, which applies the tag
+ * itself, goes on painting the bytes it already decoded. `pixel_sha` was the
+ * token here and could not express the one edit that needs it.
+ *
+ * It has to be derivable from a *grid* record, because that is what the
+ * lightbox opens on and what `prefetchFullImage` / `preloadAdjacentImages`
+ * build their warm-up URLs from. All three must agree on the URL or the
+ * lightbox reads a stale prefetch out of the memory cache, which is exactly
+ * the bug this replaced: `pixel_sha` is not in the grid projection and only
+ * arrives with `/pictures/{id}/metadata`, a beat after the `<img>` has loaded.
+ * `orientation` is, so every builder produces the same URL from the first
+ * paint and no pinning is needed. (See `Picture.grid_fields()`.)
+ *
+ * Orientation 1 — and a record that carries none — contributes nothing, so a
+ * picture that has never been turned keeps the URL it has always had.
+ *
+ * @param {Object|null} image - a grid or metadata picture record.
+ * @returns {string} `"o<orientation>"` or `""`.
+ */
+export function mediaVersion(image) {
+  const orientation = Number(image?.orientation);
+  return Number.isFinite(orientation) && orientation > 1
+    ? `o${orientation}`
+    : "";
+}
+
+/** Orientations that put the picture on its side — 90° either way. */
+const QUARTER_TURNED_ORIENTATIONS = new Set([5, 6, 7, 8]);
+
+/**
+ * The aspect ratio a picture is DISPLAYED at, for justified packing.
+ *
+ * Two dimension pairs live on a picture record and only one of them is in
+ * display space:
+ *
+ *   * `thumbnail_width`/`height` are the stored bitmap's, rendered from the
+ *     EXIF-transposed decode — already turned, never turn them again;
+ *   * `width`/`height` are the RAW stored ones and do **not** move when a
+ *     picture is rotated in place (that rewrites one tag and copies every pixel
+ *     byte through), so the quarter turns have to be applied here.
+ *
+ * The fallback is not a rare path for a turned picture: `apply_orientation`
+ * NULLs the thumbnail dimensions to re-queue the bitmap, so every card sits on
+ * `width`/`height` from the rotate until the regeneration sweep lands. Without
+ * the swap the tile keeps its pre-rotate shape and then jumps when the
+ * regenerated dimensions arrive — the reflow-then-repaint a rotate used to do
+ * in two visible steps.
+ *
+ * @param {Object|null} image - a grid or metadata picture record.
+ * @returns {number} width/height, or 1 when the record has no usable pair
+ *   (unimported pictures, unprobed videos) so packing never divides by zero.
+ */
+export function displayedAspectRatio(image) {
+  if (!image) return 1;
+  const tw = Number(image.thumbnail_width);
+  const th = Number(image.thumbnail_height);
+  if (Number.isFinite(tw) && tw > 0 && Number.isFinite(th) && th > 0) {
+    return tw / th;
+  }
+  const w = Number(image.width);
+  const h = Number(image.height);
+  if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) {
+    return QUARTER_TURNED_ORIENTATIONS.has(Number(image.orientation))
+      ? h / w
+      : w / h;
+  }
+  return 1;
+}
+
 export function buildMediaUrl({ backendUrl, image, format } = {}) {
   if (!backendUrl || !image || !image.id) return "";
   const ext = MediaFormat(format || image);
@@ -314,7 +388,8 @@ export function buildMediaUrl({ backendUrl, image, format } = {}) {
   // at the JSON picture-detail resource, whose 200 response cannot be decoded
   // by <img>/<video> elements.
   if (!ext) return "";
-  const cacheBuster = image.pixel_sha ? `?v=${image.pixel_sha}` : "";
+  const version = mediaVersion(image);
+  const cacheBuster = version ? `?v=${version}` : "";
   return `${backendUrl}/pictures/${image.id}.${ext}${cacheBuster}`;
 }
 

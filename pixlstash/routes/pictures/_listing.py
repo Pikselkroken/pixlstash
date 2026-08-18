@@ -128,6 +128,15 @@ class GridPicture(BaseModel):
     reference_folder_id: int | None = Field(
         None, description="Source reference-folder id for externally-referenced files."
     )
+    orientation: int | None = Field(
+        None,
+        description=(
+            "Stored EXIF orientation, 1-8, or null when it has not been read "
+            "yet. Carried in the grid projection because it is the cache-buster "
+            "for the full-size media URL: an in-place rotate changes nothing "
+            "else about the picture."
+        ),
+    )
     file_path: str | None = Field(
         None,
         description="Path relative to the image root (omitted when grid_lite=true).",

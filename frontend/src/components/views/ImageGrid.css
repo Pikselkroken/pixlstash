@@ -1111,3 +1111,41 @@
   align-items: center;
   color: rgb(var(--v-theme-primary));
 }
+
+/* ── In-flight rotate ───────────────────────────────────────────────────────
+   A rotate lands as ONE visual change — the packed cell's shape and the bitmap
+   inside it change in the same frame — which means it is deliberately NOT
+   instant: `applyRotatedCards` decodes the new thumbnail before committing
+   either. This is what fills that beat, so an unconfirmed, dialog-less gesture
+   is visibly heard.
+
+   It sits over an arbitrary photo, so `--scrim-photo` with an `on-dark-surface`
+   glyph (visual-language §7 "scrims"), matching the purge badge above. The icon
+   names the DIRECTION rather than spinning: which way it was asked to turn is
+   the one thing worth echoing back on an action with no confirmation step. */
+.thumbnail-rotating-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-raised);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim-photo);
+  border-radius: var(--radius-md);
+  pointer-events: none;
+  animation: thumbnail-rotating-in var(--dur-2) var(--ease-decelerate);
+}
+
+.thumbnail-rotating-icon {
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xl);
+}
+
+@keyframes thumbnail-rotating-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

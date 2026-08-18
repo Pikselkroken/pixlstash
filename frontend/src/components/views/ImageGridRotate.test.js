@@ -13,7 +13,7 @@
 // re-reads it. That is what the first test asserts: before vs after, same
 // picture id, and the dimensions in the version back where they started.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { afterEach, describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 import { ref } from "vue";
@@ -125,9 +125,51 @@ function rotateCalls() {
     .map(([, body]) => body);
 }
 
+// jsdom never fetches a resource, so an `<img>` handed a src fires neither
+// `load` nor `error` and simply never settles. `applyRotatedCards` decodes the
+// new bitmap BEFORE it writes anything — that is the whole point of it, and it
+// is why the tile's shape and its picture change in the same frame — so without
+// a stub every rotate here would sit out its own timeout.
+//
+// Controllable rather than automatic: `holdBitmaps` is what lets a test observe
+// the in-between state and prove the commit really is waiting.
+let thumbnailDims = { thumbnail_width: 1600, thumbnail_height: 1200 };
+let pendingBitmaps = [];
+let holdBitmaps = false;
+let RealImage;
+
+function settleBitmaps() {
+  const loading = pendingBitmaps;
+  pendingBitmaps = [];
+  for (const probe of loading) probe.onload?.();
+}
+
+/** Let every awaited read, decode and re-render settle. */
+async function flushRotate() {
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  if (!holdBitmaps) settleBitmaps();
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
 beforeEach(() => {
   setActivePinia(createPinia());
+  pendingBitmaps = [];
+  holdBitmaps = false;
+  RealImage = globalThis.Image;
+  globalThis.Image = class StubImage {
+    set src(value) {
+      this._src = value;
+      pendingBitmaps.push(this);
+    }
+    get src() {
+      return this._src;
+    }
+    decode() {
+      return Promise.resolve();
+    }
+  };
   thumbnailVersion = "1600x1200";
+  thumbnailDims = { thumbnail_width: 1600, thumbnail_height: 1200 };
   apiGet.mockReset();
   apiPost.mockReset();
   apiPatch.mockReset();
@@ -152,14 +194,17 @@ beforeEach(() => {
         data: {
           42: {
             thumbnail: `/pictures/thumbnails/42.webp?v=${thumbnailVersion}`,
-            thumbnail_width: 1600,
-            thumbnail_height: 1200,
+            ...thumbnailDims,
           },
         },
       };
     }
     return { data: {} };
   });
+});
+
+afterEach(() => {
+  globalThis.Image = RealImage;
 });
 
 describe("ImageGrid — rotate in place", () => {
@@ -172,9 +217,13 @@ describe("ImageGrid — rotate in place", () => {
     // Two quarter-turns the same way. The dimensions are identical either side
     // of them — the server's orientation component is the only thing that moved.
     thumbnailVersion = "1200x1600o6";
-    await wrapper.vm.rotateSelectedPictures("cw");
+    const firstTurn = wrapper.vm.rotateSelectedPictures("cw");
+    await flushRotate();
+    await firstTurn;
     thumbnailVersion = "1600x1200o3";
-    await wrapper.vm.rotateSelectedPictures("cw");
+    const secondTurn = wrapper.vm.rotateSelectedPictures("cw");
+    await flushRotate();
+    await secondTurn;
 
     const after = thumbnailOf(wrapper);
     expect(rotateCalls()).toEqual([
@@ -199,7 +248,9 @@ describe("ImageGrid — rotate in place", () => {
     seedCard(wrapper);
 
     thumbnailVersion = "1200x1600o6";
-    await wrapper.vm.rotateSelectedPictures("ccw");
+    const turn = wrapper.vm.rotateSelectedPictures("ccw");
+    await flushRotate();
+    await turn;
 
     expect(thumbnailOf(wrapper)).toBe(
       "/api/v1/pictures/thumbnails/42.webp?v=1200x1600o6",
@@ -249,6 +300,92 @@ describe("ImageGrid — rotate in place", () => {
     wrapper.unmount();
   });
 
+  it("writes nothing until the new bitmap is decoded", async () => {
+    // The two-paint bug, asserted at its source. A turned picture changes the
+    // shape of the packed cell (from `orientation`, via /metadata) and the
+    // bitmap inside it (from POST /pictures/thumbnails), and applying each as it
+    // arrived is what made a rotate happen twice on screen: the cell flipped to
+    // portrait first, stretching the old landscape bitmap into it, and only
+    // then did the picture turn.
+    //
+    // So the card must not move AT ALL while the bitmap is still in flight —
+    // not the URL, and not the fields the aspect ratio is derived from.
+    holdBitmaps = true;
+    // What the server really reports right after a rotate: `apply_orientation`
+    // NULLs the stored dimensions to re-queue the bitmap, so the aspect has to
+    // fall through to the raw pair turned by the orientation.
+    thumbnailDims = { thumbnail_width: null, thumbnail_height: null };
+    const wrapper = mountGrid();
+    await wrapper.vm.$nextTick();
+    seedCard(wrapper);
+    const before = { ...wrapper.vm.allGridImages[0] };
+
+    thumbnailVersion = "1200x1600o6";
+    const turn = wrapper.vm.rotateSelectedPictures("cw");
+    await flushRotate();
+
+    // Both reads have answered by now — only the decode is outstanding.
+    expect(pendingBitmaps.length).toBe(1);
+    const held = wrapper.vm.allGridImages[0];
+    expect(held.thumbnail).toBe(before.thumbnail);
+    expect(held.thumbnail_width).toBe(before.thumbnail_width);
+    expect(held.thumbnail_height).toBe(before.thumbnail_height);
+    expect(held.orientation).toBe(before.orientation);
+
+    settleBitmaps();
+    await turn;
+    await wrapper.vm.$nextTick();
+
+    const after = wrapper.vm.allGridImages[0];
+    expect(after.thumbnail).toContain("1200x1600o6");
+    // Landed together: the server reports no dimensions until the background
+    // regeneration runs, so the aspect falls through to the raw pair turned by
+    // the orientation — the shape the regenerated bitmap will have.
+    expect(after.thumbnail_width).toBeNull();
+    expect(after.thumbnail_height).toBeNull();
+    wrapper.unmount();
+  });
+
+  it("marks the tile in flight, with the direction it was asked to turn", async () => {
+    // The gesture has no dialog and no confirmation, and the commit is now
+    // deliberately a beat late (it waits for the decode above). Something has to
+    // say the click was heard, and it says WHICH WAY, because that is the only
+    // part of an instant, unconfirmed action a user cannot otherwise check.
+    holdBitmaps = true;
+    const wrapper = mountGrid();
+    await wrapper.vm.$nextTick();
+    seedCard(wrapper);
+
+    const turn = wrapper.vm.rotateSelectedPictures("ccw");
+    await flushRotate();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.rotatingIconFor({ id: 42 })).toBe("mdi-file-rotate-left");
+
+    settleBitmaps();
+    await turn;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.rotatingIconFor({ id: 42 })).toBeNull();
+    wrapper.unmount();
+  });
+
+  it("clears the in-flight mark when the rotate fails", async () => {
+    // Otherwise a failed gesture leaves the tile scrimmed for the rest of the
+    // session, which reads as "still working" for something that has stopped.
+    apiPost.mockImplementation(async (url) => {
+      if (String(url ?? "").includes("/pictures/rotate")) {
+        throw new Error("nope");
+      }
+      return { data: {} };
+    });
+    const wrapper = mountGrid();
+    await wrapper.vm.$nextTick();
+    seedCard(wrapper);
+
+    await wrapper.vm.rotateSelectedPictures("cw");
+    expect(wrapper.vm.rotatingIconFor({ id: 42 })).toBeNull();
+    wrapper.unmount();
+  });
+
   it("refreshes the tile when the lightbox reports a bytes change", async () => {
     // The overlay owns its own picture and rotates it directly; `overlay-change`
     // with `fields.pixels` is how the card behind it learns to re-read.
@@ -259,9 +396,7 @@ describe("ImageGrid — rotate in place", () => {
 
     thumbnailVersion = "1200x1600o6";
     wrapper.vm.handleOverlayChange({ imageId: 42, fields: { pixels: true } });
-    // The handler fans out two awaited reads; let both settle.
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
+    await flushRotate();
 
     expect(thumbnailOf(wrapper)).not.toBe(before);
     wrapper.unmount();

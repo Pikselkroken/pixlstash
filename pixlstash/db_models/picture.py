@@ -1193,6 +1193,13 @@ class Picture(SQLModel, table=True):
             "text_score",
             "reference_folder_id",
             "file_path",
+            # The full-size media URL's `?v=` token (`mediaVersion` in
+            # frontend/src/utils/media.js). An in-place rotate rewrites only the
+            # EXIF orientation tag, so nothing else in this projection moves when
+            # a picture is turned — without it the lightbox, the grid's
+            # full-image prefetch and the neighbour preloads all build the same
+            # unchanged URL and the browser repaints the pre-rotate bytes.
+            "orientation",
         }
 
     @classmethod

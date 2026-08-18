@@ -3838,6 +3838,40 @@ ComfyUI provenance lives in. A format with no writer (and any reference-folder
 original) is reported in `unsupported_picture_ids`, and the caller falls back to
 the `rotate` **image plugin**, which produces a rotated copy.
 
+**The tag is only half of it: one renderer in this stack is the browser, and it
+turns JPEG and nothing else.** Re-measured 2026-08-18 (Chromium 148.0.7778.96,
+Firefox 150.0.2) by writing a tag with `write_orientation` and reading back
+`naturalWidth`/`naturalHeight`: a JPEG's is applied by both, a PNG's `eXIf`
+chunk is ignored by both — exactly like WebP's. The compatibility table in
+`orientation.py` claimed PNG was honoured, nothing checked it, and a rotated PNG
+therefore showed a turned thumbnail (the backend transposes on every decode)
+beside an unturned full view. A ComfyUI library is around five-sixths PNG, so
+that was most of the feature.
+
+The fix keeps the write a metadata splice and moves the burden to the read:
+`GET /pictures/{id}.{ext}` (`routes/pictures/_serving.py`) serves any format
+outside `BROWSER_ORIENTED_FORMATS` **already transposed**, and JPEG untouched
+because transposing it too would turn it twice on screen. Three consequences
+worth knowing:
+
+- The render is disk-cached beside the original as `{stem}_oriented{ext}`, on
+  the same validity rule as the watermark cache — the cached file must be at
+  least as new as the source, so the next rotate invalidates it by rewriting the
+  original. Reference-folder pictures are rendered per request instead: this
+  library does not write beside the user's own files, the same rule that puts
+  their thumbnails under `.ref_thumbs`.
+- **Re-encoding drops PNG text chunks, so they are carried across explicitly.**
+  This response is what "Save image as" hands the user, and a saved copy of a
+  rotated picture that had quietly lost its `workflow` / `prompt` would be a
+  worse bug than the unturned view. The stored file is untouched regardless.
+- Anything already on the re-encode path — the HEIC→JPEG transcode, watermark
+  compositing — is transposed too, JPEG included, because PIL drops the EXIF
+  block on save and the tag would not survive to be applied.
+
+`tests/test_inline_rotate.py` asserts this on the **response bytes**, not on the
+file or the column: both of those were correct throughout, which is precisely
+why nothing caught it.
+
 | `op_type` | Recorded by | Undo | Redo | `summary` |
 |---|---|---|---|---|
 | `pictures.rotate` | `POST /pictures/rotate` (one row + a `batch_id`) | writes the orientation the files had | writes the orientation the rotate produced | "Rotated 5 pictures right" |
