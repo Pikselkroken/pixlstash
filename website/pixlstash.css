@@ -404,15 +404,6 @@ a {
   line-height: 1.55;
 }
 
-.method-warning code {
-  font-family: var(--mono);
-  font-size: 0.9em;
-  color: var(--warning);
-  background: color-mix(in srgb, var(--warning) 16%, var(--panel-strong));
-  border-radius: 4px;
-  padding: 1px 5px;
-}
-
 .method-warning a {
   color: var(--warning);
   font-weight: 600;
