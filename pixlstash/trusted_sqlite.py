@@ -244,14 +244,19 @@ def _is_private_group(uid: int, gid: int) -> bool:
     (``info.st_uid == uid``), so nothing here relaxes a root-owned ancestor.
 
     Any lookup failure returns False, so the caller refuses rather than trusts
-    an answer it did not get.
+    an answer it did not get. ``OverflowError`` is in that list because the two
+    modules disagree about the same input: measured on CPython 3.12,
+    ``grp.getgrgid(-2)`` raises ``OverflowError`` while ``pwd.getpwuid(-2)``
+    raises ``KeyError``. A ``st_gid`` from the kernel is a ``gid_t`` and cannot
+    be out of range, so this is unreachable from the caller — but a fail-closed
+    promise that holds only for the inputs one caller happens to pass is not one.
     """
     if grp is None or pwd is None:
         return False
     try:
         owner = pwd.getpwuid(uid).pw_name
         group = grp.getgrgid(gid)
-    except (KeyError, OSError) as exc:
+    except (KeyError, OSError, OverflowError) as exc:
         logger.warning(
             "Could not resolve uid %d / gid %d while checking whether a "
             "group-writable SQLite directory is exposed (%s); treating the "

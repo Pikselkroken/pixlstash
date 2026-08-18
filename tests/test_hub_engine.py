@@ -743,6 +743,20 @@ class TestGroupWritableDirectories:
         """An id no name service knows must read as shared, not as private."""
         assert _is_private_group(os.geteuid(), 0x7FFFFFFE) is False
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
+    def test_the_real_lookups_fail_closed_on_an_out_of_range_id(self):
+        """Out of range is a different exception, and the two modules disagree.
+
+        ``grp.getgrgid`` raises ``OverflowError`` past the end of ``gid_t``,
+        where the unresolvable id above raises ``KeyError`` and where
+        ``pwd.getpwuid`` raises ``KeyError`` for the same value. Unreachable from
+        ``_require_owned_directory``, whose gid comes from the kernel — but the
+        helper promises to fail closed on *any* lookup failure, and an escaping
+        ``OverflowError`` would make that a startup crash instead.
+        """
+        assert _is_private_group(os.geteuid(), 2**32) is False
+        assert _is_private_group(os.geteuid(), -2) is False
+
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
     def test_an_unresolvable_group_fails_closed(self, tmp_path, monkeypatch):
         """A lookup that did not work must not be read as "nobody else"."""
