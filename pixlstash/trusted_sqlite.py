@@ -44,6 +44,20 @@ timestamp comparison bought same-uid swap detection nobody needed and refused
 roughly a fifth of concurrent opens, because SQLite creating our own WAL is
 indistinguishable from tampering when you are watching a directory's mtime.
 
+The same rule cuts the other way, and cost a startup: ``mode & 0o022`` is a
+*proxy* for "another principal can write here", and for the group bit the proxy
+is wrong wherever the group is the owner's own. Debian and Ubuntu give every
+account a group of its own and default to umask 002, so a directory this app
+created before it started passing 0700 is 0775 with a one-member group — no
+other principal at all, and the blanket test refused it and exited 1 with no way
+back except a manual ``chmod``. ``_is_private_group`` names the actor instead of
+the bit: group-write is tolerated only when the group is the owner's own,
+same-named, and has no other member, on a directory this user owns. World-write
+is refused as before, root-owned ancestors are refused as before, and the two
+limits of the group answer — supplementary members only, and NSS resolved in
+this process — are recorded as accepted risk beside W17 in
+``docs/backend_architecture.md`` §13.
+
 **Windows, and what this cannot check.** Python exposes neither owner SID nor
 directory DACL portably, so the "another principal cannot write this directory"
 test — POSIX's ``mode & 0o022`` — has no Windows implementation. An earlier
@@ -111,8 +125,16 @@ a record kept there would exist only on the machine that wrote it.
 from __future__ import annotations
 
 import os
+import shlex
 import stat
 from dataclasses import dataclass
+
+try:  # POSIX-only; only ever consulted where os.geteuid() also exists.
+    import grp
+    import pwd
+except ImportError:  # pragma: no cover - Windows
+    grp = None  # type: ignore[assignment]
+    pwd = None  # type: ignore[assignment]
 
 from pixlstash.pixl_logging import get_logger
 
@@ -153,13 +175,98 @@ def _require_owned_directory(path: str, *, immediate: bool) -> os.stat_result:
             f"SQLite directory {path} is owned by uid {info.st_uid}, not this "
             "user or root."
         )
-    writable = stat.S_IMODE(info.st_mode) & 0o022
-    if writable and (immediate or not (info.st_mode & stat.S_ISVTX)):
+    exposed = stat.S_IMODE(info.st_mode) & 0o022
+    # `info.st_uid == uid`, not the `(uid, 0)` the ownership check above admits.
+    # The tolerance is only ever about *this* user's own group — that is why the
+    # helper is asked about `uid` rather than `info.st_uid`, which by itself
+    # already refuses `root:root`, whose members are administrators rather than
+    # one single owner. What the precondition adds is the odder shape:
+    # `chown root:<this user's group>` with g+w, where the group name does match.
+    # A directory this user does not own keeps the blanket refusal either way.
+    if (
+        exposed == stat.S_IWGRP
+        and info.st_uid == uid
+        and _is_private_group(uid, info.st_gid)
+    ):
+        logger.info(
+            "SQLite directory %s is group-writable (gid %d), accepted because "
+            "that group is this user's own and has no other member, so no other "
+            "account can write it. Tighten it with %s if that is not intended.",
+            path,
+            info.st_gid,
+            f"chmod g-w {shlex.quote(path)}",
+        )
+        exposed = 0
+    if exposed and (immediate or not (info.st_mode & stat.S_ISVTX)):
         raise TrustedSQLiteLocationError(
             f"SQLite directory {path} is group/world-writable; another account "
-            "could replace the database or its WAL/SHM files."
+            "could replace the database or its WAL/SHM files. Tighten it with "
+            f"chmod g-w,o-w {shlex.quote(path)}"
         )
     return info
+
+
+def _is_private_group(uid: int, gid: int) -> bool:
+    """True when *gid* is *uid*'s own one-member group.
+
+    ``mode & 0o020`` is only an exposure when somebody else is in the group, and
+    on Debian, Ubuntu and every other distro that runs ``useradd -U`` nobody
+    else is: each account gets a group of its own, named after it, and the
+    default umask is 002. Every directory created before this code started
+    passing 0700 explicitly is therefore 0775 with a group of exactly one
+    member, which the blanket bit test read as "another account could replace
+    the database" and refused — taking the server down at startup, for good, on
+    a stock Linux install with a library from an earlier release.
+
+    Deliberately narrow, and deliberately not ``pwd.getpwall()``:
+
+    * The name must match the owner's login. That is what makes this the
+      *private* group rather than any group that happens to be empty today, and
+      it is the property an admin has to undo on purpose.
+    * ``gr_mem`` carries **supplementary** members only, so an empty one is the
+      default state of every private group rather than evidence of anything.
+      What it cannot see is an account whose *primary* gid is this group, which
+      ``pwd.getpwall()`` would — and which this deliberately does not call:
+      ``getpwall`` is unreliable exactly where it would matter (SSSD defaults to
+      ``enumerate = false``, so it answers "nobody" on the managed hosts that
+      have real user directories) and slow where it works. That residue is a
+      stated accepted risk, recorded beside W17 in
+      ``docs/backend_architecture.md`` §13 rather than only here: it takes
+      ``useradd -g <this user> <account>``, an administrator putting a second
+      account into one user's own group, and the module docstring rates this
+      whole lane LOW single-owner.
+
+    Two further limits, for the same record. Names are resolved through *this*
+    process's NSS while the writers come from the kernel's uid/gid on the
+    filesystem, so a container or idmapped mount whose ``/etc/group`` disagrees
+    with the host answers about a different group than the one that can write.
+    And the caller asks only about a directory **this** user owns
+    (``info.st_uid == uid``), so nothing here relaxes a root-owned ancestor.
+
+    Any lookup failure returns False, so the caller refuses rather than trusts
+    an answer it did not get. ``OverflowError`` is in that list because the two
+    modules disagree about the same input: measured on CPython 3.12,
+    ``grp.getgrgid(-2)`` raises ``OverflowError`` while ``pwd.getpwuid(-2)``
+    raises ``KeyError``. A ``st_gid`` from the kernel is a ``gid_t`` and cannot
+    be out of range, so this is unreachable from the caller — but a fail-closed
+    promise that holds only for the inputs one caller happens to pass is not one.
+    """
+    if grp is None or pwd is None:
+        return False
+    try:
+        owner = pwd.getpwuid(uid).pw_name
+        group = grp.getgrgid(gid)
+    except (KeyError, OSError, OverflowError) as exc:
+        logger.warning(
+            "Could not resolve uid %d / gid %d while checking whether a "
+            "group-writable SQLite directory is exposed (%s); treating the "
+            "group as shared.",
+            uid,
+            gid,
+            exc,
+        )
+        return False
+    return group.gr_name == owner and not set(group.gr_mem) - {owner}
 
 
 def _is_redirect(path: str) -> bool:

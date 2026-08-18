@@ -11,6 +11,7 @@ import re
 import sqlite3
 import stat
 import threading
+import types
 
 import pytest
 from sqlmodel import select
@@ -25,6 +26,7 @@ from pixlstash import trusted_sqlite
 from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
     TrustedSQLiteLocationError,
+    _is_private_group,
     _reject_symlinked_path,
     _validate_file,
 )
@@ -566,6 +568,218 @@ class TestTrustedPathSymlinkCheck:
         monkeypatch.setattr(os.path, "realpath", explode)
 
         _reject_symlinked_path(str(directory / "hub.db"))
+
+
+class TestGroupWritableDirectories:
+    """Group-write is an exposure only when the group has another member.
+
+    The blanket ``mode & 0o022`` test exited the server 1 at startup on a stock
+    Linux box: Debian/Ubuntu give every account a same-named group of its own
+    and default to umask 002, so every directory PixlStash created before it
+    started passing 0700 is 0775 — group-writable by a group of exactly one.
+
+    ``grp``/``pwd`` are patched rather than read, in both directions, because
+    the real answer depends on the machine — a developer box's group is named
+    after the login, a CI runner's need not be — so an unpatched test asserting
+    a *value* would assert whatever the box happened to be configured with. Two
+    tests at the end do call the real lookups, for what is machine-independent:
+    that the production path resolves real ``pwd``/``grp`` records without an
+    attribute error, and that an unresolvable id fails closed.
+    """
+
+    @staticmethod
+    def _patch_groups(monkeypatch, *, group_name, members):
+        """Report this user as ``me`` in a group of the given shape.
+
+        uid 0 keeps its real name. A fake that answered ``me`` for *every* uid
+        would make the root-owned case fail on a name mismatch rather than on the
+        precondition it exists to pin, which is a test that cannot detect its own
+        subject going missing.
+        """
+        monkeypatch.setattr(
+            trusted_sqlite,
+            "pwd",
+            types.SimpleNamespace(
+                getpwuid=lambda uid: types.SimpleNamespace(
+                    pw_name="root" if uid == 0 else "me"
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            trusted_sqlite,
+            "grp",
+            types.SimpleNamespace(
+                getgrgid=lambda _gid: types.SimpleNamespace(
+                    gr_name=group_name, gr_mem=members
+                )
+            ),
+        )
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_private_group_makes_group_write_harmless(self, tmp_path, monkeypatch):
+        directory = tmp_path / "images"
+        directory.mkdir()
+        os.chmod(tmp_path, 0o755)
+        os.chmod(directory, 0o775)
+        self._patch_groups(monkeypatch, group_name="me", members=["me"])
+
+        TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True).close()
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_shared_group_still_refuses_group_write(self, tmp_path, monkeypatch):
+        directory = tmp_path / "images"
+        directory.mkdir()
+        os.chmod(directory, 0o775)
+        self._patch_groups(monkeypatch, group_name="staff", members=["me", "someone"])
+
+        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
+            TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_same_named_group_with_another_member_is_not_private(
+        self, tmp_path, monkeypatch
+    ):
+        """The name alone is not the property; a group of one is."""
+        directory = tmp_path / "images"
+        directory.mkdir()
+        os.chmod(directory, 0o775)
+        self._patch_groups(monkeypatch, group_name="me", members=["me", "someone"])
+
+        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
+            TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_world_write_is_refused_whatever_the_group_is(self, tmp_path, monkeypatch):
+        directory = tmp_path / "images"
+        directory.mkdir()
+        os.chmod(directory, 0o777)
+        self._patch_groups(monkeypatch, group_name="me", members=["me"])
+
+        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
+            TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_differently_named_group_of_one_is_not_private(
+        self, tmp_path, monkeypatch
+    ):
+        """The member count alone is not the property; the name carries half of it.
+
+        ``gr_mem`` is empty for *every* private group, so "no other member" is
+        the default state of a group rather than evidence about it — a shared
+        group with only primary members looks identical. The name is what makes
+        this the owner's own group, and without this case that half of the
+        predicate could be deleted with the suite still green.
+        """
+        directory = tmp_path / "images"
+        directory.mkdir()
+        os.chmod(directory, 0o775)
+        self._patch_groups(monkeypatch, group_name="staff", members=[])
+
+        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
+            TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    @pytest.mark.skipif(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        reason="running as root makes root-owned the owner's own directory",
+    )
+    def test_a_root_owned_group_writable_ancestor_is_still_refused(
+        self, tmp_path, monkeypatch
+    ):
+        """gid 0 is the administrators' group, not one owner's own.
+
+        The ownership check admits an ancestor owned by root, and ``root:root
+        0775`` directories exist on a stock Ubuntu box
+        (``/var/lib/AccountsService``). Those are already refused by the name
+        comparison, since the helper is asked about *this* user's name and not
+        the directory's.
+
+        So the case pinned here is the one only the precondition refuses:
+        ``chown root:<this user's group>`` plus g+w, where the group name does
+        match and both halves of ``_is_private_group`` say "private". This
+        process stays its ordinary self; only the directory is reported as
+        root-owned, which leaves the precondition as the sole reason to refuse.
+        """
+        directory = tmp_path / "images"
+        directory.mkdir()
+        os.chmod(directory, 0o775)
+        real_lstat = os.lstat
+        # Identity, not a path comparison: `realpath` itself calls `os.lstat`,
+        # so matching on the resolved string recurses into the patch.
+        target = (real_lstat(directory).st_dev, real_lstat(directory).st_ino)
+
+        def as_root(path, *args, **kwargs):
+            info = real_lstat(path, *args, **kwargs)
+            if (info.st_dev, info.st_ino) != target:
+                return info
+            fields = list(info)
+            fields[4] = 0  # st_uid: root's, while the group stays this user's
+            return os.stat_result(fields)
+
+        monkeypatch.setattr(os, "lstat", as_root)
+        self._patch_groups(monkeypatch, group_name="me", members=["me"])
+
+        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
+            TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
+    @pytest.mark.skipif(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        reason="running as root makes gid 0 this user's own group",
+    )
+    def test_the_real_lookups_resolve_a_real_pwd_and_grp_record(self):
+        """One call with nothing patched, to pin the field names.
+
+        Every other test here replaces ``grp`` and ``pwd`` with stand-ins written
+        to match the code, so ``pw_name``/``gr_name``/``gr_mem`` would go on
+        agreeing with a typo. Asking about gid 0 as a non-root user has a
+        machine-independent answer — this login is not called ``root`` — while
+        still running the production lookups end to end.
+        """
+        assert _is_private_group(os.geteuid(), 0) is False
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
+    def test_the_real_lookups_fail_closed_on_an_unresolvable_id(self):
+        """An id no name service knows must read as shared, not as private."""
+        assert _is_private_group(os.geteuid(), 0x7FFFFFFE) is False
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX only")
+    def test_the_real_lookups_fail_closed_on_an_out_of_range_id(self):
+        """Out of range is a different exception, and the two modules disagree.
+
+        ``grp.getgrgid`` raises ``OverflowError`` past the end of ``gid_t``,
+        where the unresolvable id above raises ``KeyError`` and where
+        ``pwd.getpwuid`` raises ``KeyError`` for the same value. Unreachable from
+        ``_require_owned_directory``, whose gid comes from the kernel — but the
+        helper promises to fail closed on *any* lookup failure, and an escaping
+        ``OverflowError`` would make that a startup crash instead.
+        """
+        assert _is_private_group(os.geteuid(), 2**32) is False
+        assert _is_private_group(os.geteuid(), -2) is False
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_an_unresolvable_group_fails_closed(self, tmp_path, monkeypatch):
+        """A lookup that did not work must not be read as "nobody else"."""
+        directory = tmp_path / "images"
+        directory.mkdir()
+        os.chmod(directory, 0o775)
+
+        def explode(_gid):
+            raise KeyError("no such gid")
+
+        monkeypatch.setattr(
+            trusted_sqlite,
+            "pwd",
+            types.SimpleNamespace(
+                getpwuid=lambda _uid: types.SimpleNamespace(pw_name="me")
+            ),
+        )
+        monkeypatch.setattr(
+            trusted_sqlite, "grp", types.SimpleNamespace(getgrgid=explode)
+        )
+
+        with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
+            TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
 
 
 class TestWindowsHasNoModeBits:

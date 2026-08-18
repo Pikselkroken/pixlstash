@@ -2594,6 +2594,54 @@ module docstring is the design record: which actor each check is for, why the
 earlier DACL refusal was removed (it stopped the server starting on Windows,
 W6/W7/W18), and what a `private=True` open verifies instead.
 
+**Group-write is not automatically an exposure.** `mode & 0o022` is a *proxy*
+for "another principal can write here", and for the group bit that proxy is
+wrong wherever the group is the owner's own. Debian, Ubuntu and every other
+distro running `useradd -U` give each account a same-named group of its own and
+default to umask 002, so a directory PixlStash created before it started passing
+`0700` explicitly is `0775` with a group of exactly one member. The blanket bit
+test read that as "another account could replace the database" and exited the
+server 1 during startup on a stock Linux box with a library from an earlier
+release, with no recovery short of a manual `chmod`. `_is_private_group` names
+the actor instead of the bit: group-write is tolerated only when the group is the
+directory owner's own, same-named, and has no other member; any lookup failure
+is reported as shared, so the open is refused. World-write is refused exactly as
+before, and the file-level checks are unchanged — a `0664` database cannot come
+from a umask, since SQLite requests `0644`.
+
+A root-owned ancestor is **not** covered by this: the ownership check above
+admits `st_uid in (uid, 0)`, but the group tolerance additionally requires
+`st_uid == uid`, because for gid 0 the "owner's own group" is the administrators'
+group rather than one single owner's. `root:root 0775` directories exist in the
+wild (`/var/lib/AccountsService` on a stock Ubuntu box) and keep the blanket
+refusal.
+
+**Accepted risk, group membership (same record as W17).** Two things the group
+answer cannot see, both stated rather than fixed:
+
+- `grp.getgrgid(gid).gr_mem` lists **supplementary** members only, so an empty
+  one is the default state of every private group, not evidence about it. An
+  account whose *primary* gid is this user's own group passes the check and can
+  write the directory. `pwd.getpwall()` would see it and is deliberately not
+  called: it is unreliable exactly where it would matter (SSSD defaults to
+  `enumerate = false`, so on the managed hosts that have real user directories it
+  answers "nobody") and slow where it works. Reaching this needs
+  `useradd -g <this user> <account>` — an administrator putting a second account
+  into one user's own group.
+- Names resolve through the server process's NSS while the writers come from the
+  kernel's uid/gid on the filesystem, so a container or idmapped mount whose
+  `/etc/group` disagrees with the host answers about a different group than the
+  one that can write. An id that does not resolve at all fails closed.
+
+Both share W17's owner and revisit date below, and both would be closed by the
+same thing: an answer about the *filesystem's* principals rather than this
+process's name service.
+
+An NSS lookup on the startup path is the cost, and only for a directory that is
+already group-writable — a tightened install performs none. A lookup that fails
+is reported as shared, so the worst case is the refusal this whole section
+exists to remove, never a weaker check.
+
 **Accepted risk W17.** Python exposes neither owner SID nor directory DACL
 portably, so the POSIX `mode & 0o022` test — "another principal cannot write
 this directory" — has no Windows implementation. On Windows a library on a
