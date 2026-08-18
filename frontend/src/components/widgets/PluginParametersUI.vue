@@ -26,9 +26,12 @@
             index === 0 && showDescription && !!plugin.description,
         }"
       >
-        <label :class="['plugin-ui-label', labelClass]">{{
-          field.label || field.name
-        }}</label>
+        <label
+          :for="fieldControlId(index)"
+          :class="['plugin-ui-label', labelClass]"
+        >
+          {{ field.label || field.name }}
+        </label>
 
         <select
           v-if="
@@ -36,8 +39,10 @@
             Array.isArray(field.enum) &&
             field.enum.length
           "
+          :id="fieldControlId(index)"
           v-model="formValues[field.name]"
           :class="inputClass ? [inputClass] : ['plugin-ui-input']"
+          :aria-describedby="fieldDescriptionId(field, index)"
         >
           <option v-for="choice in field.enum" :key="choice" :value="choice">
             {{ (field.enumLabels && field.enumLabels[choice]) || choice }}
@@ -46,27 +51,43 @@
 
         <input
           v-else-if="field.type === 'number' || field.type === 'integer'"
+          :id="fieldControlId(index)"
           v-model.number="formValues[field.name]"
           type="number"
           :class="inputClass ? [inputClass] : ['plugin-ui-input']"
+          :min="field.min ?? undefined"
+          :max="field.max ?? undefined"
+          :step="field.step ?? (field.type === 'integer' ? 1 : undefined)"
+          :aria-describedby="fieldDescriptionId(field, index)"
         />
 
         <label
           v-else-if="field.type === 'boolean'"
           class="plugin-ui-checkbox-row"
         >
-          <input v-model="formValues[field.name]" type="checkbox" />
+          <input
+            :id="fieldControlId(index)"
+            v-model="formValues[field.name]"
+            type="checkbox"
+            :aria-describedby="fieldDescriptionId(field, index)"
+          />
           <span>Enabled</span>
         </label>
 
         <input
           v-else
+          :id="fieldControlId(index)"
           v-model="formValues[field.name]"
           type="text"
           :class="inputClass ? [inputClass] : ['plugin-ui-input']"
+          :aria-describedby="fieldDescriptionId(field, index)"
         />
 
-        <div v-if="field.description" class="plugin-ui-help">
+        <div
+          v-if="field.description"
+          :id="fieldHelpId(index)"
+          class="plugin-ui-help"
+        >
           {{ field.description }}
         </div>
       </div>
@@ -75,7 +96,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from "vue";
+import { computed, reactive, ref, useId, watch } from "vue";
 
 const props = defineProps({
   plugin: { type: Object, default: null },
@@ -91,6 +112,19 @@ const emit = defineEmits(["update:modelValue"]);
 const formValues = reactive({});
 const isSyncingFromProps = ref(false);
 const lastEmittedSignature = ref("");
+const formId = useId();
+
+function fieldControlId(index) {
+  return `${formId}-plugin-parameter-${index}`;
+}
+
+function fieldHelpId(index) {
+  return `${fieldControlId(index)}-help`;
+}
+
+function fieldDescriptionId(field, index) {
+  return field.description ? fieldHelpId(index) : undefined;
+}
 
 const parameterFields = computed(() => {
   if (!props.plugin || !Array.isArray(props.plugin.parameters)) return [];
@@ -211,6 +245,7 @@ function emitValue() {
 .plugin-ui-root {
   display: grid;
   gap: var(--space-3);
+  min-width: 0;
 }
 
 .plugin-ui--auto {
@@ -224,15 +259,18 @@ function emitValue() {
 .plugin-ui-description {
   font-size: var(--text-xs);
   opacity: 0.75;
+  overflow-wrap: anywhere;
 }
 
 .plugin-ui-note {
   opacity: 0.8;
+  overflow-wrap: anywhere;
 }
 
 .plugin-ui-field {
   display: grid;
   gap: var(--space-2);
+  min-width: 0;
 }
 
 .plugin-ui-field--after-description {
@@ -246,6 +284,7 @@ function emitValue() {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: inherit;
+  overflow-wrap: anywhere;
 }
 
 .plugin-menu-label {
@@ -266,6 +305,7 @@ function emitValue() {
 
 .plugin-ui-input {
   width: 100%;
+  min-width: 0;
   min-height: 32px;
   padding: 0 var(--space-3);
   border-radius: var(--radius-sm);
@@ -289,6 +329,13 @@ function emitValue() {
   border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-xs);
+}
+
+.plugin-ui-input:focus-visible,
+.plugin-run-select:focus-visible,
+.overlay-comfy-select:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .plugin-ui--auto .plugin-ui-input {
@@ -320,6 +367,7 @@ function emitValue() {
 .plugin-ui-help {
   font-size: var(--text-xs);
   opacity: 0.75;
+  overflow-wrap: anywhere;
 }
 
 .plugin-ui--auto .plugin-ui-help,
