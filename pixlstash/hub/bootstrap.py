@@ -17,7 +17,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from pixlstash.hub.db import HubDatabase, default_hub_path
 from pixlstash.hub.engine import HubEngine
@@ -134,6 +134,7 @@ class HubBootstrap:
 def bootstrap_hub(
     configured_image_root: str,
     hub_path: Optional[str] = None,
+    legacy_identity_prompt: Optional[Callable[[Library], bool]] = None,
 ) -> HubBootstrap:
     """Open the hub and perform only the pre-vault-open part of migration.
 
@@ -141,6 +142,22 @@ def bootstrap_hub(
     ``image_root`` is registered but its identity rows remain inert.  The
     startup never turns config shape into import authority. A legacy copy runs
     only when :func:`prepare_legacy_identity` already recorded explicit intent.
+
+    ``legacy_identity_prompt``, when given, is asked to authorize that intent
+    itself the moment a legacy owner is first found: if it returns true,
+    :func:`prepare_legacy_identity` runs for this library so the copy below
+    proceeds in this same call, exactly as if ``pixlstash-cli libraries
+    prepare-legacy-identity`` had already been run. Declining leaves the
+    library exactly as inert as if the prompt had never been offered.
+
+    The callback may block on a human for an arbitrary time (it is how the
+    interactive startup prompt is implemented), so another process — for
+    instance the CLI command it stands in for, run concurrently — can finish
+    the same preparation, or the whole migration, while it waits. The state is
+    therefore re-read once the callback returns, before deciding whether to
+    call :func:`prepare_legacy_identity` at all, and that call is still
+    tolerated if it loses the race anyway: a startup that was just told the
+    thing it wanted has already happened must not abort over it.
     """
     hub = HubDatabase(hub_path or default_hub_path())
     registry = LibraryRegistry(hub)
@@ -148,10 +165,57 @@ def bootstrap_hub(
     if library is None:
         library = _register_first_library(registry, configured_image_root)
 
+    if (
+        legacy_identity_prompt is not None
+        and library.identity_migration_state == "not_required"
+        and _legacy_owner_present(library.vault_path)
+        and legacy_identity_prompt(library)
+    ):
+        library = registry.by_uuid(library.uuid) or library
+        if library.identity_migration_state == "not_required":
+            try:
+                prepare_legacy_identity(hub, library.path)
+            except HubBootstrapError as exc:
+                logger.warning(
+                    "Could not record legacy identity preparation for %s "
+                    "after it was approved, likely because another process "
+                    "already did (%s); continuing with its current state.",
+                    library.path,
+                    exc,
+                )
+            library = registry.by_uuid(library.uuid) or library
+
     engine = HubEngine(hub.path)
     migrated = _copy_legacy_identity_if_needed(hub, library)
     library = registry.by_uuid(library.uuid) or library
     return HubBootstrap(hub=hub, engine=engine, library=library, migrated=migrated)
+
+
+def _legacy_owner_present(vault_path: str) -> bool:
+    """Peek for a real pre-hub owner row without recording any intent yet."""
+    if not os.path.isfile(vault_path):
+        return False
+    try:
+        vault = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error as exc:
+        logger.warning(
+            "Could not open %s to check for a legacy owner (%s); not offering "
+            "to migrate it.",
+            vault_path,
+            exc,
+        )
+        return False
+    try:
+        return _read_user(vault) is not None
+    except HubBootstrapError as exc:
+        logger.warning(
+            "Could not read a legacy owner from %s (%s); not offering to migrate it.",
+            vault_path,
+            exc,
+        )
+        return False
+    finally:
+        vault.close()
 
 
 def _register_first_library(

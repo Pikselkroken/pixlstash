@@ -578,6 +578,121 @@ class TestExplicitLegacyPreparation:
         assert [token["id"] for token in tokens] == [2, 10]
 
 
+class TestInteractiveLegacyPreparation:
+    """Baking `prepare-legacy-identity` into startup via a Y/n callback."""
+
+    def test_an_accepted_prompt_authorizes_and_migrates_in_one_call(self, paths):
+        hub_path, library_folder = paths
+        asked = []
+
+        def prompt(library):
+            asked.append(library.path)
+            return True
+
+        result = bootstrap_hub(library_folder, hub_path, legacy_identity_prompt=prompt)
+        finalize_opened_library(result)
+
+        assert asked == [os.path.realpath(library_folder)]
+        assert result.migrated is True
+        row = result.hub.connection.execute(
+            "SELECT username, password_hash FROM user"
+        ).fetchone()
+        assert (row["username"], row["password_hash"]) == ("owner", "a-real-hash")
+        assert vault_query(library_folder, "SELECT COUNT(*) FROM user") == [(0,)]
+        result.hub.close()
+
+    def test_a_declined_prompt_leaves_the_vault_untouched(self, paths):
+        hub_path, library_folder = paths
+
+        result = bootstrap_hub(
+            library_folder, hub_path, legacy_identity_prompt=lambda library: False
+        )
+
+        assert result.migrated is False
+        assert (
+            result.hub.connection.execute("SELECT COUNT(*) FROM user").fetchone()[0]
+            == 0
+        )
+        assert vault_query(library_folder, "SELECT username FROM user") == [("owner",)]
+        assert result.library.identity_migration_state == "not_required"
+        result.hub.close()
+
+    def test_no_prompt_is_offered_without_a_legacy_owner(self, tmp_path):
+        """A fresh install's empty vault must never trigger the callback."""
+        hub_path = str(tmp_path / "hub.db")
+        image_root = str(tmp_path / "brand-new")
+        calls = []
+
+        result = bootstrap_hub(
+            image_root, hub_path, legacy_identity_prompt=lambda library: calls.append(1)
+        )
+
+        assert calls == []
+        assert result.migrated is False
+        result.hub.close()
+
+    def test_omitting_the_prompt_keeps_the_prior_default_behaviour(self, paths):
+        """No callback at all must behave exactly like before this feature."""
+        hub_path, library_folder = paths
+
+        result = bootstrap_hub(library_folder, hub_path)
+
+        assert result.migrated is False
+        assert (
+            result.hub.connection.execute("SELECT COUNT(*) FROM user").fetchone()[0]
+            == 0
+        )
+        result.hub.close()
+
+    def test_a_concurrent_preparation_during_the_prompt_is_not_reattempted(self, paths):
+        """The callback can block on a human for as long as it likes, so
+        another process — e.g. someone running the CLI command in a second
+        terminal while this prompt is still awaiting an answer — can record
+        the same preparation first. The belated "yes" must not try to record
+        it again, only pick up the state that is already there.
+        """
+        hub_path, library_folder = paths
+
+        def prompt(library):
+            concurrent_hub = HubDatabase(hub_path)
+            prepare_legacy_identity(concurrent_hub, library_folder)
+            concurrent_hub.close()
+            return True
+
+        result = bootstrap_hub(library_folder, hub_path, legacy_identity_prompt=prompt)
+        finalize_opened_library(result)
+
+        assert result.migrated is True
+        assert result.library.identity_migration_state == "complete"
+        result.hub.close()
+
+    def test_a_concurrent_full_migration_during_the_prompt_does_not_abort_startup(
+        self, paths
+    ):
+        """The tighter case: another process finishes the *entire* migration
+        (prepare, copy and finalize) before the belated "yes" comes back.
+        `prepare_legacy_identity` then refuses ("hub already has an owner"),
+        and that refusal must be swallowed rather than raised out of
+        `bootstrap_hub`, since the only thing wrong is that this startup asked
+        for something already done.
+        """
+        hub_path, library_folder = paths
+
+        def prompt(library):
+            concurrent = bootstrap_hub(
+                library_folder, hub_path, legacy_identity_prompt=lambda lib: True
+            )
+            finalize_opened_library(concurrent)
+            concurrent.hub.close()
+            return True
+
+        result = bootstrap_hub(library_folder, hub_path, legacy_identity_prompt=prompt)
+
+        assert result.migrated is False
+        assert result.library.identity_migration_state == "complete"
+        result.hub.close()
+
+
 class TestCrashSafeOrdering:
     def test_legacy_select_helpers_fail_closed_on_sqlite_errors(self):
         import pixlstash.hub.bootstrap as bootstrap_module

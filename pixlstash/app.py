@@ -13,6 +13,7 @@ from passlib.hash import bcrypt
 from pixlstash.pixl_logging import setup_logging, get_logger
 from pixlstash.server import Server
 from pixlstash.startup_checks import StartupCheckError
+from pixlstash.hub.bootstrap import HubBootstrapError
 from pixlstash.hub.db import HubPermissionError
 from pixlstash.startup_permissions import (
     PERMISSION_REPAIR_ENV,
@@ -71,8 +72,7 @@ def _permission_fix_commands(issues) -> list[str]:
     """Return copy/pasteable commands for a non-interactive POSIX launch."""
 
     return [
-        f"chmod {issue.repaired_mode:03o} {shlex.quote(issue.path)}"
-        for issue in issues
+        f"chmod {issue.repaired_mode:03o} {shlex.quote(issue.path)}" for issue in issues
     ]
 
 
@@ -107,7 +107,9 @@ def _prepare_startup_permissions(
             try:
                 repair_permission_issues(issues)
             except OSError as exc:
-                print(f"\nPixlStash could not fix the permissions: {exc}", file=sys.stderr)
+                print(
+                    f"\nPixlStash could not fix the permissions: {exc}", file=sys.stderr
+                )
                 return False
             continue
 
@@ -130,7 +132,9 @@ def _prepare_startup_permissions(
             try:
                 repair_permission_issues(issues)
             except OSError as exc:
-                print(f"\nPixlStash could not fix the permissions: {exc}", file=sys.stderr)
+                print(
+                    f"\nPixlStash could not fix the permissions: {exc}", file=sys.stderr
+                )
                 return False
             print("Permissions fixed. Starting PixlStash…", file=sys.stderr)
             continue
@@ -145,6 +149,54 @@ def _prepare_startup_permissions(
         file=sys.stderr,
     )
     return False
+
+
+def _prompt_legacy_identity_migration(library) -> bool:
+    """Offer, at startup, what `pixlstash-cli libraries prepare-legacy-identity`
+    otherwise requires as a separate manual step.
+
+    Skipped for Electron, whose own setup wizard already offers this choice
+    before the backend is ever launched. A non-interactive launch is told
+    about it in the log instead of being asked, and either way leaves the
+    vault exactly as untouched as declining would, with the CLI command still
+    available. Defaults to **not** migrating on a bare Enter: this is
+    irreversible (the vault stops being readable by pre-hub PixlStash
+    afterwards), and the desktop wizard's equivalent checkbox
+    (`importLegacyIdentity` in electron/src/renderer/setup.js) starts
+    unchecked for the same reason.
+    """
+    is_electron = (
+        os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron"
+    )
+    if is_electron:
+        return False
+    if not getattr(sys.stdin, "isatty", lambda: False)():
+        logger.info(
+            "%s still holds a pre-hub owner account and API tokens. Run "
+            "`pixlstash-cli libraries prepare-legacy-identity %s` to migrate "
+            "them into the hub, or start PixlStash in an interactive terminal "
+            "to be asked.",
+            library.path,
+            library.path,
+        )
+        return False
+
+    print(
+        f"\n{library.path} still holds an owner account and API tokens from "
+        "before PixlStash introduced its hub. PixlStash can move them into "
+        "the hub now, after which this library will no longer be readable "
+        "as an owner/token store by versions of PixlStash older than the hub.",
+        file=sys.stderr,
+    )
+    try:
+        answer = (
+            input("Migrate this library's identity into the hub now? [y/N] ")
+            .strip()
+            .lower()
+        )
+    except EOFError:
+        answer = "n"
+    return answer in {"y", "yes"}
 
 
 def _should_prompt_bootstrap(server_config_path: str, force: bool) -> bool:
@@ -408,7 +460,11 @@ def main():
         setup_logging(log_level=log_level)
 
     try:
-        server = Server(server_config_path=args.server_config, path_map=path_map)
+        server = Server(
+            server_config_path=args.server_config,
+            path_map=path_map,
+            legacy_identity_prompt=_prompt_legacy_identity_migration,
+        )
     except StartupCheckError as exc:
         print("Startup checks failed. Please resolve the following issues:")
         for failure in exc.failures:
@@ -419,6 +475,10 @@ def main():
         # deliberately not offered to chmod, but they still deserve a concise
         # startup error rather than an implementation traceback.
         print("PixlStash could not safely open its database:", file=sys.stderr)
+        print(f"- {exc}", file=sys.stderr)
+        return 1
+    except HubBootstrapError as exc:
+        print("PixlStash could not prepare its library:", file=sys.stderr)
         print(f"- {exc}", file=sys.stderr)
         return 1
 

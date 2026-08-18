@@ -2683,7 +2683,7 @@ not a record.
 1. `app.py:main()` parses CLI args and loads/creates the server config.
 2. `StartupChecks().run()` validates disk space, VRAM, CUDA, SSL; may force CPU mode.
 3. `Server.__init__()`:
-    - Opens/migrates the hub, resolves its active immutable library UUID, and performs a legacy identity copy only when a matching explicit durable preparation operation exists.
+    - Opens/migrates the hub, resolves its active immutable library UUID, and performs a legacy identity copy only when a matching explicit durable preparation operation exists. `app.py:main()` passes `Server()` an optional prompt callback, which it threads into `bootstrap_hub()`: on an interactive terminal (never for Electron, whose own setup wizard already offers this), a detected-but-unprepared legacy vault is offered a `[y/N]` explanation instead of requiring `pixlstash-cli libraries prepare-legacy-identity` as a separate manual step first; declining, a non-interactive launch (logged instead of asked), or losing a race to a concurrent preparation, all leave the vault exactly as inert — or as far along — as if the prompt had not run.
     - Instantiates `Vault` (opens `VaultDatabase` and runs Alembic), then stamps/validates `library_settings.library_uuid` and completes crash-safe legacy blanking before authentication starts.
     - Applies user-configured model/runtime settings (`keep_models_in_memory`, VRAM cap, tagger toggles/thresholds) to `Vault`.
    - Builds the FastAPI app, attaches middleware (CORS, rate limiter, auth), mounts routers and the SPA.
