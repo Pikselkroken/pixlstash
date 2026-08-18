@@ -1458,6 +1458,149 @@ describe("selecting rows", () => {
     wrapper.unmount();
   });
 
+  it("takes every shown model on Ctrl+A, and the browser's select-all with it", async () => {
+    // The bug was never that the chord did nothing: unclaimed it reached the
+    // browser's own select-all, which — `.shelf` being `user-select: none` —
+    // highlighted every part of the app EXCEPT the rows it was aimed at. Both
+    // halves are asserted, because the selection can be right with that
+    // highlight still there. The press starts with NOTHING selected, which is
+    // the state `shelfOwnsTheKey` used to refuse outright.
+    const wrapper = await mountShelf([
+      adapter({ id: 1 }),
+      adapter({ id: 2 }),
+      adapter({ id: 3 }),
+    ]);
+    // Attached, because this is a window listener exactly as Escape's is.
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+    const press = new KeyboardEvent("keydown", {
+      key: "a",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    rowAt(wrapper, 0).element.dispatchEvent(press);
+    await wrapper.vm.$nextTick();
+
+    expect([...store.selectedIds].sort()).toEqual([1, 2, 3]);
+    expect(press.defaultPrevented).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("leaves Ctrl+A to a field being typed in", async () => {
+    // Select-all inside a text field is the field's. Asserted from a field
+    // OUTSIDE the shelf — the sidebar's search box, the app bar — because that
+    // is the only place `isTypingTarget` is what declines: the shelf's own
+    // rename field stops the event (`onRenameKeydown`) and the base-model field
+    // carries `@keydown.stop`, so neither ever reaches this window listener,
+    // and a press aimed at one of them would pass with the guard deleted.
+    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    document.body.appendChild(wrapper.element);
+    const field = document.createElement("input");
+    document.body.appendChild(field);
+    const store = useModelShelfStore();
+    const press = new KeyboardEvent("keydown", {
+      key: "a",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    field.dispatchEvent(press);
+    await wrapper.vm.$nextTick();
+
+    expect(store.selectedRows).toHaveLength(0);
+    expect(press.defaultPrevented).toBe(false);
+    field.remove();
+    wrapper.unmount();
+  });
+
+  it("swallows Ctrl+A with nothing drawn, and keeps the selection", async () => {
+    // `selectedIds` is pruned against a FETCH and never against the `Show`
+    // narrowing, so a selection outlives a narrowing that empties the list.
+    // `selectVisible()` there would replace it with an empty set — a silent
+    // clear from a key that says "select", with the pill gone (it is gated on
+    // `selectedRows`) so nothing on screen could have done it on purpose. The
+    // press is still claimed, or it falls back to the native select-all.
+    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+    await rowAt(wrapper, 0).trigger("click");
+    await rowAt(wrapper, 1).trigger("click", { ctrlKey: true });
+    store.setFilters({ adapters: false });
+    await wrapper.vm.$nextTick();
+    expect(store.visibleRows).toHaveLength(0);
+
+    const press = new KeyboardEvent("keydown", {
+      key: "a",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(press);
+    await wrapper.vm.$nextTick();
+
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+    expect(press.defaultPrevented).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("answers to Cmd+A, and to no other chord on the A key", async () => {
+    // Meta is Ctrl on a Mac. Alt is what AltGr sends on a European layout, and
+    // Ctrl+Shift+A is a chord this list does not define: both are the browser's.
+    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+    const press = (init) =>
+      new KeyboardEvent("keydown", {
+        key: "a",
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+
+    for (const declined of [
+      press({ ctrlKey: true, altKey: true }),
+      press({ ctrlKey: true, shiftKey: true }),
+      press({ ctrlKey: true, repeat: true }),
+    ]) {
+      window.dispatchEvent(declined);
+      await wrapper.vm.$nextTick();
+      expect(store.selectedRows).toHaveLength(0);
+      expect(declined.defaultPrevented).toBe(false);
+    }
+
+    const cmd = press({ metaKey: true });
+    window.dispatchEvent(cmd);
+    await wrapper.vm.$nextTick();
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+    expect(cmd.defaultPrevented).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("does not claim Ctrl+A from the runs tab", async () => {
+    // The shelf stays mounted behind the runs panel, so its listener would
+    // select rows nobody can see. This is about the SHELF's listener declining;
+    // the runs grid owns its own keyboard model and its own selection.
+    const wrapper = await mountShelf([adapter({ id: 1 }), adapter({ id: 2 })]);
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+    nav.route.name = "models-runs";
+    await wrapper.vm.$nextTick();
+
+    const press = new KeyboardEvent("keydown", {
+      key: "a",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(press);
+    await wrapper.vm.$nextTick();
+
+    expect(store.selectedRows).toHaveLength(0);
+    expect(press.defaultPrevented).toBe(false);
+    wrapper.unmount();
+  });
+
   it("shows no selection bar until something is selected", async () => {
     const wrapper = await mountShelf([adapter()]);
     expect(wrapper.find(".shelf-selbar").exists()).toBe(false);

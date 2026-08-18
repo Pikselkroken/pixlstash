@@ -46,6 +46,7 @@
         >
           <v-icon size="16">mdi-select-all</v-icon>
           <span>Select all shown</span>
+          <span class="shelf-mi-kbd">{{ selectAllHint }}</span>
         </button>
         <button class="shelf-mi" type="button" role="menuitem" @click="clear">
           <v-icon size="16">mdi-close</v-icon>
@@ -282,6 +283,7 @@ import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { formatKeyHint, selectAllKeyHint } from "../../utils/shortcutHints";
 import {
   deletableModels,
   formatModelSize,
@@ -308,6 +310,11 @@ const emit = defineEmits([
 const store = useModelShelfStore();
 const folders = useModelFoldersStore();
 const moves = useModelMovesStore();
+
+// The keycap beside "Select all shown", so the chord is taught where the button
+// is — the same job the `Esc` cap next to Clear does. Read once at setup: the
+// platform cannot change under a mounted component.
+const selectAllHint = formatKeyHint(selectAllKeyHint());
 
 const countMenuOpen = ref(false);
 const assignMenuOpen = ref(false);

@@ -1935,10 +1935,17 @@ function onBandDrop(band, event) {
 /**
  * Does the shelf own this press, or does something in front of it?
  *
- * The guard both window-level keys ask first — Escape, which clears the
- * selection from anywhere including outside the shelf, and Delete, which is in
+ * The guard all three window-level keys ask first — Escape, which clears the
+ * selection from anywhere including outside the shelf, Delete, which is in
  * front of a file deletion and must never fire against a surface that is merely
- * drawn over the rows.
+ * drawn over the rows, and Ctrl+A, which selects the whole list.
+ *
+ * A declined key is handed back INTACT — no `preventDefault` — which for Ctrl+A
+ * means the browser's own select-all runs behind a dialog or a menu. That is
+ * the intent: those surfaces teleport out of `.shelf` and their text IS
+ * selectable, so select-all there is a real gesture the shelf has no business
+ * taking. It is the same bargain the `Esc` keycap in the pill's menu already
+ * strikes — with the menu open that press closes the menu instead.
  *
  * On the WINDOW rather than on the shelf root, because a keydown only reaches
  * an element that contains the focus: bound to the root it worked from a row
@@ -1975,6 +1982,11 @@ function onBandDrop(band, event) {
  *
  * Bubble phase, not capture: every owner above is meant to resolve the key
  * FIRST, and a capture-phase listener would take it from them.
+ *
+ * **It does not test the selection.** Escape and Delete need one and ask for
+ * it themselves; Ctrl+A is the key pressed precisely BECAUSE nothing is selected
+ * yet, so a shared "something is selected" line here would be the one guard
+ * that made the new key impossible.
  */
 function shelfOwnsTheKey(event) {
   // The shelf component stays mounted while the runs panel is showing, and this
@@ -2001,26 +2013,69 @@ function shelfOwnsTheKey(event) {
   if (sidebarStore.sidebarOverlay && sidebarStore.sidebarVisible) return false;
   if (event.target?.closest?.(".ate, [role='dialog']")) return false;
   if (isTypingTarget(event.target)) return false;
-  return Boolean(store.selectedRows.length);
+  return true;
 }
 
 /**
- * Escape clears, Delete deletes.
+ * Escape clears, Delete deletes, Ctrl+A takes the lot.
  *
- * One handler and one set of guards, because the question both keys ask first
- * is the same one: does the shelf own this press, or does something in front of
- * it? Splitting them would be two copies of the list above, and the copy that
- * drifted would be the one in front of a file deletion.
+ * One handler and one set of guards, because the question all three keys ask
+ * first is the same one: does the shelf own this press, or does something in
+ * front of it? Splitting them would be copies of the list above, and the copy
+ * that drifted would be the one in front of a file deletion.
  *
  * **Delete is the file-manager gesture and is spelled the way Explorer spells
  * it**: on its own it moves to the trash, with Shift it deletes permanently.
  * `event.shiftKey` is read off the press itself and handed to the same
  * confirmation the pill uses, so the key opens a prompt and never a deletion —
  * a stray Del with forty rows selected costs one Escape.
+ *
+ * **Ctrl+A is claimed rather than left to the browser**, the same chord the
+ * photo grid (`useGridKeyboardNav`) and the duplicate queue
+ * (`useDedupQueueKeyboard`) already claim. Unhandled it did not merely do
+ * nothing: it fell through to the native select-all, and `.shelf` is
+ * `user-select: none` (#932) while the app around it is not, so the one thing
+ * a select-all aimed at the rows could highlight was whatever text the app
+ * still leaves selectable everywhere else — which is what the reporter saw.
+ * It runs the store action the selection pill's "Select all shown" already
+ * runs, so the key and the button say the same thing: everything the current
+ * `Show` selection DRAWS, runs taken whole. Cmd counts as Ctrl (`metaKey`),
+ * Shift and Alt do not — those are chords this list does not define and are
+ * left to the browser, AltGr+A among them.
+ *
+ * **With nothing drawn the key is swallowed and the selection left alone.**
+ * Two things are true at once there and only one of them is obvious: there is
+ * nothing to select, and `selectedIds` may still be full, because it is pruned
+ * against a FETCH (`pruneSelection`) and not against the `Show` narrowing that
+ * emptied the list. Running `selectVisible()` would then replace a selection
+ * the reader still holds with an empty one — a silent clear, from a key that
+ * says "select", with no undo and (the pill being gated on `selectedRows`) no
+ * control on screen to do it deliberately. The press is still claimed, or
+ * declining would hand it back to the native select-all above.
+ *
+ * `event.repeat` is refused for the same reason `useDedupQueueKeyboard` refuses
+ * it: a held chord would rebuild a set over every drawn row, up to 1,800 of
+ * them, once per repeat.
  */
 function onShelfKeydown(event) {
-  if (event.key !== "Escape" && event.key !== "Delete") return;
+  const wantsSelectAll =
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    !event.shiftKey &&
+    String(event.key).toLowerCase() === "a";
+  if (event.key !== "Escape" && event.key !== "Delete" && !wantsSelectAll) {
+    return;
+  }
   if (!shelfOwnsTheKey(event)) return;
+  if (wantsSelectAll) {
+    if (event.repeat) return;
+    event.preventDefault();
+    if (store.visibleRows.length) store.selectVisible();
+    return;
+  }
+  // Escape and Delete are both about a selection, and the guard above no longer
+  // asks for one.
+  if (!store.selectedRows.length) return;
   if (event.key === "Escape") {
     store.clearSelection();
     return;

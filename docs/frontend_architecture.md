@@ -2659,13 +2659,36 @@ double click on the name, or F2 on the row for the keyboard.
 
 Arrows move the stop **without** selecting, so a reader can walk the list
 without arming a verb against every row they pass; Space and Enter pick;
-Shift+arrow extends from the anchor, the keyboard's Shift+click; Escape clears.
+Shift+arrow extends from the anchor, the keyboard's Shift+click; Escape clears;
+**Ctrl/Cmd+A takes every shown model**, the chord the photo grid
+(`useGridKeyboardNav`) and the duplicate queue (`useDedupQueueKeyboard`) already
+claim. It runs `selectVisible()` — the same store action the pill's *Select all
+shown* runs, and the pill shows the chord as a keycap beside that item — so
+"all" means whatever the current `Show` selection DRAWS, runs taken whole. It is
+refused on `event.repeat`, as the queue's is, because a held chord would rebuild
+a set over every drawn row per repeat. Unclaimed it was not a no-op: it reached
+the browser's own select-all, and `.shelf` being `user-select: none` (below)
+while the app around it is not, what it highlighted was whatever text the app
+still leaves selectable *outside* the shelf — the reported symptom.
+**With nothing drawn the press is swallowed and the selection left untouched.**
+`selectedIds` is pruned against a fetch (`pruneSelection`), never against the
+`Show` narrowing, so a selection outlives a narrowing that empties the list —
+and `selectVisible()` there would replace it with an empty set: a silent clear
+from a key that says *select*, with no undo and no control on screen to do it
+deliberately, since the pill is gated on `selectedRows`. The press is still
+claimed, or it would fall back to the native select-all.
 **Escape is bound on the `window`, not on the shelf's root**, because a keydown
 only reaches an element that contains the focus: bound to the root it worked
 from a row and from the toolbar and did nothing once the sidebar or the app bar
 had been clicked, while the selection was still on screen. A window listener
 then has to know what else owns the key, and hand it back rather than clear
-underneath. Five checks, in this order, each for its own reason:
+underneath. All three keys are bound there, and all three ask `shelfOwnsTheKey`
+first — which does **not** test the selection: Escape and Delete need one and
+check for it themselves, while Ctrl+A is pressed precisely because nothing is
+selected yet. A declined key is handed back *intact*, so Ctrl+A behind a dialog
+or a menu reaches the browser's own select-all — deliberately, since those
+surfaces teleport out of `.shelf` and their text is selectable. Five checks, in
+this order, each for its own reason:
 
 - **The shelf's own dialogs, by REF** (`moveOpen`, `importOpen`, `stacksOpen`,
   `foldersOpen`, `addFileOpen`, `editVerb`) — they are `AppDialog`s inside this
