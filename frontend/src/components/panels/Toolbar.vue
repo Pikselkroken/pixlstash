@@ -2,6 +2,21 @@
   <div class="selection-bar-overlay">
     <div class="selection-bar-content">
       <div class="selection-bar-left">
+        <button
+          v-if="sidebarStore.sidebarForcedHidden"
+          class="bar-btn bar-btn--icon tb-mobile-nav"
+          type="button"
+          :aria-expanded="sidebarStore.sidebarVisible"
+          aria-label="Open library navigation"
+          title="Open library navigation"
+          @click="sidebarStore.revealSidebar()"
+        >
+          <v-icon size="20">mdi-menu</v-icon>
+        </button>
+        <div
+          v-if="sidebarStore.sidebarForcedHidden"
+          class="bar-separator tb-mobile-nav-separator"
+        ></div>
         <!-- ── Sort split-button ──────────────────────────────────── -->
         <v-menu
           v-model="gbSortMenuOpen"
@@ -631,6 +646,7 @@ import { useExportStore } from "../../stores/useExportStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useProjectStore } from "../../stores/useProjectStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import {
   MAX_THUMBNAIL_SIZE_LEVEL,
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
@@ -701,6 +717,7 @@ const exportStore = useExportStore();
 const searchStore = useSearchStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const projectStore = useProjectStore();
+const sidebarStore = useSidebarStore();
 
 // Stack time belongs to the stack-deck lens, not to loose pictures. Keep it
 // visibly special while that lens is active and absent everywhere else. A
@@ -1477,6 +1494,50 @@ const gbCollapseAllStacksDisabled = computed(
   }
   .tb-row-600 {
     display: flex;
+  }
+}
+
+/* Once the command groups no longer fit side by side, recompose them as two
+   deliberate shell bands instead of squeezing, clipping, or hiding core
+   actions. Fine-pointer narrow windows keep the 48px desktop band; coarse
+   pointers get 56px rows so every target clears the touch floor. */
+@media (max-width: 640px) {
+  .selection-bar-overlay {
+    height: 96px;
+    padding-right: max(var(--space-2), env(safe-area-inset-right));
+    padding-left: max(var(--space-2), env(safe-area-inset-left));
+  }
+
+  .selection-bar-content {
+    height: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .selection-bar-left,
+  .selection-bar-right {
+    width: 100%;
+    height: 50%;
+    min-width: 0;
+    flex-shrink: 0;
+    box-sizing: border-box;
+  }
+
+  .selection-bar-left {
+    overflow: hidden;
+  }
+
+  .selection-bar-right {
+    justify-content: flex-end;
+    margin-left: 0;
+    border-top: 1px solid rgb(var(--v-theme-divider));
+  }
+}
+
+@media (max-width: 640px) and (hover: none) and (pointer: coarse) {
+  .selection-bar-overlay {
+    height: 112px;
   }
 }
 </style>
