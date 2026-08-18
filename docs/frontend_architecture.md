@@ -410,11 +410,13 @@ The tab/category switch is **stateless** (see Key Design Principles). Concretely
   field, to a Vuetify scrim / the lightbox / the review overlay (which
   deliberately leaves `Ctrl+A` copyable), and to the Duplicates view, whose own
   `Ctrl+A` takes the queue.
-  - The listener is capture-phase on `document` and calls `stopPropagation`,
-    because the grid's `Ctrl+A` (select all *images*) sits on `window` in the
-    bubble phase and would otherwise win. Without an owner the key fell through
-    to that listener, or — with a sidebar field focused — to the browser's
-    native select-all, which is what "Ctrl+A selects the sidebar's text" was.
+  - **`Ctrl+A` is owned per surface**: the grid takes every picture
+    (`useGridKeyboardNav`), the Duplicates queue every group
+    (`useDedupQueueKeyboard`), and now the People list every person. A surface
+    with no implementation gets the page default instead, which is what "Ctrl+A
+    selects the sidebar's text" was. The listener is capture-phase on `document`
+    and calls `stopPropagation`, because the grid's listener sits on `window` in
+    the bubble phase and would otherwise overrule it.
   - It goes through `emitCharacterMultiSelection(ids, primaryId, multiMode)`,
     the same emit Ctrl/Cmd-click uses. **`primaryId` must name a real person:**
     `pushRouteForCurrentSelection` only puts `?ids=…&mode=…` on the URL when

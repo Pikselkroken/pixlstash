@@ -1,10 +1,8 @@
 // Ctrl/Cmd+A over the sidebar selects every person the People list is showing.
 //
-// The sidebar owned no keys at all, so Ctrl+A there went one of two places,
-// neither of them the People list: the grid's `window` listener (select all
-// IMAGES), or — with a sidebar field focused, which is what a user has after
-// touching the sort selector or a rename box — the browser's own select-all,
-// which highlighted the sidebar's text.
+// Select-all is implemented per surface — the grid takes every picture, the
+// Duplicates queue every group — and the People list had no implementation, so
+// the key there fell back to the page default: a text selection.
 //
 // What this file pins is the ownership, in both directions, against the REAL
 // grid handler rather than a stand-in: over the sidebar the key selects the

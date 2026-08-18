@@ -3448,21 +3448,22 @@ function modalSurfaceOwnsKeyboard() {
 /**
  * Ctrl/Cmd+A over the sidebar selects every person the People list is showing.
  *
- * Select-all belongs to the surface the user is working in, and the sidebar
- * owned no keys at all: Ctrl+A fell through to the grid's window listener
- * (select all IMAGES) or, with a sidebar field focused, to the browser's own
- * select-all, which just highlighted the sidebar's text. The pointer is the
- * ownership signal because the rows are still non-focusable divs (a
- * roving-tabindex listbox for the list is its own change, and until it exists
- * there is no keyboard route into the sidebar); a focused sidebar control
- * counts too, since the event target is then inside the sidebar.
+ * Select-all is implemented per surface: the grid takes every picture
+ * (`useGridKeyboardNav`), the Duplicates queue takes every group
+ * (`useDedupQueueKeyboard`). The People list had no implementation, so the key
+ * there did whatever the page default was — a text selection — which is the
+ * bug. The pointer is the ownership signal because the rows are still
+ * non-focusable divs (a roving-tabindex listbox for the list is its own change,
+ * and until it exists there is no keyboard route into the sidebar); a focused
+ * sidebar control counts too, since the event target is then inside the sidebar.
  *
  * Capture phase + `stopPropagation`: the grid's Ctrl+A listener sits on
  * `window` in the bubble phase, so the sidebar has to claim the key before the
- * event ever gets there — the same way the sidebar context menu claims Escape.
- * That is also why the Duplicates queue is excluded rather than overruled: its
- * own Ctrl+A takes the whole queue from a document bubble listener, and a
- * navigation would throw the user out of their triage position.
+ * event gets there or select-all-images would overrule it — the same way the
+ * sidebar context menu claims Escape. That is also why the Duplicates queue is
+ * excluded rather than overruled: its own Ctrl+A takes the whole queue from a
+ * document bubble listener, and a navigation would throw the user out of their
+ * triage position.
  *
  * `union` is forced because the remembered mode is sessionStorage-backed: a
  * user who last used Overlap would otherwise get "all N people, intersected",
