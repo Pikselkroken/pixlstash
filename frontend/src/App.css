@@ -14,6 +14,14 @@ body {
   box-sizing: border-box;
   border: none;
 }
+
+@supports (height: 100dvh) {
+  body {
+    min-height: 100dvh;
+    height: 100dvh;
+  }
+}
+
 .app-viewport {
   position: fixed;
   inset: 0;
@@ -29,6 +37,17 @@ body {
      so the file manager simply fills the whole viewport. */
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+}
+
+@supports (height: 100dvh) {
+  .app-viewport {
+    height: 100dvh;
+  }
 }
 
 /* Removed duplicate body rule */
@@ -56,7 +75,6 @@ body {
   box-sizing: border-box;
   padding: 0;
   margin: 0;
-  transition: width 0.2s;
 }
 .main-content {
   flex: 1;
@@ -258,10 +276,6 @@ body {
      invisible hit area so hovering the edge still reveals the sidebar. */
   background: transparent;
   cursor: pointer;
-  transition: width 0.15s ease;
-}
-.sidebar-hover-trigger:hover {
-  width: 11px;
 }
 .sidebar-hover-trigger-tab {
   display: flex;
@@ -281,6 +295,21 @@ body {
 .sidebar-hover-trigger:hover .sidebar-hover-trigger-tab {
   background: rgb(var(--v-theme-accent));
   color: rgb(var(--v-theme-on-accent));
+}
+
+@media (max-width: 640px) {
+  .sidebar-shell.sidebar-overlay {
+    width: min(calc(100vw - var(--space-7)), 320px);
+    max-width: 100%;
+  }
+
+  .sidebar-shell.sidebar-overlay .sidebar {
+    width: 100% !important;
+  }
+
+  .sidebar-shell.sidebar-overlay .sidebar-resize-handle {
+    display: none;
+  }
 }
 
 /* Narrow widths reuse the same auto-hide overlay as the unpinned sidebar (the
