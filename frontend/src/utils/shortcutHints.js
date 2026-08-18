@@ -48,6 +48,19 @@ export function redoKeyHint(nav) {
 }
 
 /**
+ * Keycap labels for "select all", in press order.
+ *
+ * The shelf, the grid and the duplicate queue all accept either Ctrl or Meta;
+ * only the label differs.
+ *
+ * @param {Object} [nav] - injectable navigator.
+ * @returns {Array<string>} e.g. `["Ctrl", "A"]` or `["⌘", "A"]`.
+ */
+export function selectAllKeyHint(nav) {
+  return isApplePlatform(nav) ? ["⌘", "A"] : ["Ctrl", "A"];
+}
+
+/**
  * The same hint as one flat string, for a `title` attribute or an aria-label
  * where separate keycap elements are not available.
  * @param {Array<string>} keys - a hint from {@link undoKeyHint}.

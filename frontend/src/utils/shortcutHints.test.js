@@ -3,6 +3,7 @@ import {
   formatKeyHint,
   isApplePlatform,
   redoKeyHint,
+  selectAllKeyHint,
   undoKeyHint,
 } from "./shortcutHints";
 
@@ -44,6 +45,13 @@ describe("undoKeyHint / redoKeyHint", () => {
     expect(undoKeyHint(MAC_UA)).toEqual(["⌘", "Z"]);
     // macOS has no Ctrl+Y convention; the system redo is shift-command-Z.
     expect(redoKeyHint(MAC_UA)).toEqual(["⇧", "⌘", "Z"]);
+  });
+});
+
+describe("selectAllKeyHint", () => {
+  it("follows the platform, like the undo hint beside it", () => {
+    expect(selectAllKeyHint(WIN_UA)).toEqual(["Ctrl", "A"]);
+    expect(selectAllKeyHint(MAC_UA)).toEqual(["⌘", "A"]);
   });
 });
 
