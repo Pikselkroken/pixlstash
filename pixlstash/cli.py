@@ -278,12 +278,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicitly approve one legacy owner/token migration before startup.",
         description=(
             "Approve moving one older library's owner and API tokens out of "
-            "its vault.db and into the hub. Needed once, before the first "
-            "normal start, on an installation that predates the hub: startup "
-            "deliberately will not guess which vault to trust. This records "
-            "the approval and nothing else — the copy, the verification and "
-            "the blanking of the old identity happen the next time PixlStash "
-            "starts."
+            "its vault.db and into the hub. Startup deliberately will not "
+            "guess which vault to trust on its own; an interactive terminal "
+            "launch offers this same approval as a `[y/N]` prompt instead, "
+            "so this command is for a non-interactive upgrade (a service, a "
+            "container, a script) or for approving it ahead of time. This "
+            "records the approval and nothing else — the copy, the "
+            "verification and the blanking of the old identity happen the "
+            "next time PixlStash starts."
         ),
     )
     migrate_parser.add_argument(

@@ -183,11 +183,23 @@ the environment PixlStash is installed into is active.
 ### Required one-shot preparation when upgrading
 
 If an older installation already has its owner and tokens inside `vault.db`,
-install/pull the new version but **do not start it normally yet**. Authorize
-that exact legacy vault once; normal startup deliberately will not guess from
-the config file or from finding an existing vault. During desktop setup, the
-app performs this step only after you explicitly approve importing the detected
-legacy owner and tokens.
+normal startup deliberately will not guess from the config file or from
+finding an existing vault; it needs that exact legacy vault authorized once.
+
+- **Desktop app:** setup performs this step only after you explicitly approve
+  importing the detected legacy owner and tokens.
+- **`pixlstash-server` / `python -m pixlstash.app`, in an interactive
+  terminal:** startup detects the unprepared legacy vault itself and asks,
+  with a plain explanation and a `[y/N]` prompt — defaulting to **no**, since
+  this is irreversible — before doing anything. Saying yes does the same thing
+  the CLI command below does, in the same startup, so no separate step or
+  restart is needed. After this runs, the vault is no longer readable as an
+  owner/token store by versions of PixlStash older than the hub — the prompt
+  says so before you answer.
+- **Non-interactive launches** (a service, a container, redirected stdin) log
+  that the legacy vault needs preparing instead of asking, and the CLI command
+  below remains the
+  way to authorize the migration ahead of time.
 
 Pip installation:
 

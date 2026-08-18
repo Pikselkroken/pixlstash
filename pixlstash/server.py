@@ -380,6 +380,7 @@ class Server(
         self,
         server_config_path,
         path_map: dict[str, str] | None = None,
+        legacy_identity_prompt=None,
     ):
         """
         Initialize the Server instance.
@@ -388,6 +389,10 @@ class Server(
             server_config_path (str): Path to the server-only config file.
             path_map: Optional dict mapping host path prefixes to their
                 container equivalents. Set by the ``--path-map`` CLI arg.
+            legacy_identity_prompt: Optional callable passed straight through
+                to :func:`bootstrap_hub`, asked to authorize a detected but
+                unprepared legacy vault instead of requiring
+                ``pixlstash-cli libraries prepare-legacy-identity`` first.
         """
         # Ensure garbage collection before starting server to free up memory.
         # This is mainly to ensure repeated runs within the testing framework do not accumulate memory usage.
@@ -463,6 +468,7 @@ class Server(
         self._hub_bootstrap = bootstrap_hub(
             self._server_config["image_root"],
             hub_path,
+            legacy_identity_prompt=legacy_identity_prompt,
         )
         self.hub = self._hub_bootstrap.hub
         self.library_registry = LibraryRegistry(self.hub)
