@@ -16,6 +16,10 @@ from pixlstash.startup_permissions import (
     permission_repair_signal,
     repair_permission_issues,
 )
+from pixlstash.trusted_sqlite import (
+    TrustedSQLiteLocation,
+    TrustedSQLiteLocationError,
+)
 
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
@@ -154,9 +158,7 @@ def test_external_library_preserves_read_access(tmp_path):
     assert issues[0].repaired_mode == 0o755
 
 
-def test_human_and_electron_messages_name_paths_and_modes(
-    tmp_path, app_owned_config
-):
+def test_human_and_electron_messages_name_paths_and_modes(tmp_path, app_owned_config):
     config_dir = tmp_path / "config with spaces"
     config_dir.mkdir(mode=0o700)
     app_owned_config.add(os.path.realpath(config_dir))
@@ -175,3 +177,44 @@ def test_human_and_electron_messages_name_paths_and_modes(
     payload = json.loads(signal.removeprefix(PERMISSION_REPAIR_PREFIX))
     assert payload["version"] == 1
     assert payload["issues"][0]["path"] == str(config_dir)
+
+
+def test_offers_the_writable_ancestor_the_guard_refuses(tmp_path, app_owned_config):
+    """The repair offer must cover every directory ``TrustedSQLiteLocation`` walks.
+
+    The desktop shape that exposed the gap: the Electron config dir and the
+    library root are both private, but the library sits inside a shared folder
+    left at 0777 by an older release. The guard refuses on that ancestor, so an
+    offer that only inspects leaf paths reports "nothing to fix" for a startup
+    that cannot succeed.
+    """
+
+    desktop_config = tmp_path / "pixlstash-desktop"
+    desktop_config.mkdir(mode=0o700)
+    app_owned_config.add(os.path.realpath(desktop_config))
+    server_config = str(desktop_config / "server-config.json")
+
+    shared = tmp_path / "pixlstash"
+    shared.mkdir(mode=0o700)
+    library = shared / "images"
+    library.mkdir(mode=0o700)
+    vault = library / "vault.db"
+    sqlite3.connect(vault).close()
+    os.chmod(vault, 0o600)
+    os.chmod(shared, 0o777)
+
+    # A sticky shared root above the chain is legitimate (this is what /tmp is)
+    # and must never be offered for a chmod.
+    os.chmod(tmp_path, 0o1777)
+
+    with pytest.raises(TrustedSQLiteLocationError):
+        TrustedSQLiteLocation.open(str(vault)).close()
+
+    issues = find_startup_permission_issues(server_config, str(library))
+    assert [issue.path for issue in issues] == [str(shared)]
+    assert issues[0].repaired_mode == 0o755
+
+    repair_permission_issues(issues)
+    assert mode(shared) == 0o755
+    assert not find_startup_permission_issues(server_config, str(library))
+    TrustedSQLiteLocation.open(str(vault)).close()

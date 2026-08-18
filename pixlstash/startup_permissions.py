@@ -104,7 +104,9 @@ def _repairable_issue(
     unsafe = mode & (0o077 if private else 0o022)
     if not unsafe:
         return None
-    repaired = 0o700 if is_directory and private else 0o600 if private else mode & ~0o022
+    repaired = (
+        0o700 if is_directory and private else 0o600 if private else mode & ~0o022
+    )
     return PermissionIssue(
         area=area,
         path=os.path.abspath(path),
@@ -128,6 +130,56 @@ def _database_issues(path: str, *, area: str, private: bool) -> list[PermissionI
         if issue is not None:
             issues.append(issue)
     return issues
+
+
+def _ancestor_issues(path: str, *, area: str) -> list[PermissionIssue]:
+    """Mirror the guard's ancestor walk over the directories enclosing *path*.
+
+    ``TrustedSQLiteLocation`` refuses a database whose *enclosing* directories
+    are group/world-writable, not only the directory holding it, so an offer
+    that stops at the leaf reports "no issues" for a startup the guard will
+    still refuse.  The sticky-bit allowance is copied from the guard as well:
+    a shared root such as ``/tmp`` is acceptable above the immediate parent and
+    must never be offered for a chmod.
+    """
+
+    issues: list[PermissionIssue] = []
+    current = os.path.dirname(os.path.realpath(path))
+    immediate = True
+    while True:
+        try:
+            info = os.lstat(current)
+        except OSError:
+            break
+        if immediate or not info.st_mode & stat.S_ISVTX:
+            issue = _repairable_issue(
+                current,
+                area=area,
+                private=False,
+                is_directory=True,
+            )
+            if issue is not None:
+                issues.append(issue)
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+        immediate = False
+    return issues
+
+
+def _deduplicated(issues: Iterable[PermissionIssue]) -> list[PermissionIssue]:
+    """Keep the first offer recorded for each path; earlier ones are stricter."""
+
+    seen: set[str] = set()
+    unique: list[PermissionIssue] = []
+    for issue in issues:
+        key = os.path.realpath(issue.path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(issue)
+    return unique
 
 
 def _active_library_root(hub_path: str) -> str | None:
@@ -184,6 +236,7 @@ def find_startup_permission_issues(
     if config_issue is not None:
         issues.append(config_issue)
     issues.extend(_database_issues(hub_path, area="PixlStash settings", private=True))
+    issues.extend(_ancestor_issues(hub_path, area="Folder holding PixlStash settings"))
 
     # Do not open the hub until every repairable credential-store issue is gone.
     # A second discovery pass after repair then picks up a switched active library.
@@ -215,14 +268,16 @@ def find_startup_permission_issues(
         )
         if directory_issue is not None:
             issues.append(directory_issue)
+        vault_path = os.path.join(resolved, "vault.db")
         issues.extend(
             _database_issues(
-                os.path.join(resolved, "vault.db"),
+                vault_path,
                 area="Library",
                 private=library_is_app_owned,
             )
         )
-    return issues
+        issues.extend(_ancestor_issues(vault_path, area="Folder holding your library"))
+    return _deduplicated(issues)
 
 
 def repair_permission_issues(issues: Iterable[PermissionIssue]) -> None:
