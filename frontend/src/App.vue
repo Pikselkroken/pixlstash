@@ -1,6 +1,7 @@
 <script setup>
 import {
   computed,
+  defineAsyncComponent,
   nextTick,
   onBeforeUnmount,
   onMounted,
@@ -53,9 +54,6 @@ import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import TelemetryConsentDialog from "./components/dialogs/TelemetryConsentDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
-import DuplicateQueue from "./components/views/DuplicateQueue.vue";
-import ModelShelf from "./components/views/ModelShelf.vue";
-import ReviewSessionsOverlay from "./components/views/ReviewSessionsOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import ThumbnailUpgradeBanner from "./components/panels/ThumbnailUpgradeBanner.vue";
 import NoticeHost from "./components/widgets/NoticeHost.vue";
@@ -64,6 +62,18 @@ import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
 import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
 import { toPx } from "./utils/floatingBottom.js";
+
+// These surfaces are mutually exclusive with the primary grid (or explicitly
+// opened on demand), so keep their heavier feature code out of app startup.
+const DuplicateQueue = defineAsyncComponent(() =>
+  import("./components/views/DuplicateQueue.vue"),
+);
+const ModelShelf = defineAsyncComponent(() =>
+  import("./components/views/ModelShelf.vue"),
+);
+const ReviewSessionsOverlay = defineAsyncComponent(() =>
+  import("./components/views/ReviewSessionsOverlay.vue"),
+);
 
 // --- Stores ---
 const selectionStore = useSelectionStore();
@@ -505,7 +515,11 @@ defineExpose({
         <!-- Auto-hide (unpinned): a thin strip at the left edge reveals the
              sidebar overlay on hover (or tap, on touch). -->
         <div
-          v-if="sidebarStore.sidebarOverlay && !sidebarStore.sidebarVisible"
+          v-if="
+            sidebarStore.sidebarOverlay &&
+            !sidebarStore.sidebarVisible &&
+            !sidebarStore.sidebarForcedHidden
+          "
           class="sidebar-hover-trigger"
           title="Show sidebar"
           @mouseenter="sidebarStore.revealSidebar()"
