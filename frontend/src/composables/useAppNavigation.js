@@ -54,6 +54,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
             ? payload.projectIds
             : {},
         projectContext: payload.projectContext ?? null,
+        multiMode: payload.multiMode ?? null,
       };
     }
     return {
@@ -62,6 +63,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
       ids: [],
       projectIds: {},
       projectContext: null,
+      multiMode: null,
     };
   }
 
@@ -82,6 +84,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
       ids,
       projectIds,
       projectContext,
+      multiMode,
     } = SelectionPayload(payload);
     projectStore.characterProjectIds = projectIds;
     if (projectContext) {
@@ -113,6 +116,11 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     selectionStore.selectedCharacterIds = ids.length ? ids : [];
     if (ids.length <= 1) {
       selectionStore.setCharacterMultiMode("union");
+    } else if (multiMode) {
+      // A gesture may state the mode it means. "Select all people" does: the
+      // remembered mode is sessionStorage-backed, and intersecting everyone is
+      // an empty grid by construction.
+      selectionStore.setCharacterMultiMode(multiMode);
     }
     if (charId !== ALL_PICTURES_ID) {
       filterStore.unassignedOnlyFilter = false;

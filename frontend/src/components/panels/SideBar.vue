@@ -211,6 +211,10 @@ const securityUpdateClass = computed(() => {
 
 const imageImporterRef = ref(null);
 const sidebarRootRef = ref(null);
+// Is the pointer inside the sidebar? The shelf's Ctrl+A owner reads this: the
+// rows are not focusable, so hover is the only signal for "the user is working
+// in here" (the grid uses the same signal for its digit-scoring keys).
+const sidebarHovered = ref(false);
 const labelOverflow = ref({});
 const labelRefs = new Map();
 const labelObservers = new Map();
@@ -1540,6 +1544,42 @@ const charsCollapsed = computed(() => {
   );
 });
 
+/**
+ * The people a Ctrl/Cmd+A over the sidebar takes, or `[]` when there is no
+ * list to take.
+ *
+ * Only the global library's People list qualifies, because it is the only
+ * surface where "all people" has one answer: the project tab renders a tree of
+ * several projects' people from a different list, the Folders tab and a
+ * set-scoped share session render no People list at all, and a collapsed
+ * section (or a collapsed dock rail with its flyout shut) renders no rows.
+ * Every one of those cases leaves Ctrl+A to the grid, unchanged.
+ */
+const selectAllPeopleIds = computed(() => {
+  if (sidebarPrimaryTab.value !== "library") return [];
+  if (projectViewMode.value !== "global") return [];
+  if (scopedResourceType.value === "picture_set") return [];
+  const rowsShowing = sidebarStore.effectiveDocked
+    ? !charsCollapsed.value || collapsedCharMenuOpen.value
+    : !peopleSectionCollapsed.value;
+  if (!rowsShowing) return [];
+  return visibleCharacters.value
+    .map((char) => Number(char.id))
+    .filter((id) => Number.isFinite(id) && id > 0)
+    .sort((a, b) => a - b);
+});
+
+/**
+ * A person row's tooltip. It only promises Ctrl/Cmd+A where that key would
+ * actually act on the list the row belongs to.
+ */
+function characterRowTitle(char) {
+  const name = char?.name || "Character";
+  return selectAllPeopleIds.value.length
+    ? `${name} (Ctrl/Cmd + click to multi-select, Ctrl/Cmd + A for all)`
+    : `${name} (Ctrl/Cmd + click to multi-select)`;
+}
+
 const sidebarFolderChildIconSize = computed(() =>
   Math.round(sidebarThumbnailSizeModel.value * 0.5),
 );
@@ -1821,18 +1861,34 @@ function selectCharacter(id, label = null, event = null) {
     return;
   }
 
-  // Keep the primary view unchanged on ctrl-click
-  const primaryId = selectionStore.selectedCharacter ?? nextIds[0];
+  // Keep the primary view unchanged on ctrl-click.
+  emitCharacterMultiSelection(
+    nextIds,
+    selectionStore.selectedCharacter ?? nextIds[0],
+  );
+}
+
+/**
+ * Emit a multi-character selection for `ids` (a sorted list of character ids).
+ *
+ * Shared by Ctrl/Cmd-click and by the People list's Ctrl/Cmd+A. `primaryId` is
+ * the route's `:id` — `App.vue` only puts `?ids=…` on the URL when it names a
+ * real person (`pushRouteForCurrentSelection`), so a caller that hands it
+ * `ALL_PICTURES_ID` silently loses the whole multi-selection. `multiMode`
+ * overrides the remembered union/intersect mode when the gesture implies one.
+ */
+function emitCharacterMultiSelection(ids, primaryId, multiMode = null) {
   const multiProjectIds = {};
-  for (const cid of nextIds) {
+  for (const cid of ids) {
     const c = characters.value.find((ch) => ch.id === cid);
     multiProjectIds[cid] = c?.project_id ?? null;
   }
   emit("select-character", {
     id: primaryId,
     label: null,
-    ids: nextIds,
+    ids,
     projectIds: multiProjectIds,
+    multiMode,
   });
 }
 
@@ -3365,14 +3421,110 @@ function onSidebarCtxKeydown(event) {
   }
 }
 
+/** Does this element keep Ctrl+A for its own text? */
+function isTypingTarget(el) {
+  if (!(el instanceof HTMLElement)) return false;
+  if (el.isContentEditable) return true;
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) return true;
+  return el.getAttribute("role") === "textbox";
+}
+
+/**
+ * Is a surface that owns the keyboard for itself currently up?
+ *
+ * A Vuetify dialog and the lightbox render their own scrim over the sidebar, so
+ * a selection made behind them would be invisible; the review overlay
+ * deliberately leaves Ctrl+A alone so its text stays copyable
+ * (`ReviewSessionsOverlay.vue`), and stealing it here would undo that.
+ */
+function modalSurfaceOwnsKeyboard() {
+  return Boolean(
+    document.querySelector(".v-overlay--active .v-overlay__scrim") ||
+      document.querySelector(".image-overlay") ||
+      document.querySelector(".rs-overlay"),
+  );
+}
+
+/**
+ * Ctrl/Cmd+A over the sidebar selects every person the People list is showing.
+ *
+ * Select-all belongs to the surface the user is working in, and the sidebar
+ * owned no keys at all: Ctrl+A fell through to the grid's window listener
+ * (select all IMAGES) or, with a sidebar field focused, to the browser's own
+ * select-all, which just highlighted the sidebar's text. The pointer is the
+ * ownership signal because the rows are still non-focusable divs (a
+ * roving-tabindex listbox for the list is its own change, and until it exists
+ * there is no keyboard route into the sidebar); a focused sidebar control
+ * counts too, since the event target is then inside the sidebar.
+ *
+ * Capture phase + `stopPropagation`: the grid's Ctrl+A listener sits on
+ * `window` in the bubble phase, so the sidebar has to claim the key before the
+ * event ever gets there — the same way the sidebar context menu claims Escape.
+ * That is also why the Duplicates queue is excluded rather than overruled: its
+ * own Ctrl+A takes the whole queue from a document bubble listener, and a
+ * navigation would throw the user out of their triage position.
+ *
+ * `union` is forced because the remembered mode is sessionStorage-backed: a
+ * user who last used Overlap would otherwise get "all N people, intersected",
+ * which is an empty grid by construction.
+ */
+function onSidebarSelectAllKeydown(event) {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) {
+    return;
+  }
+  if (event.repeat) return; // a HELD chord must not push a route per repeat
+  if (event.key !== "a" && event.key !== "A") return;
+  const root = sidebarRootRef.value;
+  if (!root) return;
+  const overSidebar =
+    sidebarHovered.value ||
+    (event.target instanceof Node && root.contains(event.target));
+  if (!overSidebar) return;
+  // Native select-all is what Ctrl+A means in a text field.
+  if (isTypingTarget(event.target) || isTypingTarget(document.activeElement)) {
+    return;
+  }
+  if (modalSurfaceOwnsKeyboard()) return;
+  if (isDuplicatesView.value) return;
+  const ids = selectAllPeopleIds.value;
+  if (!ids.length) return;
+  event.preventDefault();
+  event.stopPropagation();
+  // No `select-set` reset here: `App.handleSelectSet(null)` writes
+  // `selectedCharacter = ALL_PICTURES_ID` synchronously, which would strip the
+  // ids from the route. `handleSelectCharacter` clears the set selection
+  // anyway, which is why ctrl-click does not emit it either.
+  emitCharacterMultiSelection(
+    ids,
+    ids.includes(Number(selectionStore.selectedCharacter))
+      ? selectionStore.selectedCharacter
+      : ids[0],
+    "union",
+  );
+}
+
+// The sidebar can leave under a stationary pointer — Escape dismisses the
+// auto-hide overlay without a mouse move — and no mouseleave follows, so the
+// hover flag has to be cleared on the visibility change itself.
+watch(
+  () => sidebarStore.sidebarVisible,
+  (visible) => {
+    if (!visible) sidebarHovered.value = false;
+  },
+);
+
 document.addEventListener("mousedown", onSidebarCtxOutside);
 document.addEventListener("keydown", onSidebarCtxKeydown, true);
+onMounted(() =>
+  document.addEventListener("keydown", onSidebarSelectAllKeydown, true),
+);
 
 let sidebarNoticeCleanup = null;
 let _dockedScrollObserver = null;
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onSidebarCtxOutside);
   document.removeEventListener("keydown", onSidebarCtxKeydown, true);
+  document.removeEventListener("keydown", onSidebarSelectAllKeydown, true);
   // Drop any in-flight sidebar-resize drag listeners.
   onSidebarResizeEnd();
   if (sidebarNoticeCleanup) {
@@ -4002,6 +4154,8 @@ defineExpose({
       'sidebar--narrow': sidebarIsNarrow,
     }"
     :style="sidebarThumbStyle"
+    @mouseenter="sidebarHovered = true"
+    @mouseleave="sidebarHovered = false"
   >
     <!-- Drag the right edge to resize the expanded sidebar (hidden when docked). -->
     <div
@@ -4422,7 +4576,7 @@ defineExpose({
                       selectionOwnsHighlight,
                   },
                 ]"
-                :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
+                :title="characterRowTitle(char)"
                 @click="
                   selectCharacter(char.id, char.name || 'Character', $event)
                 "
@@ -4531,6 +4685,8 @@ defineExpose({
                 top: collapsedCharMenuPos.top + 'px',
                 left: collapsedCharMenuPos.left + 'px',
               }"
+              @mouseenter="sidebarHovered = true"
+              @mouseleave="sidebarHovered = false"
             >
               <div
                 class="sidebar-collapsed-flyout-header"
@@ -5497,7 +5653,7 @@ defineExpose({
                       },
                     ]"
                     :ref="(el) => registerCharacterRef(char.id, el)"
-                    :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
+                    :title="characterRowTitle(char)"
                     @click="
                       selectCharacter(char.id, char.name || 'Character', $event)
                     "
@@ -5985,7 +6141,7 @@ defineExpose({
                           onEntityDragStart('character', char.id, $event)
                         "
                         @dragend="onEntityDragEnd"
-                        :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
+                        :title="characterRowTitle(char)"
                         @click="
                           selectCharacter(
                             char.id,

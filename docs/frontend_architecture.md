@@ -400,6 +400,40 @@ The tab/category switch is **stateless** (see Key Design Principles). Concretely
   set / project emits the corresponding `select-*` event → `App.vue` calls
   `router.push()` → the route (the single source of truth) drives the grid.
   The grid is otherwise unaffected by tab switches.
+- **`Ctrl/Cmd+A` selects every person the People list is showing, while the
+  pointer is in the sidebar** (`onSidebarSelectAllKeydown`). The list it acts on
+  is `selectAllPeopleIds`, which is empty — leaving the key to the grid — on the
+  Folders tab, in project view mode (the project tree renders several projects'
+  people from a different list, so "all people" has no single answer there), in
+  a set-scoped share session, with the People section or the dock rail
+  collapsed, and with nobody in the library. It also declines to a focused text
+  field, to a Vuetify scrim / the lightbox / the review overlay (which
+  deliberately leaves `Ctrl+A` copyable), and to the Duplicates view, whose own
+  `Ctrl+A` takes the queue.
+  - The listener is capture-phase on `document` and calls `stopPropagation`,
+    because the grid's `Ctrl+A` (select all *images*) sits on `window` in the
+    bubble phase and would otherwise win. Without an owner the key fell through
+    to that listener, or — with a sidebar field focused — to the browser's
+    native select-all, which is what "Ctrl+A selects the sidebar's text" was.
+  - It goes through `emitCharacterMultiSelection(ids, primaryId, multiMode)`,
+    the same emit Ctrl/Cmd-click uses. **`primaryId` must name a real person:**
+    `pushRouteForCurrentSelection` only puts `?ids=…&mode=…` on the URL when
+    `selectedCharacter` is not `ALL_PICTURES_ID`, so a primary of `ALL` drops
+    the whole multi-selection on the floor, and the route is the single source
+    of truth for the grid. For the same reason this path must **not** emit
+    `select-set: null` first — `handleSelectSet(null)` writes
+    `selectedCharacter = ALL_PICTURES_ID` synchronously — and it does not need
+    to, because `handleSelectCharacter` clears the set selection itself.
+    `multiMode: "union"` is forced: the remembered mode is sessionStorage-backed
+    and intersecting every person is an empty grid by construction.
+  - **Hover is the ownership signal** because the rows are still non-focusable
+    `div`s, so there is no keyboard route into the list and this shortcut is
+    pointer-gated (WCAG 2.1.1 is satisfied for the *view* by clicking rows, not
+    for this shortcut). A roving-tabindex listbox for the People list would fix
+    that and is the natural follow-up. The flag is cleared when the auto-hide
+    sidebar goes invisible, because Escape dismisses it with no pointer move and
+    therefore no `mouseleave`; the teleported dock flyout carries the same hover
+    handlers, since it renders the list outside `.sidebar`.
 - **Every entry is also a drop target.** Each character and set row (and the
   project entries) accepts a drop of the current grid selection
   (`application/json` payload via `dataTransfer`) to assign those pictures —

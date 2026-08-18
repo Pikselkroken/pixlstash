@@ -45,7 +45,7 @@ const open = computed({
             </tr>
             <tr>
               <td><kbd>Ctrl</kbd>+<kbd>A</kbd></td>
-              <td>Select all images</td>
+              <td>Select all images (pointer anywhere but the sidebar)</td>
             </tr>
             <tr :class="{ 'shortcut-disabled': isReadOnly }">
               <td>
@@ -133,6 +133,16 @@ const open = computed({
             <tr>
               <td><kbd>Esc</kbd></td>
               <td>Close overlay</td>
+            </tr>
+            <tr>
+              <td colspan="2" class="shortcuts-section">Sidebar</td>
+            </tr>
+            <tr>
+              <td><kbd>Ctrl</kbd>+<kbd>A</kbd></td>
+              <td>
+                Select all people — takes Ctrl+A from the grid while the pointer
+                is over the sidebar
+              </td>
             </tr>
             <tr>
               <td colspan="2" class="shortcuts-section">General</td>
