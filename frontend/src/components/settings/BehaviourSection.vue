@@ -26,6 +26,13 @@ const taggerPluginDir = ref(null);
 // error is exception text from a third-party plugin and can name any path on
 // the host, so it is owner-and-local like the folder itself.
 const taggerPluginErrors = ref([]);
+const taggerCliHint = ref("pixlstash-cli plugins install <name-or-path>");
+const taggerCliAvailableHint = ref("pixlstash-cli plugins available");
+const taggerCliSearchHint = ref(
+  "pixlstash-cli plugins available <search-term>",
+);
+const taggerCliListHint = ref("pixlstash-cli plugins list");
+const pluginInstallHelpOpen = ref(false);
 
 // ── VRAM budget ───────────────────────────────────────────────────────────────
 const VRAM_BUDGET_MIN_GB = 2;
@@ -193,6 +200,13 @@ async function fetchTaggerPlugins() {
     const diagnostics = await listTaggerPluginDiagnostics();
     taggerPluginDir.value = diagnostics?.plugin_dirs?.user ?? "";
     taggerPluginErrors.value = diagnostics?.load_errors ?? [];
+    taggerCliHint.value = diagnostics?.cli_hint || taggerCliHint.value;
+    taggerCliAvailableHint.value =
+      diagnostics?.cli_available_hint || taggerCliAvailableHint.value;
+    taggerCliSearchHint.value =
+      diagnostics?.cli_search_hint || taggerCliSearchHint.value;
+    taggerCliListHint.value =
+      diagnostics?.cli_list_hint || taggerCliListHint.value;
   } catch {
     taggerPluginDir.value = "";
     taggerPluginErrors.value = [];
@@ -338,29 +352,74 @@ watch(
           <strong>{{ p.name }}</strong> failed to load: {{ p.message }}
         </li>
       </ul>
-      <div v-if="taggerPluginDir" class="settings-tagger-plugin-dir">
-        Add your own plugin by dropping a <code>.py</code> file (or a folder
-        with an <code>__init__.py</code>) into
-        <code class="settings-tagger-plugin-path">{{ taggerPluginDir }}</code
-        >, creating the folder if it does not exist. Plugins run as ordinary
-        Python with the same access as PixlStash itself, so only add ones you
-        trust. Restart the server afterwards — plugins are only discovered at
-        start-up.
-      </div>
-      <!-- Rendered only once the diagnostics request has answered. Without it
-           the block just vanishes for a remote caller, which reads as a missing
-           feature rather than a deliberate restriction; rendered too early it
-           tells a local owner the path cannot be shown on the screen showing
-           it. -->
-      <div
-        v-else-if="taggerPluginDir !== null"
-        class="settings-tagger-plugin-dir"
-      >
-        Custom plugins are installed by putting a file into a folder on the
-        machine running PixlStash. The path is only shown to a browser on that
-        machine or its local network, so open this screen from there to see it.
+      <div class="settings-tagger-plugin-help">
+        <v-btn variant="text" size="small" prepend-icon="mdi-help-circle-outline" @click="pluginInstallHelpOpen = true">
+          How to install plugins
+        </v-btn>
       </div>
     </SettingsSection>
+
+    <v-dialog
+      v-model="pluginInstallHelpOpen"
+      max-width="560"
+      @click:outside="pluginInstallHelpOpen = false"
+    >
+      <v-card class="plugin-install-card">
+        <v-card-title class="plugin-install-title">
+          How to install plugins
+        </v-card-title>
+        <v-card-text class="plugin-install-help-body">
+          <p>
+            Only install plugins you trust. They run with the same access as
+            PixlStash.
+          </p>
+
+          <h3>Find plugins</h3>
+          <p>
+            Browse the
+            <a
+              class="plugin-catalogue-link"
+              href="https://github.com/Pikselkroken/PixlStash-plugins"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              official plugin catalogue
+              <v-icon size="x-small" aria-hidden="true">mdi-open-in-new</v-icon>
+            </a>
+            or use the CLI to list published plugins, search the catalogue, and
+            show installed plugins.
+          </p>
+          <div class="plugin-install-commands">
+            <pre class="plugin-install-command"><code>{{ taggerCliAvailableHint }}</code></pre>
+            <pre class="plugin-install-command"><code>{{ taggerCliSearchHint }}</code></pre>
+            <pre class="plugin-install-command"><code>{{ taggerCliListHint }}</code></pre>
+          </div>
+
+          <h3>Install with the CLI</h3>
+          <pre class="plugin-install-command"><code>{{ taggerCliHint }}</code></pre>
+          <p>
+            Use a repository name or local file/folder, then restart PixlStash.
+          </p>
+
+          <h3>Install manually</h3>
+          <p v-if="taggerPluginDir">
+            Put the plugin file or folder in
+            <code class="settings-tagger-plugin-path">{{ taggerPluginDir }}</code>
+            and restart PixlStash.
+          </p>
+          <p v-else>
+            Put the plugin file or folder in PixlStash's custom plugin folder
+            and restart. Open this screen locally to see the exact path.
+          </p>
+        </v-card-text>
+        <v-card-actions class="plugin-install-actions">
+          <v-spacer />
+          <v-btn variant="text" @click="pluginInstallHelpOpen = false">
+            Close
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -377,8 +436,131 @@ watch(
   padding-top: var(--space-3);
 }
 
+.settings-tagger-plugin-help {
+  padding-top: var(--space-2);
+}
+
+.plugin-install-card {
+  color: rgb(var(--v-theme-on-surface));
+  background: rgb(var(--v-theme-surface));
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-4);
+}
+
+.plugin-install-title {
+  padding: var(--space-5) var(--space-5) var(--space-3);
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.plugin-install-help-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5) var(--space-2);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.plugin-install-help-body p {
+  margin: 0;
+}
+
+.plugin-install-help-body h3 {
+  margin: var(--space-2) 0 0;
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.plugin-install-help-body :not(pre) > code {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-surface), 0.08);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: inherit;
+  overflow-wrap: anywhere;
+}
+
+.plugin-catalogue-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: rgb(var(--v-theme-on-surface));
+  font-weight: var(--weight-medium);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.plugin-catalogue-link:hover,
+.plugin-catalogue-link:active {
+  text-decoration-thickness: 2px;
+}
+
+.plugin-catalogue-link:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.plugin-install-commands {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.plugin-install-command {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  color: rgb(var(--v-theme-on-surface));
+  background: rgb(var(--v-theme-background));
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.plugin-install-command code {
+  color: inherit;
+  font: inherit;
+}
+
+.plugin-install-actions {
+  min-height: 40px;
+  padding: var(--space-3) var(--space-5) var(--space-4);
+}
+
 .settings-tagger-plugin-path {
   overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .plugin-install-title {
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
+  }
+
+  .plugin-install-help-body {
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
+  }
+
+  .plugin-install-actions {
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
+  }
 }
 
 .settings-tagger-plugin-errors {

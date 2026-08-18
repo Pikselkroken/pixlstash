@@ -32,6 +32,7 @@ import Toolbar from "./Toolbar.vue";
 import { isReadOnly as readOnlyRef } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 // Vuetify is not installed in the test app; v-menu is stubbed with the two
 // behaviours the toolbar relies on (activator slot props carry the toggle,
@@ -146,6 +147,38 @@ beforeEach(() => {
   setActivePinia(createPinia());
   readOnlyRef.value = false;
   vi.spyOn(console, "warn").mockImplementation(() => {});
+});
+
+describe("Toolbar — narrow-screen composition", () => {
+  it("offers a real navigation control when the sidebar is forced into a drawer", async () => {
+    const sidebar = useSidebarStore();
+    sidebar.sidebarForcedHidden = true;
+    const wrapper = mountToolbar();
+
+    const trigger = wrapper.get('[aria-label="Open library navigation"]');
+    expect(trigger.attributes("aria-expanded")).toBe("false");
+
+    await trigger.trigger("click");
+    expect(sidebar.sidebarVisible).toBe(true);
+    expect(trigger.attributes("aria-expanded")).toBe("true");
+  });
+
+  it("keeps toolbar height and grid offset on the same narrow-width ladder", async () => {
+    const { readFileSync } = await import("node:fs");
+    const toolbar = readFileSync(
+      `${process.cwd()}/src/components/panels/Toolbar.vue`,
+      "utf8",
+    );
+    const grid = readFileSync(
+      `${process.cwd()}/src/components/views/ImageGrid.css`,
+      "utf8",
+    );
+
+    for (const height of [96, 112]) {
+      expect(toolbar).toContain(`height: ${height}px`);
+      expect(grid).toContain(`--selbar-height: ${height}px`);
+    }
+  });
 });
 
 describe("Toolbar — the shell band's one box recipe", () => {

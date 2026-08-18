@@ -161,6 +161,8 @@ export interface OverlayFallbackHooks {
   notify: (message: string) => void;
   /** Diagnostic logging; defaults to console.error. */
   log?: (message: string) => void;
+  /** False when the failure is unrelated to the accelerator. */
+  shouldFallback?: (error: unknown) => boolean;
 }
 
 /**
@@ -188,6 +190,7 @@ export async function launchWithOverlayFallback(
     await hooks.start(accel);
   } catch (e) {
     if (accel === null) throw e; // bundled env failed — nothing to fall back to
+    if (hooks.shouldFallback?.(e) === false) throw e;
     const log = hooks.log ?? ((m: string) => console.error(m));
     log(
       `[overlay-fallback] backend startup failed with the ${accel} overlay active; ` +

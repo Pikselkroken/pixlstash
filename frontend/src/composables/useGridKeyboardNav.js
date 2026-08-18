@@ -52,6 +52,7 @@ export function useGridKeyboardNav(
     clearFaceSelection,
     clearSearchQuery,
     scrollCursorIntoView,
+    focusCursor = () => {},
     openOverlay,
     deleteSelected,
     selectionBarRef,
@@ -286,6 +287,7 @@ export function useGridKeyboardNav(
         // Ctrl+Arrow: move cursor without changing selection
       }
       scrollCursorIntoView(newIdx);
+      focusCursor(newIdx);
     } else if (
       (event.key === "PageDown" || event.key === "PageUp") &&
       event.shiftKey &&
@@ -355,6 +357,7 @@ export function useGridKeyboardNav(
       const end = Math.max(anchorIndex, newIdx);
       selectedImageIds.value = selectableRange(start, end);
       scrollCursorIntoView(newIdx);
+      focusCursor(newIdx);
     } else if (event.key === " ") {
       // Space: toggle selection at cursor
       if (cursorIdx.value !== null) {
@@ -396,6 +399,8 @@ export function useGridKeyboardNav(
         cursorIdx.value = idx;
         selectedImageIds.value = [img.id];
         lastSelectedImageId = img.id;
+        scrollCursorIntoView(idx);
+        focusCursor(idx);
       }
     } else if (event.key === "Delete" || event.key === "Backspace") {
       if (selectedImageIds.value.length > 0 && !isReadOnly.value) {

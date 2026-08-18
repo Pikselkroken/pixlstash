@@ -10,7 +10,7 @@
  *   textarea         — multi-line text input
  *   csv-int          — comma-separated integers (stored as string, validated)
  */
-import { reactive, watch } from "vue";
+import { reactive, useId, watch } from "vue";
 
 const props = defineProps({
   /** Array of parameter schema fields from TaggerPlugin.parameter_schema(). */
@@ -22,6 +22,28 @@ const props = defineProps({
 const emit = defineEmits(["update:modelValue"]);
 
 const form = reactive({});
+const formId = useId();
+
+function fieldControlId(index) {
+  return `${formId}-tagger-parameter-${index}`;
+}
+
+function fieldHelpId(index) {
+  return `${fieldControlId(index)}-help`;
+}
+
+function fieldUnitId(index) {
+  return `${fieldControlId(index)}-unit`;
+}
+
+function fieldDescriptionIds(field, index) {
+  const ids = [];
+  const isScaledNumber =
+    (field.type === "number" || field.type === "integer") && field.scale;
+  if (isScaledNumber && field.unit) ids.push(fieldUnitId(index));
+  if (field.description) ids.push(fieldHelpId(index));
+  return ids.length ? ids.join(" ") : undefined;
+}
 
 function applyValues(source) {
   for (const field of props.schema) {
@@ -86,8 +108,14 @@ function setScaled(field, raw) {
     <div v-if="!schema.length" class="tagger-params-empty">
       This plugin has no configurable parameters.
     </div>
-    <div v-for="field in schema" :key="field.name" class="tagger-params-field">
-      <label class="tagger-params-label">{{ field.label || field.name }}</label>
+    <div
+      v-for="(field, index) in schema"
+      :key="field.name"
+      class="tagger-params-field"
+    >
+      <label :for="fieldControlId(index)" class="tagger-params-label">
+        {{ field.label || field.name }}
+      </label>
 
       <!-- select -->
       <select
@@ -95,8 +123,10 @@ function setScaled(field, raw) {
           field.type === 'select' &&
           (Array.isArray(field.enum) || Array.isArray(field.options))
         "
+        :id="fieldControlId(index)"
         v-model="form[field.name]"
         class="tagger-params-input"
+        :aria-describedby="fieldDescriptionIds(field, index)"
       >
         <option
           v-for="opt in enumOptions(field)"
@@ -115,6 +145,7 @@ function setScaled(field, raw) {
         class="tagger-params-scaled-row"
       >
         <input
+          :id="fieldControlId(index)"
           :value="toDisplay(field, form[field.name])"
           type="number"
           class="tagger-params-input"
@@ -124,22 +155,29 @@ function setScaled(field, raw) {
             scaleBound(field, field.step) ??
             (field.type === 'integer' ? 1 : undefined)
           "
+          :aria-describedby="fieldDescriptionIds(field, index)"
           @input="setScaled(field, $event.target.value)"
         />
-        <span v-if="field.unit" class="tagger-params-unit">{{
-          field.unit
-        }}</span>
+        <span
+          v-if="field.unit"
+          :id="fieldUnitId(index)"
+          class="tagger-params-unit"
+        >
+          {{ field.unit }}
+        </span>
       </div>
 
       <!-- number / integer -->
       <input
         v-else-if="field.type === 'number' || field.type === 'integer'"
+        :id="fieldControlId(index)"
         v-model.number="form[field.name]"
         type="number"
         class="tagger-params-input"
         :min="field.min ?? undefined"
         :max="field.max ?? undefined"
         :step="field.step ?? (field.type === 'integer' ? 1 : undefined)"
+        :aria-describedby="fieldDescriptionIds(field, index)"
       />
 
       <!-- bool -->
@@ -147,36 +185,51 @@ function setScaled(field, raw) {
         v-else-if="field.type === 'bool' || field.type === 'boolean'"
         class="tagger-params-checkbox-row"
       >
-        <input v-model="form[field.name]" type="checkbox" />
+        <input
+          :id="fieldControlId(index)"
+          v-model="form[field.name]"
+          type="checkbox"
+          :aria-describedby="fieldDescriptionIds(field, index)"
+        />
         <span>Enabled</span>
       </label>
 
       <!-- textarea -->
       <textarea
         v-else-if="field.type === 'textarea'"
+        :id="fieldControlId(index)"
         v-model="form[field.name]"
         class="tagger-params-input tagger-params-textarea"
         rows="3"
+        :aria-describedby="fieldDescriptionIds(field, index)"
       />
 
       <!-- csv-int -->
       <input
         v-else-if="field.type === 'csv-int'"
+        :id="fieldControlId(index)"
         v-model="form[field.name]"
         type="text"
         class="tagger-params-input"
         placeholder="e.g. 1, 2, 3"
+        :aria-describedby="fieldDescriptionIds(field, index)"
       />
 
       <!-- string (default) -->
       <input
         v-else
+        :id="fieldControlId(index)"
         v-model="form[field.name]"
         type="text"
         class="tagger-params-input"
+        :aria-describedby="fieldDescriptionIds(field, index)"
       />
 
-      <div v-if="field.description" class="tagger-params-help">
+      <div
+        v-if="field.description"
+        :id="fieldHelpId(index)"
+        class="tagger-params-help"
+      >
         {{ field.description }}
       </div>
     </div>
@@ -188,17 +241,20 @@ function setScaled(field, raw) {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  min-width: 0;
 }
 
 .tagger-params-empty {
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.55);
+  overflow-wrap: anywhere;
 }
 
 .tagger-params-field {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  min-width: 0;
 }
 
 .tagger-params-label {
@@ -207,6 +263,7 @@ function setScaled(field, raw) {
   color: rgba(var(--v-theme-on-surface), 0.75);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  overflow-wrap: anywhere;
 }
 
 .tagger-params-input {
@@ -218,22 +275,28 @@ function setScaled(field, raw) {
   color: rgb(var(--v-theme-on-surface));
   outline: none;
   width: 100%;
+  min-width: 0;
   box-sizing: border-box;
 }
 
-.tagger-params-input:focus {
+.tagger-params-input:focus-visible {
+  outline: none;
   border-color: rgb(var(--v-theme-primary));
+  box-shadow: var(--focus-ring);
 }
 
 .tagger-params-scaled-row {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  min-width: 0;
 }
 
 .tagger-params-unit {
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.6);
+  flex-shrink: 0;
+  overflow-wrap: anywhere;
 }
 
 .tagger-params-textarea {
@@ -253,5 +316,6 @@ function setScaled(field, raw) {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.5);
   margin-top: var(--space-1);
+  overflow-wrap: anywhere;
 }
 </style>

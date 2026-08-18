@@ -25,6 +25,12 @@ import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
 import { isAllowedNavigation, redactUrl } from './urlPolicy';
 import { ServerProcess, devInterpreter } from './backend/ServerProcess';
 import {
+  isPermissionRepairRequired,
+  mkdirPrivateIfMissing,
+  permissionRepairDialogDetail,
+  PermissionRepairRequiredError,
+} from './backend/StartupPermissions';
+import {
   Accel,
   ACCEL_LABELS,
   RuntimeInfo,
@@ -662,7 +668,7 @@ function deviceFor(accel: Accel | null): string | undefined {
 }
 
 /** Spawn the backend (bundled env + optional GPU overlay), inject the loopback session, load the UI. */
-async function startAndLoad(accel: Accel | null): Promise<void> {
+async function startAndLoad(accel: Accel | null, repairPermissions = false): Promise<void> {
   sendPhase({ phase: 'starting' });
   // Await teardown so the previous backend has released its port/files before
   // the new one binds (a restart must not race the old process).
@@ -675,7 +681,11 @@ async function startAndLoad(accel: Accel | null): Promise<void> {
       );
     }
   });
-  const running = await serverProcess.start(overlayFor(accel), deviceFor(accel));
+  const running = await serverProcess.start(
+    overlayFor(accel),
+    deviceFor(accel),
+    repairPermissions,
+  );
 
   // Inject the pre-authenticated loopback session cookie so the window opens
   // straight into the library with no login prompt (backend seeds the matching
@@ -712,12 +722,79 @@ async function activeOverlayAccel(): Promise<Accel | null> {
  * phantom-active GPU with no backend running (the accel:use zombie, 2026-07-20).
  * With `accel === null` a failure rethrows unchanged (nothing to fall back from).
  */
-async function startWithOverlayFallback(accel: Accel | null): Promise<void> {
+async function startWithOverlayFallback(
+  accel: Accel | null,
+  repairPermissions = false,
+): Promise<void> {
   await launchWithOverlayFallback(accel, {
-    start: startAndLoad,
+    start: (candidate) => startAndLoad(candidate, repairPermissions),
     deactivateOverlay: () => manager.setActiveAccel(null),
     notify: (message) => dialog.showErrorBox('GPU acceleration unavailable', message),
+    // Permission failures are unrelated to an accelerator. Preserve the active
+    // overlay and let boot() offer the dedicated recovery dialog.
+    shouldFallback: (error) => !isPermissionRepairRequired(error),
   });
+}
+
+/**
+ * The repair report the permissions screen is currently showing. Held in main
+ * (rather than passed through a query string) so the renderer can only ever see
+ * a report the backend actually produced this launch.
+ */
+let pendingPermissionRepair: PermissionRepairRequiredError['request'] | null = null;
+
+/**
+ * Ask the user to authorise the backend's bounded permission repair.
+ *
+ * This is a full window rather than a native message box because the decision
+ * is the app's whole first impression when it happens: it has to explain a risk
+ * the user did not know they had, name every folder it will touch, and still
+ * read as PixlStash. A native dialog can only render one blob of detail text,
+ * which is how a list of paths and modes turns into a wall the user dismisses.
+ *
+ * Falls back to the native box when there is no window to host the page (the
+ * repair can be discovered before `createWindow`, e.g. a headless relaunch), so
+ * the offer is never silently lost.
+ */
+async function offerPermissionRepair(error: PermissionRepairRequiredError): Promise<boolean> {
+  if (!mainWindow) {
+    const result = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'PixlStash',
+      message: 'PixlStash needs safer file permissions',
+      detail: permissionRepairDialogDetail(error.request),
+      buttons: ['Fix it', 'Quit'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    return result.response === 0;
+  }
+
+  const window = mainWindow;
+  pendingPermissionRepair = error.request;
+  try {
+    await window.loadFile(join(__dirname, 'renderer', 'permissions.html'));
+    return await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const settle = (accepted: boolean) => {
+        if (settled) return;
+        settled = true;
+        ipcMain.removeHandler('permissions:resolve');
+        window.off('closed', onClosed);
+        resolve(accepted);
+      };
+      // Closing the window is a refusal, not a hang: without this the boot
+      // promise would never settle and the app would sit dead with no UI.
+      const onClosed = () => settle(false);
+      window.on('closed', onClosed);
+      ipcMain.handle('permissions:resolve', (_e, accepted: unknown) => {
+        settle(accepted === true);
+      });
+    });
+  } finally {
+    pendingPermissionRepair = null;
+  }
 }
 
 /** Launch: dev passthrough, or the bundled env (+ active GPU overlay), straight into the library. */
@@ -749,8 +826,31 @@ async function boot(): Promise<void> {
     // the user, and retry once on the bundled CPU/Metal env. If that also fails,
     // the error falls through to the fatal phase below as before.
     await startWithOverlayFallback(await activeOverlayAccel());
-  } catch (e) {
-    sendPhase({ phase: 'error', message: (e as Error).message });
+  } catch (caught) {
+    let error: unknown = caught;
+    if (isPermissionRepairRequired(error)) {
+      if (!(await offerPermissionRepair(error))) {
+        app.quit();
+        return;
+      }
+      try {
+        // Exactly one user-authorised retry. Python rechecks ownership, type,
+        // and inode before changing any recorded path.
+        if (isDevBackend()) {
+          await startAndLoad(null, true);
+        } else {
+          await startWithOverlayFallback(await activeOverlayAccel(), true);
+        }
+        return;
+      } catch (retryError) {
+        error = retryError;
+        // The permissions screen is still loaded and has no handler for the
+        // fatal phase, so put the splash back before reporting; otherwise a
+        // failed repair leaves the offer on screen with nothing happening.
+        await mainWindow?.loadFile(join(__dirname, 'renderer', 'index.html'));
+      }
+    }
+    sendPhase({ phase: 'error', message: (error as Error).message });
   }
 }
 
@@ -866,6 +966,12 @@ function registerIpc(): void {
     activeAccel: await manager.getActiveAccel(),
   }));
 
+  // ---- Startup permission recovery ----
+
+  // Read-only: the screen renders the report; `permissions:resolve` is
+  // registered only while that screen is actually waiting for an answer.
+  ipcMain.handle('permissions:request', () => pendingPermissionRepair);
+
   // ---- First-run setup wizard ----
 
   ipcMain.handle('setup:probe', async () => {
@@ -928,7 +1034,9 @@ function registerIpc(): void {
       }
 
       const configDir = dirname(serverConfigPath());
-      mkdirSync(configDir, { recursive: true });
+      // New credential directories are private even under umask 0002. Existing
+      // ones are left to the explicit recovery dialog, never silently changed.
+      mkdirPrivateIfMissing(configDir);
 
       if (choices?.importLegacyIdentity) {
         if (!detectedLegacyIdentitySource) {

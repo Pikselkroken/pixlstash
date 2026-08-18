@@ -92,6 +92,7 @@ import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { errorDetail } from "../../utils/apiError";
+import { activateOnEnterOrSpace } from "../../utils/keyboardActivation.js";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -317,6 +318,8 @@ const projectMenuRef = ref(null);
 const collapsedProjectBtnRef = ref(null);
 const collapsedProjectMenuRef = ref(null);
 const collapsedProjectSubMenuRef = ref(null);
+const collapsedProjectsMenuTriggerRef = ref(null);
+const collapsedFoldersMenuTriggerRef = ref(null);
 const collapsedProjectMenuPos = ref({ top: 0, left: 0 });
 
 const dockedScrollRef = ref(null);
@@ -1191,12 +1194,38 @@ function createSet() {
   setEditorOpen.value = true;
 }
 
-function toggleProjectMenu() {
-  if (
-    !projectMenuOpen.value &&
-    sidebarStore.effectiveDocked &&
-    collapsedProjectBtnRef.value
-  ) {
+function projectMenuItems(container) {
+  return Array.from(container?.children ?? []).filter(
+    (item) => item.matches?.('button[role="menuitem"]') && !item.disabled,
+  );
+}
+
+function focusProjectMenuItem(container, index) {
+  const items = projectMenuItems(container);
+  if (!items.length) return;
+  const wrappedIndex = ((index % items.length) + items.length) % items.length;
+  items[wrappedIndex].focus();
+}
+
+function closeProjectMenu({ restoreFocus = false } = {}) {
+  clearTimeout(_projectSubCloseTimer);
+  projectMenuSection.value = null;
+  projectMenuOpen.value = false;
+  if (restoreFocus) {
+    nextTick(() => collapsedProjectBtnRef.value?.focus());
+  }
+}
+
+function closeProjectMenuForTab() {
+  // The menus are teleported to <body>, so their DOM order is unrelated to the
+  // opener. Put focus back on the opener before the browser performs Tab's
+  // default move; forward and reverse Tab then continue from the logical place.
+  collapsedProjectBtnRef.value?.focus();
+  closeProjectMenu();
+}
+
+function openProjectMenu({ focusFirst = false } = {}) {
+  if (sidebarStore.effectiveDocked && collapsedProjectBtnRef.value) {
     const rect = collapsedProjectBtnRef.value.getBoundingClientRect();
     collapsedProjectMenuPos.value = _flyoutPos(rect);
     if (
@@ -1208,16 +1237,134 @@ function toggleProjectMenu() {
     }
   }
   projectMenuSection.value = null;
-  projectMenuOpen.value = !projectMenuOpen.value;
+  projectMenuOpen.value = true;
+  if (focusFirst) {
+    nextTick(() => focusProjectMenuItem(collapsedProjectMenuRef.value, 0));
+  }
+}
+
+function toggleProjectMenu(event) {
+  if (projectMenuOpen.value) {
+    closeProjectMenu();
+    return;
+  }
+  openProjectMenu({ focusFirst: event?.detail === 0 });
+}
+
+function onCollapsedProjectTriggerKeydown(event) {
+  if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+    event.preventDefault();
+    openProjectMenu({ focusFirst: true });
+    return;
+  }
+  if (event.key === "Escape" && projectMenuOpen.value) {
+    event.preventDefault();
+    closeProjectMenu({ restoreFocus: true });
+  }
 }
 
 let _projectSubCloseTimer = null;
 
-function openProjectSubMenu(section, event) {
+function openProjectSubMenu(section, event, focusFirst = false) {
   clearTimeout(_projectSubCloseTimer);
   const rect = event.currentTarget.getBoundingClientRect();
   projectMenuSubPos.value = { top: rect.top - 4, left: rect.right + 4 };
   projectMenuSection.value = section;
+  if (focusFirst) {
+    nextTick(() =>
+      focusProjectMenuItem(collapsedProjectSubMenuRef.value, 0),
+    );
+  }
+}
+
+function focusProjectSubMenuTrigger(section) {
+  const trigger =
+    section === "projects"
+      ? collapsedProjectsMenuTriggerRef.value
+      : collapsedFoldersMenuTriggerRef.value;
+  nextTick(() => trigger?.focus());
+}
+
+function closeProjectSubMenu({ restoreFocus = false } = {}) {
+  const section = projectMenuSection.value;
+  projectMenuSection.value = null;
+  if (restoreFocus && section) focusProjectSubMenuTrigger(section);
+}
+
+function moveProjectMenuFocus(event, container) {
+  const items = projectMenuItems(container);
+  if (!items.length) return false;
+  const currentIndex = items.indexOf(document.activeElement);
+  let nextIndex = null;
+  if (event.key === "ArrowDown") nextIndex = currentIndex + 1;
+  if (event.key === "ArrowUp")
+    nextIndex = currentIndex < 0 ? items.length - 1 : currentIndex - 1;
+  if (event.key === "Home") nextIndex = 0;
+  if (event.key === "End") nextIndex = items.length - 1;
+  if (nextIndex === null) return false;
+  event.preventDefault();
+  focusProjectMenuItem(container, nextIndex);
+  return true;
+}
+
+function onProjectMenuKeydown(event) {
+  if (moveProjectMenuFocus(event, collapsedProjectMenuRef.value)) return;
+  if (event.key === "ArrowRight") {
+    const section = document.activeElement?.dataset?.projectSubmenu;
+    if (section) {
+      event.preventDefault();
+      openProjectSubMenu(
+        section,
+        { currentTarget: document.activeElement },
+        true,
+      );
+    }
+    return;
+  }
+  if (event.key === "Escape" || event.key === "ArrowLeft") {
+    event.preventDefault();
+    closeProjectMenu({ restoreFocus: true });
+    return;
+  }
+  if (event.key === "Tab") closeProjectMenuForTab();
+}
+
+function onProjectSubMenuKeydown(event) {
+  if (moveProjectMenuFocus(event, collapsedProjectSubMenuRef.value)) return;
+  if (event.key === "Escape" || event.key === "ArrowLeft") {
+    event.preventDefault();
+    closeProjectSubMenu({ restoreFocus: true });
+    return;
+  }
+  if (event.key === "Tab") closeProjectMenuForTab();
+}
+
+function selectGlobalFromProjectMenu() {
+  selectLibraryTab("global");
+  selectCharacter(ALL_PICTURES_ID, "All Pictures");
+  closeProjectMenu({ restoreFocus: true });
+}
+
+function selectProjectFromProjectMenu(project) {
+  selectLibraryTab("project");
+  selectProjectNode(project);
+  closeProjectMenu({ restoreFocus: true });
+}
+
+function openAddFolderFromProjectMenu() {
+  closeProjectMenu();
+  openAddFolderTypeDialog();
+}
+
+function selectFolderFromProjectMenu(folder, kind) {
+  selectFoldersTab();
+  handleFolderNodeSelect(`${kind === "reference" ? "rf" : "if"}-${folder.id}`, {
+    ...(kind === "reference"
+      ? { referenceFolderId: folder.id, pathPrefix: folder.folder }
+      : { importSourceFolder: folder.folder, importFolderId: folder.id }),
+    label: folder.label || folder.folder,
+  });
+  closeProjectMenu({ restoreFocus: true });
 }
 
 function scheduleCloseProjectSubMenu() {
@@ -1266,7 +1413,7 @@ function selectProject(id) {
 }
 
 function createProject() {
-  projectMenuOpen.value = false;
+  closeProjectMenu();
   projectEditorProject.value = null;
   projectEditorOpen.value = true;
 }
@@ -4130,12 +4277,17 @@ defineExpose({
       <div
         class="sidebar-collapsed-row sidebar-collapsed-row--has-flyout sidebar-collapsed-row--project"
       >
-        <div
+        <button
+          type="button"
           class="sidebar-collapsed-item sidebar-collapsed-item--has-flyout"
           style="margin: 0 auto"
           :title="collapsedProjectBtnTitle"
           ref="collapsedProjectBtnRef"
+          aria-haspopup="menu"
+          :aria-expanded="projectMenuOpen"
+          aria-controls="sidebar-project-menu"
           @click.stop="toggleProjectMenu"
+          @keydown="onCollapsedProjectTriggerKeydown"
         >
           <v-icon size="20">{{
             sidebarPrimaryTab === "folders"
@@ -4144,41 +4296,53 @@ defineExpose({
                 ? "mdi-earth"
                 : "mdi-briefcase-outline"
           }}</v-icon>
-        </div>
+        </button>
       </div>
       <Teleport to="body">
         <div
           v-if="projectMenuOpen && sidebarStore.effectiveDocked"
+          id="sidebar-project-menu"
           ref="collapsedProjectMenuRef"
           class="sidebar-collapsed-project-menu"
+          role="menu"
+          aria-label="Library navigation"
           :style="{
             top: collapsedProjectMenuPos.top + 'px',
             left: collapsedProjectMenuPos.left + 'px',
           }"
           @mouseleave="scheduleCloseProjectSubMenu"
+          @keydown="onProjectMenuKeydown"
         >
           <!-- Global -->
-          <div
+          <button
+            type="button"
+            role="menuitem"
+            tabindex="-1"
             class="sidebar-project-menu-item"
             :class="{
               active:
                 projectViewMode === 'global' && sidebarPrimaryTab !== 'folders',
             }"
-            @mouseenter="scheduleCloseProjectSubMenu"
-            @click="
-              selectLibraryTab('global');
-              selectCharacter(ALL_PICTURES_ID, 'All Pictures');
-              projectMenuOpen = false;
+            :aria-current="
+              projectViewMode === 'global' && sidebarPrimaryTab !== 'folders'
+                ? 'page'
+                : undefined
             "
+            @mouseenter="scheduleCloseProjectSubMenu"
+            @click="selectGlobalFromProjectMenu"
           >
             <v-icon size="14">mdi-earth</v-icon>
             <span class="sidebar-project-menu-item-label">Global</span>
-          </div>
+          </button>
 
-          <div class="sidebar-project-menu-separator"></div>
+          <div class="sidebar-project-menu-separator" role="separator"></div>
 
           <!-- Projects row → flyout submenu on hover or click -->
-          <div
+          <button
+            ref="collapsedProjectsMenuTriggerRef"
+            type="button"
+            role="menuitem"
+            tabindex="-1"
             class="sidebar-project-menu-item sidebar-project-menu-has-sub"
             :class="{
               active:
@@ -4186,32 +4350,48 @@ defineExpose({
                 sidebarPrimaryTab !== 'folders',
               'sub-open': projectMenuSection === 'projects',
             }"
+            data-project-submenu="projects"
+            aria-haspopup="menu"
+            :aria-expanded="projectMenuSection === 'projects'"
+            aria-controls="sidebar-project-submenu"
             @mouseenter="openProjectSubMenu('projects', $event)"
-            @click.stop="openProjectSubMenu('projects', $event)"
+            @click.stop="
+              openProjectSubMenu('projects', $event, $event.detail === 0)
+            "
           >
             <v-icon size="14">mdi-briefcase-outline</v-icon>
             <span class="sidebar-project-menu-item-label">Projects</span>
             <v-icon size="12" class="sidebar-project-menu-chevron"
               >mdi-chevron-right</v-icon
             >
-          </div>
+          </button>
 
           <!-- Folders row → flyout submenu on hover or click -->
-          <div
+          <button
+            ref="collapsedFoldersMenuTriggerRef"
+            type="button"
+            role="menuitem"
+            tabindex="-1"
             class="sidebar-project-menu-item sidebar-project-menu-has-sub"
             :class="{
               active: sidebarPrimaryTab === 'folders',
               'sub-open': projectMenuSection === 'folders',
             }"
+            data-project-submenu="folders"
+            aria-haspopup="menu"
+            :aria-expanded="projectMenuSection === 'folders'"
+            aria-controls="sidebar-project-submenu"
             @mouseenter="openProjectSubMenu('folders', $event)"
-            @click.stop="openProjectSubMenu('folders', $event)"
+            @click.stop="
+              openProjectSubMenu('folders', $event, $event.detail === 0)
+            "
           >
             <v-icon size="14">mdi-folder-outline</v-icon>
             <span class="sidebar-project-menu-item-label">Folders</span>
             <v-icon size="12" class="sidebar-project-menu-chevron"
               >mdi-chevron-right</v-icon
             >
-          </div>
+          </button>
         </div>
       </Teleport>
 
@@ -4223,73 +4403,89 @@ defineExpose({
             projectMenuOpen &&
             sidebarStore.effectiveDocked
           "
+          id="sidebar-project-submenu"
           ref="collapsedProjectSubMenuRef"
           class="sidebar-collapsed-project-submenu"
+          role="menu"
+          :aria-label="
+            projectMenuSection === 'projects'
+              ? 'Projects'
+              : 'Library folders'
+          "
           :style="{
             top: projectMenuSubPos.top + 'px',
             left: projectMenuSubPos.left + 'px',
           }"
           @mouseenter="cancelCloseProjectSubMenu"
           @mouseleave="scheduleCloseProjectSubMenu"
+          @keydown="onProjectSubMenuKeydown"
         >
           <!-- Projects submenu -->
           <template v-if="projectMenuSection === 'projects'">
-            <div
+            <button
               v-if="!isReadOnly"
+              type="button"
+              role="menuitem"
+              tabindex="-1"
               class="sidebar-project-menu-item sidebar-project-menu-add"
-              @click="
-                createProject();
-                projectMenuSection = null;
-              "
+              @click="createProject"
             >
               <v-icon size="14">mdi-plus</v-icon>
               <span class="sidebar-project-menu-item-label"
                 >Add new project</span
               >
-            </div>
-            <div
+            </button>
+            <button
               v-for="p in sortedProjects"
               :key="p.id"
+              type="button"
+              role="menuitem"
+              tabindex="-1"
               class="sidebar-project-menu-item"
               :class="{
                 active:
                   projectStore.projectViewMode === 'project' &&
                   projectStore.selectedProjectId === p.id,
               }"
-              @click="
-                selectLibraryTab('project');
-                selectProjectNode(p);
-                projectMenuSection = null;
+              :aria-current="
+                projectStore.projectViewMode === 'project' &&
+                projectStore.selectedProjectId === p.id
+                  ? 'page'
+                  : undefined
               "
+              @click="selectProjectFromProjectMenu(p)"
             >
               <v-icon size="14">mdi-folder</v-icon>
               <span class="sidebar-project-menu-item-label">{{ p.name }}</span>
-            </div>
+            </button>
           </template>
 
           <!-- Folders submenu -->
           <template v-if="projectMenuSection === 'folders'">
-            <div
+            <button
               v-if="!isReadOnly"
+              type="button"
+              role="menuitem"
+              tabindex="-1"
               class="sidebar-project-menu-item sidebar-project-menu-add"
-              @click="
-                openAddFolderTypeDialog();
-                projectMenuOpen = false;
-                projectMenuSection = null;
-              "
+              @click="openAddFolderFromProjectMenu"
             >
               <v-icon size="14">mdi-plus</v-icon>
               <span class="sidebar-project-menu-item-label">Add folder</span>
-            </div>
+            </button>
             <div
               v-if="referenceFolders.length"
               class="sidebar-project-menu-section-label"
+              role="presentation"
             >
               Reference Folders
             </div>
-            <div
+            <button
               v-for="rf in referenceFolders"
               :key="'rf-' + rf.id"
+              type="button"
+              role="menuitem"
+              tabindex="-1"
               class="sidebar-project-menu-item"
               :class="{
                 active:
@@ -4297,31 +4493,33 @@ defineExpose({
                   selectedFolderKey === 'rf-' + rf.id &&
                   !isDuplicatesView,
               }"
-              @click="
-                selectFoldersTab();
-                handleFolderNodeSelect('rf-' + rf.id, {
-                  referenceFolderId: rf.id,
-                  pathPrefix: rf.folder,
-                  label: rf.label || rf.folder,
-                });
-                projectMenuOpen = false;
-                projectMenuSection = null;
+              :aria-current="
+                sidebarPrimaryTab === 'folders' &&
+                selectedFolderKey === 'rf-' + rf.id &&
+                !isDuplicatesView
+                  ? 'page'
+                  : undefined
               "
+              @click="selectFolderFromProjectMenu(rf, 'reference')"
             >
               <v-icon size="14">mdi-folder-network-outline</v-icon>
               <span class="sidebar-project-menu-item-label">{{
                 rf.label || rf.folder
               }}</span>
-            </div>
+            </button>
             <div
               v-if="importFolders.length"
               class="sidebar-project-menu-section-label"
+              role="presentation"
             >
               Import Folders
             </div>
-            <div
+            <button
               v-for="imf in importFolders"
               :key="'if-' + imf.id"
+              type="button"
+              role="menuitem"
+              tabindex="-1"
               class="sidebar-project-menu-item"
               :class="{
                 active:
@@ -4329,22 +4527,20 @@ defineExpose({
                   selectedFolderKey === 'if-' + imf.id &&
                   !isDuplicatesView,
               }"
-              @click="
-                selectFoldersTab();
-                handleFolderNodeSelect('if-' + imf.id, {
-                  importSourceFolder: imf.folder,
-                  importFolderId: imf.id,
-                  label: imf.label || imf.folder,
-                });
-                projectMenuOpen = false;
-                projectMenuSection = null;
+              :aria-current="
+                sidebarPrimaryTab === 'folders' &&
+                selectedFolderKey === 'if-' + imf.id &&
+                !isDuplicatesView
+                  ? 'page'
+                  : undefined
               "
+              @click="selectFolderFromProjectMenu(imf, 'import')"
             >
               <v-icon size="14">mdi-folder-open-outline</v-icon>
               <span class="sidebar-project-menu-item-label">{{
                 imf.label || imf.folder
               }}</span>
-            </div>
+            </button>
           </template>
         </div>
       </Teleport>
@@ -4463,10 +4659,19 @@ defineExpose({
                       selectionOwnsHighlight,
                   },
                 ]"
+                role="button"
+                tabindex="0"
+                :aria-pressed="
+                  selectionStore.selectedCharacter === char.id &&
+                  selectionOwnsHighlight
+                    ? 'true'
+                    : 'false'
+                "
                 :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
                 @click="
                   selectCharacter(char.id, char.name || 'Character', $event)
                 "
+                @keydown="activateOnEnterOrSpace"
                 @contextmenu.prevent.stop="
                   openSidebarCtxMenu('character', char, $event)
                 "
@@ -4486,7 +4691,10 @@ defineExpose({
               <div
                 class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-person"
                 title="Add person"
+                role="button"
+                tabindex="0"
                 @click="createCharacter()"
+                @keydown="activateOnEnterOrSpace"
               >
                 <i
                   class="mdi mdi-account sidebar-collapsed-item--add-bg-icon"
@@ -4509,7 +4717,10 @@ defineExpose({
             <div
               class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-person"
               title="Add person"
+              role="button"
+              tabindex="0"
               @click="createCharacter()"
+              @keydown="activateOnEnterOrSpace"
               @contextmenu.prevent.stop="
                 openSidebarCtxMenu('header', 'people', $event)
               "
@@ -4547,7 +4758,12 @@ defineExpose({
                 selectedCharacterObj ? selectedCharacterObj.name : 'People'
               "
               ref="collapsedCharBtnRef"
+              role="button"
+              tabindex="0"
+              aria-haspopup="menu"
+              :aria-expanded="collapsedCharMenuOpen"
               @click.stop="toggleCollapsedCharMenu"
+              @keydown="activateOnEnterOrSpace"
             >
               <img
                 v-if="
@@ -4682,7 +4898,15 @@ defineExpose({
                   },
                 ]"
                 :title="pset.name || 'Picture Set'"
+                role="button"
+                tabindex="0"
+                :aria-pressed="
+                  selectedSetIdSet.has(pset.id) && selectionOwnsHighlight
+                    ? 'true'
+                    : 'false'
+                "
                 @click="selectSet(pset.id, pset.name || 'Picture Set', $event)"
+                @keydown="activateOnEnterOrSpace"
                 @contextmenu.prevent.stop="
                   openSidebarCtxMenu('set', pset, $event)
                 "
@@ -4725,7 +4949,10 @@ defineExpose({
               <div
                 class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-set"
                 title="Add picture set"
+                role="button"
+                tabindex="0"
                 @click="createSet()"
+                @keydown="activateOnEnterOrSpace"
               >
                 <i
                   class="mdi mdi-image-album sidebar-collapsed-item--add-bg-icon"
@@ -4748,7 +4975,10 @@ defineExpose({
             <div
               class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-set"
               title="Add picture set"
+              role="button"
+              tabindex="0"
               @click="createSet()"
+              @keydown="activateOnEnterOrSpace"
               @contextmenu.prevent.stop="
                 openSidebarCtxMenu('header', 'sets', $event)
               "
@@ -4778,7 +5008,12 @@ defineExpose({
               ]"
               :title="selectedSetObj ? selectedSetObj.name : 'Picture Sets'"
               ref="collapsedSetBtnRef"
+              role="button"
+              tabindex="0"
+              aria-haspopup="menu"
+              :aria-expanded="collapsedSetMenuOpen"
               @click.stop="toggleCollapsedSetMenu"
+              @keydown="activateOnEnterOrSpace"
             >
               <template v-if="selectedSetObj">
                 <v-icon
@@ -5493,22 +5728,30 @@ defineExpose({
             >
               <div
                 class="sidebar-section-header sidebar-section-header--collapsible"
-                @click.stop="togglePeopleSection()"
                 @contextmenu.prevent.stop="
                   openSidebarCtxMenu('header', 'people', $event)
                 "
               >
-                <v-icon class="sidebar-section-chevron" size="16">{{
-                  peopleSectionCollapsed
-                    ? "mdi-chevron-right"
-                    : "mdi-chevron-down"
-                }}</v-icon>
-                People
+                <button
+                  type="button"
+                  class="sidebar-section-toggle"
+                  :aria-expanded="!peopleSectionCollapsed"
+                  @click.stop="togglePeopleSection()"
+                >
+                  <v-icon class="sidebar-section-chevron" size="16">{{
+                    peopleSectionCollapsed
+                      ? "mdi-chevron-right"
+                      : "mdi-chevron-down"
+                  }}</v-icon>
+                  <span>People</span>
+                </button>
                 <span class="sidebar-header-spacer"></span>
                 <div class="sidebar-header-actions" @click.stop>
                   <button
                     v-if="selectedCharacterIdSet.size > 1"
+                    type="button"
                     class="clear-selection-inline"
+                    aria-label="Clear character selection"
                     @click.stop="
                       selectCharacter(ALL_PICTURES_ID, 'All Pictures')
                     "
@@ -5516,18 +5759,20 @@ defineExpose({
                   >
                     <v-icon size="16">mdi-selection-off</v-icon>
                   </button>
-                  <v-icon
+                  <button
                     v-if="
                       selectedCharacterObj &&
                       hasSingleSelectedCharacter &&
                       !isReadOnly
                     "
+                    type="button"
                     class="edit-character-inline"
+                    aria-label="Edit selected character"
                     @click.stop="openCharacterEditor(selectedCharacterObj)"
                     title="Edit selected character"
-                    >mdi-pencil</v-icon
+                    ><v-icon size="16">mdi-pencil</v-icon></button
                   >
-                  <v-icon
+                  <button
                     v-if="
                       !isReadOnly &&
                       selectionStore.selectedCharacter &&
@@ -5536,18 +5781,21 @@ defineExpose({
                         UNASSIGNED_PICTURES_ID &&
                       selectionStore.selectedCharacter !== SCRAPHEAP_PICTURES_ID
                     "
+                    type="button"
                     class="delete-character-inline"
-                    color="white"
+                    aria-label="Delete selected character"
                     @click.stop="deleteCharacter"
                     title="Delete selected character"
-                    >mdi-trash-can-outline</v-icon
+                    ><v-icon size="16">mdi-trash-can-outline</v-icon></button
                   >
-                  <v-icon
+                  <button
                     v-if="!isReadOnly"
+                    type="button"
                     class="add-character-inline"
+                    aria-label="Add character"
                     @click.stop="createCharacter"
                     title="Add character"
-                    >mdi-plus</v-icon
+                    ><v-icon size="16">mdi-plus</v-icon></button
                   >
                 </div>
               </div>
@@ -5598,10 +5846,21 @@ defineExpose({
                       },
                     ]"
                     :ref="(el) => registerCharacterRef(char.id, el)"
+                    role="button"
+                    tabindex="0"
+                    :aria-pressed="
+                      (selectedCharacterIdSet.size > 0
+                        ? selectedCharacterIdSet.has(char.id)
+                        : selectionStore.selectedCharacter === char.id) &&
+                      selectionOwnsHighlight
+                        ? 'true'
+                        : 'false'
+                    "
                     :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
                     @click="
                       selectCharacter(char.id, char.name || 'Character', $event)
                     "
+                    @keydown="activateOnEnterOrSpace"
                     @contextmenu.prevent="
                       openSidebarCtxMenu('character', char, $event)
                     "
@@ -5674,52 +5933,65 @@ defineExpose({
             >
               <div
                 class="sidebar-section-header sidebar-section-header--collapsible"
-                @click.stop="toggleSetsSection()"
                 @contextmenu.prevent.stop="
                   openSidebarCtxMenu('header', 'sets', $event)
                 "
               >
-                <v-icon class="sidebar-section-chevron" size="16">{{
-                  setsSectionCollapsed
-                    ? "mdi-chevron-right"
-                    : "mdi-chevron-down"
-                }}</v-icon>
-                Sets
+                <button
+                  type="button"
+                  class="sidebar-section-toggle"
+                  :aria-expanded="!setsSectionCollapsed"
+                  @click.stop="toggleSetsSection()"
+                >
+                  <v-icon class="sidebar-section-chevron" size="16">{{
+                    setsSectionCollapsed
+                      ? "mdi-chevron-right"
+                      : "mdi-chevron-down"
+                  }}</v-icon>
+                  <span>Sets</span>
+                </button>
                 <span class="sidebar-header-spacer"></span>
                 <div class="sidebar-header-actions">
                   <button
                     v-if="selectedSetIdSet.size > 1"
+                    type="button"
                     class="clear-selection-inline"
+                    aria-label="Clear set selection"
                     @click.stop="emit('select-set', null)"
                     title="Clear set selection"
                   >
                     <v-icon size="16">mdi-selection-off</v-icon>
                   </button>
-                  <v-icon
+                  <button
                     v-if="selectedSetObj && hasSingleSelectedSet && !isReadOnly"
+                    type="button"
                     class="edit-set-inline"
+                    aria-label="Edit selected set"
                     @click.stop="openSetEditor(selectedSetObj)"
                     title="Edit selected set"
-                    >mdi-pencil</v-icon
+                    ><v-icon size="16">mdi-pencil</v-icon></button
                   >
-                  <v-icon
+                  <button
                     v-if="!isReadOnly && selectedSetIdSet.size > 0"
+                    type="button"
                     class="delete-character-inline"
-                    color="white"
+                    aria-label="Delete selected sets"
                     @click.stop="handleDeleteSet"
                     :title="
                       selectedSetIdSet.size > 1
                         ? `Delete ${selectedSetIdSet.size} selected sets`
                         : 'Delete selected set'
                     "
-                    >mdi-trash-can-outline</v-icon
+                    ><v-icon size="16">mdi-trash-can-outline</v-icon></button
                   >
-                  <v-icon
+                  <button
                     v-if="!isReadOnly"
+                    type="button"
                     class="add-character-inline"
+                    aria-label="Create new set"
                     @click.stop="createSet"
                     title="Create new set"
-                    >mdi-plus</v-icon
+                    ><v-icon size="16">mdi-plus</v-icon></button
                   >
                 </div>
               </div>
@@ -5747,10 +6019,18 @@ defineExpose({
                       },
                     ]"
                     :ref="(el) => registerSetRef(pset.id, el)"
+                    role="button"
+                    tabindex="0"
+                    :aria-pressed="
+                      selectedSetIdSet.has(pset.id) && selectionOwnsHighlight
+                        ? 'true'
+                        : 'false'
+                    "
                     :title="`${pset.name || 'Picture Set'} (Ctrl/Cmd + click to multi-select)`"
                     @click="
                       selectSet(pset.id, pset.name || 'Picture Set', $event)
                     "
+                    @keydown="activateOnEnterOrSpace"
                     @contextmenu.prevent="
                       openSidebarCtxMenu('set', pset, $event)
                     "
