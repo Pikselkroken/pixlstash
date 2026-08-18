@@ -511,3 +511,88 @@ input[type="text"]:focus-visible,
   font-size: 12px;
   line-height: 1.4;
 }
+
+/* Permission-recovery screen (permissions.html) */
+.app.repair {
+  justify-content: center;
+  max-width: 600px;
+}
+
+/* Folder + open padlock. Strokes only, so it reads as line art at any size and
+   needs no second colour for a dark/light split. */
+.repair-art {
+  width: 96px;
+  height: 72px;
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.repair-art-folder {
+  stroke: var(--border);
+}
+
+.repair-art-shackle,
+.repair-art-body {
+  stroke: var(--err);
+}
+
+.repair-art-body {
+  fill: var(--bg);
+}
+
+.repair-art-keyhole {
+  fill: var(--err);
+  stroke: none;
+}
+
+.repair-list {
+  list-style: none;
+  margin: 10px 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.repair-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.repair-area {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.repair-path {
+  font-size: 12px;
+  color: var(--muted);
+  /* Long absolute paths must wrap rather than force the panel to scroll. */
+  overflow-wrap: anywhere;
+}
+
+.repair-change {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.repair-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.repair-actions button {
+  min-width: 120px;
+  padding: 11px 22px;
+}
