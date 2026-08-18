@@ -2475,3 +2475,26 @@ def test_private_address_guardrail_reads_a_named_file_of_any_kind(tmp_path):
     assert [o.split(":", 1)[0] for o in named] == ["Dockerfile.demo"], (
         f"a named file must be read whatever it is called; got {named}"
     )
+
+
+def test_tests_close_the_server_not_only_its_vault():
+    """Closing a test server's vault alone leaks the hub's SQLite connection.
+
+    Harmless on POSIX, fatal on Windows: ``TemporaryDirectory`` cleanup then
+    raises a sharing violation on ``hub.db``. ``Server.close`` closes both and
+    is the only supported teardown; this pins that, because the failure is
+    invisible until a Windows shard spends a full gate run finding it.
+
+    The needle is assembled from parts so this file is not its own offender.
+    """
+    needle = ".vault" + ".close()"
+    offenders = [
+        f"{path.relative_to(REPO_ROOT).as_posix()}:{number}"
+        for path in (REPO_ROOT / "tests").rglob("*.py")
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if needle in line
+    ]
+    assert not offenders, (
+        "close the whole server, not only its vault — server.close() — at "
+        + ", ".join(offenders)
+    )

@@ -223,7 +223,7 @@ def test_new_sets_rotate_default_icon_and_color():
         assert resp.json()["picture_set"]["set_icon"] == "cards"
         assert resp.json()["picture_set"]["set_color"] == "#123456"
     finally:
-        server.vault.close()
+        server.close()
         temp_dir.cleanup()
         gc.collect()
 
