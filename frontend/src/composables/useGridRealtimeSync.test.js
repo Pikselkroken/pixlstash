@@ -10,6 +10,7 @@ function makeHarness(overrides = {}) {
     refreshGridImage: vi.fn(),
     refreshStackFacets: vi.fn(),
     refreshThumbnailUrls: vi.fn(),
+    applyRotatedCards: vi.fn(),
     repositionImageByScore: vi.fn(),
     repositionImageBySmartScore: vi.fn(),
     refreshSmartScoreForImage: vi.fn(),
@@ -773,6 +774,7 @@ function makeCoalescingHarness(overrides = {}) {
     refreshGridImage: vi.fn(),
     refreshStackFacets: vi.fn(),
     refreshThumbnailUrls: vi.fn(),
+    applyRotatedCards: vi.fn(),
     repositionImageByScore: vi.fn(),
     repositionImageBySmartScore: vi.fn(),
     refreshSmartScoreForImage: vi.fn(),
@@ -1089,8 +1091,12 @@ describe("useGridRealtimeSync — a rotate's pixels changed", () => {
     });
     expect(res.action).toBe("targeted");
     expect(res.reason).toBe("card-content-refresh");
-    expect(h.grid.refreshGridImage).toHaveBeenCalledWith(11);
-    expect(h.grid.refreshThumbnailUrls).toHaveBeenCalledWith([11, 12]);
+    // One applier, not a metadata refresh followed by a thumbnail refresh: the
+    // tile's shape and its bitmap have to land in the same frame or the picture
+    // turns twice on screen. Asserting the old pair is asserting the bug.
+    expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([11, 12]);
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+    expect(h.grid.refreshThumbnailUrls).not.toHaveBeenCalled();
   });
 
   it("a foreign tab's rotate also repaints here", () => {
@@ -1103,7 +1109,7 @@ describe("useGridRealtimeSync — a rotate's pixels changed", () => {
       change_kind: "updated",
       fields: ["pixels"],
     });
-    expect(h.grid.refreshThumbnailUrls).toHaveBeenCalledWith([13]);
+    expect(h.grid.applyRotatedCards).toHaveBeenCalledWith([13]);
   });
 
   it("never reloads the grid or raises a pill — a turned photo does not move", () => {
@@ -1130,7 +1136,9 @@ describe("useGridRealtimeSync — a rotate's pixels changed", () => {
       change_kind: "updated",
       fields: ["detections"],
     });
+    // `detections` leaves the FILE alone, so it keeps the plain metadata
+    // refresh and must not take the rotate applier's decode-then-commit path.
     expect(h.grid.refreshGridImage).toHaveBeenCalledWith(15);
-    expect(h.grid.refreshThumbnailUrls).not.toHaveBeenCalled();
+    expect(h.grid.applyRotatedCards).not.toHaveBeenCalled();
   });
 });

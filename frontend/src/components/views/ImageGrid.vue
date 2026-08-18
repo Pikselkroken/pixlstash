@@ -752,6 +752,21 @@
                     >mdi-image-broken-variant</v-icon
                   >
                 </div>
+                <!-- In-flight rotate. Raised the moment the gesture is sent and
+                     dropped when the tile actually turns, which is a beat later
+                     than the click: the new bitmap is decoded first so the
+                     shape and the picture change in one frame. Decorative —
+                     the operation receipt is what announces the result. -->
+                <div
+                  v-if="rotatingIconFor(img)"
+                  class="thumbnail-rotating-overlay"
+                  data-testid="thumbnail-rotating-overlay"
+                  aria-hidden="true"
+                >
+                  <v-icon class="thumbnail-rotating-icon">{{
+                    rotatingIconFor(img)
+                  }}</v-icon>
+                </div>
                 <img
                   v-if="isVideo(img)"
                   class="thumbnail-drag-preview"
@@ -1160,6 +1175,7 @@ import {
   squareCropBboxRect,
   coverBboxRect,
 } from "../../utils/squareCrop.js";
+import { errorMessage } from "../../utils/apiError.js";
 import {
   isSupportedImageFile,
   isSupportedVideoFile,
@@ -3003,7 +3019,13 @@ const noticeStore = useNoticeStore();
  * @param {string} fallback - used when the server sent nothing useful.
  */
 function errorDetail(err, fallback = "Please try again.") {
-  return errorDetail(err) || err?.message || fallback;
+  // Delegates: this used to be a verbatim copy of `errorMessage`'s body under a
+  // name that shadowed the `errorDetail` it meant to call, so it recursed until
+  // the stack blew — and every failure path in this component reports through
+  // it, which turned each of them from "a notice explaining what went wrong"
+  // into a RangeError with no notice at all. Caught by a test that made a
+  // rotate fail on purpose.
+  return errorMessage(err, fallback);
 }
 // Live "is the Review Sessions overlay up" signal. It stays mounted over the
 // grid as a modal review surface with its own keyboard/drag handling, so the
@@ -4024,6 +4046,179 @@ async function refreshThumbnailUrls(pictureIds) {
   if (changed) allGridImages.value = next;
 }
 
+// Pictures whose rotate is in flight, and which way they are turning. Drives the
+// tile's in-flight overlay; the icon names the DIRECTION rather than showing a
+// generic spinner, because the gesture is unconfirmed and instant-looking and
+// the one thing a user needs echoed back is which way they just asked for.
+const rotatingDirectionById = ref(new Map());
+
+function markRotating(pictureIds, direction) {
+  for (const id of Array.isArray(pictureIds) ? pictureIds : []) {
+    const key = getPictureId(id);
+    if (key !== null) rotatingDirectionById.value.set(key, direction);
+  }
+}
+
+function clearRotating(pictureIds) {
+  for (const id of Array.isArray(pictureIds) ? pictureIds : []) {
+    const key = getPictureId(id);
+    if (key !== null) rotatingDirectionById.value.delete(key);
+  }
+}
+
+/** The in-flight rotate icon for this card, or `null` when it is not turning. */
+function rotatingIconFor(img) {
+  const direction = rotatingDirectionById.value.get(getPictureId(img?.id));
+  if (direction === ROTATE_CW) return "mdi-file-rotate-right";
+  if (direction === ROTATE_CCW) return "mdi-file-rotate-left";
+  return null;
+}
+
+// How long a tile will wait for its new bitmap before landing anyway. The commit
+// is deliberately blocked on the decode (see `applyRotatedCards`), so a request
+// that never answers would otherwise leave the card mid-gesture for good.
+// ponytail: a flat ceiling, not a per-picture budget — one number is enough
+// until a batch of very large thumbnails proves otherwise.
+const ROTATE_BITMAP_WAIT_MS = 5000;
+
+/**
+ * Fetch and decode a bitmap off-screen, so the next paint that uses it is free.
+ *
+ * Never rejects and never blocks for long: a URL that 404s or hangs resolves
+ * anyway, because the caller is holding a visible commit on this promise.
+ *
+ * @param {string} url
+ * @returns {Promise<void>}
+ */
+function preloadBitmap(url) {
+  if (!url) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(done, ROTATE_BITMAP_WAIT_MS);
+    const probe = new Image();
+    probe.onload = () => {
+      // decode() as well as load(), so the commit is not followed by a decode
+      // on the main thread — that is visible as a hitch on a large thumbnail.
+      const decoded =
+        typeof probe.decode === "function"
+          ? probe.decode().catch(() => {})
+          : Promise.resolve();
+      decoded.then(done, done);
+    };
+    probe.onerror = done;
+    probe.src = url;
+  });
+}
+
+/**
+ * Land a rotate on its cards as ONE visual change.
+ *
+ * A turned picture changes two things about its tile — the shape of the box the
+ * justified layout packs, and the bitmap inside it — and they arrive from
+ * different places: the orientation from `/pictures/{id}/metadata`, the URL and
+ * its cache token from `POST /pictures/thumbnails` (the metadata endpoint
+ * carries no thumbnail URL at all). Applying each as it arrives is what made a
+ * rotate happen twice on screen: the cell flipped to portrait first, stretching
+ * the old landscape bitmap into it, and only then did the new bitmap arrive and
+ * the picture turn.
+ *
+ * So both reads happen first, the new bitmap is fetched AND decoded off-screen,
+ * and only then is one write made to `allGridImages` — after which the shape and
+ * the pixels change in the same frame. The visible cost is that the tile does
+ * nothing for a moment, which is what the in-flight overlay is for.
+ *
+ * FIELDS ONLY: nothing is inserted, removed or reordered. A turned photo does
+ * not move in the grid, which is why this can be safe inside an open overlay
+ * where a refetch would not be.
+ *
+ * @param {Array<number|string>} pictureIds - pictures the server actually turned.
+ * @returns {Promise<void>} settles once the cards show the new picture.
+ */
+async function applyRotatedCards(pictureIds) {
+  const ids = [
+    ...new Set(
+      (Array.isArray(pictureIds) ? pictureIds : [])
+        .map((id) => getPictureId(id))
+        .filter((id) => id !== null),
+    ),
+  ];
+  if (!ids.length) return;
+
+  let thumbData;
+  let records;
+  try {
+    [thumbData, records] = await Promise.all([
+      getThumbnails(ids),
+      Promise.all(ids.map((id) => fetchImageInfo(id, { force: true }))),
+    ]);
+  } catch (e) {
+    console.error(
+      `applyRotatedCards: could not re-read pictures [${ids.join(", ")}]; ` +
+        "their tiles keep the picture they last painted",
+      e,
+    );
+    return;
+  }
+
+  // The patch each card will take, built before anything is written so the
+  // write itself is one assignment.
+  const patchById = new Map();
+  ids.forEach((id, index) => {
+    const record = thumbData?.[id];
+    const info = records[index];
+    const patch = {};
+    if (info && !Array.isArray(info)) Object.assign(patch, info);
+    if (record?.thumbnail) {
+      patch.thumbnail = appendShareToken(
+        record.thumbnail.startsWith("http")
+          ? record.thumbnail
+          : `${props.backendUrl}${record.thumbnail}`,
+      );
+    }
+    if (record) {
+      // Taken verbatim, null included: a rotate NULLs the stored dimensions to
+      // re-queue the bitmap, and `displayedAspectRatio` then falls through to
+      // the raw dimensions turned by the orientation — which is the shape the
+      // regenerated bitmap will have, so the tile does not move again later.
+      const width = Number(record.thumbnail_width);
+      const height = Number(record.thumbnail_height);
+      patch.thumbnail_width = width > 0 ? width : null;
+      patch.thumbnail_height = height > 0 ? height : null;
+      // The boxes live in a coordinate space the turn just redefined.
+      patch.faces = Array.isArray(record.faces) ? record.faces : [];
+      patch.detections = Array.isArray(record.detections)
+        ? record.detections
+        : [];
+    }
+    patchById.set(id, patch);
+  });
+
+  await Promise.all(
+    [...patchById.values()].map((patch) => preloadBitmap(patch.thumbnail)),
+  );
+
+  const next = allGridImages.value.slice();
+  let changed = false;
+  for (let i = 0; i < next.length; i++) {
+    const img = next[i];
+    if (!img || img.id == null) continue;
+    const patch = patchById.get(getPictureId(img.id));
+    if (!patch) continue;
+    next[i] = { ...img, ...patch, idx: img.idx ?? i };
+    // The range is re-read on the next visit, so a later background sweep's
+    // regenerated bitmap is picked up rather than masked by this write.
+    invalidateThumbnailIndex(i);
+    changed = true;
+  }
+  if (changed) allGridImages.value = next;
+}
+
 /**
  * One 90° step over a set of pictures, plus the refresh it owes.
  *
@@ -4037,6 +4232,7 @@ async function refreshThumbnailUrls(pictureIds) {
  * @returns {Promise<void>}
  */
 async function runRotate(pictureIds, direction) {
+  markRotating(pictureIds, direction);
   try {
     const result = await rotatePictures(pictureIds, direction);
     // The note is armed immediately before the refresh that narrates the
@@ -4047,13 +4243,7 @@ async function runRotate(pictureIds, direction) {
       ? result.rotated_picture_ids
       : [];
     if (!rotated.length) return;
-    // Two reads, because neither covers the other: the metadata read refreshes
-    // the card's record, and the thumbnail read is the ONLY source of the new
-    // cache token — `/pictures/{id}/metadata` carries no thumbnail URL at all.
-    await Promise.all(
-      rotated.map((id) => refreshGridImage(id, { force: true })),
-    );
-    await refreshThumbnailUrls(rotated);
+    await applyRotatedCards(rotated);
   } catch (e) {
     console.error(
       `Rotate ${direction} failed for pictures [${pictureIds.join(", ")}]`,
@@ -4062,6 +4252,8 @@ async function runRotate(pictureIds, direction) {
     noticeStore.error(`Couldn't rotate those pictures. ${errorDetail(e)}`, {
       key: "rotate-pictures",
     });
+  } finally {
+    clearRotating(pictureIds);
   }
 }
 
@@ -6080,14 +6272,11 @@ function handleOverlayChange(payload) {
   if (!imageId) return;
   // The picture's own bytes changed (an in-place rotate from the lightbox).
   // Nothing is inserted, removed or reordered — the card is the same card — but
-  // its thumbnail URL has to be re-read from the server or the tile keeps
-  // painting the pre-rotate bitmap. `refreshGridImage` alone cannot do it: the
-  // metadata endpoint carries no thumbnail URL.
+  // both its shape and its bitmap move, from two different reads, and they have
+  // to land together or the tile turns twice on screen. `applyRotatedCards`
+  // owns that; see its docstring.
   if (fields.pixels) {
-    void (async () => {
-      await refreshGridImage(imageId, { force: true });
-      await refreshThumbnailUrls([imageId]);
-    })();
+    void applyRotatedCards([imageId]);
     return;
   }
   if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
@@ -7347,6 +7536,11 @@ defineExpose({
   // cannot repair a tile whose FILE changed (an in-place rotate, or an undo of
   // one arriving over the socket).
   refreshThumbnailUrls,
+  // A bytes change (an in-place rotate, or an undo/redo of one over the socket)
+  // moves the tile's shape and its bitmap from two different reads. This lands
+  // them as one visual change; nothing that reacts to `pixels` should be doing
+  // the two refreshes by hand.
+  applyRotatedCards,
   repositionImageByScore,
   repositionImageBySmartScore,
   refreshSmartScoreForImage,

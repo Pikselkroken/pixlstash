@@ -385,10 +385,7 @@ export function useGridRealtimeSync(deps) {
     // pre-rotate bitmap. Same reasoning as `stack_count` — a listing-only value
     // a per-card metadata read cannot repair.
     if (fields.includes("pixels")) {
-      void (async () => {
-        await grid.refreshGridImage?.(id);
-        await grid.refreshThumbnailUrls?.([id]);
-      })();
+      void grid.applyRotatedCards?.([id]);
       return;
     }
     // Any other change (incl. a score change): refresh the card's metadata in
@@ -615,12 +612,15 @@ export function useGridRealtimeSync(deps) {
           reason: "card-content-refresh-overlay-deferred",
         };
       }
-      for (const id of pictureIds) grid.refreshGridImage?.(id);
-      // A `pixels` change rewrote the FILE, so the card also needs its thumbnail
-      // URL re-read from the server. One batched call for the whole event, and
-      // only when the file actually changed — `detections` leaves it alone.
+      // A `pixels` change rewrote the FILE, so the card's shape and its bitmap
+      // both move — from two different reads, which have to land together or the
+      // tile turns twice on screen. `applyRotatedCards` owns both, so it
+      // REPLACES the metadata refresh here rather than following it.
+      // `detections` leaves the file alone and takes the plain refresh.
       if (fields.includes("pixels")) {
-        grid.refreshThumbnailUrls?.(pictureIds);
+        void grid.applyRotatedCards?.(pictureIds);
+      } else {
+        for (const id of pictureIds) grid.refreshGridImage?.(id);
       }
       return { action: TARGETED, reason: "card-content-refresh" };
     }

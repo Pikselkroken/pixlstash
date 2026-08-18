@@ -217,6 +217,8 @@ export function useUpdatesSocket({
     refreshStackFacets: (ids) => gridContainer.value?.refreshStackFacets?.(ids),
     refreshThumbnailUrls: (ids) =>
       gridContainer.value?.refreshThumbnailUrls?.(ids),
+    applyRotatedCards: (ids) =>
+      gridContainer.value?.applyRotatedCards?.(ids),
     repositionImageByScore: (id, score) =>
       gridContainer.value?.repositionImageByScore?.(id, score),
     repositionImageBySmartScore: (id) =>
