@@ -40,6 +40,7 @@ import pytest
 from fastapi.testclient import TestClient
 from passlib.hash import bcrypt
 from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 from sqlmodel import delete, select
 
 from pixlstash.db_models import (
@@ -675,6 +676,96 @@ def test_the_thumbnail_route_regenerates_a_turned_bitmap_on_the_next_request(
         f"the pre-rotate bitmap. The grid paints that until the background sweep "
         f"gets round to the picture, which is the wrong-then-right refresh."
     )
+
+
+def test_a_rotated_png_is_SERVED_turned_because_no_browser_turns_it(client, server):
+    """The bug that made the whole feature look broken on a ComfyUI library.
+
+    An in-place rotate writes the EXIF tag and leaves the pixels, which is only
+    correct where the renderer applies the tag. Measured 2026-08-18 by writing a
+    tag with `write_orientation` and reading `naturalWidth`/`naturalHeight`
+    back: Chromium 148 and Firefox 150 both apply it for JPEG and both IGNORE it
+    for PNG, exactly as they ignore WebP's. So a rotated PNG showed a turned
+    thumbnail beside an unturned full view — and around five-sixths of a ComfyUI
+    library is PNG.
+
+    The fix is in the media route, so the assertion has to be on the RESPONSE
+    BYTES rather than on the file or the column: those are both correct either
+    way, which is precisely why nothing caught this. A landscape source served
+    portrait is the whole claim.
+
+    JPEG is the control in the sibling test below: it must keep streaming
+    untouched, because turning it here as well would turn it twice on screen.
+    """
+    picture_id = _upload(client, fmt="PNG", size=(64, 48))
+
+    def _served_size():
+        resp = client.get(f"{API}/pictures/{picture_id}.png")
+        assert resp.status_code == 200, resp.text
+        with Image.open(io.BytesIO(resp.content)) as served:
+            return served.size
+
+    assert _served_size() == (64, 48)
+
+    assert _rotate(client, [picture_id], "cw").status_code == 200
+
+    assert _served_size() == (48, 64), (
+        "the media route served the PNG unturned. No browser applies a PNG's "
+        "eXIf orientation, so this response is the only thing that can turn it "
+        "— the lightbox shows these bytes beside an already-turned thumbnail"
+    )
+
+
+def test_a_rotated_jpeg_is_still_streamed_untouched(client, server):
+    """The control, and the reason `BROWSER_ORIENTED_FORMATS` is not just empty.
+
+    The browser DOES apply a JPEG's orientation, so transposing it server-side
+    as well would turn it twice on screen. The bytes must come back with their
+    stored (unturned) dimensions and their orientation tag intact.
+    """
+    picture_id = _upload(client, fmt="JPEG", size=(64, 48))
+    assert _rotate(client, [picture_id], "cw").status_code == 200
+
+    resp = client.get(f"{API}/pictures/{picture_id}.jpeg")
+    assert resp.status_code == 200, resp.text
+    with Image.open(io.BytesIO(resp.content)) as served:
+        assert served.size == (64, 48), (
+            "the JPEG came back transposed; the browser will turn it again"
+        )
+        assert served.getexif().get(0x0112) == 6, (
+            "the orientation tag was stripped, so the browser has nothing to "
+            "apply and the picture renders flat"
+        )
+
+
+def test_a_served_rotated_png_keeps_its_comfyui_provenance(client, server):
+    """A re-encode drops PNG text chunks, and this response is what gets saved.
+
+    `workflow` / `prompt` are how this library recovers a picture's graph, and
+    "Save image as" in the lightbox hands the user exactly these bytes. Losing
+    them would be a worse bug than the unturned view this branch fixes.
+    """
+    _counter[0] += 1
+    image = Image.new("RGB", (64, 48), color=(11, 22, 33))
+    info = PngInfo()
+    info.add_text("workflow", '{"nodes": []}')
+    buf = io.BytesIO()
+    image.save(buf, format="PNG", pnginfo=info)
+    result = upload_pictures_and_wait(
+        client, [("file", ("provenance.png", buf.getvalue(), "image/png"))]
+    )
+    picture_id = result["results"][0]["picture_id"]
+
+    assert _rotate(client, [picture_id], "ccw").status_code == 200
+
+    resp = client.get(f"{API}/pictures/{picture_id}.png")
+    assert resp.status_code == 200, resp.text
+    with Image.open(io.BytesIO(resp.content)) as served:
+        assert served.size == (48, 64), "expected the turned render"
+        assert served.text.get("workflow") == '{"nodes": []}', (
+            "the transposing render dropped the PNG text chunks, so a saved "
+            "copy of a rotated picture loses its ComfyUI graph"
+        )
 
 
 def test_the_grid_projection_carries_the_orientation(client, server):

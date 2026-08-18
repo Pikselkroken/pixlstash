@@ -15,14 +15,17 @@
 //
 // **In-place rotate is an EXIF edit, not a re-encode.** The backend rewrites the
 // orientation tag and copies every other byte through, which is why it is
-// instant and lossless — and also why it only works where every renderer
-// honours that tag. The backend transposes on decode and the browser paints the
-// full-size original itself, so both have to agree. JPEG and PNG do; WebP does
-// not (Chromium and Firefox both ignore its orientation tag, which would show a
-// rotated thumbnail beside an unrotated full view), and TIFF/BMP/GIF/video are
-// out for the ordinary reasons. `supports_in_place_rotation` on the server is
-// the authority; this is the client half, which exists only so the control is
-// greyed *before* the round-trip rather than after it.
+// instant and lossless. What it needs in exchange is that every renderer agrees
+// on the tag — and the browser only does for JPEG. Measured 2026-08-18: both
+// Chromium 148 and Firefox 150 ignore a PNG's `eXIf` orientation exactly as
+// they ignore WebP's. That is NOT what gates this list, though: the media route
+// serves anything the browser will not turn already transposed
+// (`BROWSER_ORIENTED_FORMATS` in `routes/pictures/_serving.py`), so PNG is
+// offered and renders correctly on both halves. WebP stays out, and
+// TIFF/BMP/GIF/video are out for the ordinary reasons.
+// `supports_in_place_rotation` on the server is the authority; this is the
+// client half, which exists only so the control is greyed *before* the
+// round-trip rather than after it.
 
 import { MediaFormat } from "./media";
 
