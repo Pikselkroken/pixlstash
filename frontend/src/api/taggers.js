@@ -26,8 +26,9 @@ export async function listTaggers() {
  * caller is expected to treat as "nothing to show" rather than an error. Both
  * halves name paths on the server's disk, which is why they are not on
  * `/taggers`.
- * @returns {Promise<Object>} the body: `plugin_dirs`, `load_errors`, and the
- *   deployment-aware `cli_hint` command for installing plugins.
+ * @returns {Promise<Object>} the body: `plugin_dirs`, `load_errors`, and
+ *   deployment-aware CLI hints for finding, searching, listing, and installing
+ *   plugins.
  */
 export async function listTaggerPluginDiagnostics() {
   return unwrap(apiClient.get(`/taggers/plugin-diagnostics`));
