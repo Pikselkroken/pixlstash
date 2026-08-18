@@ -290,7 +290,6 @@ def register_routes(router, server):
                 )
 
             if status == "memory-only" and thumbnail_bytes:
-                cache_thumbnail_bytes(id, thumbnail_bytes)
                 elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
                 logger.warning(
                     "Thumbnail GET generated-memory-only: id=%s source=%s elapsed_ms=%.1f",
