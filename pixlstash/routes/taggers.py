@@ -64,6 +64,9 @@ class TaggerPluginDiagnosticsResponse(BaseModel):
     plugin_dirs: dict = {}
     load_errors: list[dict] = []
     cli_hint: Optional[str] = None
+    cli_available_hint: Optional[str] = None
+    cli_search_hint: Optional[str] = None
+    cli_list_hint: Optional[str] = None
 
 
 class TaggerDownloadResponse(BaseModel):
@@ -184,6 +187,9 @@ def create_router(server) -> APIRouter:
             "plugin_dirs": mgr.plugin_dirs(),
             "load_errors": mgr.list_errors(),
             "cli_hint": cli_hint("plugins install <name-or-path>"),
+            "cli_available_hint": cli_hint("plugins available"),
+            "cli_search_hint": cli_hint("plugins available <search-term>"),
+            "cli_list_hint": cli_hint("plugins list"),
         }
 
     @router.post(

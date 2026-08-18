@@ -30,6 +30,9 @@ vi.mock("../../api/taggers", () => ({
     plugin_dirs: { user: "/home/me/.pixlstash/plugins" },
     load_errors: [],
     cli_hint: "pixlstash plugins install <name-or-path>",
+    cli_available_hint: "pixlstash plugins available",
+    cli_search_hint: "pixlstash plugins available <search-term>",
+    cli_list_hint: "pixlstash plugins list",
   }),
 }));
 
@@ -73,6 +76,14 @@ describe("BehaviourSection plugin installation help", () => {
     const button = wrapper.get("button");
     expect(button.text()).toContain("How to install plugins");
     await button.trigger("click");
+    expect(wrapper.get(".plugin-catalogue-link").attributes("href")).toBe(
+      "https://github.com/Pikselkroken/PixlStash-plugins",
+    );
+    expect(wrapper.text()).toContain("pixlstash plugins available");
+    expect(wrapper.text()).toContain(
+      "pixlstash plugins available <search-term>",
+    );
+    expect(wrapper.text()).toContain("pixlstash plugins list");
     expect(wrapper.text()).toContain("pixlstash plugins install <name-or-path>");
     expect(wrapper.text()).toContain("/home/me/.pixlstash/plugins");
 
