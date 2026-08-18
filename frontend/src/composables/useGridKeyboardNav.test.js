@@ -57,10 +57,12 @@ function makeNav({
 
   const openOverlay = vi.fn();
   const clearSearchQuery = vi.fn();
+  const focusCursor = vi.fn();
   const callbacks = {
     clearFaceSelection: vi.fn(),
     clearSearchQuery,
     scrollCursorIntoView: vi.fn(),
+    focusCursor,
     openOverlay,
     deleteSelected,
     selectionBarRef: ref({ openTagInput: vi.fn() }),
@@ -85,6 +87,7 @@ function makeNav({
     applyScoresForSelection,
     openOverlay,
     clearSearchQuery,
+    focusCursor,
   };
 }
 
@@ -146,6 +149,14 @@ const NINE_IMAGES = ["a", "b", "c", "d", "e", "f", "g", "h", "i"].map((id) => ({
 }));
 
 describe("useGridKeyboardNav — justified vertical navigation", () => {
+  it("moves DOM focus with the keyboard cursor", () => {
+    const { handleKeyDown, focusCursor } = makeNav({ cursorIdx: 0 });
+
+    handleKeyDown(keyEvent({ key: "ArrowRight" }));
+
+    expect(focusCursor).toHaveBeenCalledWith(1);
+  });
+
   it("ArrowDown moves to the nearest-center item of the next visual row", () => {
     const { handleKeyDown, deps } = makeNav({
       images: NINE_IMAGES,
