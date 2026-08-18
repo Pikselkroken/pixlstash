@@ -171,6 +171,201 @@ describe("watching one to its end", () => {
     expect(store.status).toBe("running");
   });
 
+  it("keeps watching after a failed reading and consumes the finish", async () => {
+    // #1018: a failed read is "status unknown", not "stop observing forever".
+    // Giving up on one left `busy` true off a stale `running` snapshot, which
+    // disabled every move entry point AND the adoption path that could have
+    // recovered it — so the tab could only be freed by a reload.
+    const store = useModelMovesStore();
+    await store.start(2, ITEMS);
+    getModelMoveStatus
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue(
+        snapshot({
+          status: "finished",
+          done: 2,
+          results: [{ status: "moved" }, { status: "moved" }],
+        }),
+      );
+
+    await vi.advanceTimersByTimeAsync(1000); // the reading that fails
+    expect(getModelMoveStatus).toHaveBeenCalledTimes(1);
+    expect(store.busy).toBe(true);
+    expect(useNoticeStore().notices).toHaveLength(0);
+
+    // The retry is BACKED OFF, so it is not due one interval later.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(getModelMoveStatus).toHaveBeenCalledTimes(1);
+    expect(store.busy).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1000); // two intervals after the failure
+    expect(getModelMoveStatus).toHaveBeenCalledTimes(2);
+    expect(store.status).toBe("finished");
+    expect(store.busy).toBe(false);
+    expect(useNoticeStore().notices.at(-1).text).toBe("Moved 2 files.");
+    expect(fetchRows).toHaveBeenCalledTimes(1);
+    expect(refreshFolders).toHaveBeenCalledTimes(1);
+
+    // And then it stops: a loop that outlives its job keeps a timer and a
+    // request per second going for the rest of the session.
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(getModelMoveStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports the finish even when the refresh behind it fails", async () => {
+    // The move landed and the receipt is the news. The two reads that follow it
+    // are a repaint, and letting one of them reject out of a timer callback is
+    // an unhandled rejection nobody is positioned to catch — so it is caught
+    // and said out loud here instead.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const store = useModelMovesStore();
+    await store.start(2, ITEMS);
+    fetchRows.mockRejectedValue(new Error("offline"));
+    getModelMoveStatus.mockResolvedValue(
+      snapshot({ status: "finished", done: 2, results: [{ status: "moved" }] }),
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(useNoticeStore().notices.at(-1).text).toBe("Moved 1 file.");
+    expect(store.busy).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+
+    // And the store is idle rather than wedged: the next move takes the slot
+    // and gets a loop of its own.
+    fetchRows.mockResolvedValue(undefined);
+    getModelMoveStatus.mockClear().mockResolvedValue(snapshot());
+    startModelMove.mockResolvedValue(snapshot());
+    expect(await store.start(3, ITEMS)).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(getModelMoveStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a reading throw out of the timer callback", async () => {
+    // A terminal snapshot whose `results` is not a list: the tally of "did
+    // anything fail?" throws on it, from inside a timer callback where there is
+    // nobody left to catch it. That receipt is lost either way — an unhandled
+    // rejection that also strands the loop is the part that must not happen.
+    const store = useModelMovesStore();
+    await store.start(2, ITEMS);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    getModelMoveStatus.mockResolvedValue(
+      snapshot({ status: "finished", results: {} }),
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
+
+    // The store is idle rather than wedged, and the next move gets a loop.
+    expect(store.busy).toBe(false);
+    startModelMove.mockResolvedValue(snapshot());
+    getModelMoveStatus.mockClear().mockResolvedValue(snapshot());
+    expect(await store.start(3, ITEMS)).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(getModelMoveStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("still reports a job that finished before its own POST returned", async () => {
+    // A same-drive rename of a handful of files can beat the read the start
+    // route does on its way out, so the accepted job comes back ALREADY
+    // terminal. Ending the loop on "the job is not running" rather than on
+    // "the finish has been reported" loses the receipt and both refreshes here,
+    // because the one reading that would have consumed it is the one that fails.
+    const store = useModelMovesStore();
+    const finished = snapshot({
+      status: "finished",
+      done: 1,
+      results: [{ status: "moved" }],
+    });
+    startModelMove.mockResolvedValue(finished);
+    getModelMoveStatus
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue(finished);
+
+    await store.start(2, ITEMS);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(useNoticeStore().notices.at(-1).text).toBe("Moved 1 file.");
+    expect(fetchRows).toHaveBeenCalledTimes(1);
+  });
+
+  it("backs off to a ceiling rather than doubling away from the owner", async () => {
+    // Unbounded doubling would put the reading that notices the server came
+    // back minutes out. Bounded, five minutes of outage is tens of readings,
+    // not the nine an uncapped 2^n would manage.
+    const store = useModelMovesStore();
+    await store.start(2, ITEMS);
+    getModelMoveStatus.mockReset().mockRejectedValue(new Error("offline"));
+
+    await vi.advanceTimersByTimeAsync(300000);
+    expect(getModelMoveStatus.mock.calls.length).toBeGreaterThan(15);
+    expect(store.busy).toBe(true);
+  });
+
+  it("never has two readings in flight at once", async () => {
+    // The next reading is booked only once the current one lands. An interval
+    // would stack a request per tick on top of a status read that is hanging.
+    const store = useModelMovesStore();
+    await store.start(2, ITEMS);
+    getModelMoveStatus.mockReset().mockReturnValue(new Promise(() => {}));
+
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(getModelMoveStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("abandons a reading already in flight when the session resets", async () => {
+    // Host paths and folder ids are owner-only, so the new session has no
+    // standing to watch a job the old one started — including the answer to a
+    // request it had already sent.
+    const store = useModelMovesStore();
+    await store.start(2, ITEMS);
+    let answer;
+    getModelMoveStatus
+      .mockReset()
+      .mockReturnValue(new Promise((resolve) => (answer = resolve)));
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(getModelMoveStatus).toHaveBeenCalledTimes(1);
+    store.resetForSession();
+    answer(
+      snapshot({ status: "finished", done: 2, results: [{ status: "moved" }] }),
+    );
+
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(store.job).toBe(null);
+    expect(store.busy).toBe(false);
+    expect(useNoticeStore().notices).toHaveLength(0);
+    expect(fetchRows).not.toHaveBeenCalled();
+    // The loop is gone with the session, not merely quiet for one tick.
+    expect(getModelMoveStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not leave a second loop behind when a move follows a reset", async () => {
+    // The abandoned reading lands after the new session has started a move of
+    // its own, so "is anything still being watched?" is the wrong question —
+    // something is, just not this loop's job. Two loops on one job is two
+    // requests a second and two receipts for the same finish.
+    const store = useModelMovesStore();
+    await store.start(2, ITEMS);
+    let answer;
+    getModelMoveStatus
+      .mockReset()
+      .mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+      .mockResolvedValue(snapshot());
+
+    await vi.advanceTimersByTimeAsync(1000); // the abandoned reading, in flight
+    store.resetForSession();
+    await store.start(3, ITEMS);
+    answer(snapshot());
+
+    // From here every reading hangs, so the new session's loop can account for
+    // exactly one of them and a second could only be a loop still alive from
+    // before the reset.
+    getModelMoveStatus.mockClear().mockReturnValue(new Promise(() => {}));
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(getModelMoveStatus).toHaveBeenCalledTimes(1);
+  });
+
   it("counts progress in items, because a same-drive move copies no bytes", () => {
     const store = useModelMovesStore();
     store.job = snapshot({ total: 4, done: 1, bytes_to_copy: 0 });

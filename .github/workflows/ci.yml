@@ -968,5 +968,37 @@ jobs:
           tests/test_watch_folder_worker.py
           tests/test_work_planner.py
 
+      # `PYTHONFAULTHANDLER` above did not name it, and that is itself the
+      # finding: pytest's faulthandler plugin restores the handler in its
+      # `pytest_unconfigure` whenever the env var enabled it (verified in
+      # `_pytest/faulthandler.py`), so it IS armed all the way into
+      # `Py_FinalizeEx` — and six of these crashes have still printed nothing.
+      # A handler that is live and silent puts the fault beyond CPython's reach
+      # entirely: past `_PyFaulthandler_Fini`, in native teardown. Windows logs
+      # one layer below that, an Application Error record naming the faulting
+      # module, its version and the fault offset — the DLL this has never been
+      # able to name.
+      #
+      # Read the event rather than shipping a minidump: artifacts on a public
+      # repository are downloadable by anyone, and dumped process memory reaches
+      # the environment block, which is where this job's `HF_TOKEN` lives. An
+      # event record carries module names and offsets and no memory at all.
+      - name: Name the faulting module
+        if: failure()
+        shell: pwsh
+        run: |
+          $events = Get-WinEvent -MaxEvents 5 -ErrorAction SilentlyContinue -FilterHashtable @{
+            LogName      = 'Application'
+            ProviderName = 'Application Error', 'Windows Error Reporting'
+          }
+          if (-not $events) {
+            Write-Host 'No Application Error record: this failure was not a native crash.'
+            exit 0
+          }
+          foreach ($event in $events) {
+            Write-Host "--- $($event.TimeCreated.ToString('o')) [$($event.Id)] $($event.ProviderName)"
+            Write-Host $event.Message
+          }
+
   # The `build-windows` aggregator over this job was removed with `build` in
   # #796 — see the note where `build` used to be, above `e2e`.
