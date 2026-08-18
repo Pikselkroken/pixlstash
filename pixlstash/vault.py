@@ -29,7 +29,7 @@ from .db_models import (
     TAG_SENTINEL_ESCAPE_CHAR,
 )
 from .pixl_logging import get_logger
-from pixlstash.hub.db import _mkdir_private
+from pixlstash.startup_permissions import mkdir_private
 from pixlstash.inference.engine import InferenceEngine
 from .utils.image_processing.image_utils import ImageUtils
 from .tasks.face_extraction_task import FaceExtractionTask
@@ -112,7 +112,7 @@ class Vault:
         # mode reaches only the LEAF, so intermediates of a deep new image_root
         # came out 0775 under Ubuntu's umask 002 and the guarded open then
         # refused the namespace the app itself had just created (W21).
-        _mkdir_private(Path(self.image_root))
+        mkdir_private(Path(self.image_root))
         assert os.path.exists(self.image_root), (
             f"Image root path does not exist: {self.image_root}"
         )

@@ -4,6 +4,7 @@ import logging
 import sys
 import json
 import getpass
+import shlex
 
 from platformdirs import user_config_dir
 from passlib.hash import bcrypt
@@ -12,6 +13,15 @@ from passlib.hash import bcrypt
 from pixlstash.pixl_logging import setup_logging, get_logger
 from pixlstash.server import Server
 from pixlstash.startup_checks import StartupCheckError
+from pixlstash.hub.db import HubPermissionError
+from pixlstash.startup_permissions import (
+    PERMISSION_REPAIR_ENV,
+    find_startup_permission_issues,
+    format_permission_problem,
+    permission_repair_signal,
+    repair_permission_issues,
+)
+from pixlstash.trusted_sqlite import TrustedSQLiteLocationError
 
 logger = get_logger(__name__)
 
@@ -55,6 +65,86 @@ def _parse_yes_no(value, default: bool) -> bool:
     if raw in {"n", "no", "false", "0", "off"}:
         return False
     return default
+
+
+def _permission_fix_commands(issues) -> list[str]:
+    """Return copy/pasteable commands for a non-interactive POSIX launch."""
+
+    return [
+        f"chmod {issue.repaired_mode:03o} {shlex.quote(issue.path)}"
+        for issue in issues
+    ]
+
+
+def _prepare_startup_permissions(
+    server_config_path: str,
+    server_config: dict,
+) -> bool:
+    """Offer or perform the bounded permission repair needed before startup.
+
+    Electron has no usable stdin, so the first backend launch emits a structured
+    line for the shell and exits. After the user accepts the native dialog, the
+    shell retries once with ``PIXLSTASH_REPAIR_PERMISSIONS=1``. A terminal gets
+    the same decision inline; services get actionable commands and a clean exit.
+    """
+
+    repair_requested = os.environ.get(PERMISSION_REPAIR_ENV) == "1"
+    is_electron = os.environ.get("PIXLSTASH_INSTALL_TYPE", "").lower() == "electron"
+
+    # Usually one pass is enough. A second pass can discover an active library
+    # stored in the hub only after the hub directory itself has been repaired.
+    for _ in range(3):
+        issues = find_startup_permission_issues(
+            server_config_path,
+            str(server_config.get("image_root") or "") or None,
+        )
+        if not issues:
+            return True
+
+        message = format_permission_problem(issues)
+        if repair_requested:
+            print(message, file=sys.stderr)
+            try:
+                repair_permission_issues(issues)
+            except OSError as exc:
+                print(f"\nPixlStash could not fix the permissions: {exc}", file=sys.stderr)
+                return False
+            continue
+
+        if is_electron:
+            # Human text remains in the log; the single-line JSON record is the
+            # stable protocol consumed by the desktop shell.
+            print(message, file=sys.stderr)
+            print(permission_repair_signal(issues), file=sys.stderr)
+            return False
+
+        print(message, file=sys.stderr)
+        if getattr(sys.stdin, "isatty", lambda: False)():
+            try:
+                answer = input("\nFix permissions now? [Y/n] ").strip().lower()
+            except EOFError:
+                answer = "n"
+            if answer not in {"", "y", "yes"}:
+                print("Permissions were not changed.", file=sys.stderr)
+                return False
+            try:
+                repair_permission_issues(issues)
+            except OSError as exc:
+                print(f"\nPixlStash could not fix the permissions: {exc}", file=sys.stderr)
+                return False
+            print("Permissions fixed. Starting PixlStash…", file=sys.stderr)
+            continue
+
+        print("\nFix them and start PixlStash again:", file=sys.stderr)
+        for command in _permission_fix_commands(issues):
+            print(f"  {command}", file=sys.stderr)
+        return False
+
+    print(
+        "PixlStash still found unsafe permissions after attempting the repair.",
+        file=sys.stderr,
+    )
+    return False
 
 
 def _should_prompt_bootstrap(server_config_path: str, force: bool) -> bool:
@@ -304,6 +394,8 @@ def main():
         path_map[parts[0]] = parts[1]
 
     server_config = Server.init_server_config(args.server_config)
+    if not _prepare_startup_permissions(args.server_config, server_config):
+        return 1
 
     log_level = _resolve_log_level(server_config.get("log_level"))
     log_file = server_config.get("log_file")
@@ -321,6 +413,13 @@ def main():
         print("Startup checks failed. Please resolve the following issues:")
         for failure in exc.failures:
             print(f"- {failure}")
+        return 1
+    except (HubPermissionError, TrustedSQLiteLocationError) as exc:
+        # Suspicious cases (foreign owner, symlink/junction, replaced file) are
+        # deliberately not offered to chmod, but they still deserve a concise
+        # startup error rather than an implementation traceback.
+        print("PixlStash could not safely open its database:", file=sys.stderr)
+        print(f"- {exc}", file=sys.stderr)
         return 1
 
     if ran_bootstrap:

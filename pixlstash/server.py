@@ -7,6 +7,7 @@ import re
 import socket
 import asyncio
 import threading
+from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version as package_version
 from platformdirs import user_config_dir
 
@@ -47,6 +48,7 @@ from pixlstash.services import library_settings_service, scrapheap_service
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
 from pixlstash.startup_checks import StartupChecks
+from pixlstash.startup_permissions import mkdir_private
 from pixlstash.hub.bootstrap import (
     bootstrap_hub,
     registered_vault_path,
@@ -1046,7 +1048,10 @@ class Server(
     @staticmethod
     def init_server_config(server_config_path):
         config_dir = os.path.dirname(server_config_path)
-        os.makedirs(config_dir, exist_ok=True)
+        # This directory contains the hub credential store. A plain makedirs()
+        # becomes 0775 under Linux's common umask 0002, after which the SQLite
+        # guard correctly refuses the directory the app itself just created.
+        mkdir_private(Path(config_dir))
 
         # SSL certs are always stored in the platform user-config dir so they
         # stay in a consistent, writable location regardless of where the
