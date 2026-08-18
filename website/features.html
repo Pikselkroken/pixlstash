@@ -322,6 +322,73 @@
 
       <section class="section">
         <div class="section-header">
+          <h2 class="section-title">Libraries, models and the command line</h2>
+          <p class="section-subtitle">
+            Keep separate picture libraries in one installation, catalogue the
+            models already on your disks, and run the housekeeping from a
+            terminal.
+          </p>
+        </div>
+        <div class="feature-grid feature-grid--primary">
+          <div class="feature-card">
+            <h3>Several picture libraries</h3>
+            <p>
+              Register more than one library and keep one open at a time.
+              Pictures, tags, scores and snapshots stay with their library, while
+              your account, your preferences and the model shelf stay with the
+              installation. Switch from Settings → Libraries.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Tokens and links per library</h3>
+            <p>
+              API tokens and share links belong to the library that created them.
+              They go quiet while another library is open and work again when you
+              switch back, and Settings warns you before you switch away from a
+              library with live share links.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Model shelf</h3>
+            <p>
+              Register the folders holding your checkpoints and LoRAs and see
+              what is in them: kind, base model, size, and every folder a copy
+              sits in. Group and sort the shelf, move a model between folders, or
+              delete one to your Trash.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Training runs and versions</h3>
+            <p>
+              Read an ai-toolkit run where it was written, then import it with
+              its sample images. Versions of one subject group behind a single
+              row, so a character you have trained four times is one entry with
+              its history under it.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>A command line</h3>
+            <p>
+              pixlstash-cli manages libraries, writes and restores backups, and
+              installs plugins. Every command documents itself, including the
+              exit codes a script needs, so a nightly backup is one cron line.
+              The desktop app can run it without being open.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Folder permission repair</h3>
+            <p>
+              The desktop app checks at start-up whether another account on the
+              computer can write to your library folder, and offers to tighten
+              the permissions. It changes permissions only, and leaves your own
+              access alone.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-header">
           <h2 class="section-title">Work with confidence</h2>
           <p class="section-subtitle">
             Reverse everyday edits across your library, review duplicate
@@ -391,6 +458,36 @@
           <h2 class="section-title">A UI focused on the work</h2>
         </div>
         <div class="shot-grid">
+          <div class="shot">
+            <div class="shot-label"><h4>Model shelf</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotModelShelf.jpg"
+                data-full="assets/ScreenshotModelShelf.jpg"
+                alt="The PixlStash model shelf listing checkpoints and LoRAs grouped by kind, with size and date columns"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              See the checkpoints and LoRAs in the folders you register, grouped
+              by kind, base model, folder or feature.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Libraries</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotLibraries.jpg"
+                data-full="assets/ScreenshotLibraries.jpg"
+                alt="PixlStash Settings with two registered picture libraries and the active one marked"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Switch between registered libraries from Settings. Each one keeps
+              its own pictures, tags, scores and snapshots.
+            </p>
+          </div>
           <div class="shot">
             <div class="shot-label"><h4>Full undo and redo</h4></div>
             <button class="shot-image-btn" type="button">

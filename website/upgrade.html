@@ -397,30 +397,30 @@
       </div>
 
       <div id="upgrade-notice" class="method-warning upgrade-notice">
-        ⚠️ <strong>Coming from 1.8.0 or earlier?</strong> Updating clears every
-        API token, as it did in 1.8.1. Create replacements from Settings, share
-        your links again with their new values, and enter your public URL and
-        ComfyUI URL again. If you already updated to 1.8.1 or later this has
-        happened and your current tokens are left alone.
+        ⚠️ <strong>Upgrading to 1.10?</strong> The library upgrade is not
+        backwards compatible: once a library has been opened by 1.10, an older
+        version cannot open it again. Back it up first by copying the library
+        folder somewhere safe while PixlStash is stopped.
       </div>
 
       <a class="whatsnew-banner" href="whatsnew.html">
         <div>
-          <span class="whatsnew-kicker">New in 1.9</span>
+          <span class="whatsnew-kicker">New in 1.10</span>
           <h2 class="whatsnew-title">
             Explore what changed before you upgrade
           </h2>
           <p class="whatsnew-copy">
-            Undo and redo across your library, the new Duplicates view, Keep
-            cover only for clearing out stacks, characters and sets in several
-            projects at once, and a new Privacy pane.
+            Several picture libraries in one installation, a model shelf for your
+            checkpoints and LoRAs, ai-toolkit training run import, a
+            pixlstash-cli command line for backups and plugins, and a start-up
+            check on your library folder's permissions.
           </p>
           <span class="whatsnew-cta">Open the What's New page →</span>
         </div>
         <div class="whatsnew-media">
           <img
-            src="assets/ScreenshotDuplicates.jpg"
-            alt="PixlStash 1.9: the Duplicates view grouping likely copies for review"
+            src="assets/ScreenshotLibraries.jpg"
+            alt="PixlStash 1.10: Settings with two registered picture libraries and the active one marked"
           />
         </div>
       </a>
@@ -689,6 +689,12 @@
       function inlineMarkdown(escaped) {
         return escaped
           .replace(/`([^`]+)`/g, "<code>$1</code>")
+          // Release notes link into the README by relative path, which resolves
+          // to nothing here. Send those to the file on GitHub.
+          .replace(
+            /\[([^\]]+)\]\((README\.md(?:#[^\s)]*)?)\)/g,
+            '<a href="https://github.com/pikselkroken/pixlstash/blob/main/$2" target="_blank" rel="noopener">$1</a>',
+          )
           .replace(
             /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
             '<a href="$2" target="_blank" rel="noopener">$1</a>',
