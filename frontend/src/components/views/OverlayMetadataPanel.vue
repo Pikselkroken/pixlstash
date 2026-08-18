@@ -116,7 +116,7 @@
           <details v-if="comfyMetadata.workflow" class="metadata-comfy-details">
             <summary class="metadata-comfy-summary">
               <span class="metadata-comfy-summary-left">
-                <span style="font-weight: 500; color: #fff">{{
+                <span class="metadata-comfy-summary-title">{{
                   comfyMetadata.isApiFormat
                     ? "API Workflow JSON"
                     : "Workflow JSON"
@@ -607,6 +607,11 @@ watch(
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+}
+
+.metadata-comfy-summary-title {
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-weight: var(--weight-medium);
 }
 
 .metadata-comfy-workflow-action {
