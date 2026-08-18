@@ -55,10 +55,12 @@
            on one segment against mdi line art on the other unbalances a control
            that has to read as symmetric.
 
-           The selected segment FILLS, the way the shipped `.tbm-seg` control
-           does. Not a wash plus a bolder label: a bolder label is a wider
-           label, so the pair resized on every switch and shoved the whole left
-           group sideways. -->
+           The selected segment FILLS, in a wash rather than the solid accent
+           `.tbm-seg` uses inside a menu — this one sits in a toolbar beside the
+           bar's one accent button, and two solid fills in one strip is what
+           made this bar read louder than the other two. Never a bolder label: a
+           bolder label is a wider label, so the pair resized on every switch and
+           shoved the whole left group sideways. -->
       <div class="shelf-viewswitch" role="tablist" aria-label="Model view">
         <button
           id="shelf-tab-shelf"
@@ -3833,9 +3835,21 @@ watch(
 /* The one filled button in the bar. It is the only control here with a result
    behind it — everything else changes what you are looking at — and that is
    what the fill says. `on-primary` and not the surface ink: this is a solid
-   accent fill, which is the pairing that measures (§4). */
+   primary fill, which is the pairing that measures (§4).
+
+   28px, not `.bar-btn`'s 32, and `--radius-sm` rather than the nothing it
+   inherited. A filled control is the only kind whose box you can actually see:
+   the boxed buttons beside it are transparent at rest, so their 32px shows as a
+   hover wash and never as a silhouette, while this one's 32px in a 36px band
+   (35 inside the bottom hairline) left 1.5px of clearance and read as a
+   bar-height object rather than a control sitting in a bar. The radius was
+   simply missing — `--boxed` is what carries `--radius-sm` and this never took
+   it, so the one accent button in the app was also the one square-cornered one,
+   at a radius (0) that is not on the scale (§6). */
 .shelf-toolbar .bar-btn--accent {
   gap: var(--space-2);
+  height: 28px;
+  border-radius: var(--radius-sm);
   border-color: rgb(var(--v-theme-primary));
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
@@ -3928,15 +3942,20 @@ watch(
   border-radius: var(--radius-pill);
 }
 
-/* 30px, not `.bar-btn`'s 32: this is the one control on any of the three bars
+/* 26px, not `.bar-btn`'s 32: this is the one control on any of the three bars
    that wraps its buttons in a bordered track, so 32px segments made the switch
    34px against every neighbour's 32. In the old 48px band that only misaligned
    it; in the 36px band it also left 0.5px between the switch and the band edge,
-   so a focused segment's 3px ring painted over the first list row. 30 + 2×1px
-   border = 32, the height every other control in every bar already is. */
+   so a focused segment's 3px ring painted over the first list row.
+
+   26 + 2×1px border = 28, matching `Add` beside it rather than the 32 of the
+   boxed buttons — and for the same reason `Add` moved: this switch and that
+   button are the only two objects on the bar that are visibly filled at rest,
+   so they are the only two whose height reads as a silhouette. 28 in a 36px
+   band leaves 3.5px above and below instead of 1.5. */
 .shelf-viewseg {
   border-radius: 0;
-  height: 30px;
+  height: 26px;
   color: rgba(var(--v-theme-on-panel), 0.7);
 }
 
@@ -3957,19 +3976,36 @@ watch(
   background: var(--hover-wash);
 }
 
-/* The selected segment FILLS, exactly as `.tbm-seg-btn--on` does, and carries
-   no weight change. A bolder label is a wider label, so the pair resized on
-   every switch and the whole left group jumped — the fill says the same thing
-   and costs no layout. `on-primary` on `primary` measures 4.86:1 in both
-   themes, so the label clears the text floor on the fill. */
+/* The selected segment fills, and carries no weight change. A bolder label is a
+   wider label, so the pair resized on every switch and the whole left group
+   jumped — the fill says the same thing and costs no layout (and the guardrail
+   in `ModelShelf.test.js` holds this rule to any property that would).
+
+   A WASH and not the solid `primary` `.tbm-seg-btn--on` uses. That control
+   lives inside a menu panel, where a branded fill is the only thing on the
+   surface; here it sat in a 36px band beside `Add`, and two solid accents in
+   one strip is what made this bar read as louder than the other two. Every
+   other bar in the app runs on transparent buttons — ink and a hover wash,
+   nothing filled at rest.
+
+   The label leaves `on-primary` with the fill, because warm white on a 28%
+   tint does not measure; it goes to `toolbar-text` at FULL strength against the
+   0.7 its neighbour keeps. That step is not decoration — `.shelf-row--selected`
+   below states the rule this obeys: a wash alone is a hue, and it needs a
+   partner that survives greyscale and forced-colors. Here the partner is the
+   ink, since a pill cannot carry that rule's inset bar.
+
+   The two alphas live in `style.css` beside `--hover-wash` and `--active-wash`,
+   which is where every theme-varying value in this app is declared — including
+   the shelf's own drive-band meter colours. */
 .shelf-viewseg--on {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+  background: var(--shelf-viewseg-wash);
+  color: rgb(var(--v-theme-toolbar-text));
 }
 
 .shelf-viewseg--on:hover {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+  background: var(--shelf-viewseg-wash);
+  color: rgb(var(--v-theme-toolbar-text));
 }
 
 /* Raised so the focus ring is not clipped by the welded sibling. */

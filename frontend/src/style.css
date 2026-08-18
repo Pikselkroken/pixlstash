@@ -68,6 +68,15 @@ body {
      `on-surface` (10.84:1) and needs no change either. */
   --active-text: rgb(var(--v-theme-on-primary));
 
+  /* The model shelf's view switch, whose selected segment is a wash rather than
+     a solid fill (`.shelf-viewseg--on`). Not `--active-wash`: that one selects
+     in the warm accent on light and the olive on dark, and this control keeps
+     one hue in both because it sits beside the bar's olive `Add` and a warm
+     chip next to it would read as a second, different accent. The +.06 over
+     light is the same compensation the line above makes, for the same reason —
+     the deepened olive needs more of itself to register on the dark track. */
+  --shelf-viewseg-wash: rgba(var(--v-theme-primary), 0.34);
+
   /* Drive-band capacity meter (#893). Three segments, so TWO adjacencies to
      keep readable: ours|other and other|free. `ours` is `primary` in both
      themes; it is the NEUTRAL that steps per theme.
@@ -106,6 +115,10 @@ body {
   --active-wash: rgba(var(--v-theme-accent), 0.2);
   --active-bar: rgb(var(--v-theme-accent));
   --active-text: rgb(var(--v-theme-on-surface));
+
+  /* See the dark block above: this control holds one hue across both themes,
+     so it stays olive here rather than following `--active-wash` into accent. */
+  --shelf-viewseg-wash: rgba(var(--v-theme-primary), 0.28);
 
   /* Drive-band capacity meter (#893) — see the dark block above for the rule.
      Here the canvas is near-white, so the neutral goes to the DARK extreme,
