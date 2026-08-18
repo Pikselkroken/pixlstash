@@ -234,6 +234,7 @@ function onParamsSaved({ name, params }) {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  white-space: nowrap;
   cursor: default;
 }
 

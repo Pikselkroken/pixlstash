@@ -26,6 +26,8 @@ const taggerPluginDir = ref(null);
 // error is exception text from a third-party plugin and can name any path on
 // the host, so it is owner-and-local like the folder itself.
 const taggerPluginErrors = ref([]);
+const taggerCliHint = ref("pixlstash-cli plugins install <name-or-path>");
+const pluginInstallHelpOpen = ref(false);
 
 // ── VRAM budget ───────────────────────────────────────────────────────────────
 const VRAM_BUDGET_MIN_GB = 2;
@@ -193,6 +195,7 @@ async function fetchTaggerPlugins() {
     const diagnostics = await listTaggerPluginDiagnostics();
     taggerPluginDir.value = diagnostics?.plugin_dirs?.user ?? "";
     taggerPluginErrors.value = diagnostics?.load_errors ?? [];
+    taggerCliHint.value = diagnostics?.cli_hint || taggerCliHint.value;
   } catch {
     taggerPluginDir.value = "";
     taggerPluginErrors.value = [];
@@ -338,29 +341,29 @@ watch(
           <strong>{{ p.name }}</strong> failed to load: {{ p.message }}
         </li>
       </ul>
-      <div v-if="taggerPluginDir" class="settings-tagger-plugin-dir">
-        Add your own plugin by dropping a <code>.py</code> file (or a folder
-        with an <code>__init__.py</code>) into
-        <code class="settings-tagger-plugin-path">{{ taggerPluginDir }}</code
-        >, creating the folder if it does not exist. Plugins run as ordinary
-        Python with the same access as PixlStash itself, so only add ones you
-        trust. Restart the server afterwards — plugins are only discovered at
-        start-up.
-      </div>
-      <!-- Rendered only once the diagnostics request has answered. Without it
-           the block just vanishes for a remote caller, which reads as a missing
-           feature rather than a deliberate restriction; rendered too early it
-           tells a local owner the path cannot be shown on the screen showing
-           it. -->
-      <div
-        v-else-if="taggerPluginDir !== null"
-        class="settings-tagger-plugin-dir"
-      >
-        Custom plugins are installed by putting a file into a folder on the
-        machine running PixlStash. The path is only shown to a browser on that
-        machine or its local network, so open this screen from there to see it.
+      <div class="settings-tagger-plugin-help">
+        <v-btn variant="text" size="small" prepend-icon="mdi-help-circle-outline" @click="pluginInstallHelpOpen = true">
+          How to install plugins
+        </v-btn>
       </div>
     </SettingsSection>
+
+    <v-dialog v-model="pluginInstallHelpOpen" max-width="560" @click:outside="pluginInstallHelpOpen = false">
+      <v-card>
+        <v-card-title>How to install plugins</v-card-title>
+        <v-card-text class="plugin-install-help-body">
+          <p>Plugins run as ordinary Python with the same access as PixlStash itself, so only install plugins you trust.</p>
+          <h4>Command line (recommended)</h4>
+          <p>On the machine running PixlStash, install a plugin from the built-in repository or a local file:</p>
+          <code class="plugin-install-command">{{ taggerCliHint }}</code>
+          <p>Replace <code>&lt;name-or-path&gt;</code> with a repository name or local plugin file/folder. Restart the server afterwards; plugins are discovered at startup.</p>
+          <h4>Manual installation</h4>
+          <p v-if="taggerPluginDir">Drop a <code>.py</code> file or a folder containing <code>__init__.py</code> into <code class="settings-tagger-plugin-path">{{ taggerPluginDir }}</code>, creating the folder if needed, then restart the server.</p>
+          <p v-else>Put a <code>.py</code> file or plugin folder into the custom plugin folder on the machine running PixlStash, then restart the server. The exact path is shown when this screen is opened locally.</p>
+        </v-card-text>
+        <v-card-actions><v-spacer /><v-btn variant="text" @click="pluginInstallHelpOpen = false">Close</v-btn></v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -375,6 +378,21 @@ watch(
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.55);
   padding-top: var(--space-3);
+}
+
+.settings-tagger-plugin-help {
+  padding-top: var(--space-2);
+}
+
+.plugin-install-help-body h4 {
+  margin: var(--space-3) 0 var(--space-1);
+}
+
+.plugin-install-command {
+  display: block;
+  padding: var(--space-2);
+  overflow-wrap: anywhere;
+  background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
 .settings-tagger-plugin-path {
