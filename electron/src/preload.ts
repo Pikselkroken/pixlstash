@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   probeSetup: () => ipcRenderer.invoke('setup:probe'),
   pickLibraryFolder: (current: string) => ipcRenderer.invoke('setup:pickFolder', current),
   commitSetup: (choices: unknown) => ipcRenderer.invoke('setup:commit', choices),
+  // Startup permission recovery: main holds the backend's repair report and
+  // waits for exactly one answer before retrying or quitting.
+  permissionRepairRequest: () => ipcRenderer.invoke('permissions:request'),
+  resolvePermissionRepair: (accepted: boolean) =>
+    ipcRenderer.invoke('permissions:resolve', accepted),
   listAccelerators: () => ipcRenderer.invoke('accel:list'),
   installAccelerator: (accel: string) => ipcRenderer.invoke('accel:install', accel),
   useAccelerator: (accel: string | null) => ipcRenderer.invoke('accel:use', accel),

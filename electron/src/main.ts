@@ -736,21 +736,65 @@ async function startWithOverlayFallback(
   });
 }
 
+/**
+ * The repair report the permissions screen is currently showing. Held in main
+ * (rather than passed through a query string) so the renderer can only ever see
+ * a report the backend actually produced this launch.
+ */
+let pendingPermissionRepair: PermissionRepairRequiredError['request'] | null = null;
+
+/**
+ * Ask the user to authorise the backend's bounded permission repair.
+ *
+ * This is a full window rather than a native message box because the decision
+ * is the app's whole first impression when it happens: it has to explain a risk
+ * the user did not know they had, name every folder it will touch, and still
+ * read as PixlStash. A native dialog can only render one blob of detail text,
+ * which is how a list of paths and modes turns into a wall the user dismisses.
+ *
+ * Falls back to the native box when there is no window to host the page (the
+ * repair can be discovered before `createWindow`, e.g. a headless relaunch), so
+ * the offer is never silently lost.
+ */
 async function offerPermissionRepair(error: PermissionRepairRequiredError): Promise<boolean> {
-  const options: Electron.MessageBoxOptions = {
-    type: 'warning',
-    title: 'PixlStash',
-    message: 'PixlStash needs safer file permissions',
-    detail: permissionRepairDialogDetail(error.request),
-    buttons: ['Fix permissions', 'Quit'],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-  };
-  const result = mainWindow
-    ? await dialog.showMessageBox(mainWindow, options)
-    : await dialog.showMessageBox(options);
-  return result.response === 0;
+  if (!mainWindow) {
+    const result = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'PixlStash',
+      message: 'PixlStash needs safer file permissions',
+      detail: permissionRepairDialogDetail(error.request),
+      buttons: ['Fix it', 'Quit'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    return result.response === 0;
+  }
+
+  const window = mainWindow;
+  pendingPermissionRepair = error.request;
+  try {
+    await window.loadFile(join(__dirname, 'renderer', 'permissions.html'));
+    return await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const settle = (accepted: boolean) => {
+        if (settled) return;
+        settled = true;
+        ipcMain.removeHandler('permissions:resolve');
+        window.off('closed', onClosed);
+        resolve(accepted);
+      };
+      // Closing the window is a refusal, not a hang: without this the boot
+      // promise would never settle and the app would sit dead with no UI.
+      const onClosed = () => settle(false);
+      window.on('closed', onClosed);
+      ipcMain.handle('permissions:resolve', (_e, accepted: unknown) => {
+        settle(accepted === true);
+      });
+    });
+  } finally {
+    pendingPermissionRepair = null;
+  }
 }
 
 /** Launch: dev passthrough, or the bundled env (+ active GPU overlay), straight into the library. */
@@ -800,6 +844,10 @@ async function boot(): Promise<void> {
         return;
       } catch (retryError) {
         error = retryError;
+        // The permissions screen is still loaded and has no handler for the
+        // fatal phase, so put the splash back before reporting; otherwise a
+        // failed repair leaves the offer on screen with nothing happening.
+        await mainWindow?.loadFile(join(__dirname, 'renderer', 'index.html'));
       }
     }
     sendPhase({ phase: 'error', message: (error as Error).message });
@@ -917,6 +965,12 @@ function registerIpc(): void {
     bundledAccel: bundledAccel(),
     activeAccel: await manager.getActiveAccel(),
   }));
+
+  // ---- Startup permission recovery ----
+
+  // Read-only: the screen renders the report; `permissions:resolve` is
+  // registered only while that screen is actually waiting for an answer.
+  ipcMain.handle('permissions:request', () => pendingPermissionRepair);
 
   // ---- First-run setup wizard ----
 
