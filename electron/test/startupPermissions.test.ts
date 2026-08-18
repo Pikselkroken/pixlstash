@@ -14,7 +14,7 @@ import { PermissionRepairRequiredError } from '../src/backend/StartupPermissions
 
 const issue = {
   area: 'Library',
-  path: '/home/alex/Pictures/a very long library path',
+  path: '/home/me/Pictures/a very long library path',
   current_mode: '775',
   repaired_mode: '755',
 };
@@ -75,8 +75,9 @@ describe('permission repair startup protocol', () => {
     const root = mkdtempSync(join(tmpdir(), 'pixlstash-permissions-'));
     const target = join(root, 'existing');
     mkdirSync(target, { mode: 0o775 });
+    const originalMode = statSync(target).mode & 0o777;
     assert.equal(mkdirPrivateIfMissing(target), false);
-    assert.equal(statSync(target).mode & 0o777, 0o775);
+    assert.equal(statSync(target).mode & 0o777, originalMode);
     rmSync(root, { recursive: true, force: true });
   });
 });
