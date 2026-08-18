@@ -7,6 +7,10 @@ import { randomBytes } from 'node:crypto';
 import { join, dirname, delimiter } from 'node:path';
 import { existsSync } from 'node:fs';
 import { bundledInterpreter, isDevBackend, serverConfigPath, serverLogPath } from '../config';
+import {
+  parsePermissionRepairRequest,
+  PermissionRepairRequiredError,
+} from './StartupPermissions';
 
 export interface RunningServer {
   url: string;
@@ -148,6 +152,18 @@ function startupFailureMessage(
   );
 }
 
+/** Preserve repairable permission failures as a typed desktop-shell event. */
+export function startupFailureError(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  tail: string,
+): Error {
+  const request = parsePermissionRepairRequest(tail);
+  return request
+    ? new PermissionRepairRequiredError(request)
+    : new Error(startupFailureMessage(code, signal, tail));
+}
+
 /**
  * Issue a kill against the backend's whole process tree. Resolves with a human
  * message when the kill reported a real problem (so the caller can record it —
@@ -242,7 +258,11 @@ export class ServerProcess {
    * PYTHONPATH so its torch/onnxruntime shadow the bundled CPU build. `null`
    * runs the bundled CPU/Metal env as-is.
    */
-  async start(overlayDir: string | null, device?: string): Promise<RunningServer> {
+  async start(
+    overlayDir: string | null,
+    device?: string,
+    repairPermissions = false,
+  ): Promise<RunningServer> {
     const python = isDevBackend() ? devInterpreter() : bundledInterpreter();
     if (!existsSync(python)) {
       throw new Error(`Backend interpreter not found: ${python}`);
@@ -278,6 +298,9 @@ export class ServerProcess {
       // declare itself. See Server.DEV_MACHINE_ENV_VAR.
       ...(isDevBackend() ? { PIXLSTASH_TELEMETRY_DEV: '1' } : {}),
       PIXLSTASH_DESKTOP_SESSION: sessionToken,
+      // Set only after the user accepts the native repair dialog. An explicit
+      // value prevents a parent-shell variable from authorising it accidentally.
+      PIXLSTASH_REPAIR_PERMISSIONS: repairPermissions ? '1' : '0',
       // Force the inference device to match this runtime (the bundled env is
       // CPU-only); overrides default_device in the shared on-disk config.
       ...(device ? { PIXLSTASH_DEFAULT_DEVICE: device } : {}),
@@ -334,7 +357,7 @@ export class ServerProcess {
         this.onExit?.(code);
       } else {
         // Crashed during startup — fail fast with the captured reason.
-        failStartup?.(new Error(startupFailureMessage(code, signal, tail.text())));
+        failStartup?.(startupFailureError(code, signal, tail.text()));
       }
     });
 
