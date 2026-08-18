@@ -33,6 +33,7 @@ from platformdirs import user_config_dir
 
 from pixlstash.hub.schema import apply_migrations
 from pixlstash.pixl_logging import get_logger
+from pixlstash.startup_permissions import mkdir_private
 from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
     TrustedSQLiteLocationError,
@@ -124,38 +125,6 @@ def default_hub_path() -> str:
     return os.path.join(user_config_dir(APP_NAME), "hub.db")
 
 
-def _mkdir_private(path: Path) -> None:
-    """Create *path* and every missing parent, each mode 0700.
-
-    Not ``path.mkdir(parents=True, mode=0o700)``: that mode reaches only the
-    **leaf**. Intermediate directories are created 0777 masked by the process
-    umask, which is 0775 under the Debian/Ubuntu default of 002 (every user has
-    their own group). :class:`~pixlstash.trusted_sqlite.TrustedSQLiteLocation`
-    walks *every* ancestor of the database and refuses a group- or
-    world-writable one, so a loose intermediate fails the open exactly as a
-    loose leaf does.
-
-    Without this, a fresh install on a stock Ubuntu box creates its own config
-    directory and then refuses to open the hub inside it: a first-run
-    self-lockout whose error names a directory the user never chose. Existing
-    directories are left untouched, so a permission someone else loosened is
-    still reported rather than silently repaired (the rule
-    :func:`check_file_mode` follows for the hub file).
-
-    Args:
-        path: The directory to create.
-    """
-    missing: list[Path] = []
-    current = path
-    while not current.exists():
-        missing.append(current)
-        if current.parent == current:
-            break
-        current = current.parent
-    for directory in reversed(missing):
-        directory.mkdir(mode=0o700, exist_ok=True)
-
-
 def check_file_mode(path: str, *, repair: bool) -> None:
     """Verify that *path* is not group- or world-accessible.
 
@@ -230,7 +199,7 @@ class HubDatabase:
         self._closed = False
 
         parent = Path(self._path).parent
-        _mkdir_private(parent)
+        mkdir_private(parent)
 
         created, _expected_identity = _prepare_hub_file(
             self._path, repair=repair_permissions

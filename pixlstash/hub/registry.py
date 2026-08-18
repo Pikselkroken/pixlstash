@@ -24,7 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from pixlstash.hub.db import HubDatabase, _mkdir_private
+from pixlstash.hub.db import HubDatabase
+from pixlstash.startup_permissions import mkdir_private
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -376,7 +377,7 @@ class LibraryRegistry:
         # mode stops at the leaf, so a deep new path left 0775 intermediates
         # under umask 002 and the guarded open refused them). Existing
         # directories keep their modes.
-        _mkdir_private(Path(resolved))
+        mkdir_private(Path(resolved))
         if os.name != "nt":
             os.chmod(resolved, 0o700)
 
