@@ -4,8 +4,10 @@ function finiteInteger(value, fallback = 0) {
 }
 
 /**
- * Keep the real viewport eager while allowing the virtualizer's buffer to load
- * lazily. Only the first visible row receives high network priority.
+ * Eagerly load the virtualizer's rendered buffer so it remains a real prefetch
+ * runway during fast scrolling. The visible window receives high network
+ * priority; buffered thumbnails stay at normal priority so they cannot jump
+ * ahead of what the user is currently looking at.
  */
 export function thumbnailRequestWindow({
   visibleStart,
@@ -20,26 +22,33 @@ export function thumbnailRequestWindow({
   const viewportStart = finiteInteger(visibleStart);
   const viewportEnd = Math.max(viewportStart, finiteInteger(visibleEnd));
   const hasVisibleWindow = viewportEnd > viewportStart;
-  const eagerStart = hasVisibleWindow ? viewportStart : bufferedStart;
-  const eagerEnd = hasVisibleWindow ? viewportEnd : bufferedEnd;
+  const eagerStart = bufferedStart;
+  const eagerEnd = bufferedEnd;
   const columnCount = Math.max(1, finiteInteger(columns, 1));
 
-  let highEnd = Math.min(eagerEnd, eagerStart + columnCount);
-  if (Array.isArray(rowStarts)) {
+  const highStart = hasVisibleWindow
+    ? Math.min(bufferedEnd, Math.max(bufferedStart, viewportStart))
+    : bufferedStart;
+  let highEnd = hasVisibleWindow
+    ? Math.max(highStart, Math.min(bufferedEnd, viewportEnd))
+    : Math.min(bufferedEnd, bufferedStart + columnCount);
+  if (!hasVisibleWindow && Array.isArray(rowStarts)) {
     const nextRowStart = rowStarts.find(
-      (rowStart) => finiteInteger(rowStart) > eagerStart,
+      (rowStart) => finiteInteger(rowStart) > bufferedStart,
     );
     if (nextRowStart !== undefined) {
-      highEnd = Math.min(eagerEnd, finiteInteger(nextRowStart));
+      highEnd = Math.min(bufferedEnd, finiteInteger(nextRowStart));
     }
   }
 
-  if (eagerEnd > eagerStart) highEnd = Math.max(eagerStart + 1, highEnd);
+  if (bufferedEnd > highStart) {
+    highEnd = Math.min(bufferedEnd, Math.max(highStart + 1, highEnd));
+  }
 
   return {
     eagerStart,
     eagerEnd,
-    highStart: eagerStart,
+    highStart,
     highEnd,
   };
 }
