@@ -293,6 +293,44 @@ describe("ImageOverlay cold media bootstrap", () => {
     expect(wrapper.find(".overlay-img").element).toBe(initialEl);
   });
 
+  it("keeps the first URL when orientation backfill lands", async () => {
+    let resolveMetadata;
+    metadataResponse = new Promise((resolve) => {
+      resolveMetadata = resolve;
+    });
+
+    const wrapper = mount(ImageOverlay, {
+      props: {
+        open: true,
+        initialImageId: 7,
+        allImages: [{ id: 7, format: "png", orientation: null, tags: [] }],
+        backendUrl: "http://test",
+        tagUpdate: { key: 0, pictureIds: [] },
+        descriptionUpdate: { key: 0, pictureIds: [] },
+        smartScoreUpdate: { key: 0, pictureIds: [] },
+      },
+      global: { stubs: STUBS },
+      attachTo: document.body,
+    });
+
+    const initialSrc = wrapper.find(".overlay-img").attributes("src");
+    expect(initialSrc).toBe("http://test/pictures/7.png");
+    const initialEl = wrapper.find(".overlay-img").element;
+
+    resolveMetadata({
+      id: 7,
+      format: "png",
+      orientation: 6,
+      pixel_sha: "first",
+      tags: [],
+    });
+    await flush();
+    await flush();
+
+    expect(wrapper.find(".overlay-img").attributes("src")).toBe(initialSrc);
+    expect(wrapper.find(".overlay-img").element).toBe(initialEl);
+  });
+
   // …and it does reload when the orientation really moves. That is the whole
   // point of the buster: an in-place rotate rewrites the EXIF tag and copies
   // every pixel through, so nothing else about the file changes.

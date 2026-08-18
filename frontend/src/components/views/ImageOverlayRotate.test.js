@@ -339,6 +339,53 @@ describe("ImageOverlay — the picture on screen after a rotate", () => {
     expect(srcAfter).not.toContain("sha-stable");
   });
 
+  it("unpins the URL when the first known orientation comes from rotate", async () => {
+    const defaultGetMock = getMock.getMockImplementation();
+    let metadataCalls = 0;
+    getMock.mockImplementation(async (url) => {
+      const path = String(url ?? "");
+      if (path.includes("/workflow")) {
+        const e = new Error("no workflow");
+        e.response = { status: 404 };
+        throw e;
+      }
+      if (path.includes("/metadata")) {
+        metadataCalls += 1;
+        if (metadataCalls === 1) {
+          return new Promise(() => {});
+        }
+        return {
+          data: {
+            id: 7,
+            format: "jpg",
+            pixel_sha: metadataPixelSha,
+            orientation: 8,
+            width: 1600,
+            height: 1200,
+            tags: [],
+          },
+        };
+      }
+      return { data: [] };
+    });
+    try {
+      const wrapper = await openOverlay();
+      expect(wrapper.find(".overlay-img").attributes("src")).toBe(
+        "http://test/pictures/7.jpg",
+      );
+
+      press("]");
+      await flush();
+      await flush();
+
+      expect(wrapper.find(".overlay-img").attributes("src")).toBe(
+        "http://test/pictures/7.jpg?v=o8",
+      );
+    } finally {
+      getMock.mockImplementation(defaultGetMock);
+    }
+  });
+
   it("leaves an unrotated picture's URL exactly as it was", async () => {
     // Orientation 1 contributes nothing, so a picture that has never been
     // turned keeps the bare URL — the same one `prefetchFullImage` and the

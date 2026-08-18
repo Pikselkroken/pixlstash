@@ -1275,6 +1275,7 @@ const currentLockReason = computed(() =>
 // orientation and writes the next one, so two in flight over one picture race,
 // and one of the turns is silently lost. A chain gives both properties.
 let rotateQueue = Promise.resolve();
+const rotateMetadataInFlightImageIds = new Set();
 
 /** Why the rotate controls are greyed, or `null` when they are live. */
 const rotateDisabledReason = computed(() =>
@@ -1334,7 +1335,13 @@ async function runRotate(imageId, direction) {
     // between render and click, or a container the client gate misread). The
     // receipt already says so, so there is nothing left to refresh.
     if (!rotated.includes(String(imageId))) return;
-    await fetchOverlayMetadata(imageId);
+    const imageIdKey = String(imageId);
+    rotateMetadataInFlightImageIds.add(imageIdKey);
+    try {
+      await fetchOverlayMetadata(imageId);
+    } finally {
+      rotateMetadataInFlightImageIds.delete(imageIdKey);
+    }
     // The boxes are drawn in the file's own coordinate space, which the turn
     // just redefined. Re-read rather than transform them here: whatever the
     // server now reports is what the grid and every other surface will draw.
@@ -2974,15 +2981,51 @@ function buildFullImageSrc(data) {
   return getFullImageUrl(data);
 }
 
-// The media URL carries `?v=o<orientation>` so an in-place rotate busts any
-// cached copy, and `orientation` rides the grid projection — so the version is
-// known from the first paint rather than arriving a beat later with
-// fetchOverlayMetadata. That is what lets this be a plain computed: the URL the
-// neighbour preloads warm (`preloadAdjacentImages`, and the grid's
-// `prefetchFullImage`) is the same URL rendered here, so there is nothing to
-// pin against a late arrival and no blank-then-reload flash to avoid. See
-// `mediaVersion` in utils/media.js.
-const fullImageSrc = computed(() => buildFullImageSrc(image.value));
+function knownOrientation(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const orientation = Number(value);
+  return Number.isFinite(orientation) ? orientation : null;
+}
+
+// A cold-opened row can still arrive with `orientation: null` while the
+// backfill catches up. In that case metadata may later confirm a known
+// orientation for the same bytes; switching `fullImageSrc` at that moment would
+// remount the keyed <img> and flash blank. Keep rendering the first URL until
+// orientation moves between two known values (the actual in-place rotate case).
+const pinnedOrientation = ref(undefined);
+watch(
+  () => [image.value?.id, image.value?.orientation],
+  ([id, orientation], [previousId, previousOrientation] = []) => {
+    if (!id) {
+      pinnedOrientation.value = undefined;
+      return;
+    }
+    const currentKnown = knownOrientation(orientation);
+    const previousKnown = knownOrientation(previousOrientation);
+    if (id !== previousId) {
+      const hasInitialUrl = Boolean(buildFullImageSrc(image.value));
+      pinnedOrientation.value =
+        currentKnown === null && hasInitialUrl ? null : undefined;
+      return;
+    }
+    if (
+      pinnedOrientation.value === null &&
+      currentKnown !== null &&
+      (rotateMetadataInFlightImageIds.has(String(id)) ||
+        (previousKnown !== null && currentKnown !== previousKnown))
+    ) {
+      pinnedOrientation.value = undefined;
+    }
+  },
+  { immediate: true },
+);
+const fullImageSrc = computed(() => {
+  if (!image.value) return "";
+  if (pinnedOrientation.value === null) {
+    return buildFullImageSrc({ ...image.value, orientation: null });
+  }
+  return buildFullImageSrc(image.value);
+});
 const overlayDims = ref({
   width: 1,
   height: 1,
