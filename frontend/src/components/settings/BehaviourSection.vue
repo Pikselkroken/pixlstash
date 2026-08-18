@@ -370,55 +370,46 @@ watch(
         </v-card-title>
         <v-card-text class="plugin-install-help-body">
           <p>
-            Plugins run as ordinary Python with the same access as PixlStash
-            itself, so only install plugins you trust.
+            Only install plugins you trust. They run with the same access as
+            PixlStash.
           </p>
 
-          <h3>Find a plugin</h3>
+          <h3>Find plugins</h3>
           <p>
-            Browse the official PixlStash plugin catalogue on GitHub, or use
-            the CLI to see what is published.
+            Browse the
+            <a
+              class="plugin-catalogue-link"
+              href="https://github.com/Pikselkroken/PixlStash-plugins"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              official plugin catalogue
+              <v-icon size="x-small" aria-hidden="true">mdi-open-in-new</v-icon>
+            </a>
+            or use the CLI to list published plugins, search the catalogue, and
+            show installed plugins.
           </p>
-          <a
-            class="plugin-catalogue-link"
-            href="https://github.com/Pikselkroken/PixlStash-plugins"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Open PixlStash-plugins on GitHub
-            <v-icon size="small" aria-hidden="true">mdi-open-in-new</v-icon>
-          </a>
-          <pre class="plugin-install-command"><code>{{ taggerCliAvailableHint }}</code></pre>
-          <p>
-            Search the catalogue by name, title, summary, author, or licence.
-          </p>
-          <pre class="plugin-install-command"><code>{{ taggerCliSearchHint }}</code></pre>
-          <p>See which plugins are already installed on this PixlStash instance.</p>
-          <pre class="plugin-install-command"><code>{{ taggerCliListHint }}</code></pre>
+          <div class="plugin-install-commands">
+            <pre class="plugin-install-command"><code>{{ taggerCliAvailableHint }}</code></pre>
+            <pre class="plugin-install-command"><code>{{ taggerCliSearchHint }}</code></pre>
+            <pre class="plugin-install-command"><code>{{ taggerCliListHint }}</code></pre>
+          </div>
 
-          <h3>Install a plugin</h3>
-          <p>
-            Install by repository name, or provide a local plugin file or
-            folder.
-          </p>
+          <h3>Install with the CLI</h3>
           <pre class="plugin-install-command"><code>{{ taggerCliHint }}</code></pre>
           <p>
-            Replace <code>&lt;name-or-path&gt;</code> with a repository name or local
-            plugin file/folder. Restart the server afterwards; plugins are
-            discovered at startup.
+            Use a repository name or local file/folder, then restart PixlStash.
           </p>
 
-          <h3>Manual installation</h3>
+          <h3>Install manually</h3>
           <p v-if="taggerPluginDir">
-            Drop a <code>.py</code> file or a folder containing
-            <code>__init__.py</code> into
-            <code class="settings-tagger-plugin-path">{{ taggerPluginDir }}</code>,
-            creating the folder if needed, then restart the server.
+            Put the plugin file or folder in
+            <code class="settings-tagger-plugin-path">{{ taggerPluginDir }}</code>
+            and restart PixlStash.
           </p>
           <p v-else>
-            Put a <code>.py</code> file or plugin folder into the custom plugin
-            folder on the machine running PixlStash, then restart the server.
-            The exact path is shown when this screen is opened locally.
+            Put the plugin file or folder in PixlStash's custom plugin folder
+            and restart. Open this screen locally to see the exact path.
           </p>
         </v-card-text>
         <v-card-actions class="plugin-install-actions">
@@ -457,9 +448,9 @@ watch(
 }
 
 .plugin-install-title {
-  padding: var(--space-6) var(--space-6) var(--space-3);
+  padding: var(--space-5) var(--space-5) var(--space-3);
   font-family: var(--font-ui);
-  font-size: var(--text-lg);
+  font-size: var(--text-md);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
 }
@@ -467,10 +458,10 @@ watch(
 .plugin-install-help-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-6) var(--space-5);
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5) var(--space-2);
   font-family: var(--font-ui);
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   line-height: var(--leading-body);
 }
 
@@ -480,10 +471,12 @@ watch(
 
 .plugin-install-help-body h3 {
   margin: var(--space-2) 0 0;
-  color: rgb(var(--v-theme-on-surface));
-  font-size: var(--text-base);
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-snug);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .plugin-install-help-body :not(pre) > code {
@@ -491,7 +484,7 @@ watch(
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.08);
   font-family: var(--font-mono);
-  font-size: var(--text-base);
+  font-size: var(--text-xs);
   line-height: inherit;
   overflow-wrap: anywhere;
 }
@@ -499,8 +492,7 @@ watch(
 .plugin-catalogue-link {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
-  gap: var(--space-2);
+  gap: var(--space-1);
   color: rgb(var(--v-theme-on-surface));
   font-weight: var(--weight-medium);
   text-decoration: underline;
@@ -518,16 +510,22 @@ watch(
   box-shadow: var(--focus-ring);
 }
 
+.plugin-install-commands {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .plugin-install-command {
   margin: 0;
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid rgba(var(--v-theme-primary), 0.28);
-  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
   color: rgb(var(--v-theme-on-surface));
-  background: rgba(var(--v-theme-primary), 0.08);
+  background: rgb(var(--v-theme-background));
   font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
   line-height: var(--leading-snug);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -541,7 +539,7 @@ watch(
 
 .plugin-install-actions {
   min-height: 40px;
-  padding: var(--space-3) var(--space-6) var(--space-5);
+  padding: var(--space-3) var(--space-5) var(--space-4);
 }
 
 .settings-tagger-plugin-path {
