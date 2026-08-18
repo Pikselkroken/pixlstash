@@ -3835,7 +3835,7 @@ watch(
 /* The one filled button in the bar. It is the only control here with a result
    behind it — everything else changes what you are looking at — and that is
    what the fill says. `on-primary` and not the surface ink: this is a solid
-   accent fill, which is the pairing that measures (§4).
+   primary fill, which is the pairing that measures (§4).
 
    28px, not `.bar-btn`'s 32, and `--radius-sm` rather than the nothing it
    inherited. A filled control is the only kind whose box you can actually see:
