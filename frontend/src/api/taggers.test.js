@@ -39,12 +39,14 @@ describe("api/taggers", () => {
       data: {
         plugin_dirs: { user: "/somewhere/tagger-plugins/user" },
         load_errors: [{ name: "broken", message: "boom" }],
+        cli_hint: "pixlstash plugins install <name-or-path>",
       },
     });
     const result = await listTaggerPluginDiagnostics();
     expect(apiClient.get).toHaveBeenCalledWith("/taggers/plugin-diagnostics");
     expect(result.plugin_dirs.user).toBe("/somewhere/tagger-plugins/user");
     expect(result.load_errors[0].name).toBe("broken");
+    expect(result.cli_hint).toBe("pixlstash plugins install <name-or-path>");
   });
 
   it("getLabelThresholds sends the previewed offset", async () => {
