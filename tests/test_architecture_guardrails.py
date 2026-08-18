@@ -2489,7 +2489,7 @@ def test_tests_close_the_server_not_only_its_vault():
     """
     needle = ".vault" + ".close()"
     offenders = [
-        f"{path.relative_to(REPO_ROOT)}:{number}"
+        f"{path.relative_to(REPO_ROOT).as_posix()}:{number}"
         for path in (REPO_ROOT / "tests").rglob("*.py")
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
         if needle in line
