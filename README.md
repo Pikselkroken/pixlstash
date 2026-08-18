@@ -7,7 +7,7 @@ PixlStash is a local picture library server for organizing, filtering, and revie
 
 It provides:
 
-- A browser-based interface
+- A desktop application or a headless server with a browser-based interface
 - Automatic tagging and image descriptions with selectable AI engines (including JoyCaption)
 - Re-tag or regenerate descriptions for any selection directly from the context menu
 - Instant grid loading — thumbnails appear immediately, metadata fills in asynchronously
@@ -24,6 +24,9 @@ It provides:
 - Undo and Redo with keyboard shortcuts and history
 - Deduplication helper
 - Tag review helper
+- A model overview for keeping track of your generative AI models
+- Swappable image library
+- Scriptable backup 
 
 PixlStash runs on your machine and serves the UI at a local (or Internet-facing) web address.
 
