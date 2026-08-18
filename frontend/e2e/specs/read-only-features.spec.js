@@ -85,7 +85,13 @@ test.describe('read-only session: owner-only features stay visible', () => {
       // cannot read, so it must never appear.
       await expect(duplicates.locator('.sidebar-dedup-dot')).toHaveCount(0)
 
-      await duplicates.click()
+      // `force`, because the row is a <button aria-disabled="true"> now (it was
+      // a div until #837 made the sidebar destinations keyboard-operable).
+      // Playwright's actionability check reads aria-disabled on button-role
+      // elements as disabled and would wait out the timeout rather than click —
+      // which is the right reading, and exactly what this test needs to bypass:
+      // the point is that a user CAN still press it and nothing happens.
+      await duplicates.click({ force: true })
       await page.waitForTimeout(500)
       expect(new URL(page.url()).pathname).not.toContain('duplicates')
 

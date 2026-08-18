@@ -450,7 +450,7 @@ function handleRestore(cp) {
 }
 
 .snapshot-row--incompatible {
-  opacity: 0.6;
+  opacity: var(--opacity-text-secondary);
 }
 
 .snapshot-row-meta {

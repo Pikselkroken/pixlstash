@@ -1160,7 +1160,7 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 
 .tag-data-loading {
   font-size: var(--text-xs);
-  opacity: 0.6;
+  opacity: var(--opacity-text-secondary);
   margin-bottom: var(--space-3);
 }
 

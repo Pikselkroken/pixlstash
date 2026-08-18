@@ -717,10 +717,7 @@ const filteredSortOptions = computed(() =>
 );
 
 watch(
-  [
-    () => filterStore.stackStateFilter,
-    () => sortStore.selectedSort,
-  ],
+  [() => filterStore.stackStateFilter, () => sortStore.selectedSort],
   ([stackState, selectedSort]) => {
     if (
       stackState !== "stacked" &&
@@ -1005,7 +1002,8 @@ watch(
 );
 
 watch(gbViewMenuOpen, (isOpen) => {
-  if (isOpen) gbPendingSize.value = gridStore.sizeLevel ?? DEFAULT_THUMBNAIL_SIZE_LEVEL;
+  if (isOpen)
+    gbPendingSize.value = gridStore.sizeLevel ?? DEFAULT_THUMBNAIL_SIZE_LEVEL;
 });
 
 function gbCommitSize() {
@@ -1371,7 +1369,7 @@ const gbCollapseAllStacksDisabled = computed(
 .gb-size-value {
   align-self: flex-end;
   font-size: var(--text-sm);
-  opacity: 0.6;
+  opacity: var(--opacity-text-secondary);
   white-space: nowrap;
 }
 

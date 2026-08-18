@@ -1035,6 +1035,12 @@
   justify-content: center;
   border-radius: var(--sidebar-item-radius);
   cursor: pointer;
+  /* Same reason as .sidebar-list-item: the dock's destinations are <button>s. */
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
   color: rgb(var(--v-theme-sidebar-text));
   position: relative;
   transition:
@@ -1164,6 +1170,25 @@
     background 0.12s,
     color 0.12s,
     border-color 0.12s;
+  /* The destination rows are <button>s (keyboard reach); the rest of this class
+     is still on <div>s. Neutralise the UA button chrome so both render alike.
+     The left rail belongs to the row system in SideBar.global.css, so only the
+     other three sides are zeroed here. */
+  appearance: none;
+  font-family: inherit;
+  text-align: left;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+/* Inset, not the token's outer ring: these rows run edge to edge in the
+   sidebar, so an outer 3px stroke is clipped on both sides. Same colour, same
+   width — `inset var(--focus-ring)` expands to `inset 0 0 0 3px accent`. */
+.sidebar-list-item:focus-visible,
+.sidebar-collapsed-item:focus-visible {
+  outline: none;
+  box-shadow: inset var(--focus-ring);
 }
 
 .sidebar-scroll {

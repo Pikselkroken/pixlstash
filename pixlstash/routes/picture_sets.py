@@ -765,40 +765,121 @@ def create_router(server) -> APIRouter:
         "#a1887f",
         "#76ff03",
     ]
+    # Same order as SET_ICONS in frontend/src/utils/setAppearance.js, so a set
+    # created through the API rotates through the palette the UI shows.
     _SET_ICONS = [
+        "mdi-camera",
+        "mdi-image-multiple",
+        "mdi-image-album",
+        "mdi-bookmark",
+        "mdi-folder-image",
+        "mdi-camera-iris",
+        "mdi-film",
+        "mdi-image-frame",
         "mdi-star",
         "mdi-heart",
-        "mdi-camera",
+        "mdi-crown",
+        "mdi-trophy",
+        "mdi-flag",
+        "mdi-alert",
+        "mdi-fire",
+        "mdi-diamond-stone",
+        "mdi-account-group",
+        "mdi-human-male-female-child",
+        "mdi-baby-face-outline",
+        "mdi-human-child",
+        "mdi-dog",
+        "mdi-cat",
+        "mdi-baby-carriage",
+        "mdi-home-heart",
+        "mdi-hanger",
+        "mdi-tshirt-crew",
+        "mdi-shoe-heel",
+        "mdi-sunglasses",
+        "mdi-hat-fedora",
+        "mdi-bag-personal",
+        "mdi-watch",
+        "mdi-tie",
+        "mdi-home",
+        "mdi-bed",
+        "mdi-sofa",
         "mdi-music",
-        "mdi-run",
-        "mdi-bike",
+        "mdi-television",
+        "mdi-shower",
+        "mdi-desk-lamp",
+        "mdi-fireplace",
+        "mdi-silverware-fork-knife",
+        "mdi-cup",
+        "mdi-glass-cocktail",
+        "mdi-food-apple",
+        "mdi-cake-variant",
+        "mdi-coffee",
+        "mdi-pizza",
+        "mdi-beer",
+        "mdi-airplane",
+        "mdi-beach",
         "mdi-hiking",
+        "mdi-city-variant",
         "mdi-pine-tree",
         "mdi-flower",
-        "mdi-beach",
-        "mdi-airplane",
-        "mdi-city-variant",
-        "mdi-food-apple",
-        "mdi-trophy",
-        "mdi-home",
-        "mdi-bookmark",
-        "mdi-crown",
-        "mdi-silverware-fork-knife",
+        "mdi-map-marker",
+        "mdi-tent",
+        "mdi-car",
+        "mdi-bike",
+        "mdi-run",
+        "mdi-bus",
+        "mdi-train",
+        "mdi-motorbike",
+        "mdi-walk",
+        "mdi-tram",
+        "mdi-basketball",
+        "mdi-football",
+        "mdi-weight-lifter",
+        "mdi-swim",
+        "mdi-table-tennis",
+        "mdi-ski",
+        "mdi-bowling",
+        "mdi-golf",
         "mdi-briefcase",
         "mdi-gamepad-variant",
+        "mdi-monitor",
+        "mdi-school",
+        "mdi-code-braces",
+        "mdi-chart-bar",
+        "mdi-stethoscope",
+        "mdi-flask",
     ]
 
+    def _next_from_palette(palette, last_value, used):
+        """The palette entry after ``last_value``, skipping anything in ``used``.
+
+        A ``last_value`` that is not in the palette (None, the ``cards``
+        sentinel, a value from an older palette) starts the scan at the head.
+        """
+        start = palette.index(last_value) + 1 if last_value in palette else 0
+        for offset in range(len(palette)):
+            candidate = palette[(start + offset) % len(palette)]
+            if candidate not in used:
+                return candidate
+        return palette[start % len(palette)]
+
     def _auto_assign_icon_color(session, project_ids):
-        """Return (icon, color) not already used by sibling sets.
+        """Return the (icon, color) a new set defaults to (#457).
+
+        Rotates on from the newest set that carries a palette icon/colour, so
+        consecutive sets differ. Taking the first *unused* entry instead handed
+        out ``mdi-camera``/red again for every set created in a fresh project,
+        and again whenever an earlier default had been replaced by hand.
 
         Args:
             session: A pre-opened session.
-            project_ids: The projects the new set is joining. Siblings are the
-                sets sharing any of them; with no projects, every set is a
-                sibling (the pre-#125 unscoped behaviour).
+            project_ids: The projects the new set is joining. Siblings — whose
+                icons and colours are skipped so they stay distinguishable in
+                one list — are the sets sharing any of them; with no projects,
+                every set is a sibling (the pre-#125 unscoped behaviour).
         """
         wanted = sorted({int(pid) for pid in (project_ids or []) if pid is not None})
-        existing = session.exec(
+        siblings = session.exec(
             select(PictureSet.set_icon, PictureSet.set_color)
             .join(
                 PictureSetProjectMember,
@@ -809,15 +890,23 @@ def create_router(server) -> APIRouter:
             if wanted
             else select(PictureSet.set_icon, PictureSet.set_color)
         ).all()
-        used_icons = {row[0] for row in existing if row[0] and row[0] != "cards"}
-        used_colors = {row[1] for row in existing if row[1]}
-        icon = next(
-            (i for i in _SET_ICONS if i not in used_icons),
-            _SET_ICONS[len(existing) % len(_SET_ICONS)],
+        # Newest set holding a palette value — reference sets and sets left on
+        # the card-stack default carry none, so they are skipped by the filter.
+        last_icon = session.exec(
+            select(PictureSet.set_icon)
+            .where(PictureSet.set_icon.in_(_SET_ICONS))
+            .order_by(PictureSet.id.desc())
+        ).first()
+        last_color = session.exec(
+            select(PictureSet.set_color)
+            .where(PictureSet.set_color.in_(_SET_COLORS))
+            .order_by(PictureSet.id.desc())
+        ).first()
+        icon = _next_from_palette(
+            _SET_ICONS, last_icon, {row[0] for row in siblings if row[0]}
         )
-        color = next(
-            (c for c in _SET_COLORS if c not in used_colors),
-            _SET_COLORS[len(existing) % len(_SET_COLORS)],
+        color = _next_from_palette(
+            _SET_COLORS, last_color, {row[1] for row in siblings if row[1]}
         )
         return icon, color
 

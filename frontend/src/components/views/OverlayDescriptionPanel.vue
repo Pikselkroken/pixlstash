@@ -477,7 +477,7 @@ defineExpose({
 
 .description-editor--sentinel textarea {
   font-style: italic;
-  opacity: 0.6;
+  opacity: var(--opacity-text-secondary);
   cursor: default;
 }
 </style>

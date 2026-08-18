@@ -814,6 +814,55 @@ def test_all_routes_declare_access_policy(built_app):
 
 
 # ---------------------------------------------------------------------------
+# Guardrail: READ_BLOCKED_GET_PATHS names no route that is not an owner-class
+# GET in the registry (issue #831)
+# ---------------------------------------------------------------------------
+
+
+def test_read_blocked_get_paths_name_declared_owner_class_gets():
+    """No entry in ``READ_BLOCKED_GET_PATHS`` may be a path nothing declares.
+
+    The frozenset is matched against ``request.url.path`` exactly, so a typo, a
+    removed route or a route since loosened leaves a string that silently
+    protects nothing while reading as protection. Derived from
+    ``ROUTE_POLICIES`` one class wider than the §16.3 locality tier, because the
+    set legitimately also covers a few ``OWNER_ONLY`` config GETs.
+
+    The forward direction — every locality-tier GET is *on* the belt — is
+    ``tests/test_authz_host_capability_16_3.py``
+    ``::test_every_untemplated_locality_get_is_on_the_read_blocked_belt``, and it
+    is not repeated here: exact matching cannot express a templated path such as
+    ``/models/{model_id}/samples`` at all, so that test asserts the rule for the
+    untemplated routes and pins the templated ones as a known gap. A copy here
+    without that distinction would only demand dead strings be added.
+
+    The gate's own ``_enforce_unscoped_owner`` is the live enforcement for these
+    routes and refuses the same tokens (pinned by
+    ``tests/test_authz_gate_step3.py::test_local_owner_only_get_refused_at_the_gate``);
+    the frozenset is the pre-routing layer that also survives an
+    ``AUTHZ_GATE_ENFORCING = False`` rollback, which is why it still earns its
+    keep rather than being deleted in favour of the single chokepoint.
+    """
+    from pixlstash.auth import READ_BLOCKED_GET_PATHS
+    from pixlstash.authz.gate import OWNER_CLASS_POLICIES
+    from pixlstash.authz.registry import ROUTE_POLICIES
+
+    owner_class_gets = {
+        path
+        for (method, path), route_policy in ROUTE_POLICIES.items()
+        if method == "GET" and route_policy.policy in OWNER_CLASS_POLICIES
+    }
+
+    stale = sorted(READ_BLOCKED_GET_PATHS - owner_class_gets)
+    assert not stale, (
+        "READ_BLOCKED_GET_PATHS entr(y/ies) do not name a GET route declared "
+        "OWNER_ONLY/LOCAL_OWNER_ONLY/LOOPBACK_OWNER_ONLY in the authz registry — "
+        "a typo, a removed route, or a route deliberately loosened. Fix the path "
+        "or drop the entry:\n" + "\n".join(f"  {p}" for p in stale)
+    )
+
+
+# ---------------------------------------------------------------------------
 # Guardrail: the written coverage matrix matches the registry, row for row
 # ---------------------------------------------------------------------------
 

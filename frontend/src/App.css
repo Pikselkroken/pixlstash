@@ -346,7 +346,6 @@ button:focus:not(:focus-visible) {
   color: rgb(var(--v-theme-secondary)) !important;
 }
 
-
 /* -- The selection pill: the floating contextual-action dialect -------------
    Moved here from `ShelfSelectionBar.vue`'s scoped block, unchanged apart from
    the name. `<style scoped>` compiles these to `.selbar[data-v-hash]`, which
@@ -1133,7 +1132,7 @@ kbd {
 
 .bar-btn-prefix {
   font-size: var(--text-sm);
-  opacity: 0.6;
+  opacity: var(--opacity-text-secondary);
   white-space: nowrap;
   flex-shrink: 0;
 }

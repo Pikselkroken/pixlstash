@@ -187,6 +187,47 @@ def test_update_and_delete_picture_set():
         gc.collect()
 
 
+def test_new_sets_rotate_default_icon_and_color():
+    """A set created without an appearance differs from the previous one (#457).
+
+    Includes a set in a fresh project: the rotation continues from the newest
+    set library-wide, so an empty project no longer restarts at the head of the
+    palette (the bug this test pins).
+    """
+    temp_dir, client, server = setup_server_with_temp_db()
+    try:
+        seen = []
+        for name in ("Rot A", "Rot B", "Rot C"):
+            resp = client.post("/picture_sets", json={"name": name})
+            assert resp.status_code == 200
+            created = resp.json()["picture_set"]
+            seen.append((created["set_icon"], created["set_color"]))
+
+        project_id = client.post("/projects", json={"name": "Rot Project"}).json()["id"]
+        resp = client.post(
+            "/picture_sets", json={"name": "Rot D", "project_id": project_id}
+        )
+        assert resp.status_code == 200
+        created = resp.json()["picture_set"]
+        seen.append((created["set_icon"], created["set_color"]))
+
+        assert all(icon and color for icon, color in seen)
+        assert len({icon for icon, _ in seen}) == len(seen), seen
+        assert len({color for _, color in seen}) == len(seen), seen
+
+        # An explicit appearance still wins over the rotation.
+        resp = client.post(
+            "/picture_sets",
+            json={"name": "Rot E", "set_icon": "cards", "set_color": "#123456"},
+        )
+        assert resp.json()["picture_set"]["set_icon"] == "cards"
+        assert resp.json()["picture_set"]["set_color"] == "#123456"
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_reassigning_set_project_reconciles_member_picture_memberships():
     temp_dir, client, server = setup_server_with_temp_db()
     try:
