@@ -6,7 +6,7 @@ import {
 } from "./thumbnailRequestPriority.js";
 
 describe("thumbnailRequestPriority", () => {
-  it("keeps the viewport eager and gives only its first square row high priority", () => {
+  it("eagerly prefetches the rendered buffer while prioritizing the visible window", () => {
     const bounds = thumbnailRequestWindow({
       visibleStart: 12,
       visibleEnd: 20,
@@ -16,17 +16,19 @@ describe("thumbnailRequestPriority", () => {
     });
 
     expect(bounds).toEqual({
-      eagerStart: 12,
-      eagerEnd: 20,
+      eagerStart: 8,
+      eagerEnd: 24,
       highStart: 12,
-      highEnd: 16,
+      highEnd: 20,
     });
-    expect(loadingModeForThumbnail(10, bounds)).toBe("lazy");
+    expect(loadingModeForThumbnail(10, bounds)).toBe("eager");
     expect(fetchPriorityForThumbnail(10, bounds)).toBe("auto");
     expect(loadingModeForThumbnail(12, bounds)).toBe("eager");
     expect(fetchPriorityForThumbnail(12, bounds)).toBe("high");
     expect(loadingModeForThumbnail(17, bounds)).toBe("eager");
-    expect(fetchPriorityForThumbnail(17, bounds)).toBe("auto");
+    expect(fetchPriorityForThumbnail(17, bounds)).toBe("high");
+    expect(fetchPriorityForThumbnail(21, bounds)).toBe("auto");
+    expect(loadingModeForThumbnail(24, bounds)).toBe("lazy");
   });
 
   it("uses the render window until the virtualizer reports a viewport", () => {
@@ -46,17 +48,35 @@ describe("thumbnailRequestPriority", () => {
     });
   });
 
-  it("uses packed row boundaries in justified mode", () => {
+  it("uses the first packed row as the fallback priority band", () => {
     const bounds = thumbnailRequestWindow({
-      visibleStart: 3,
-      visibleEnd: 10,
+      visibleStart: 0,
+      visibleEnd: 0,
       renderStart: 0,
       renderEnd: 10,
       columns: 4,
       rowStarts: [0, 3, 7, 10],
     });
 
-    expect(bounds.highEnd).toBe(7);
+    expect(bounds.highEnd).toBe(3);
+  });
+
+  it("keeps a representative 100-item scroll buffer eager without raising its priority", () => {
+    const bounds = thumbnailRequestWindow({
+      visibleStart: 0,
+      visibleEnd: 24,
+      renderStart: 0,
+      renderEnd: 124,
+      columns: 6,
+    });
+    const counts = { eager: 0, lazy: 0, high: 0, auto: 0 };
+
+    for (let index = 0; index < 124; index += 1) {
+      counts[loadingModeForThumbnail(index, bounds)] += 1;
+      counts[fetchPriorityForThumbnail(index, bounds)] += 1;
+    }
+
+    expect(counts).toEqual({ eager: 124, lazy: 0, high: 24, auto: 100 });
   });
 
   it("treats invalid indexes as non-critical", () => {
