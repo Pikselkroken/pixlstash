@@ -324,15 +324,21 @@ class TestFreshInstall:
     def test_a_loose_existing_ancestor_is_kept_and_still_refused(self, tmp_path):
         """Creation only: the fix never chmods a directory the owner already had.
 
-        The loose ancestor keeps its 0775 (owner's folder, owner's business),
+        The loose ancestor keeps its mode (owner's folder, owner's business),
         and the guarded open goes on refusing the namespace — that refusal is
         pre-existing behaviour, asserted here so the fix cannot drift into
         repairing directories it did not create.
+
+        World-writable, not the 0775 this asserted originally: group-write alone
+        is no longer an exposure when the group is the owner's own one-member
+        group, which is exactly what a developer box and a GitHub runner both
+        have, so 0775 stopped being refused and this asserted the opposite of
+        the behaviour it names.
         """
         os.chmod(tmp_path, 0o700)
         loose = tmp_path / "loose"
         loose.mkdir()
-        os.chmod(loose, 0o775)
+        os.chmod(loose, 0o777)
 
         old_umask = os.umask(0o002)
         try:
@@ -342,7 +348,7 @@ class TestFreshInstall:
         finally:
             os.umask(old_umask)
 
-        assert stat.S_IMODE(os.lstat(loose).st_mode) == 0o775
+        assert stat.S_IMODE(os.lstat(loose).st_mode) == 0o777
         assert stat.S_IMODE(os.lstat(image_root).st_mode) == 0o700
         with pytest.raises(TrustedSQLiteLocationError, match="group/world-writable"):
             TrustedSQLiteLocation.open(str(image_root / "vault.db"))
@@ -360,16 +366,21 @@ class TestFreshInstall:
         parent = tmp_path / "loose"
         parent.mkdir()
         # chmod, not mkdir(mode=): the mode argument is masked by the process
-        # umask, so 0o775 lands as 0o755 wherever the umask is 022 — which is
+        # umask, so the mode lands short wherever the umask is 022 — which is
         # the GitHub runner default. The directory then is not group-writable,
         # nothing is loose, and the test failed with "DID NOT RAISE" for the
         # one reason that is not a defect in the code under test.
-        os.chmod(parent, 0o775)
+        #
+        # World-writable, where this used to say 0o775: group-write alone is no
+        # longer an exposure when the group is the owner's own one-member group
+        # (``_is_private_group``), which is what a developer box has, so 0o775
+        # would make this pass there and fail nothing.
+        os.chmod(parent, 0o777)
 
         with pytest.raises(HubPermissionError, match="group/world-writable"):
             HubDatabase(str(parent / "hub.db"))
 
-        assert stat.S_IMODE(parent.stat().st_mode) == 0o775
+        assert stat.S_IMODE(parent.stat().st_mode) == 0o777
 
     def test_existing_foreign_vault_is_not_an_implicit_identity_source(self, tmp_path):
         hub_path = str(tmp_path / "hub.db")
