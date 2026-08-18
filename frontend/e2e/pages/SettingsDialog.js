@@ -54,4 +54,16 @@ export class SettingsDialog {
     await this.snapshotsTab.click()
     await expect(this.snapshotsSection).toBeVisible()
   }
+
+  /**
+   * Open any pane by its rail label ("Compute", "Backend", "Privacy", …).
+   * The rail is plain buttons in a <nav>, not a tablist, so getByRole('tab')
+   * matches nothing — go through .settings-nav-item.
+   */
+  async openTab(label) {
+    await this.page
+      .locator('.settings-nav-item', { hasText: label })
+      .first()
+      .click()
+  }
 }
