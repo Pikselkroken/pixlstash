@@ -757,8 +757,8 @@
                   class="thumbnail-img"
                   :style="getSquareCropImgStyle(img)"
                   :ref="(el) => setThumbnailRef(img.id, el)"
-                  :loading="thumbnailLoadingMode(idx)"
-                  :fetchpriority="thumbnailFetchPriority(idx)"
+                  loading="eager"
+                  fetchpriority="high"
                   decoding="async"
                   draggable="true"
                   @pointerdown="prepareThumbnailNativeDrag(img, $event)"
@@ -1200,11 +1200,6 @@ import {
   pictureGridLabel,
   pictureGridTabIndex,
 } from "../../utils/gridAccessibility.js";
-import {
-  fetchPriorityForThumbnail,
-  loadingModeForThumbnail,
-  thumbnailRequestWindow,
-} from "../../utils/thumbnailRequestPriority.js";
 import ImageImporter from "../io/ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
@@ -5250,37 +5245,6 @@ const stackDeckEdgesFit = computed(
 
 function gridImageLayoutIndex(img, localIdx) {
   return Number.isFinite(img?.idx) ? img.idx : renderStart.value + localIdx;
-}
-
-const thumbnailRequestBounds = computed(() =>
-  thumbnailRequestWindow({
-    visibleStart: visibleStart.value,
-    visibleEnd: visibleEnd.value,
-    renderStart: renderStart.value,
-    renderEnd: renderEnd.value,
-    columns: gridStore.columns,
-    rowStarts: isJustifiedMode.value ? justifiedLayout.value?.rowStarts : null,
-  }),
-);
-
-function thumbnailRenderIndex(localIdx) {
-  // The rendered array is a slice of the active media filter, so its local
-  // position—not the picture's unfiltered `idx`—matches the virtual viewport.
-  return renderStart.value + localIdx;
-}
-
-function thumbnailLoadingMode(localIdx) {
-  return loadingModeForThumbnail(
-    thumbnailRenderIndex(localIdx),
-    thumbnailRequestBounds.value,
-  );
-}
-
-function thumbnailFetchPriority(localIdx) {
-  return fetchPriorityForThumbnail(
-    thumbnailRenderIndex(localIdx),
-    thumbnailRequestBounds.value,
-  );
 }
 
 function _justifiedItemGeometry(img, localIdx) {
