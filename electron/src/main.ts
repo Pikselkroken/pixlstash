@@ -25,6 +25,12 @@ import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
 import { isAllowedNavigation, redactUrl } from './urlPolicy';
 import { ServerProcess, devInterpreter } from './backend/ServerProcess';
 import {
+  isPermissionRepairRequired,
+  mkdirPrivateIfMissing,
+  permissionRepairDialogDetail,
+  PermissionRepairRequiredError,
+} from './backend/StartupPermissions';
+import {
   Accel,
   ACCEL_LABELS,
   RuntimeInfo,
@@ -662,7 +668,7 @@ function deviceFor(accel: Accel | null): string | undefined {
 }
 
 /** Spawn the backend (bundled env + optional GPU overlay), inject the loopback session, load the UI. */
-async function startAndLoad(accel: Accel | null): Promise<void> {
+async function startAndLoad(accel: Accel | null, repairPermissions = false): Promise<void> {
   sendPhase({ phase: 'starting' });
   // Await teardown so the previous backend has released its port/files before
   // the new one binds (a restart must not race the old process).
@@ -675,7 +681,11 @@ async function startAndLoad(accel: Accel | null): Promise<void> {
       );
     }
   });
-  const running = await serverProcess.start(overlayFor(accel), deviceFor(accel));
+  const running = await serverProcess.start(
+    overlayFor(accel),
+    deviceFor(accel),
+    repairPermissions,
+  );
 
   // Inject the pre-authenticated loopback session cookie so the window opens
   // straight into the library with no login prompt (backend seeds the matching
@@ -712,12 +722,35 @@ async function activeOverlayAccel(): Promise<Accel | null> {
  * phantom-active GPU with no backend running (the accel:use zombie, 2026-07-20).
  * With `accel === null` a failure rethrows unchanged (nothing to fall back from).
  */
-async function startWithOverlayFallback(accel: Accel | null): Promise<void> {
+async function startWithOverlayFallback(
+  accel: Accel | null,
+  repairPermissions = false,
+): Promise<void> {
   await launchWithOverlayFallback(accel, {
-    start: startAndLoad,
+    start: (candidate) => startAndLoad(candidate, repairPermissions),
     deactivateOverlay: () => manager.setActiveAccel(null),
     notify: (message) => dialog.showErrorBox('GPU acceleration unavailable', message),
+    // Permission failures are unrelated to an accelerator. Preserve the active
+    // overlay and let boot() offer the dedicated recovery dialog.
+    shouldFallback: (error) => !isPermissionRepairRequired(error),
   });
+}
+
+async function offerPermissionRepair(error: PermissionRepairRequiredError): Promise<boolean> {
+  const options: Electron.MessageBoxOptions = {
+    type: 'warning',
+    title: 'PixlStash',
+    message: 'PixlStash needs safer file permissions',
+    detail: permissionRepairDialogDetail(error.request),
+    buttons: ['Fix permissions', 'Quit'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  };
+  const result = mainWindow
+    ? await dialog.showMessageBox(mainWindow, options)
+    : await dialog.showMessageBox(options);
+  return result.response === 0;
 }
 
 /** Launch: dev passthrough, or the bundled env (+ active GPU overlay), straight into the library. */
@@ -749,8 +782,27 @@ async function boot(): Promise<void> {
     // the user, and retry once on the bundled CPU/Metal env. If that also fails,
     // the error falls through to the fatal phase below as before.
     await startWithOverlayFallback(await activeOverlayAccel());
-  } catch (e) {
-    sendPhase({ phase: 'error', message: (e as Error).message });
+  } catch (caught) {
+    let error: unknown = caught;
+    if (isPermissionRepairRequired(error)) {
+      if (!(await offerPermissionRepair(error))) {
+        app.quit();
+        return;
+      }
+      try {
+        // Exactly one user-authorised retry. Python rechecks ownership, type,
+        // and inode before changing any recorded path.
+        if (isDevBackend()) {
+          await startAndLoad(null, true);
+        } else {
+          await startWithOverlayFallback(await activeOverlayAccel(), true);
+        }
+        return;
+      } catch (retryError) {
+        error = retryError;
+      }
+    }
+    sendPhase({ phase: 'error', message: (error as Error).message });
   }
 }
 
@@ -928,7 +980,9 @@ function registerIpc(): void {
       }
 
       const configDir = dirname(serverConfigPath());
-      mkdirSync(configDir, { recursive: true });
+      // New credential directories are private even under umask 0002. Existing
+      // ones are left to the explicit recovery dialog, never silently changed.
+      mkdirPrivateIfMissing(configDir);
 
       if (choices?.importLegacyIdentity) {
         if (!detectedLegacyIdentitySource) {
