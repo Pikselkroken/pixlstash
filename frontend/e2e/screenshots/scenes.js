@@ -439,7 +439,7 @@ export const scenes = [
       if (await bar.isVisible()) {
         await bar.click()
       } else {
-        await page.locator('.dq-overflow').click()
+        await page.locator('.dq-overflow .tbo-trigger').click()
         await page.getByTestId('mixed-row').click()
       }
       await page.waitForTimeout(1200)

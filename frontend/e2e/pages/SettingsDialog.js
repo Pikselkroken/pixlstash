@@ -58,12 +58,18 @@ export class SettingsDialog {
   /**
    * Open any pane by its rail label ("Compute", "Backend", "Privacy", …).
    * The rail is plain buttons in a <nav>, not a tablist, so getByRole('tab')
-   * matches nothing — go through .settings-nav-item.
+   * matches nothing — go through .settings-nav-item, scoped to this dialog.
+   *
+   * Waits for the item to become aria-current="page" rather than returning on
+   * the click: the panes are v-show, so a click that lands on nothing leaves
+   * the PREVIOUS pane on screen, and a scene that only sleeps before shooting
+   * would capture the wrong one and still pass.
    */
   async openTab(label) {
-    await this.page
+    const item = this.card
       .locator('.settings-nav-item', { hasText: label })
       .first()
-      .click()
+    await item.click()
+    await expect(item).toHaveAttribute('aria-current', 'page')
   }
 }
