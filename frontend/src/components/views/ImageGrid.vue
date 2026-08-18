@@ -456,12 +456,14 @@
           data-testid="pending-imports-pill"
           @click="emit('load-pending-imports')"
         >
-          ↑ {{ wsStore.pendingExternalImportCount }}
+          <v-icon :size="16" aria-hidden="true">mdi-image-plus-outline</v-icon>
+          {{ wsStore.pendingExternalImportCount }}
           {{
             wsStore.pendingExternalImportCount === 1
               ? "new picture"
               : "new pictures"
-          }}, click to load
+          }}
+          — Load
         </button>
         <button
           v-if="wsStore.sortChangedExternalCount > 0"
@@ -469,24 +471,26 @@
           data-testid="sort-changed-pill"
           @click="emit('load-sort-changed')"
         >
-          ⟳ View changed externally, click to refresh
+          <v-icon :size="16" aria-hidden="true">mdi-refresh</v-icon>
+          View changed externally — Refresh
         </button>
       </div>
       <div v-if="dragOverlayVisible" class="drag-overlay">
         <div class="drag-overlay-message">{{ dragOverlayMessage }}</div>
       </div>
       <div v-if="showFolderScanningState" class="empty-state">
-        <div class="empty-state-card">
+        <div class="empty-state-card" role="status" aria-live="polite">
           <div class="empty-state-illustration" aria-hidden="true">
             <img
               src="/Empty.png"
-              alt="Scanning"
+              alt=""
               :style="emptyStateImageStyle"
-              style="width: 90%"
             />
           </div>
           <div class="empty-state-title">PixlStash is scanning your folder</div>
-          <div class="empty-state-subtitle">Reticulating splines…</div>
+          <div class="empty-state-subtitle">
+            Preparing pictures and thumbnails…
+          </div>
         </div>
       </div>
       <div v-if="showEmptyState" class="empty-state">
@@ -494,9 +498,8 @@
           <div class="empty-state-illustration" aria-hidden="true">
             <img
               :src="emptyStateImage"
-              :alt="emptyStateAlt"
+              alt=""
               :style="emptyStateImageStyle"
-              style="width: 90%"
             />
           </div>
           <div class="empty-state-title">
@@ -528,6 +531,10 @@
         :style="gridContainerStyle"
         ref="gridContainer"
         data-testid="image-grid"
+        role="grid"
+        :aria-label="`${activeCategoryLabel || 'Pictures'} grid`"
+        aria-multiselectable="true"
+        :aria-busy="imagesLoading ? 'true' : 'false'"
         @click="handleGridBackgroundClick"
       >
         <!-- Top spacer for virtual scroll alignment (width 100% makes it a
@@ -564,8 +571,21 @@
               'image-card--ghost': isImageGhosted(img),
             },
           ]"
+          :ref="(element) => setImageCardRef(img.idx, element)"
+          :role="img.id && !isImageGhosted(img) ? 'row' : 'presentation'"
+          :tabindex="imageCardTabIndex(img)"
+          :aria-label="img.id ? imageCardAriaLabel(img) : undefined"
+          :aria-selected="
+            img.id && !isImageGhosted(img)
+              ? selectedImageIds.includes(img.id)
+                ? 'true'
+                : 'false'
+              : undefined
+          "
+          :aria-hidden="!img.id || isImageGhosted(img) ? 'true' : undefined"
           :inert="isImageGhosted(img) || null"
           @click="handleImageCardClick(img, img.idx, $event)"
+          @focus="handleImageCardFocus(img)"
           @mouseenter="handleImageMouseEnter(img)"
           @mouseleave="handleImageMouseLeave(img)"
           @contextmenu.prevent="handleImageContextMenu(img, $event)"
@@ -578,6 +598,7 @@
               'thumbnail-card',
               { 'thumbnail-card-new': isImageRecentlyAdded(img.id) },
             ]"
+            :role="img.id && !isImageGhosted(img) ? 'gridcell' : 'presentation'"
             @click.stop="handleThumbnailClick(img, img.idx, $event)"
           >
             <div
@@ -629,14 +650,16 @@
                     }}</v-icon
                   >
                 </div>
-                <div
+                <button
                   v-if="img.reference_folder_id"
+                  type="button"
                   class="thumbnail-reference-badge thumbnail-badge"
                   :title="img.file_path || 'Reference picture'"
+                  :aria-label="`Open reference location for ${imageCardAriaLabel(img)}`"
                   @click.stop="openReferenceLocation(img.id)"
                 >
                   <v-icon :size="badgeIconSizes.penalised">mdi-folder</v-icon>
-                </div>
+                </button>
                 <div
                   v-if="lockedSetsStore.isLocked(img.id)"
                   class="thumbnail-lock-badge thumbnail-badge"
@@ -698,6 +721,7 @@
               >
                 <video
                   class="thumbnail-img"
+                  aria-hidden="true"
                   :src="getVideoThumbnailSrc(img)"
                   :poster="getThumbnailSrc(img)"
                   :ref="
@@ -729,11 +753,12 @@
                 <img
                   v-show="!failedThumbnailIds.has(img.id)"
                   :src="getThumbnailSrc(img)"
+                  alt=""
                   class="thumbnail-img"
                   :style="getSquareCropImgStyle(img)"
                   :ref="(el) => setThumbnailRef(img.id, el)"
-                  loading="eager"
-                  fetchpriority="high"
+                  :loading="thumbnailLoadingMode(idx)"
+                  :fetchpriority="thumbnailFetchPriority(idx)"
                   decoding="async"
                   draggable="true"
                   @pointerdown="prepareThumbnailNativeDrag(img, $event)"
@@ -761,7 +786,7 @@
                 />
                 <!-- Face bounding box overlays: must be rendered after the image for correct stacking -->
                 <template v-if="isThumbnailReady(img.id) && img.thumbnail">
-                  <div
+                  <button
                     v-for="overlay in getFaceBboxOverlays(img)"
                     :key="
                       overlay.faceId +
@@ -770,8 +795,13 @@
                       '-' +
                       (img.thumbnail ? 1 : 0)
                     "
-                    class="face-bbox-overlay"
+                    type="button"
+                    class="face-bbox-overlay face-bbox-overlay--interactive"
                     :style="overlay.style"
+                    :aria-label="`Select face ${overlay.face.character_name || overlay.faceIdx + 1}`"
+                    :aria-pressed="
+                      isFaceSelected(img.id, overlay.faceIdx) ? 'true' : 'false'
+                    "
                     draggable="true"
                     @pointerdown.stop
                     @mousedown.stop
@@ -803,7 +833,7 @@
                     >
                       {{ overlay.face.character_name }}
                     </div>
-                  </div>
+                  </button>
                 </template>
                 <!-- Object detection (segmentation) overlays -->
                 <template v-if="isThumbnailReady(img.id) && img.thumbnail">
@@ -846,11 +876,10 @@
                 </div>
               </template>
               <template v-else>
-                <div class="thumbnail-placeholder">
-                  <v-icon class="thumbnail-placeholder-icon"
-                    >mdi-loading</v-icon
-                  >
-                </div>
+                <div
+                  class="thumbnail-placeholder thumbnail-placeholder--loading"
+                  aria-hidden="true"
+                ></div>
               </template>
               <!-- Stack band overlay (top+bottom color stripe for compact mode) -->
               <div
@@ -1167,6 +1196,15 @@ import {
   getPictureId,
   buildMediaUrl,
 } from "../../utils/media.js";
+import {
+  pictureGridLabel,
+  pictureGridTabIndex,
+} from "../../utils/gridAccessibility.js";
+import {
+  fetchPriorityForThumbnail,
+  loadingModeForThumbnail,
+  thumbnailRequestWindow,
+} from "../../utils/thumbnailRequestPriority.js";
 import ImageImporter from "../io/ImageImporter.vue";
 import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
@@ -5210,13 +5248,46 @@ const stackDeckEdgesFit = computed(
   () => !isJustifiedMode.value && !gridStore.compactMode,
 );
 
+function gridImageLayoutIndex(img, localIdx) {
+  return Number.isFinite(img?.idx) ? img.idx : renderStart.value + localIdx;
+}
+
+const thumbnailRequestBounds = computed(() =>
+  thumbnailRequestWindow({
+    visibleStart: visibleStart.value,
+    visibleEnd: visibleEnd.value,
+    renderStart: renderStart.value,
+    renderEnd: renderEnd.value,
+    columns: gridStore.columns,
+    rowStarts: isJustifiedMode.value ? justifiedLayout.value?.rowStarts : null,
+  }),
+);
+
+function thumbnailRenderIndex(localIdx) {
+  // The rendered array is a slice of the active media filter, so its local
+  // position—not the picture's unfiltered `idx`—matches the virtual viewport.
+  return renderStart.value + localIdx;
+}
+
+function thumbnailLoadingMode(localIdx) {
+  return loadingModeForThumbnail(
+    thumbnailRenderIndex(localIdx),
+    thumbnailRequestBounds.value,
+  );
+}
+
+function thumbnailFetchPriority(localIdx) {
+  return fetchPriorityForThumbnail(
+    thumbnailRenderIndex(localIdx),
+    thumbnailRequestBounds.value,
+  );
+}
+
 function _justifiedItemGeometry(img, localIdx) {
   if (!isJustifiedMode.value) return null;
   const layout = justifiedLayout.value;
   if (!layout || !layout.rowHeights.length) return null;
-  const globalIdx = Number.isFinite(img?.idx)
-    ? img.idx
-    : renderStart.value + localIdx;
+  const globalIdx = gridImageLayoutIndex(img, localIdx);
   if (globalIdx < 0 || globalIdx >= layout.itemScaledWidths.length) return null;
   const row = rowOfIndex(layout.rowStarts, globalIdx);
   return {
@@ -5878,6 +5949,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     clearFaceSelection,
     clearSearchQuery,
     scrollCursorIntoView,
+    focusCursor: focusGridCursor,
     openOverlay,
     deleteSelected,
     selectionBarRef,
@@ -6522,10 +6594,6 @@ const emptyStateImage = computed(() => {
   return isScrapheapView.value ? "/EmptyTrash.png" : "/Empty.png";
 });
 
-const emptyStateAlt = computed(() => {
-  return isScrapheapView.value ? "Empty scrap heap" : "No images";
-});
-
 const isDarkThemeActive = computed(() => {
   const mode = String(userPrefsStore.themeMode || "light").toLowerCase();
   if (mode === "dark") return true;
@@ -6594,6 +6662,42 @@ const gridImagesToRender = computed(() => {
   const filtered = filterImagesByMediaType(allGridImages.value);
   return filtered.slice(renderStart.value, renderEnd.value);
 });
+
+const imageCardRefs = new Map();
+const firstFocusableRenderedIndex = computed(
+  () =>
+    gridImagesToRender.value.find(
+      (image) => image?.id && !isImageGhosted(image),
+    )?.idx ?? -1,
+);
+
+function setImageCardRef(index, element) {
+  const normalizedIndex = Number(index);
+  if (!Number.isFinite(normalizedIndex)) return;
+  if (element) imageCardRefs.set(normalizedIndex, element);
+  else imageCardRefs.delete(normalizedIndex);
+}
+
+function imageCardTabIndex(image) {
+  return pictureGridTabIndex(image, {
+    cursorIndex: cursorIdx.value,
+    fallbackIndex: firstFocusableRenderedIndex.value,
+    ghosted: isImageGhosted(image),
+  });
+}
+
+function imageCardAriaLabel(image) {
+  return pictureGridLabel(image, { video: isVideo(image) });
+}
+
+async function focusGridCursor(index) {
+  await nextTick();
+  imageCardRefs.get(Number(index))?.focus({ preventScroll: true });
+}
+
+function handleImageCardFocus(image) {
+  if (image?.id && !isImageGhosted(image)) cursorIdx.value = image.idx;
+}
 
 // Batch fetch metadata (including thumbnail) for visible range
 // ============================================================
@@ -6880,6 +6984,7 @@ function handleImageCardClick(img, idx, event) {
     return;
   }
   cursorIdx.value = idx;
+  focusGridCursor(idx);
   const isCtrl = event.ctrlKey || event.metaKey;
   const isShift = event.shiftKey;
   let newSelection;
