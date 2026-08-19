@@ -218,3 +218,35 @@ def test_offers_the_writable_ancestor_the_guard_refuses(tmp_path, app_owned_conf
     assert mode(shared) == 0o755
     assert not find_startup_permission_issues(server_config, str(library))
     TrustedSQLiteLocation.open(str(vault)).close()
+
+
+def test_a_server_starts_with_its_config_under_a_symlinked_directory(tmp_path):
+    """The macOS ``/var`` -> ``/private/var`` case, reproduced on any POSIX box.
+
+    That failure is not macOS-specific: it is simply a symlinked ancestor, and
+    every ancestor of the config path is one the caller did not construct. The
+    guard used to refuse it outright, so `pixlstash-server --server-config
+    <path under a symlinked dir>` exited 1 before serving anything, which is
+    what `scripts/smoke_install.py` had to work around on its macOS runner.
+
+    Asserting a *successful start* rather than a guard call, because the hub is
+    only one of the databases opened on that path and the point is that the
+    whole startup chain now agrees on one spelling.
+    """
+    from pixlstash.server import Server
+
+    real = tmp_path / "real-home"
+    real.mkdir(mode=0o700)
+    link = tmp_path / "home"
+    link.symlink_to(real, target_is_directory=True)
+
+    server_config = str(link / "server-config.json")
+    with Server(server_config_path=server_config) as server:
+        # The hub landed at the resolved location and is opened by that name,
+        # so the pool and every later reopen agree with the guard.
+        assert server.hub.path == str(real / "hub.db")
+        assert (real / "hub.db").is_file()
+
+    # And the scan that gates startup sees the same file rather than reporting
+    # "no issues" about a path nothing opens.
+    assert not find_startup_permission_issues(server_config, None)
